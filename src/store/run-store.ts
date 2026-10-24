@@ -7,8 +7,9 @@ import Database from 'better-sqlite3';
 import { z } from 'zod';
 import type { EffectIntent, JsonValue, RunSnapshot, TransitionResult, ValidatedEvent } from '../domain/contracts.js';
 import { canonicalJson, hashArtifact } from '../domain/hash.js';
-import { hashSchema, idSchema, jsonValueSchema, runSnapshotSchema, validatedEventSchema } from '../domain/schemas.js';
+import { hashSchema, idSchema, jsonValueSchema, runSnapshotSchema, validatedEventSchema, watchdogArmingProofSchema, watchdogLaunchProofSchema } from '../domain/schemas.js';
 import { createInitialSnapshot, reduceRun, restoreForReconciliation } from '../machine/reduce.js';
+import { decodeStrictJson } from '../workers/strict-json.js';
 import { openArtifactStore, readArtifact, verifyConfiguration, type ArtifactStore } from './artifacts.js';
 
 export interface CommitReceipt { runId: string; eventId: string; revision: number; duplicate: boolean }
@@ -148,8 +149,7 @@ function acceptedReceiptValue(intent: EffectIntent, event: ValidatedEvent): unkn
     case 'evaluate-round':
       return body.kind === 'EVALUATE_ROUND' && event.id === intent.key ? body.data : undefined;
     case 'deadline':
-      // Expiry does not prove that the watchdog was armed.
-      return undefined;
+      return body.kind === 'WATCHDOG_ARMED' && body.data.key === intent.key && body.data.intentHash === hash('effect', intent) && taskKey === body.data.logicalTaskKey && 'deadline' in input && same(input.deadline, body.data.deadline) ? body.data.receipt : undefined;
     // These effects use the adapter-owned generic completion event above.
     case 'publish-context':
     case 'report': return undefined;
@@ -242,14 +242,25 @@ class SQLiteRunStore implements RunStore {
     requireThat(same(result, expected) && expected.snapshot.revision === expectedRevision + 1, 'TRANSITION_MISMATCH');
     const next = expected.snapshot;
     let completedEffect: OutboxRow | undefined;
-    if (event.body.kind === 'EFFECT_RECEIPT_RECORDED') {
+    if (event.body.kind === 'EFFECT_RECEIPT_RECORDED' || event.body.kind === 'WATCHDOG_ARMED') {
       const data = event.body.data;
       completedEffect = this.db.prepare('SELECT * FROM outbox WHERE key = ? AND run_id = ?').get(data.key, runId) as OutboxRow | undefined;
       requireThat(completedEffect, 'EFFECT_NOT_FOUND');
       const effect = decodeEffect(completedEffect);
       requireThat(completedEffect.intent_hash === data.intentHash, 'EFFECT_INTENT_HASH_MISMATCH');
       requireThat(effect.intent.kind !== 'launch', 'GENERIC_LAUNCH_RECEIPT_FORBIDDEN');
-      requireThat(genericReceiptKinds.has(effect.intent.kind), 'GENERIC_EFFECT_RECEIPT_FORBIDDEN');
+      if (event.body.kind === 'WATCHDOG_ARMED') {
+        requireThat(effect.intent.kind === 'deadline' && acceptedReceiptValue(effect.intent, event) !== undefined, 'WATCHDOG_INTENT_MISMATCH');
+        requireThat(data.receipt.kind === 'watchdog-armed', 'WATCHDOG_PROOF_REQUIRED');
+        const proof = watchdogArmingProofSchema.parse(decodeStrictJson(Buffer.from(readArtifact(data.receipt, this.artifacts.root)).toString('utf8')));
+        const { receipt: _receipt, ...binding } = data;
+        requireThat(Object.entries(binding).every(([key, value]) => same(proof[key as keyof typeof proof], value)), 'WATCHDOG_PROOF_MISMATCH');
+        const task = snapshot.context.issuedLogicalTasks[proof.logicalTaskKey];
+        requireThat(task?.binding && proof.resourceKey === hash('watchdog-resource', { attemptId: proof.attemptId, authority: task.binding.authority, deadlineMs: proof.deadline.wallMs }), 'WATCHDOG_RESOURCE_MISMATCH');
+        requireThat(proof.launchReceipt.kind === 'watchdog-launch', 'WATCHDOG_LAUNCH_PROOF_REQUIRED');
+        const launch = watchdogLaunchProofSchema.parse(decodeStrictJson(Buffer.from(readArtifact(proof.launchReceipt, this.artifacts.root)).toString('utf8')));
+        requireThat(launch.pid === proof.pid && launch.processStart === proof.processStart && launch.resourceKey === proof.resourceKey, 'WATCHDOG_LAUNCH_PROOF_MISMATCH');
+      } else requireThat(genericReceiptKinds.has(effect.intent.kind), 'GENERIC_EFFECT_RECEIPT_FORBIDDEN');
       requireThat(completedEffect.created_revision < next.revision && completedEffect.status !== 'superseded', 'EFFECT_RECEIPT_NOT_ELIGIBLE');
       readArtifact(data.receipt, this.artifacts.root);
       if (effect.receipt) requireThat(same(effect.receipt.value, data.receipt), 'EFFECT_RECEIPT_CONFLICT');
@@ -283,7 +294,7 @@ class SQLiteRunStore implements RunStore {
         if (task.stage === 'pending_execution' && next.context.control.supersededTaskKeys.includes(key))
           this.db.prepare("UPDATE outbox SET status = 'superseded' WHERE key = ? AND run_id = ? AND status = 'pending_execution'").run(task.reservation.effectKey, runId);
       }
-      if (completedEffect && event.body.kind === 'EFFECT_RECEIPT_RECORDED') {
+      if (completedEffect && (event.body.kind === 'EFFECT_RECEIPT_RECORDED' || event.body.kind === 'WATCHDOG_ARMED')) {
         const current = this.db.prepare('SELECT * FROM outbox WHERE key = ?').get(event.body.data.key) as OutboxRow;
         requireThat(same(current, completedEffect), 'OUTBOX_CHANGED');
         if (!current.receipt) this.db.prepare("UPDATE outbox SET status = 'receipt_recorded', receipt = ?, receipt_event_id = ? WHERE key = ?").run(canonicalJson({ eventId: event.id, value: event.body.data.receipt }), event.id, event.body.data.key);
@@ -325,7 +336,7 @@ class SQLiteRunStore implements RunStore {
       const generation = this.claim(row.run_id, observed);
       const current = this.db.prepare('SELECT * FROM outbox WHERE key = ?').get(key) as OutboxRow;
       requireThat(same(current, row), 'OUTBOX_CHANGED');
-      if (effect.intent.kind === 'launch' || event.body.kind === 'EFFECT_RECEIPT_RECORDED') {
+      if (effect.intent.kind === 'launch' || event.body.kind === 'EFFECT_RECEIPT_RECORDED' || event.body.kind === 'WATCHDOG_ARMED') {
         // The accepted reducer event already wrote this receipt and stage in its
         // commit. This API can only verify that mirror, never fence a launch.
         requireThat(current.status === 'receipt_recorded' && current.receipt === canonicalJson(receipt), 'UNACCEPTED_EFFECT_RECEIPT');

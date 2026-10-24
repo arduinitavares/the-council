@@ -249,7 +249,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
   }
   requireThat(e.runId === c.request.runId && e.round === c.roundsUsed, 'Event run/round mismatch');
   const b = e.body;
-  const receiptOnly = b.kind === 'EFFECT_RECEIPT_RECORDED';
+  const receiptOnly = b.kind === 'EFFECT_RECEIPT_RECORDED' || b.kind === 'WATCHDOG_ARMED';
   requireThat(receiptOnly || !['completed', 'cancelled'].includes(from), 'RUN_SETTLED');
   requireThat(stateEventTargets[from][b.kind], 'Event not legal in this state');
   if (b.kind === 'CONTEXT_UPDATE')
@@ -258,6 +258,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     requireThat(!c.inferenceBlock, 'Terminal inference block permits inspection only');
   const adapterKinds = [
     'EFFECT_RECEIPT_RECORDED',
+    'WATCHDOG_ARMED',
     'LAUNCH_RECEIPT_RECORDED',
     'WORKER_RESULT',
     'WORKER_OBSERVED',
@@ -701,6 +702,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
       ![
         'CLOCK_CHECKPOINT',
         'EFFECT_RECEIPT_RECORDED',
+        'WATCHDOG_ARMED',
         'SETTLED',
         'EXTEND',
         'RECONCILED',
@@ -716,6 +718,15 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
         case 'CLOCK_CHECKPOINT':
         case 'EFFECT_RECEIPT_RECORDED':
           break;
+        case 'WATCHDOG_ARMED': {
+          const data = b.data, task = c.issuedLogicalTasks[data.logicalTaskKey];
+          const deadline = c.control.workerDeadlines[data.logicalTaskKey];
+          requireThat(task?.binding && task.stage === 'receipt_recorded' && task.binding.attemptId === data.attemptId && e.phase === task.binding.phase && deadline && same(deadline, data.deadline), 'WATCHDOG_BINDING_MISMATCH');
+          const intent = { key: `${data.logicalTaskKey}/deadline`, kind: 'deadline', input: { logicalTaskKey: data.logicalTaskKey, deadline } };
+          requireThat(data.key === intent.key && data.intentHash === hash('effect', intent), 'WATCHDOG_INTENT_MISMATCH');
+          requireThat(e.id === `${data.key}/armed`, 'WATCHDOG_EVENT_ID_MISMATCH');
+          break;
+        }
         case 'CANCEL':
           requireThat(
             activeStates.includes(from) || from === 'reconciling' || pauses.includes(from),

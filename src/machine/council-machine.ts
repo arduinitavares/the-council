@@ -119,13 +119,15 @@ for (const state of [
   stateEventTargets[state].CLOCK_CHECKPOINT = [state];
 
 // Post-settlement transport/file housekeeping cannot reopen a phase or admit work.
-for (const state of Object.keys(stateEventTargets) as ControlState[])
+for (const state of Object.keys(stateEventTargets) as ControlState[]) {
   stateEventTargets[state].EFFECT_RECEIPT_RECORDED = [state];
+  stateEventTargets[state].WATCHDOG_ARMED = [state];
+}
 
 // A recorded clock/lifecycle blocker is a global recovery path for every otherwise legal active event.
 for (const state of activeStates)
   for (const [kind, targets] of Object.entries(stateEventTargets[state])) {
-    if (kind !== 'CLOCK_CHECKPOINT' && kind !== 'EFFECT_RECEIPT_RECORDED')
+    if (kind !== 'CLOCK_CHECKPOINT' && kind !== 'EFFECT_RECEIPT_RECORDED' && kind !== 'WATCHDOG_ARMED')
       stateEventTargets[state][kind as EventKind] = [
         ...new Set([...targets!, 'reconciling' as const]),
       ];

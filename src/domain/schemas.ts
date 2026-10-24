@@ -117,6 +117,9 @@ export const frozenCandidateSchema = z.strictObject({ text: artifactRefSchema, h
 export const confirmationContextSchema = z.strictObject({ expected: roundBindingsSchema, expectedAttempts: z.strictObject({ openai: attemptBindingSchema, gemini: attemptBindingSchema, claude: attemptBindingSchema }), config: councilConfigSchema, candidate: frozenCandidateSchema, ballots: z.array(ballotSchema), objections: z.array(objectionSchema), inputObjectionIds: z.array(idSchema), questionLedger: questionLedgerSchema, judgeChallengeIds: z.array(idSchema) });
 export const clockReceiptSchema = z.strictObject({ id: idSchema, wallMs: z.number().finite().nonnegative(), monotonicMs: z.number().finite().nonnegative(), processEpoch: idSchema });
 export const activeDeadlineSchema = z.strictObject({ wallMs: z.number().finite().nonnegative(), monotonicMs: z.number().finite(), processEpoch: idSchema });
+export const watchdogArmingSchema = z.strictObject({ key: idSchema, intentHash: hashSchema, logicalTaskKey: idSchema, attemptId: idSchema, deadline: activeDeadlineSchema, receipt: artifactRefSchema });
+export const watchdogLaunchProofSchema = z.strictObject({ pid: positive, processStart: idSchema, resourceKey: hashSchema });
+export const watchdogArmingProofSchema = watchdogArmingSchema.omit({ receipt: true }).extend({ kind: z.literal('watchdog-armed'), resourceKey: hashSchema, pid: positive, processStart: idSchema, launchReceipt: artifactRefSchema });
 export const activeBudgetSchema = z.strictObject({ totalMs: natural, remainingMs: z.number().finite().nonnegative(), status: z.enum(['active', 'paused', 'settled']), intervalEpoch: natural, startReceipt: clockReceiptSchema, lastReceipt: clockReceiptSchema, accruedMs: z.number().finite().nonnegative(), appliedExtensionIds: z.array(idSchema), deadline: activeDeadlineSchema.nullable() }).refine(budget => budget.remainingMs <= budget.totalMs && (budget.status === 'active' ? budget.deadline !== null && budget.deadline.processEpoch === budget.lastReceipt.processEpoch : budget.deadline === null), 'Invalid budget allowance or active deadline');
 export const budgetEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('active-checkpoint') }), z.strictObject({ kind: z.literal('resume-active') }), z.strictObject({ kind: z.literal('crash-reconcile') }),
@@ -307,6 +310,7 @@ export const controlEventBodySchema = z.discriminatedUnion('kind', [
   ),
   body('LAUNCH_DISPATCHED', z.strictObject({ logicalTaskKey: idSchema })),
   body('LAUNCH_RECEIPT_RECORDED', z.strictObject({ binding: attemptBindingSchema })),
+  body('WATCHDOG_ARMED', watchdogArmingSchema),
   body('EFFECT_RECEIPT_RECORDED', z.strictObject({ key: idSchema, intentHash: hashSchema, receipt: artifactRefSchema })),
   body(
     'WORKER_RESULT',
@@ -362,7 +366,7 @@ export const validatedEventSchema = z.strictObject({
   body: controlEventBodySchema,
 });
 const roleRecord = <S extends z.ZodType>(schema: S) => z.partialRecord(workerRoleSchema, schema);
-const reservationSchema = z.strictObject({
+export const reservationSchema = z.strictObject({
   logicalTaskKey: idSchema,
   effectKey: idSchema,
   clientAttemptKey: idSchema,

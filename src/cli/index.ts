@@ -16,7 +16,7 @@ import { openRunReader, openRunStore, type RunStore } from '../store/run-store.j
 import { candidateInputs, describeCandidate, runController, type CandidateAction, type ControllerOptions } from '../runtime/controller.js';
 import { controlRequestSchema, readBoundedJson, submitControl, type ControlRequest } from '../runtime/inbox.js';
 import { systemClock } from '../runtime/clocks.js';
-import { readExecutionProjection, resourcesSettled } from '../runtime/reconcile.js';
+import { evidenceResourcesSettled, readExecutionProjection, resourcesSettled } from '../runtime/reconcile.js';
 import { OrcaTransport, qualifyRoute } from '../orca/transport.js';
 import { qualificationRequirementSchema } from '../policy/qualification.js';
 import { parseArgs } from './parse.js';
@@ -50,16 +50,17 @@ export function inspectRun(root: string, runId: string) {
       const value = candidateInputs(s), sha256 = hashArtifact('candidate-input', value), ref = { kind: 'candidate-input', sha256, bytes: Buffer.byteLength(canonicalJson(value)), path: join(root, 'artifacts', 'candidate-input', sha256, 'blob') };
       try { readArtifact(ref, join(root, 'artifacts')); pendingCandidate = describeCandidate(s, ref); } catch { /* The committed intent may still await its artifact publication. */ }
     }
+    const execution = readExecutionProjection(root, runId);
     return { runId, revision: s.revision, state: s.state, pendingOutcome: c.pendingOutcome, pauseReason: c.pauseReason,
       configHash: c.config.configHash, profileHash: c.profile.profileHash, contextHash: c.sharedContext.contextHash,
       roundsUsed: c.roundsUsed, clarificationBatchesUsed: c.clarificationBatchesUsed, callsReserved: c.callsReserved,
       remainingBudgetMs: c.activeBudget.remainingMs, budgetStatus: c.activeBudget.status, effectiveLimits: c.effectiveLimits,
       pendingQuestion: c.control.questionBatch, answerDraft: c.control.pendingAnswerBatch, pendingContextUpdate: c.pendingContextUpdate,
-      pendingCandidate, execution: readExecutionProjection(root, runId),
+      pendingCandidate, execution,
       action_required: s.state === 'prepare_candidate' && c.control.candidateRequested ? 'candidate' : null,
       candidateInputs: s.state === 'prepare_candidate' && c.control.candidateRequested ? { round: c.roundsUsed, config: c.config, profile: c.profile, context: c.sharedContext, ledger: c.questionLedger, reviews: c.phaseResults, objections: c.objections, evidence: c.control.evidence, requiredEvidenceIds: c.requiredEvidenceIds } : null,
       resources: Object.values(c.issuedLogicalTasks).map(task => ({ logicalTaskKey: task.reservation.logicalTaskKey, stage: task.stage, settlement: task.settlement, binding: task.binding })),
-      settlement: resourcesSettled(s) && ['completed', 'cancelled', 'needs_user', 'needs_context', 'blocked'].includes(s.state) ? 'settled' : 'unverifiable', inferenceBlock: c.inferenceBlock };
+      settlement: resourcesSettled(s) && evidenceResourcesSettled(root, s, execution) && ['completed', 'cancelled', 'needs_user', 'needs_context', 'blocked'].includes(s.state) ? 'settled' : 'unverifiable', inferenceBlock: c.inferenceBlock };
   } finally { reader.close(); }
 }
 export function outcomeExitCode(outcome: RunOutcome): number {

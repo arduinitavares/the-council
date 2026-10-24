@@ -21,7 +21,7 @@ it('exports the foreground controller and fails closed without current admission
 }, 60000);
 
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ArtifactRef, AttemptBinding, ControlEventBody, JsonValue, RunRequest, RunSnapshot, ValidatedEvent, WorkerPayload, WorkerPhase, WorkerRole } from '../../src/domain/contracts.js';
@@ -38,7 +38,7 @@ import { submitControl } from '../../src/runtime/inbox.js';
 import { captureClock } from '../../src/runtime/clocks.js';
 import { inspectRun } from '../../src/cli/index.js';
 
-function scenario(settings: { disagree?: boolean; questionWaves?: number; childLive?: boolean; invalidOutput?: boolean; workerLive?: boolean } = {}) {
+function scenario(settings: { disagree?: boolean; questionWaves?: number; childLive?: boolean; invalidOutput?: boolean; workerLive?: boolean; lookupMissing?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'council-controller-'))), workspace = join(root, 'workspace'); mkdirSync(workspace);
   const runRoot = join(workspace, '.council', 'runs', 'run1');
   let store = openRunStore(runRoot), ticks = 100, wall = 10000, epoch = 'fake-controller-1';
@@ -68,7 +68,7 @@ function scenario(settings: { disagree?: boolean; questionWaves?: number; childL
         exposed: { selection: q.requested, workspace: spec.workspace, cwd: spec.cwd, roots: spec.access.grantedRoots, mode: 'supplied-packet-read-only' as const, helpersDisabled: true, hooks: [], tools: [], actions: [], children: [], delivery: { renderedHash: spec.packet.renderedHash, bytes: Buffer.byteLength(spec.packet.text), verified: true } } };
       const receipt = { ...envelope, receipt: put('launch', envelope) }; receipts.set(q.clientAttemptKey, receipt); return receipt;
     },
-    async lookup(key) { return receipts.get(key) ?? null; },
+    async lookup(key) { return settings.lookupMissing ? null : receipts.get(key) ?? null; },
     async observe(binding) {
       const s = store.load('run1'), deadline = s.context.control.workerDeadlines[binding.logicalTaskKey]!;
       const ref = put('synthetic-observation', { attemptId: binding.attemptId, exited: true });
@@ -579,4 +579,192 @@ it('retains an invalidated evidence intent and uncertain original marker across 
   expect(await f.resume()).toMatchObject({ state: 'reconciling', settlement: 'unverifiable' });
   expect(readExecutionProjection(f.root, 'run1').effects.find(effect => effect.kind === 'evidence')).toMatchObject({ rawStatus: 'pending_execution', derived: 'held_may_have_executed' });
   expect(executions).toBe(1); expect(f.calls).toHaveLength(6); expect(f.store().load('run1').context.activeBudget.status).toBe('active'); f.close();
+}, 60000);
+
+for (const phase of ['review', 'judge', 'ballot'] as const) it(`fix1 adopts recovered ${phase} payloads before a queued ContextUpdate barrier`, async () => {
+  const f = scenario(), options = f.options('start'), originalRead = options.readResult!;
+  let crashed = false;
+  const readResult: NonNullable<ControllerOptions['readResult']> = async binding => {
+    const payload = JSON.parse(Buffer.from((await originalRead(binding))!).toString('utf8')) as WorkerPayload;
+    if (payload.kind === 'review') payload.newObjections = [{ id: 'original', claimId: 'claim', claim: 'Retain this review objection', evidenceIds: [], resolution: 'Resolve it explicitly', status: 'open' }];
+    if (payload.kind === 'ballot') {
+      payload.newObjections = [{ id: 'late', claimId: 'late-claim', claim: 'Retain this ballot objection', evidenceIds: [], resolution: 'Resolve it explicitly', status: 'open' }];
+      payload.dispositions = [{ objectionId: `run1/review/r1/${binding.role}/objection/original`, status: 'closed', reason: 'Resolved by this owner', evidenceIds: [] }];
+      payload.missingInputQuestions = [{ id: 'late-question', text: 'What changed?', reason: 'Required context', blocking: true, answerForm: { kind: 'text' }, dependencies: [] }];
+    }
+    if (!crashed && binding.phase === phase) { crashed = true; throw new Error('FIX1_PHASE_CRASH'); }
+    return Buffer.from(JSON.stringify(payload));
+  };
+  options.readResult = readResult;
+  await runController(options);
+  const before = f.store().load('run1'), callsBefore = f.calls.length;
+  expect(before.state).toBe({ review: 'reviewing', judge: 'judging', ballot: 'confirming' }[phase]);
+  await submitControl(f.root, { kind: 'context_update', requestId: 'fix1-recovered-update', runId: 'run1', update: { requestId: 'fix1-recovered-update', runId: 'run1', baseContextHash: before.context.sharedContext.contextHash, userDirections: [f.store().artifacts.putArtifact(Buffer.from('New user direction'), 'user-direction')] } });
+  const result = await f.resume(0, { readResult, preflight: async snapshot => {
+    if (snapshot.state === 'preflight' && snapshot.context.pendingContextUpdate) throw new Error('FIX1_BARRIER_OBSERVED');
+    throw new Error('FIX1_OLD_CONTEXT_ADMISSION');
+  } });
+  expect(result.blockers).toContain('FIX1_BARRIER_OBSERVED');
+  const journal = f.store().readJournal('run1').filter(row => row.revision > before.revision);
+  const barrier = journal.findIndex(row => row.event.body.kind === 'PHASE_READY');
+  const adopted = journal.slice(0, barrier).filter(row => row.event.body.kind === 'WORKER_RESULT' && row.event.phase === phase);
+  expect(adopted).toHaveLength(phase === 'judge' ? 1 : 3);
+  const after = f.store().load('run1');
+  expect(after.context.objections.filter(item => item.id.includes('/review/r1/'))).toHaveLength(3);
+  if (phase === 'ballot') {
+    expect(after.context.objections.filter(item => item.id.includes('/review/r1/')).every(item => item.status === 'closed' && item.history.length === 1)).toBe(true);
+    expect(after.context.objections.filter(item => item.id.includes('/ballot/r1/'))).toHaveLength(3);
+    expect(after.context.control.stagedQuestions).toHaveLength(3);
+  }
+  expect(f.calls).toHaveLength(callsBefore); f.close();
+}, 60000);
+
+it('fix1 persists the start owner before the first accepted epoch event and a crash', async () => {
+  const f = scenario(), options = f.options('start'), target = f.store(); let ownerBeforeCommit = false;
+  options.store = new Proxy(target, { get(store, property) {
+    if (property === 'commitTransition') return (...args: Parameters<typeof target.commitTransition>) => {
+      ownerBeforeCommit = existsSync(join(f.root, 'controllers', `${hashArtifact('controller-epoch', args[2].clockReceipt.processEpoch)}.json`));
+      store.commitTransition(...args); throw new Error('FIX1_FIRST_EVENT_CRASH');
+    };
+    const value = Reflect.get(store, property); return typeof value === 'function' ? value.bind(store) : value;
+  } });
+  await runController(options);
+  expect(f.store().load('run1').context.activeBudget.lastReceipt.processEpoch).toBe(options.processEpoch);
+  expect(ownerBeforeCommit).toBe(true);
+  expect(await f.resume()).toMatchObject({ state: 'completed', settlement: 'settled' }); f.close();
+}, 60000);
+
+it('fix1 persists an active successor owner before its first accepted recovery event', async () => {
+  const f = scenario(); let lost = false;
+  f.hook(async () => { if (!lost) { lost = true; throw new Error('FIX1_ACTIVE_OWNER_LOSS'); } });
+  await runController(f.options('start'));
+  const target = f.store(), options = { ...f.options('resume'), processEpoch: 'fix1-active-successor' }; let ownerBeforeCommit = false;
+  options.store = new Proxy(target, { get(store, property) {
+    if (property === 'commitTransition') return (...args: Parameters<typeof target.commitTransition>) => {
+      ownerBeforeCommit = existsSync(join(f.root, 'controllers', `${hashArtifact('controller-epoch', args[2].clockReceipt.processEpoch)}.json`));
+      store.commitTransition(...args); throw new Error('FIX1_RECOVERY_EVENT_CRASH');
+    };
+    const value = Reflect.get(store, property); return typeof value === 'function' ? value.bind(store) : value;
+  } });
+  await runController(options);
+  expect(f.store().load('run1').context.activeBudget.lastReceipt.processEpoch).toBe('fix1-active-successor');
+  expect(ownerBeforeCommit).toBe(true);
+  expect(await f.resume()).toMatchObject({ state: 'completed', settlement: 'settled' }); expect(f.calls).toHaveLength(10); f.close();
+}, 60000);
+
+for (const kind of ['answers', 'extend'] as const) it(`fix1 records the paused ${kind} owner's epoch before its early return`, async () => {
+  const f = scenario({ questionWaves: 1 });
+  await runController(f.options('start'));
+  const before = f.store().load('run1'), batch = before.context.control.questionBatch!;
+  if (kind === 'answers') await submitControl(f.root, { kind, requestId: 'fix1-draft', runId: 'run1', batch: { requestId: 'fix1-draft', batchId: batch.id, origin: batch.origin, baseContextHash: batch.baseContextHash, answers: [], finalized: false } });
+  else await submitControl(f.root, { kind, requestId: 'fix1-extension', runId: 'run1', extension: { id: 'fix1-extension', baseRevision: before.revision, authorizationReceipt: 'fixture-user-authorization', expiresAt: Date.now() + 100000, additionalClarificationBatches: 0, additionalRounds: 0, additionalActiveBudgetMs: 1000 } });
+  expect(await f.resume()).toMatchObject({ state: 'needs_user', settlement: 'settled' });
+  const after = f.store().load('run1');
+  // Paused accounting retains its closed interval receipt; the accepted event
+  // itself still belongs to the new owner and needs a durable identity first.
+  expect(after.context.activeBudget.lastReceipt).toEqual(before.context.activeBudget.lastReceipt);
+  const event = f.store().readJournal('run1').filter(row => row.event.body.kind === (kind === 'answers' ? 'ANSWER_BATCH' : 'EXTEND')).at(-1)!.event;
+  expect(event.clockReceipt.processEpoch).not.toBe(before.context.activeBudget.lastReceipt.processEpoch);
+  expect(existsSync(join(f.root, 'controllers', `${hashArtifact('controller-epoch', event.clockReceipt.processEpoch)}.json`))).toBe(true);
+  expect(f.calls).toHaveLength(3); f.close();
+}, 60000);
+
+function latestReport(f: ReturnType<typeof scenario>, outcome: import('../../src/domain/contracts.js').RunOutcome) {
+  const ref = outcome.reports.filter(item => item.kind === 'report-json').at(-1)!;
+  expect(ref).toBeDefined();
+  const report = JSON.parse(Buffer.from(f.store().artifacts.readArtifact(ref)).toString('utf8'));
+  return { ...report, settings: report.mapping.flatMap((entry: { observations: unknown[] }) => entry.observations) };
+}
+it('fix1 retains receipt-backed settings when settling recovers a physically launched attempt', async () => {
+  const f = scenario(), options = f.options('start'), target = f.store(); let failed = false;
+  options.store = new Proxy(target, { get(store, property) {
+    if (property === 'commitTransition') return (...args: Parameters<typeof target.commitTransition>) => {
+      if (!failed && args[2].body.kind === 'LAUNCH_RECEIPT_RECORDED') { failed = true; throw new Error('FIX1_PRE_RECEIPT_CRASH'); }
+      return store.commitTransition(...args);
+    };
+    const value = Reflect.get(store, property); return typeof value === 'function' ? value.bind(store) : value;
+  } });
+  const result = await runController(options);
+  expect(result).toMatchObject({ state: 'blocked', settlement: 'settled' });
+  expect(f.calls).toHaveLength(1);
+  expect(latestReport(f, result).settings).toEqual([expect.objectContaining({ role: 'openai', exposed: { route: 'codex', model: 'gpt-6.1-sol', effort: 'max' } })]); f.close();
+}, 60000);
+it('fix1 recovers immutable settings after a post-commit crash before the launch sidecar', async () => {
+  const f = scenario(), options = f.options('start'), target = f.store(); let crashed = false;
+  options.store = new Proxy(target, { get(store, property) {
+    if (property === 'load' && crashed) return () => { throw new Error('FIX1_DEAD_PROCESS'); };
+    if (property === 'commitTransition') return (...args: Parameters<typeof target.commitTransition>) => {
+      const result = store.commitTransition(...args);
+      if (args[2].body.kind === 'LAUNCH_RECEIPT_RECORDED') { crashed = true; throw new Error('FIX1_POST_RECEIPT_CRASH'); }
+      return result;
+    };
+    const value = Reflect.get(store, property); return typeof value === 'function' ? value.bind(store) : value;
+  } });
+  await runController(options);
+  const first = Object.values(f.store().load('run1').context.issuedLogicalTasks).find(task => task.binding)!;
+  expect(first.stage).toBe('receipt_recorded');
+  expect(existsSync(join(f.root, 'launch-receipts', `${hashArtifact('logical-task', first.reservation.logicalTaskKey)}.json`))).toBe(false);
+  const result = await f.resume();
+  expect(result).toMatchObject({ state: 'completed', settlement: 'settled' });
+  expect(latestReport(f, result).settings).toHaveLength(10);
+  expect(f.calls).toHaveLength(10); expect(new Set(f.calls.map(call => call.reservation.clientAttemptKey)).size).toBe(10); f.close();
+}, 60000);
+it('fix1 restores a lost launch sidecar from the same original immutable receipt', async () => {
+  const f = scenario(); let crashed = false;
+  f.hook(async () => { if (!crashed) { crashed = true; throw new Error('FIX1_RESULT_CRASH'); } });
+  await runController(f.options('start'));
+  const key = f.calls[0]!.reservation.logicalTaskKey, file = join(f.root, 'launch-receipts', `${hashArtifact('logical-task', key)}.json`), original = readFileSync(file, 'utf8');
+  unlinkSync(file); // Deliberate loss of one task-owned temporary fixture sidecar.
+  const result = await f.resume();
+  expect(result).toMatchObject({ state: 'completed', settlement: 'settled' });
+  expect(readFileSync(file, 'utf8')).toBe(original);
+  expect(latestReport(f, result).settings).toHaveLength(10); expect(f.calls).toHaveLength(10); f.close();
+}, 60000);
+
+it('fix1 reports unavailable original launch proof without fabricating exposed settings or a successful exit', async () => {
+  const settings = { lookupMissing: false }, f = scenario(settings); let crashed = false;
+  f.hook(async () => { if (!crashed) { crashed = true; throw new Error('FIX1_RESULT_CRASH'); } });
+  await runController(f.options('start'));
+  const key = f.calls[0]!.reservation.logicalTaskKey;
+  unlinkSync(join(f.root, 'launch-receipts', `${hashArtifact('logical-task', key)}.json`));
+  settings.lookupMissing = true;
+  const result = await f.resume();
+  expect(result).toMatchObject({ state: 'completed', decision: 'blocked', settlement: 'settled', blockers: expect.arrayContaining(['LAUNCH_PROOF_UNAVAILABLE']) });
+  const report = latestReport(f, result);
+  expect(report.settings).toHaveLength(10);
+  expect(report.settings.filter((setting: { exposed: unknown }) => setting.exposed === null)).toHaveLength(1);
+  expect(report.outcome).toBe('blocked');
+  expect((await import('../../src/cli/index.js')).outcomeExitCode(result)).toBe(3);
+  expect(f.calls).toHaveLength(10); f.close();
+}, 60000);
+
+for (const recorded of [false, true]) it(`fix1 inspect rejects a settled model-only recovery with ${recorded ? 'an unknown check receipt' : 'an unrecovered check marker'}`, async () => {
+  const f = scenario(), declared = checkOptions(f), options = f.options('start'); let record: import('../../src/domain/contracts.js').EvidenceRecord | null = null;
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  const collector = createEvidenceCollector({ sourceManifest: declared.evidenceManifest, environment: {}, artifacts: f.store().artifacts,
+    retrieve: async () => { throw new Error('UNEXPECTED_RETRIEVAL'); },
+    executeCheck: async ({ check }) => ({ kind: 'completed', executed: check, stdout: Buffer.from('fixture output'), stderr: Buffer.alloc(0), exitCode: 0, receiptId: 'fixture-check', resource: { id: 'fixture-unknown', pid: 12345, processGroupId: 12345, startedAtMs: 100, parentExitCode: 0, parentSignal: null, settlement: 'unverifiable', stopRequested: true, settlementReceiptId: null } }),
+  });
+  options.collectEvidence = async (request, snapshot) => { record = await collector.collectEvidence(request, snapshot.context.request.scope); throw new Error('FIX1_CHECK_RECEIPT_LOSS'); };
+  await runController(options);
+  const commit = (body: ControlEventBody, id?: string) => {
+    const snapshot = f.store().load('run1'), event: ValidatedEvent = { id: id ?? `fix1-recovery-${snapshot.revision}`, runId: 'run1', schemaVersion: 1, actor: { kind: body.kind === 'CANCEL' ? 'user' : 'adapter', receiptId: 'fixture-model-only-recovery' }, round: snapshot.context.roundsUsed, phase: null, clockReceipt: captureClock(options.clock, options.processEpoch), body };
+    f.store().commitTransition('run1', snapshot.revision, event, reduceRun(snapshot, event)); return event;
+  };
+  // Negative recovery fixture: the reducer accepts model-only settlement, while
+  // Task7 owns the additional evidence-marker/resource guard. No snapshot rewrite.
+  if (recorded) {
+    const intent = f.store().pendingEffects('run1').find(intent => intent.kind === 'evidence')!;
+    const event = commit({ kind: 'EVIDENCE_RECORDED', data: { record: record! } }, intent.key);
+    f.store().recordEffectReceipt(intent.key, { eventId: event.id, value: JSON.parse(canonicalJson(record)) as JsonValue }, f.store().load('run1').revision);
+  }
+  commit({ kind: 'CANCEL', data: {} });
+  commit({ kind: 'SETTLED', data: { receipt: f.store().artifacts.putArtifact(Buffer.from('Fixture model-only exit; no check settlement'), 'fixture-model-settlement') } });
+  expect(f.store().load('run1').state).toBe('cancelled');
+  const inspected = f.inspect();
+  expect(inspected.settlement).toBe('unverifiable');
+  expect(await f.resume()).toMatchObject({ state: 'cancelled', settlement: 'unverifiable' });
+  const stdout: string[] = [];
+  expect(await (await import('../../src/cli/index.js')).runCli(['cancel', '--workspace', f.request.workspace, '--run', 'run1', '--json'], { stdout: text => stdout.push(text), stderr: () => {}, wait: async () => {} })).not.toBe(130);
+  expect(f.calls).toHaveLength(6); f.close();
 }, 60000);

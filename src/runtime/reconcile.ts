@@ -197,6 +197,7 @@ import Database from 'better-sqlite3';
 import type { JsonValue } from '../domain/contracts.js';
 import { idSchema, jsonValueSchema, runSnapshotSchema } from '../domain/schemas.js';
 import { readArtifact } from '../store/artifacts.js';
+import type { ArtifactStore } from '../store/artifacts.js';
 import type { TransitionResult, ValidatedEvent } from '../domain/contracts.js';
 const projectedKinds = new Set<EffectIntent['kind']>(['evidence', 'question-batch-request', 'candidate-request', 'evaluate-round']);
 export function effectOriginPath(root: string, key: string, eventId: string): string {
@@ -263,4 +264,19 @@ export function readExecutionProjection(root: string, runId: string) {
       return { ...base, binding, derived: snapshot.state === phase ? 'eligible' : 'held', reason: snapshot.state === phase ? 'CURRENT_CORRELATION' : 'WAITING_BARRIER' };
     }) };
   } finally { reader.close(); }
+}
+
+/** The controller and read-only inspect require the same check-resource proof. */
+export function evidenceResourcesSettled(root: string, snapshot: RunSnapshot, execution?: ReturnType<typeof readExecutionProjection>): boolean {
+  const artifactRoot = join(root, 'artifacts');
+  const artifacts: ArtifactStore = {
+    root: artifactRoot,
+    readArtifact: ref => readArtifact(ref, artifactRoot),
+    putArtifact: () => { throw new Error('EVIDENCE_SETTLEMENT_READ_ONLY'); },
+  };
+  if (!snapshot.context.control.evidence.every(record => readEvidenceReceipt(record, artifacts).checkResourceState !== 'unverifiable')) return false;
+  if (!execution && !existsSync(join(root, 'evidence-started'))) return true;
+  const projection = execution ?? readExecutionProjection(root, snapshot.context.request.runId);
+  return projection.consistent && projection.revision === snapshot.revision &&
+    !projection.effects.some(effect => effect.kind === 'evidence' && effect.derived === 'held_may_have_executed');
 }

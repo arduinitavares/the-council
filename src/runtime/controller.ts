@@ -9,7 +9,7 @@ import { buildQuestionBatch } from '../input/questions.js';
 import type { SourceManifest } from '../evidence/scope.js';
 import { freezeEvidenceBundle, readEvidenceReceipt } from '../evidence/adapter.js';
 import { runPreflight, type AdmissionEvidence, type PreflightInput } from '../policy/preflight.js';
-import { OrcaTransport, launchReceiptSchema, type LaunchReceipt, type WorkerPacket, type PreparedWorkerInput } from '../orca/transport.js';
+import { LaunchControlError, OrcaTransport, launchReceiptSchema, type LaunchReceipt, type WorkerPacket, type PreparedWorkerInput } from '../orca/transport.js';
 import { WorkerBridge } from '../workers/bridge.js';
 import { decodeProviderOutputWithReceipt } from '../workers/protocol.js';
 import type { ArtifactStore } from '../store/artifacts.js';
@@ -18,7 +18,7 @@ import { renderReport } from '../reports/render.js';
 import { captureClock } from './clocks.js';
 import { overdue } from './deadlines.js';
 import { acknowledgeControl, controlEventBody, publishAtomic, readBoundedJson, readInbox, validateControl, type ControlRequest } from './inbox.js';
-import { controllerIdentity, observePriorOwner, originalPrepared, persistPrepared, recordOwner, resourcesSettled, type PriorOwnerEvidence, EvidenceExecutionJournal, type RecoverEvidence, retainEffectOrigins, markSemanticStarted, readExecutionProjection } from './reconcile.js';
+import { controllerIdentity, observePriorOwner, originalPrepared, persistPrepared, recordOwner, resourcesSettled, evidenceResourcesSettled, type PriorOwnerEvidence, EvidenceExecutionJournal, type RecoverEvidence, retainEffectOrigins, markSemanticStarted, readExecutionProjection } from './reconcile.js';
 
 const seats = ['openai', 'gemini', 'claude'] as const;
 const settledStates = ['needs_user', 'needs_context', 'blocked', 'completed', 'cancelled'];
@@ -201,22 +201,43 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
     preflightRequired = false;
     return { input: input!, decision, receipt };
   };
-  const evidenceSafe = (snapshot: RunSnapshot) => snapshot.context.control.evidence.every(record => readEvidenceReceipt(record, store.artifacts).checkResourceState !== 'unverifiable');
+  const evidenceSafe = (snapshot: RunSnapshot) => evidenceResourcesSettled(root, snapshot);
   const outcome = (): RunOutcome => {
     const s = load(), c = s.context;
-    return { decision: s.state === 'completed' ? 'unanimous' : s.state === 'cancelled' ? 'cancelled' : s.state === 'blocked' || blockers.length ? 'blocked' : 'unresolved', state: s.state, settlement: resourcesSettled(s) && evidenceSafe(s) && settledStates.includes(s.state) ? 'settled' : 'unverifiable', reports, blockers: [...new Set([...blockers, ...(c.pauseReason ? [c.pauseReason] : []), ...(c.inferenceBlock ? [c.inferenceBlock] : [])])] };
+    return { decision: blockers.includes('LAUNCH_PROOF_UNAVAILABLE') ? 'blocked' : s.state === 'completed' ? 'unanimous' : s.state === 'cancelled' ? 'cancelled' : s.state === 'blocked' || blockers.length ? 'blocked' : 'unresolved', state: s.state, settlement: resourcesSettled(s) && evidenceSafe(s) && settledStates.includes(s.state) ? 'settled' : 'unverifiable', reports, blockers: [...new Set([...blockers, ...(c.pauseReason ? [c.pauseReason] : []), ...(c.inferenceBlock ? [c.inferenceBlock] : [])])] };
   };
   const launchPath = (key: string) => join(root, 'launch-receipts', `${hashArtifact('logical-task', key)}.json`);
   const rememberLaunch = (receipt: LaunchReceipt) => {
     const file = launchPath(receipt.binding.logicalTaskKey);
     if (!publishAtomic(file, receipt.receipt) && canonicalJson(readBoundedJson(file)) !== canonicalJson(receipt.receipt)) throw new Error('LAUNCH_PROOF_CONFLICT');
   };
-  const saveReport = () => {
+  const dispatch = async (reservation: LaunchReservation, prepare: () => PreparedWorkerInput) => {
+    try {
+      const receipt = await bridge.dispatch(reservation, prepare);
+      if (receipt) rememberLaunch(receipt);
+      return receipt;
+    } catch (error) {
+      if (error instanceof LaunchControlError) rememberLaunch(error.receipt);
+      throw error;
+    }
+  };
+  const saveReport = async () => {
     const s = load(), c = s.context;
     const settings: import('../reports/render.js').ObservedSettings[] = [];
     for (const task of Object.values(c.issuedLogicalTasks)) {
       const file = launchPath(task.reservation.logicalTaskKey);
-      if (!task.binding || !existsSync(file)) continue;
+      if (!task.binding) continue;
+      if (!existsSync(file)) {
+        // A committed binding can outlive the controller's receipt sidecar.
+        // Recover only the original fenced attempt; never prepare a new call.
+        try { await dispatch(task.reservation, () => originalPrepared(root, task.reservation.logicalTaskKey, store, runId)); }
+        catch (error) { if (!(error instanceof LaunchControlError)) throw error; }
+      }
+      if (!existsSync(file)) {
+        if (!blockers.includes('LAUNCH_PROOF_UNAVAILABLE')) blockers.push('LAUNCH_PROOF_UNAVAILABLE');
+        settings.push({ role: task.binding.role, requested: task.binding.requested, exposed: null, receiptId: task.binding.authority.receiptId });
+        continue;
+      }
       const ref = artifactRefSchema.parse(readBoundedJson(file));
       const proof = launchReceiptSchema.omit({ receipt: true }).parse(JSON.parse(Buffer.from(store.artifacts.readArtifact(ref)).toString('utf8')));
       if (canonicalJson(proof.binding) !== canonicalJson(task.binding)) throw new Error('LAUNCH_PROOF_BINDING_MISMATCH');
@@ -234,8 +255,8 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
     if (options.mode === 'start') {
       if (!options.request || options.request.runId !== runId) throw new Error('START_REQUEST_REQUIRED');
       store.createRun(createInitialSnapshot(runRequestSchema.parse(options.request) as RunRequest)); owned = true;
-      commit({ kind: 'CLOCK_CHECKPOINT', data: {} });
       recordOwner(root, controllerIdentity(options.processEpoch));
+      commit({ kind: 'CLOCK_CHECKPOINT', data: {} });
       evidenceJournal = new EvidenceExecutionJournal(root, store, load(), true, options.evidenceManifest);
     } else {
       let s = load();
@@ -244,6 +265,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
       const owner = options.priorOwner ? await options.priorOwner(s) : observePriorOwner(root, s, store);
       store.artifacts.readArtifact(owner.receipt);
       if (!owner.exited) { blockers.push('PRIOR_CONTROLLER_EXIT_UNPROVEN'); return outcome(); }
+      recordOwner(root, controllerIdentity(options.processEpoch));
       // Paused extensions bind this exact revision. Consume before RESUME/checkpoint.
       if (settledStates.includes(s.state)) {
         consume(); s = load();
@@ -251,7 +273,6 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
         else if (s.context.control.questionBatch && !s.context.control.pendingAnswerBatch?.finalized) return outcome();
         else commit({ kind: 'RESUME', data: {} }, 'user');
       } else commit({ kind: 'CLOCK_CHECKPOINT', data: {} }, 'controller', null, randomUUID(), true);
-      recordOwner(root, controllerIdentity(options.processEpoch));
       if (load().state === 'reconciling') {
         const observations: Extract<ControlEventBody, { kind: 'RECONCILED' }>['data']['observations'][number][] = [];
         let aggregate = true;
@@ -259,7 +280,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
           consume();
           if (load().state !== 'reconciling') break;
           if (t.stage === 'pending_execution' || load().context.control.settledResourceTasks.includes(t.reservation.logicalTaskKey)) continue;
-          if (!t.binding) { const receipt = await bridge.dispatch(t.reservation, () => originalPrepared(root, t.reservation.logicalTaskKey, store, runId)); if (receipt) rememberLaunch(receipt); }
+          if (!t.binding) await dispatch(t.reservation, () => originalPrepared(root, t.reservation.logicalTaskKey, store, runId));
           const current = load().context.issuedLogicalTasks[t.reservation.logicalTaskKey]!;
           if (!current.binding) { aggregate = false; continue; }
           const binding = current.binding;
@@ -298,7 +319,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
       let s = load(), c = s.context;
       if (settledStates.includes(s.state)) {
         recoverMirrors();
-        const rendered = saveReport();
+        const rendered = await saveReport();
         // Only receipt/report/release housekeeping is permitted after a settled pause.
         for (const intent of store.pendingEffects(runId)) {
           if (intent.kind === 'report') complete(intent, rendered);
@@ -318,7 +339,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
           consume();
           if (task.stage === 'pending_execution' || task.settlement === 'settled' && c.control.settledResourceTasks.includes(task.reservation.logicalTaskKey)) continue;
           let binding = task.binding;
-          if (!binding) { await bridge.dispatch(task.reservation, () => originalPrepared(root, task.reservation.logicalTaskKey, store, runId)); binding = load().context.issuedLogicalTasks[task.reservation.logicalTaskKey]!.binding; }
+          if (!binding) { await dispatch(task.reservation, () => originalPrepared(root, task.reservation.logicalTaskKey, store, runId)); binding = load().context.issuedLogicalTasks[task.reservation.logicalTaskKey]!.binding; }
           if (!binding) continue;
           const arming = store.effectRecord(`${binding.logicalTaskKey}/deadline`);
           if (arming.status === 'pending_execution' && options.armDeadline) await options.armDeadline(arming.intent, binding, bridge);
@@ -342,9 +363,9 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
           }
           commit({ kind: 'SETTLED', data: { receipt: put('aggregate-settlement', { tasks: current.context.control.settledResourceTasks, evidence: current.context.control.evidence.map(r => r.observationReceipt) }) } }, 'adapter'); continue;
         }
-        blockers.push('UNVERIFIABLE_LIFECYCLE'); saveReport(); return outcome();
+        blockers.push('UNVERIFIABLE_LIFECYCLE'); await saveReport(); return outcome();
       }
-      if (s.state === 'reconciling') { blockers.push('UNVERIFIABLE_LIFECYCLE'); saveReport(); return outcome(); }
+      if (s.state === 'reconciling') { blockers.push('UNVERIFIABLE_LIFECYCLE'); await saveReport(); return outcome(); }
       if (s.state === 'preflight' || preflightRequired && ['prepare_round', 'prepare_candidate', 'evaluate_round'].includes(s.state)) {
         const next = s.state === 'prepare_candidate' ? { phase: 'judge' as const, roles: ['judge'] as const } : s.state === 'prepare_round' ? { phase: 'review' as const, roles: seats } : null;
         if (!await admission(next)) continue; s = load(); c = s.context;
@@ -356,7 +377,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
       }
       const pending = store.pendingEffects(runId);
       const launch = pending.find(intent => intent.kind === 'launch');
-      if (c.pendingContextUpdate && resourcesSettled(s) && ['reviewing', 'prepare_candidate', 'judging', 'confirming', 'evaluate_round'].includes(s.state)) { commit({ kind: 'PHASE_READY', data: {} }); continue; }
+      if (c.pendingContextUpdate && resourcesSettled(s) && ['prepare_candidate', 'evaluate_round'].includes(s.state)) { commit({ kind: 'PHASE_READY', data: {} }); continue; }
       if (launch && !c.pendingContextUpdate) {
         const reservation = launch.input as unknown as LaunchReservation;
         const roles = pending.filter(intent => intent.kind === 'launch' && (intent.input as unknown as LaunchReservation).phase === reservation.phase).map(intent => (intent.input as unknown as LaunchReservation).role);
@@ -372,8 +393,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
         if (load().state !== s.state || load().context.pendingContextUpdate || overdue(load(), now()) !== 'pending') continue;
         persistPrepared(root, prepared, store);
         try {
-          const receipt = await bridge.dispatch(reservation, () => prepared);
-          if (receipt) rememberLaunch(receipt);
+          const receipt = await dispatch(reservation, () => prepared);
           consume();
           if (receipt) {
             const deadline = store.effectRecord(`${reservation.logicalTaskKey}/deadline`);
@@ -432,7 +452,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
             markSemanticStarted(root, intent);
             put('candidate-action', action); notified.add(intent.key); await options.onAction?.(action);
           }
-        } else if (intent.kind === 'report') { complete(intent, saveReport()); effectProgress = true; }
+        } else if (intent.kind === 'report') { complete(intent, await saveReport()); effectProgress = true; }
       }
       if (effectProgress) continue;
       s = load(); c = s.context;
@@ -452,7 +472,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
         if (['settling', 'reconciling'].includes(load().state)) continue;
         if (resourcesSettled(load())) {
           consume();
-          if (preflightRequired) {
+          if (preflightRequired && !load().context.pendingContextUpdate) {
             const phase = load().state === 'judging' ? { phase: 'ballot' as const, roles: seats } : load().state === 'reviewing' ? { phase: 'judge' as const, roles: ['judge'] as const } : null;
             if (!await admission(phase)) continue;
           }
@@ -464,7 +484,7 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
         for (const request of requests) if (!load().context.requiredEvidenceIds.includes(request.id)) commit({ kind: 'EVIDENCE_REQUESTED', data: { request } });
         if (!load().context.pendingEvidenceIds.length) commit({ kind: 'REQUEST_CANDIDATE', data: {} });
         continue;
-      } else if (c.pendingContextUpdate && resourcesSettled(s) && ['prepare_candidate', 'evaluate_round'].includes(s.state)) { commit({ kind: 'PHASE_READY', data: {} }); continue; }
+      }
       await wait(poll);
       commit({ kind: 'CLOCK_CHECKPOINT', data: {} });
     }

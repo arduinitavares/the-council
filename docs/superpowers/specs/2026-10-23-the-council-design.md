@@ -4,6 +4,8 @@ Date: 2026-10-23
 
 Status: Approved by the user on 2026-10-23 after a fresh independent builder check. Implementation planning is authorized. This document authorizes no implementation or installation.
 
+Revision: On 2026-10-24, the user authorized `council.yaml` for reviewer and judge selection, with the current models as defaults.
+
 ## Purpose
 
 The Council helps the user make difficult decisions. Most topics concern software architecture, but the workflow accepts other topics.
@@ -17,8 +19,9 @@ The result is either a unanimous recommendation or a precise account of the unre
 - A skill starts and supervises the workflow through Orca orchestration.
 - The skill always prepares a topic-specific handoff. This applies to new sessions and long conversations.
 - The handoff follows the existing `handoff` skill and stays in the operating system temporary directory.
-- The reviewer seats are Astra Ultra through Codex, Argon High through Antigravity, and Opus High through Antigravity.
-- A fresh Astra Ultra session acts as judge between rounds. The judge is separate from the Astra reviewer.
+- `council.yaml` selects the reviewers and judge by exact model, route, and effort. The reviewer seats remain OpenAI, Gemini, and Claude.
+- Reviewer defaults are Astra Ultra through Codex, Argon High through Antigravity, and Opus High through Antigravity.
+- A fresh configured judge acts between rounds. Its default is Astra Ultra. The judge is separate from every reviewer session.
 - The judge validates evidence and challenges weak arguments. It cannot overrule a reviewer and has no acceptance vote.
 - All three reviewers must accept the same recommendation.
 - Three rounds are the default limit. Remaining disagreements return to the user.
@@ -46,7 +49,7 @@ It must not claim that a state machine makes model reasoning deterministic. It m
 1. The calling agent acts as judge. This reduces launches but shares the calling agent's earlier context and commitments.
 2. A fresh judge checks each round. This adds launches but separates the judge's context from the preceding discussion.
 
-The user selected a fresh judge. The user selected Astra Ultra for that role.
+The user selected a fresh judge, with Astra Ultra as its configurable default.
 
 ### Proposed implementation form
 
@@ -92,6 +95,73 @@ The three reviewers can reject that synthesis. The calling agent has no addition
 
 ## Model selection and placement
 
+### Configuration file and defaults
+
+The planned runner reads `council.yaml`. Its default location is the Council package root, beside `package.json`.
+
+This location is independent of the reviewed project's workspace. A linked skill resolves the real Council package path.
+
+`council start --config FILE` selects another complete configuration. Relative paths resolve against the invocation's recorded working directory.
+
+There is no directory search, environment override, or configuration merge. An unreadable or missing selected file fails before any provider launch.
+
+The shipped file contains these defaults:
+
+```yaml
+version: 1
+
+reviewers:
+  openai:
+    route: codex
+    model: gpt-6-astra
+    effort: ultra
+  gemini:
+    route: antigravity
+    model: gemini-4-argon-high
+    effort: high
+  claude:
+    route: antigravity
+    model: claude-opus-5-5-high
+    effort: high
+
+judge:
+  route: codex
+  model: gpt-6-astra
+  effort: ultra
+```
+
+The three reviewer keys are stable seat identities. Replacing Astra with Sol does not rename the `openai` seat or its objection ownership.
+
+Each reviewer must use a model from its named family. The judge has its own configuration and can use any currently admitted, qualified model.
+
+All entries still launch through Orca. `codex` and `antigravity` select the existing provider adapters, not alternative orchestration systems.
+
+The accepted file is one UTF-8 YAML 1.2 document of at most 65,536 bytes. Every displayed field is required.
+
+Reject unknown fields, duplicate keys, aliases, merge keys, unsupported tags, invalid values, and unsupported schema versions. Do not expand environment variables or includes.
+
+This file selects models only. It cannot define commands, credentials, permission grants, helpers, or changes to the consensus rules.
+
+Exact model IDs and efforts are validated against current policy, catalog evidence, and route qualifications. Short names such as `sonnet` are not model IDs.
+
+A supported replacement within an existing adapter needs no code change. A new provider or required control can require adapter work and qualification.
+
+### Frozen run configuration
+
+Before any effect, the runner saves the original configuration bytes and a canonical validated configuration as immutable run artifacts.
+
+It records the source path, raw-file SHA-256, configuration schema version, and canonical configuration hash. The run manifest binds all four worker roles.
+
+The machine context, round bindings, launch registry, and reports use that saved configuration hash. Reviewer phases use the same seat-to-model mapping throughout a run.
+
+Edits to `council.yaml` apply only to new runs. There is no hot reload or mid-run model replacement, including during format correction.
+
+Resume uses the saved configuration. It does not reread or require the original file. A missing or corrupt saved configuration blocks launch.
+
+Resume still rechecks current policy, availability, allowance, concurrency, and qualification. A previously valid snapshot does not authorize a currently forbidden launch.
+
+### Default routes and launch checks
+
 | Seat | Route through Orca | Exact model | Requested effort |
 | --- | --- | --- | --- |
 | OpenAI reviewer | Codex | `gpt-6-astra` | `ultra` |
@@ -101,7 +171,7 @@ The three reviewers can reject that synthesis. The calling agent has no addition
 
 The runner reads the execution host's current model policy before each assignment or fallback decision. It does not change that policy.
 
-This document records the user's selection of Astra Ultra. Actual launch remains subject to supported settings, the applicable policy, and qualified route controls.
+The table shows the shipped defaults. Actual launch uses the frozen configuration and remains subject to current policy and qualified route controls.
 
 An Ultra launch requires verified control of any descendants. The first version permits no worker-created helpers or nested coordinators.
 
@@ -119,9 +189,13 @@ At most four visible workstreams can be active, including the coordinator. Revie
 
 All reviewer tasks must settle before the judge starts. The judge must settle before the final reviewer responses start.
 
-This order prevents concurrent Astra reviewer and judge workers. The runner also checks other active Astra ownership, including the calling session.
+This order prevents concurrent reviewer and judge workers. The runner derives model-specific limits from the frozen roster and current active ownership.
 
-An active Astra caller does not stop counting while it waits. The first version returns `blocked` before worker launch when that conflict exists.
+An active Astra caller still counts while it waits. With the default roster, that caller conflicts with the configured Astra assignments.
+
+If neither the reviewers nor judge use Astra, caller identity alone does not create an Astra worker conflict. Other policy and slot limits still apply.
+
+The first version returns `blocked` before worker launch when the configured schedule requires unapproved concurrency.
 
 The result explains two remedies: resume from a non-Astra calling agent, or obtain specific additional-concurrency authorization.
 
@@ -163,7 +237,7 @@ Each round has one candidate proposal and one fresh judge. A candidate has an im
 2. The coordinator publishes all three outputs in a stable seat order. Later rounds include the preceding arguments and unresolved points.
 3. The coordinator compiles one candidate from those outputs. It preserves alternatives, objections, assumptions, and amendment provenance.
 4. The candidate and evidence bundle become immutable for this round. All initial reviewer tasks settle.
-5. A fresh Astra Ultra judge checks the frozen material. It returns evidence assessments and specific challenges. The judge then settles.
+5. A fresh configured judge checks the frozen material. It returns evidence assessments and specific challenges. The judge then settles.
 6. Three fresh reviewer tasks receive the identical candidate, evidence bundle, judge report, and objection record.
 7. Each reviewer responds to the challenges and submits its own explicit acceptance or rejection of that exact candidate.
 8. The runner validates all responses. It either records consensus, starts the next permitted round, or returns the unresolved points.
@@ -243,7 +317,7 @@ A new assumption introduced only in a final response changes the candidate. That
 Consensus requires all of the following:
 
 - Exactly one current, valid final response from each configured reviewer seat.
-- Every response belongs to the same run, round, candidate hash, evidence bundle hash, and judge report hash.
+- Every response belongs to the same run, configuration hash, round, candidate hash, evidence bundle hash, and judge report hash.
 - Every reviewer explicitly accepts the candidate and its stated tradeoffs, assumptions, and uncertainty.
 - No reviewer retains an open objection to that candidate.
 - Every reviewer addresses the judge's challenges. Remaining uncertainty appears in the frozen candidate and final report.
@@ -263,7 +337,7 @@ The deterministic core follows this relation:
 
 `next_state, effect_intents = transition(current_state, validated_event)`
 
-The same machine version, saved context, and ordered event history must produce the same state and effect intents.
+The same machine version, frozen configuration, saved context, and ordered event history must produce the same state and effect intents.
 
 This guarantee does not extend to another model call. It also does not imply that different event histories produce identical recommendations.
 
@@ -344,7 +418,7 @@ If launch outcome is unknown, the runner retains the original receipt and inspec
 
 If the transport cannot resolve that uncertainty, the run stays blocked. A timeout is an observation, not proof that the worker exited.
 
-The runner records the machine, schema, packet, prompt, and dependency versions. An incompatible checkpoint requires an explicit migration or remains read-only.
+The runner records the machine, schema, configuration, packet, prompt, and dependency versions. An incompatible checkpoint requires an explicit migration or remains read-only.
 
 Default run records live under `.council/runs/<run_id>/` in the task workspace. This internal store is separate from the temporary handoff.
 
@@ -432,6 +506,11 @@ The builder must provide focused tests for these consequential controls:
 - Replay of a recorded history under its pinned machine version gives the same control states and effect intents.
 - A checkpoint cannot silently resume under an incompatible schema or machine version.
 - An Astra caller conflict and a concurrent Astra worker conflict block unapproved launches.
+- The default YAML preserves the selected models and efforts. Qualified same-family replacements preserve stable seats and objection ownership.
+- Invalid, oversized, duplicated, or incomplete configuration fails before launch. A model-family mismatch cannot reduce the three-family review requirement.
+- Editing or deleting the original YAML cannot change an existing run or its recovery. A corrupt saved configuration blocks instead of using current defaults.
+- A configured model or effort change requires matching policy, catalog, and route evidence. Old-model qualification never qualifies its replacement.
+- A roster without Astra avoids a false Astra caller conflict. A configured Astra judge still requires its own available slot.
 - Unsupported effort, missing effective-setting evidence, exhausted allowance, and permission denial have distinct outcomes.
 - Cancellation, timeouts, connection loss, and temporary-file loss preserve the correct unknown or blocked state.
 - All owned resources have inspected settlement and cleanup evidence before operational completion.
@@ -449,7 +528,7 @@ The implementation plan must define schemas, module boundaries, package layout, 
 
 It must map the adapter contract to the installed Orca capabilities. Any missing required capability remains a reported gate.
 
-The builder must preserve the selected model roles, unanimous acceptance rule, three-round default, fresh judge, and no-override judge authority.
+The builder must preserve the configured model roles and shipped defaults, unanimous acceptance rule, three-round default, and fresh judge without override authority.
 
 Implementation, live council qualification, global skill installation, Git initialization, and policy changes remain outside this design-writing task.
 
@@ -484,3 +563,7 @@ The supplied-text route qualifies assessment only. A fresh check of the substant
 That check used a new Argon High session and made no tool calls. The provider and terminal exited with code `0`.
 
 The coordinator then updated only status and review-evidence text. The user approved the design on 2026-10-23 and requested the implementation plan and state diagrams.
+
+The 2026-10-24 configuration amendment supersedes fixed-model wording. A fresh Argon High review returned **READY**, with no material findings.
+
+See [the configuration amendment review](../reviews/2026-10-24-the-council-config-review.md). Only status and review-evidence text changed after that review.

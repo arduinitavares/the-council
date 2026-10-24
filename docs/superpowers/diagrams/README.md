@@ -10,6 +10,10 @@ The calling agent writes candidate recommendations. The XState core returns stat
 
 The three reviewers have equal acceptance authority. The fresh judge checks evidence between reviewer phases and has no vote.
 
+The component image shows the default Astra/Argon/Opus roster and Astra judge. `council.yaml` can replace those models within the configured family seats.
+
+Each run freezes its configuration. A different roster changes worker selections, not these 14 control states or consensus authority.
+
 ## Control states
 
 ![Council state map](states-map.png)

@@ -4,23 +4,26 @@
 
 **Goal:** Build an explicitly invoked skill that obtains three equal model-family assessments and a fresh judge report, then returns unanimous advice or unresolved questions.
 
-**Architecture:** A thin skill keeps the calling agent in charge of candidate synthesis. A pure XState reducer emits effect intents. A local controller persists those intents in SQLite and executes them through qualified Orca and evidence adapters.
+**Architecture:** A thin skill keeps the calling agent in charge of candidate synthesis. The runner freezes the reviewer and judge roster from `council.yaml` for each run. A pure XState reducer emits effect intents, which a local controller persists in SQLite and executes through qualified Orca and evidence adapters.
 
-**Tech Stack:** Node.js `22.23.4`, TypeScript `7.0.2`, XState `5.33.3`, Zod `4.6.7`, better-sqlite3 `13.0.3`, Vitest `5.0.5`.
+**Tech Stack:** Node.js `22.23.4`, TypeScript `7.0.2`, XState `5.33.3`, Zod `4.6.7`, YAML `2.9.1`, better-sqlite3 `13.0.3`, Vitest `5.0.5`.
 
-**Spec:** [Approved design](../specs/2026-10-23-the-council-design.md), committed at `1e166a5` and approved by the user on 2026-10-23.
+**Spec:** [Approved design](../specs/2026-10-23-the-council-design.md). The base design was approved on 2026-10-23. The user authorized the YAML configuration amendment on 2026-10-24.
 
 ## Global Constraints
 
-- Reviewer seats: `gpt-6-astra` / `ultra` through Codex, `gemini-4-argon-high` / `high` through Antigravity, and `claude-opus-5-5-high` / `high` through Antigravity.
-- Judge: a fresh `gpt-6-astra` / `ultra` session between reviewer phases, with no acceptance vote.
+- Reviewer seats are `openai`, `gemini`, and `claude`, selected through `council.yaml`. Defaults: `gpt-6-astra` / `ultra`, `gemini-4-argon-high` / `high`, and `claude-opus-5-5-high` / `high`.
+- The judge is configured separately. Its default is `gpt-6-astra` / `ultra` through Codex. Every judge session is fresh and has no acceptance vote.
+- Require exactly one reviewer per named family. Codex routes OpenAI entries; Antigravity routes Gemini and Claude entries. All entries go through Orca.
+- Freeze the complete validated configuration and its hash before any effect. Resume uses that snapshot; original-file edits affect new runs only.
+- YAML selects models, routes, and efforts only. It cannot weaken consensus, phase settlement, policy, permission, or attempt-limit controls.
 - Consensus requires three explicit acceptances of the same immutable candidate, evidence bundle, and judge report.
 - Default maximum: three admitted rounds. A round counts when its first initial-review inference starts.
 - Maximum worker attempts: `7 * maxRounds * 2`, or `42` at the default. Each logical output permits one format correction.
 - Worker attempt timeout: `1_800_000` ms. Invocation timeout: `10_800_000` ms. The earlier deadline always wins.
 - Maximum four visible active workstreams including the caller. One active Astra by default, counting the caller.
 - Reviewer tasks settle before the judge starts. The judge settles before confirmation tasks start.
-- An Astra caller conflict blocks before launch. Version one performs no automatic ownership handoff.
+- A caller conflict with the configured schedule blocks before launch. An Astra caller conflicts with the default roster. Version one performs no automatic ownership handoff.
 - No worker helpers, nested coordinators, AGY Boost, or AGY Teamwork.
 - Use the task's actual Orca workspace. Record the hosting workspace and task-owned process cwd separately.
 - Read the execution host's current `/Users/aaat/.agents/policies/model-policy.md` before assignments and fallback decisions.
@@ -33,10 +36,10 @@
 
 ## Review Focus
 
-1. A malformed, oversized, stale, or forged worker result must never create assent. Tests belong to Tasks 1 and 5.
+1. Malformed or oversized configuration fails before launch; malformed, stale, or forged worker output never creates assent. Tests belong to Tasks 1, 4, and 5.
 2. A crash after external launch but before receipt commit must never create a duplicate worker. Tests belong to Tasks 3 and 5.
-3. An unknown caller model, changed owner, or active Astra caller must block an unproven launch. Tests belong to Tasks 4 and 7.
-4. Source drift, a changed candidate, or a missing temporary handoff must invalidate dependent acceptance. Tests belong to Tasks 1, 6, and 7.
+3. An unknown caller, changed owner, or model-specific slot conflict must block an unproven launch. Derive conflicts from the frozen roster. Tests belong to Tasks 4 and 7.
+4. Source/candidate drift invalidates assent; editing the original YAML does not change an existing run. Missing saved configuration blocks recovery. Tests belong to Tasks 1, 3, 4, 6, and 7.
 5. Deadline expiry, clock regression, cancellation, and connection loss must preserve unknown lifecycle until positive settlement evidence exists. Tests belong to Tasks 5 and 7.
 
 ---
@@ -59,13 +62,14 @@ Use exact dependency versions and commit the generated `package-lock.json`:
 | --- | --- | --- |
 | Runtime | `xstate` | `5.33.3` |
 | Runtime | `zod` | `4.6.7` |
+| Runtime | `yaml` | `2.9.1` |
 | Runtime | `better-sqlite3` | `13.0.3` |
 | Development | `typescript` | `7.0.2` |
 | Development | `vitest` | `5.0.5` |
 | Development | `@types/node` | `22.20.5` |
 | Development | `@types/better-sqlite3` | `9.6.0` |
 
-Registry metadata was checked on 2026-10-23. These packages were not installed during planning.
+Original registry metadata was checked on 2026-10-23. YAML `2.9.1` and its Node requirement were checked on 2026-10-24. These packages were not installed during planning.
 
 Use ESM, `module: NodeNext`, `target: ES2022`, `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`.
 
@@ -80,6 +84,7 @@ The package binary is `council`, targeting `dist/cli/index.js`. Use `.js` import
 | Domain | `src/domain/contracts.ts`, `schemas.ts`, `hash.ts`, `consensus.ts`, `objections.ts` | Strict protocol types, hashes, assent, and owned objection changes |
 | Machine | `src/machine/council-machine.ts`, `reduce.ts` | Pure transitions and deterministic effect intents |
 | Persistence | `src/store/run-store.ts`, `schema.sql`, `artifacts.ts` | Single-writer journal, checkpoints, outbox, and immutable blobs |
+| Model configuration | `council.yaml`, `src/config/{schema,load}.ts` | Shipped defaults, bounded YAML parsing, canonical resolved roster |
 | Input and policy | `src/input/handoff.ts`, `src/policy/preflight.ts`, `src/policy/qualification.ts` | Temporary packet, scope manifest, current-policy attestation, route gates |
 | Orca | `src/orca/client.ts`, `transport.ts`, `observations.ts` | Version-matched commands, real identities, and lifecycle interpretation |
 | Provider bridge | `src/workers/bridge.ts`, `protocol.ts`, `watchdog.ts` | Bounded source-only worker execution and inspected provider results |
@@ -88,7 +93,7 @@ The package binary is `council`, targeting `dist/cli/index.js`. Use `.js` import
 | Reports | `src/reports/render.ts`, `language-profile.ts` | Consensus, disagreement, blockers, and STE-oriented diagnostics |
 | CLI | `src/cli/index.ts`, `parse.ts` | Start, inspect, respond, resume, cancel, and qualification commands |
 | Skill | `skills/the-council/SKILL.md`, `agents/openai.yaml`, `scripts/run-council.mjs`, `references/communication.md` | Explicit invocation, caller loop, and portable communication contract |
-| Tests | `test/domain/`, `machine/`, `store/`, `policy/`, `orca/`, `evidence/`, `runtime/`, `cli/`, `skill/` | Focused unit, crash, and fake-provider integration tests |
+| Tests | `test/config/`, `domain/`, `machine/`, `store/`, `policy/`, `orca/`, `evidence/`, `runtime/`, `cli/`, `skill/` | Focused unit, crash, and fake-provider integration tests |
 | Fixtures | `test/fixtures/builders.ts`, `fake-orca.mjs`, `fake-provider.mjs` | Deterministic test data and real subprocess fixtures without real models |
 | Operations | `docs/qualification/local-macos.md`, `docs/runbook.md` | Qualification receipts, safe recovery, installation, and rollback |
 
@@ -96,16 +101,19 @@ The package binary is `council`, targeting `dist/cli/index.js`. Use `.js` import
 
 Define these names in `src/domain/contracts.ts`. Later tasks import them rather than defining competing variants.
 
-- `ReviewerSeat = 'astra' | 'argon' | 'opus'`; `WorkerRole = ReviewerSeat | 'judge'`.
+- `ReviewerSeat = 'openai' | 'gemini' | 'claude'`; `WorkerRole = ReviewerSeat | 'judge'`. Model changes never rename seats or objection owners.
+- `ProviderRoute = 'codex' | 'antigravity'`; `ModelSelection = { route: ProviderRoute; model: string; effort: string }`.
+- `CouncilConfig = { version: 1; reviewers: Record<ReviewerSeat, ModelSelection>; judge: ModelSelection }`. Model and effort strings must be nonempty exact values. Current policy and catalog checks establish admission separately.
+- `ConfigSnapshot`: `sourcePath`, `rawSha256`, `rawArtifact: ArtifactRef`, `configArtifact: ArtifactRef`, `configHash`, and `resolved: CouncilConfig`.
 - `JsonValue` is JSON null, boolean, finite number, string, array, or an object with string keys and JSON values.
 - `ArtifactRef`: artifact kind, SHA-256, canonical local path, and byte count.
 - `RunScope`: canonical permitted source roots, allowed source addresses, and `CheckSpec[]`. A `CheckSpec` fixes its ID, argv, cwd, declared effects, and output targets.
 - `ControlState` is the exact 14-state union from the approved design and diagram source.
-- `RunRequest`: `runId`, `workspace`, `topic`, `handoffPath`, `handoffHash`, `scope`, `maxRounds`, `workerTimeoutMs`, `runTimeoutMs`.
-- `RoundBindings`: `runId`, `round`, `candidateHash`, `evidenceHash`, `judgeHash`.
-- `PhaseBindings`: run ID, round, input hash, logical task key, and `originAttemptId`. Initial reviews use these before a candidate exists.
+- `RunRequest`: `runId`, `workspace`, `topic`, `handoffPath`, `handoffHash`, `config: ConfigSnapshot`, `scope`, `maxRounds`, `workerTimeoutMs`, `runTimeoutMs`. The request input file cannot override the CLI-selected configuration.
+- `RoundBindings`: `runId`, `configHash`, `round`, `candidateHash`, `evidenceHash`, `judgeHash`.
+- `PhaseBindings`: run ID, configuration hash, round, input hash, logical task key, and `originAttemptId`. Initial reviews use these before a candidate exists.
 - Judge bindings add candidate and evidence hashes. Ballot bindings also add the judge report hash.
-- `AttemptBinding`: logical task key, actual transport attempt ID, `originAttemptId`, role, phase, exact requested model, and adapter-issued authority.
+- `AttemptBinding`: logical task key, actual transport attempt ID, `originAttemptId`, role, phase, `configHash`, exact requested route/model/effort, and adapter-issued authority.
 - Normally the origin and transport attempt IDs match. A format sub-attempt keeps the original assessment's origin ID and records its own transport ID.
 - `WorkerPayload` is the strict tagged union `review`, `judge`, or `ballot`. A review contains proposals, objections, evidence requests, and missing-input IDs. A judge report contains evidence assessments and challenges. A ballot contains assent data.
 - `WorkerResult` is a validated payload with adapter provenance, or `{ status: 'invalid'; code: string }`. Model output cannot supply adapter provenance.
@@ -117,7 +125,7 @@ Define these names in `src/domain/contracts.ts`. Later tasks import them rather 
 - `ConfirmationContext`: expected bindings and attempt map, candidate, three ballots, objection ledger, and judge challenge IDs.
 - `ConsensusDecision`: `{ kind: 'unanimous' }` or `{ kind: 'unresolved'; reasons: string[] }`.
 - `RunSnapshot`: machine version, schema version, revision, control state, and `RunContext`.
-- `RunContext`: request manifest, rounds used, current immutable round references, expected attempts, objections, ballots, pending outcome, deadlines, and recorded resume target.
+- `RunContext`: request manifest with frozen configuration, rounds used, current immutable round references, expected attempts, objections, ballots, pending outcome, deadlines, and recorded resume target.
 - `EffectIntent`: stable key plus a discriminated kind: launch, observe, stop, release, evidence, candidate request, report, or deadline.
 - `TransitionResult`: `{ snapshot: RunSnapshot; intents: EffectIntent[] }`.
 - `Authority`: a real supervised Orca Run/Task/Dispatch binding, or a clearly labelled terminal-only binding. They are never interchangeable.
@@ -126,7 +134,7 @@ Define these names in `src/domain/contracts.ts`. Later tasks import them rather 
 - `Clock` provides `wallNow(): number` and `monotonicNow(): number`. Neither method is available inside the reducer.
 - `RunOutcome`: decision outcome, control state, operational settlement status, report references, and remaining blockers.
 
-Boundary-specific types are exported by their producing module: handoff input/reference by Task 4's handoff module; preflight and qualification inputs/decisions by Task 4's policy modules; store receipts by Task 3; transport specifications/receipts by Task 5; report input/artifacts by Task 6; and controller options, control requests/receipts, and CLI I/O by Task 7. Each type contains the inputs or receipts named in its task contract. Later tasks must import these types.
+Boundary-specific types are exported by their producing module: loaded configuration by Task 4's configuration loader; handoff input/reference by Task 4's handoff module; preflight and qualification inputs/decisions by Task 4's policy modules; store receipts by Task 3; transport specifications/receipts by Task 5; report input/artifacts by Task 6; and controller options, control requests/receipts, and CLI I/O by Task 7. Each type contains the inputs or receipts named in its task contract. Later tasks must import these types.
 
 All public decoders use strict Zod objects. Unknown fields, duplicate reviewer seats, unsafe paths, and invalid hashes fail explicitly.
 
@@ -141,7 +149,7 @@ Default input limit is 8 MiB. Default final worker-result limit is 1 MiB. An ove
 **Files:** Create package files, TypeScript/Vitest configuration, `.gitignore`, `src/domain/*`, `test/fixtures/builders.ts`, and `test/domain/{schemas,hash,consensus,objections}.test.ts`.
 
 **Interfaces:**
-- Consumes: approved requirements and exact model roster.
+- Consumes: approved requirements, stable family seats, and the frozen configuration contract.
 - Produces: shared contracts, `parseWorkerPayload(raw: unknown): WorkerPayload`, `hashArtifact(kind: string, value: JsonValue): string`, `applyOwnedDispositions(context: ConfirmationContext): readonly Objection[]`, and `evaluateConsensus(context: ConfirmationContext): ConsensusDecision`.
 - Test builders: `makeConfirmation(overrides?: Partial<ConfirmationContext>): ConfirmationContext` and `makeBallot(seat: ReviewerSeat, overrides?: Partial<Ballot>): Ballot`.
 
@@ -152,12 +160,12 @@ Default input limit is 8 MiB. Default final worker-result limit is 1 MiB. An ove
 ```ts
 expect(evaluateConsensus(makeConfirmation())).toEqual({ kind: 'unanimous' });
 expect(evaluateConsensus(makeConfirmation({
-  ballots: [makeBallot('astra'), makeBallot('argon'), makeBallot('opus', { decision: 'reject' })],
+  ballots: [makeBallot('openai'), makeBallot('gemini'), makeBallot('claude', { decision: 'reject' })],
 })).kind).toBe('unresolved');
 ```
 
 - [ ] **Step 4: Verify red.** Run `npm test -- test/domain`. Expected: missing domain exports or failed invariant assertions, not a broken test runner.
-- [ ] **Step 5: Implement the domain exports.** Derive seat identity from adapter bindings, never model-authored role claims. Apply owner dispositions before consensus. Preserve the frozen input ledger.
+- [ ] **Step 5: Implement the domain exports.** Derive seat identity from adapter bindings, never model-authored role claims. Require matching configuration hashes and the configured mapping. Apply owner dispositions before consensus. Preserve the frozen input ledger.
 - [ ] **Step 6: Verify green.** Run `npm test -- test/domain`, then `npm run typecheck`. All tests must pass.
 - [ ] **Step 7: Commit this deliverable.** Commit package/config files, `src/domain`, and the domain fixtures/tests with `feat: add strict council protocol and consensus rules`.
 
@@ -182,7 +190,7 @@ expect(reduceRun(confirmationReady, ballotsReady).snapshot.context.pendingOutcom
 - [ ] **Step 3: Implement pure transitions.** Use XState `initialTransition` and `transition`. Use `machine.resolveState` to reconstruct the pinned state/context. Do not start provider actors in the machine. Emit launch intents only on explicit admission or phase-advance events, never on state entry alone. A reconciliation re-entry must observe the existing attempt.
 - [ ] **Step 4: Implement deterministic intents.** Keys contain run, round, phase, role, logical assignment, and sub-attempt. Read no clock, filesystem, network, or random source in guards or reducers.
 - [ ] **Step 5: Add round and safety assertions.** Initial-review admission increments the counter exactly once. A unanimous missing-issue ID pauses after review and consumes the round. A judge cannot author a ballot. A fourth round requires an explicit authorized extension event.
-- [ ] **Step 6: Verify replay and ordering.** Replay the same event history twice and compare all snapshots/intents. Deliver the three reviewer results in all six arrival orders and compare the completed phase output.
+- [ ] **Step 6: Verify replay and ordering.** Replay the same event history and frozen configuration twice and compare all snapshots/intents. Deliver the three reviewer results in all six arrival orders and compare the completed phase output. Run the same control scenarios with qualified Sol/Sonnet fake selections; seat IDs, objections, limits, and outcomes must stay unchanged.
 - [ ] **Step 7: Verify green and commit.** Run `npm test -- test/machine` and `npm run typecheck`. Commit with `feat: model deterministic council control states`.
 
 ## Task 3: Transactional journal, artifacts, and effect outbox
@@ -204,40 +212,51 @@ expect(reopened.load(runId).revision).toBe(1);
 - [ ] **Step 2: Verify red.** Run `npm test -- test/store`.
 - [ ] **Step 3: Implement schema and transaction boundaries.** Use WAL, `synchronous = FULL`, foreign keys, and a 5,000 ms busy timeout. Use an immediate transaction for event, checkpoint, and outbox writes. Keep all external I/O outside the transaction.
 - [ ] **Step 4: Enforce one active writer.** Record owner identity and generation. Require expected revision on each mutation. A timeout alone cannot steal an owner's lease. A new owner requires release or positive process-exit evidence.
-- [ ] **Step 5: Implement immutable artifacts.** Write task-owned temporary bytes, hash them, then atomically rename into the run's content store before referencing them. Existing hash conflicts are fatal. Orphaned blobs receive no automatic destructive cleanup.
+- [ ] **Step 5: Implement immutable artifacts.** Write task-owned temporary bytes, hash them, then atomically rename into the run's content store before referencing them. Include the raw YAML and canonical configuration. Verify both hashes before recovery and reject missing/corrupt configuration artifacts. Existing hash conflicts are fatal. Orphaned blobs receive no automatic destructive cleanup.
 - [ ] **Step 6: Verify crash windows.** Kill the test child before external launch, after a fake launch, and before receipt commit. Confirm the intent remains reconcilable and no new launch is authorized by missing data alone.
 - [ ] **Step 7: Verify green and commit.** Run `npm test -- test/store` and `npm run typecheck`. Commit with `feat: persist council journal and effect outbox`.
 
-## Task 4: Handoff, scope, and policy preflight
+## Task 4: YAML roster, handoff, scope, and policy preflight
 
-**Files:** Create `src/input/handoff.ts`, `src/policy/{preflight,qualification}.ts`, and `test/policy/{handoff,models,ownership,scope}.test.ts`.
+**Files:** Create `council.yaml`, `src/config/{schema,load}.ts`, `src/input/handoff.ts`, `src/policy/{preflight,qualification}.ts`, `test/config/{load,defaults,snapshot}.test.ts`, and `test/policy/{handoff,models,ownership,scope}.test.ts`.
 
 **Interfaces:**
-- Consumes: `RunRequest`, source manifest, caller identity, current policy bytes, exposed allowance, and qualification receipts.
+- Consumes: selected YAML path and bytes, package root, invocation cwd, source manifest, caller identity, current policy/catalog evidence, exposed allowance, and qualification receipts.
+- Produces: `resolveConfigPath(override: string | undefined, invocationCwd: string, packageRoot: string): string`; `parseCouncilConfig(raw: Uint8Array): CouncilConfig`; and `loadCouncilConfig(path: string): Promise<LoadedCouncilConfig>`.
+- `LoadedCouncilConfig` contains canonical `sourcePath`, `sourceBytes: Uint8Array`, `rawSha256`, `resolved: CouncilConfig`, and `configHash`. Task 7 stores those bytes and canonical JSON to construct `ConfigSnapshot` before machine creation.
 - Produces: `writeHandoff(input: HandoffInput, tempRoot: string): HandoffRef`; `validateScope(scope: RunScope): ScopeDecision`; and `runPreflight(input: PreflightInput): PreflightDecision`.
 - `PreflightDecision` is `ready`, `needs_context`, or `blocked`, with stable reason codes and supporting receipt references.
 
-- [ ] **Step 1: Add failing preflight tests.** Use injected OS paths and current-policy hashes:
+- [ ] **Step 1: Add failing configuration and preflight tests.** Use injected OS paths, supplied catalog facts, and current-policy hashes. Define fixtures for the default configuration, an alternate Sol Max/Sonnet High roster, and a Sonnet judge:
 
 ```ts
 expect(runPreflight(astraCallerWithoutExtraSlot).reason).toBe('ASTRA_CALLER_CONFLICT');
 expect(runPreflight(unknownCaller).reason).toBe('CALLER_MODEL_UNKNOWN');
 expect(runPreflight(unqualifiedUltra).reason).toBe('UNQUALIFIED_ROUTE');
+expect(parseCouncilConfig(defaultYaml).reviewers.openai.model).toBe('gpt-6-astra');
+expect(parseCouncilConfig(defaultYaml).judge.effort).toBe('ultra');
+expect(parseCouncilConfig(solSonnetYaml).reviewers.claude.model).toBe('claude-sonnet-5-5-high');
+expect(runPreflight(wrongFamily).reason).toBe('MODEL_FAMILY_MISMATCH');
+expect(runPreflight(astraCallerWithNoAstraAssignments).kind).toBe('ready');
+expect(runPreflight(astraCallerWithAstraJudge).reason).toBe('ASTRA_CALLER_CONFLICT');
 ```
 
-- [ ] **Step 2: Verify red.** Run `npm test -- test/policy`.
-- [ ] **Step 3: Implement temporary handoff creation.** Use `$TMPDIR`, else `/tmp`, on this host. Include suggested skills, requirements, priorities, prior decisions, references, and uncertainty. Reference existing artifacts instead of copying them. Reject known secret fields and leave sensitive exclusions visible to the calling agent.
-- [ ] **Step 4: Implement policy attestation.** The calling agent must read the current human policy and supply its normalized choices. The runner verifies the file hash, fixed roster, caller/slot observations, and qualification receipts. It must not pretend that a regex parser can interpret arbitrary policy prose.
-- [ ] **Step 5: Implement route and access gates.** Require exact requested/exposed settings, current host/version/action-class qualification, separate quota states, and approved action roots. Unknown quota permits only the declared bounded invocation. Authentication failure, denial, and quota exhaustion stay distinct.
-- [ ] **Step 6: Reject unsafe scope.** Resolve canonical roots and reject symlink escapes. Keep source credentials, protected instructions, and coordinator control state outside worker roots unless an existing qualified control protects them. Do not add directories or persistent grants merely to make reads work.
-- [ ] **Step 7: Verify green and commit.** Run `npm test -- test/policy` and `npm run typecheck`. Commit with `feat: validate council handoff and launch prerequisites`.
+- [ ] **Step 2: Verify red.** Run `npm test -- test/config test/policy`.
+- [ ] **Step 3: Add the default YAML and bounded loader.** Copy the exact complete YAML from the design to package-root `council.yaml`. Resolve only explicit `--config` or the real package-root file. Reject missing/unreadable files, invalid UTF-8, and input over 65,536 bytes. Do not search workspace/parent directories or merge partial settings.
+- [ ] **Step 4: Implement strict YAML decoding and hashes.** Use `yaml` `parseDocument` with `version: '1.2'`, `schema: 'core'`, `strict: true`, `uniqueKeys: true`, `merge: false`, and `resolveKnownTags: false`. Reject parse errors/warnings, non-1.2 directives, and unsupported node tags before `toJS({ maxAliasCount: 0 })`. Validate with strict Zod objects. Required keys are exactly those in the design. Reject aliases, merge keys, extra documents, unknown fields, missing seats, and non-string selections. Hash original bytes separately from `hashArtifact('council-config', normalizedConfig)`. Never expand variables, includes, commands, or secrets.
+- [ ] **Step 5: Pin configuration failure and replacement behavior.** Add explicit assertions for duplicate `judge` keys, YAML anchors with aliases, `<<`, custom tags, extra documents, typo fields, non-1.2 directives, unsupported schema versions, whitespace/alias model names, missing fields, and 65,537-byte input. Expect `CONFIG_INVALID`, `CONFIG_VERSION_UNSUPPORTED`, or `CONFIG_NOT_FOUND` as appropriate, with zero launches. An unsupported model or effort returns the distinct preflight reason `MODEL_UNAVAILABLE` or `EFFORT_UNSUPPORTED`. A permitted replacement needs fresh matching qualification; old-model receipts yield `UNQUALIFIED_ROUTE`.
+- [ ] **Step 6: Implement temporary handoff creation.** Use `$TMPDIR`, else `/tmp`, on this host. Include suggested skills, requirements, priorities, prior decisions, references, and uncertainty. Reference existing artifacts instead of copying them. Reject known secret fields and leave sensitive exclusions visible to the calling agent.
+- [ ] **Step 7: Implement policy attestation.** The calling agent must read the current human policy and supply its normalized choices. The runner verifies the policy hash, frozen configuration hash, seat families against current catalog evidence, route/model/effort admission, caller/slot observations, and qualification receipts. It must not pretend that a regex parser can interpret arbitrary policy prose. Do not compile the default model IDs into a fixed selection allowlist; current attested policy and exact qualified adapter controls govern replacements.
+- [ ] **Step 8: Implement route and access gates.** Require exact requested/exposed settings, current host/version/action-class qualification, separate quota states, and approved action roots. Unknown quota permits only the declared bounded invocation. Authentication failure, denial, and quota exhaustion stay distinct.
+- [ ] **Step 9: Reject unsafe scope.** Resolve canonical roots and reject symlink escapes. Keep source credentials, protected instructions, and coordinator control state outside worker roots unless an existing qualified control protects them. Do not add directories or persistent grants merely to make reads work.
+- [ ] **Step 10: Verify green and commit.** Run `npm test -- test/config test/policy` and `npm run typecheck`. Commit with `feat: configure council roster and validate launch prerequisites`.
 
 ## Task 5: Qualified Orca transport and bounded worker bridge
 
 **Files:** Create `src/orca/{client,transport,observations}.ts`, `src/workers/{bridge,protocol,strict-json,watchdog}.ts`, subprocess fixtures, and `test/orca/{argv,protocol,lifecycle,reconcile,deadline,qualification}.test.ts`.
 
 **Interfaces:**
-- Consumes: effect intents, immutable task packets, Task 4 qualification/access decisions, and current Orca guides.
+- Consumes: effect intents, immutable task packets, the frozen configured selections, Task 4 qualification/access decisions, and current Orca guides.
 - Produces `OrcaTransport` with `launch(spec: WorkerSpec): Promise<LaunchReceipt>`, `observe(binding: AttemptBinding): Promise<WorkerObservation>`, `stop(binding, reason): Promise<StopReceipt>`, and `release(binding): Promise<ReleaseReceipt>`.
 - Also produces `qualifyRoute(request: QualificationRequest): Promise<QualificationReceipt>` and `decodeProviderOutput(raw: Uint8Array, binding: AttemptBinding): WorkerResult`.
 - `decodeStrictJson(text: string): unknown` rejects duplicate object keys, invalid JSON, and extra top-level values. Scan keys while respecting JSON string escapes, then apply `JSON.parse` for complete syntax validation.
@@ -246,19 +265,19 @@ expect(runPreflight(unqualifiedUltra).reason).toBe('UNQUALIFIED_ROUTE');
 - [ ] **Step 1: Add failing process and protocol tests.** The fake CLI records exact argv, cwd, environment keys, native actions, and children:
 
 ```ts
-expect(decodeProviderOutput(forgedSeatReply, argonBinding).status).toBe('invalid');
+expect(decodeProviderOutput(forgedSeatReply, geminiBinding).status).toBe('invalid');
 expect(await transport.observe(lostConnection)).toMatchObject({ status: 'unverifiable' });
 expect(fakeOrca.launchCount(effectKey)).toBe(1);
 ```
 
 - [ ] **Step 2: Verify red.** Run `npm test -- test/orca`.
 - [ ] **Step 3: Implement command safety.** Resolve one Orca executable and load its version-matched guide. Use argv arrays and `shell: false`. Validate cwd and hosting workspace separately. Allowlist inherited environment and inspect hooks/tool exposure. Keep model output out of shell command construction.
-- [ ] **Step 4: Implement provider profiles.** Pin exact model/effort. Use a private task-owned temporary worker cwd and supplied task text when that route is qualified. Add no source roots or persistent permissions. Inspect effective roots, mode, settings, actions, and children. In AGY `1.4.6`, `--disable-slash-commands` disables `--mode plan`; reject that combination and verify the actual expanded `plan` command.
+- [ ] **Step 4: Implement provider profiles.** Pin route/model/effort from the frozen selection for the logical role. Use one adapter per supported provider route, not one implementation per default model. Assert that Sol/Sonnet replacements produce their exact configured argv and that a format correction cannot change selection. Use a private task-owned temporary worker cwd and supplied task text when that route is qualified. Add no source roots or persistent permissions. Inspect effective roots, mode, settings, actions, and children. In AGY `1.4.6`, `--disable-slash-commands` disables `--mode plan`; reject that combination and verify the actual expanded `plan` command. Requalify after an installed-version change.
 - [ ] **Step 5: Implement lifecycle reconciliation.** Persist launch intent before execution. Recover through the original replay ID when supported. On unknown start, inspect the same attempt. Never launch a replacement because a wait or read is empty. Process inbox messages before acknowledgment, and release only accepted settled resources.
 - [ ] **Step 6: Implement per-worker deadline enforcement.** Each bridge receives an absolute deadline of `min(worker deadline, run deadline)`. Its task-owned watchdog survives loss of the coordinator process. It can stop only that owned attempt and remains active until settlement. Use positive exit/child evidence before cleanup. Unknown exit codes remain unknown.
 - [ ] **Step 7: Implement bounded format correction.** Settle the original attempt, then create at most one fresh sub-attempt under the same logical task. Preserve `originAttemptId` while assigning a new transport attempt ID. A repair baseline is permitted only after removing one whole-message JSON fence and/or trailing commas outside strings. The resulting object must parse strictly and uniquely. Compare the correction's canonical payload hash with that baseline. Other malformed, duplicated, truncated, changed, or ambiguous content blocks the seat without a repair launch. This does not waive any denial.
 - [ ] **Step 8: Verify green with fakes.** Run `npm test -- test/orca` and `npm run typecheck`. Include oversized stdout, conflicting duplicate receipts, partial NDJSON, a child that outlives its parent, and an unsupported model override.
-- [ ] **Step 9: Run the live feasibility gate only under valid current policy and allowance.** Qualify supplied-packet, no-write synthetic jobs for each required model and role. Prove real orchestration authority and owned settlement for the selected bridge. A terminal-only assessment is not a substitute for the full Council's required orchestration controls.
+- [ ] **Step 9: Run the live feasibility gate only under valid current policy and allowance.** Qualify supplied-packet, no-write synthetic jobs for every route/model/effort required by the frozen configuration and its role/action class. A replacement cannot reuse another model's qualification. Prove real orchestration authority and owned settlement for the selected bridge. A terminal-only assessment is not a substitute for the full Council's required orchestration controls.
 - [ ] **Step 10: Stop unsupported real routes.** If exact Ultra settings, descendant controls, source protection, dispatch authority, or lifecycle controls are unavailable, record `UNQUALIFIED_ROUTE`. Preserve the fake-backed implementation and request a scoped design/route decision. Do not select another effort or invent a CLI flag.
 - [ ] **Step 11: Commit this deliverable.** Save qualification receipts under `docs/qualification/local-macos.md` and commit with `feat: add qualified orca worker transport`. A fake-only commit must label live capability as unqualified.
 
@@ -281,7 +300,7 @@ expect(renderReport(unresolvedAtThree).outcome).toBe('needs_user');
 - [ ] **Step 2: Verify red.** Run `npm test -- test/evidence test/reports`.
 - [ ] **Step 3: Implement coordinator-owned retrieval and checks.** Execute only allowed sources and exact declared argv/cwd/effects. Record receipts and hashes. Do not let a source page or model request authorize a new action. Stop affected work on a real denial.
 - [ ] **Step 4: Separate provenance from claim support.** An observed source/check can receive `verified` provenance. A judge's `supported` assessment stays a model judgment with reasons. A source hash change creates a new evidence bundle and invalidates dependent ballots.
-- [ ] **Step 5: Implement report forms.** Produce consensus, unresolved disagreement, operational blocker, and cancellation reports. Include alternatives, objection owners, judge challenges, missing evidence, model/settings evidence, and actual resource state. User direction never becomes a synthetic vote.
+- [ ] **Step 5: Implement report forms.** Produce consensus, unresolved disagreement, operational blocker, and cancellation reports. Include alternatives, objection owners, judge challenges, missing evidence, the frozen configuration hash, stable seat-to-model mapping, requested/exposed settings, and actual resource state. User direction never becomes a synthetic vote.
 - [ ] **Step 6: Implement the scoped language profile.** Apply 25-word descriptive and 20-word procedural targets, consistent terms, active voice, and protected literals. Keep diagnostics separate from technical correctness. Do not claim dictionary verification or ASD certification.
 - [ ] **Step 7: Verify green and commit.** Run `npm test -- test/evidence test/reports` and `npm run typecheck`. Commit with `feat: collect scoped evidence and render council decisions`.
 
@@ -298,7 +317,7 @@ expect(renderReport(unresolvedAtThree).outcome).toBe('needs_user');
 
 | Command | Behavior |
 | --- | --- |
-| `council start --input FILE --workspace PATH --json` | Validate the request, create the run, and own the foreground loop |
+| `council start --input FILE --workspace PATH [--config FILE] --json` | Load and freeze the selected YAML, validate the request, create the run, and own the foreground loop |
 | `council inspect --run ID --workspace PATH --json` | Read committed status, pending caller action, and resource observations |
 | `council respond --run ID --workspace PATH --input FILE --json` | Submit candidate, user facts, direction, or explicit extension to the active owner |
 | `council resume --run ID --workspace PATH --json` | Acquire ownership only with valid evidence, then reconcile before effects |
@@ -306,6 +325,10 @@ expect(renderReport(unresolvedAtThree).outcome).toBe('needs_user');
 | `council qualify --profile FILE --workspace PATH --json` | Run only the explicitly declared disposable qualification |
 
 Control files use an atomic per-request inbox. Only the controller writes SQLite. Duplicate request IDs are idempotent; conflicting duplicates block.
+
+Only `start` accepts `--config`. Its default is the real Council package-root `council.yaml`, not the target workspace. `resume` rejects that flag.
+
+The run input file contains topic, handoff, scope, and operational limits. It cannot supply competing reviewer/judge selections or override the resolved configuration.
 
 The calling skill launches `start` in its own Orca terminal and supervises that process. It polls `inspect` in bounded waits and answers candidate requests.
 
@@ -317,14 +340,17 @@ The controller does not call an extra LLM for synthesis. Its report returns `act
 expect(await runScenario('unanimous')).toMatchObject({ outcome: 'completed', roundsUsed: 1 });
 expect(await runScenario('three-disagreements')).toMatchObject({ outcome: 'needs_user', roundsUsed: 3 });
 expect(await runScenario('restart-after-launch')).toMatchObject({ duplicateLaunches: 0 });
+expect(await runScenario('edit-yaml-then-resume')).toMatchObject({ configChanged: false, duplicateLaunches: 0 });
+expect(await runScenario('original-yaml-deleted')).toMatchObject({ usesSavedConfig: true });
+expect(await runScenario('saved-config-corrupt')).toMatchObject({ outcome: 'blocked', reason: 'CONFIG_SNAPSHOT_INVALID' });
 ```
 
 - [ ] **Step 2: Verify red.** Run `npm test -- test/runtime test/cli`.
-- [ ] **Step 3: Implement the controller.** Commit each validated event/transition before executing its outbox intent. Use the stable seat order `astra`, `argon`, `opus` at phase barriers. Preserve raw arrival evidence.
+- [ ] **Step 3: Implement the controller.** On `start`, load configuration once, persist both immutable artifacts, and commit the manifest/checkpoint with `ConfigSnapshot` before any outbox effect can run. Use the saved resolved roster for every initial review, judge, ballot, and correction. Commit each validated event/transition before executing its outbox intent. Use stable seat order `openai`, `gemini`, `claude` at phase barriers. Preserve raw arrival evidence.
 - [ ] **Step 4: Implement candidate and user controls.** Freeze the candidate once per round. Later material changes require a new round. A unanimous missing-input ID skips judge/confirmation but consumes the admitted round. A third-round reply cannot create another round without explicit extension.
-- [ ] **Step 5: Implement restart and deadlines.** Resume always enters reconciliation. Observe overdue deadlines before any new launch. Within a process, use monotonic timing. A wall-clock regression behind the last recorded observation blocks new work instead of extending time. Independent worker watchdogs retain the original deadline during coordinator loss.
+- [ ] **Step 5: Implement restart and deadlines.** Resume verifies saved configuration artifacts and hashes, then enters reconciliation. Never reread the original YAML or substitute current defaults. Recheck current admission/availability/qualification/slot evidence against the saved roster. Observe overdue deadlines before any new launch. Within a process, use monotonic timing. A wall-clock regression behind the last recorded observation blocks new work instead of extending time. Independent worker watchdogs retain the original deadline during coordinator loss.
 - [ ] **Step 6: Implement CLI I/O and exit codes.** Output structured JSON to stdout and bounded diagnostics to stderr. Use exit `0` for settled consensus, `2` for settled user action, `3` for blocked/unknown lifecycle, `4` for input/usage errors, and `130` for settled cancellation. Print the run ID before the long wait.
-- [ ] **Step 7: Verify the full fake workflow.** Cover candidate/evidence drift, temporary handoff loss, wrong caller ownership, timeout, repeated cancel, connection loss, late old-attempt output, and all 42-attempt bound checks. No test may contact a real provider.
+- [ ] **Step 7: Verify the full fake workflow.** Cover candidate/evidence drift, temporary handoff loss, wrong caller ownership, timeout, repeated cancel, connection loss, late old-attempt output, and all 42-attempt bound checks. Verify default package resolution from another cwd, explicit relative paths, missing-file failure without defaults, editing/deleting the original YAML during a run, new-run adoption of edits, unchanged objection ownership after model replacement, current-policy rejection on resume, and rejection of `--config` on resume. No test may contact a real provider.
 - [ ] **Step 8: Verify green and commit.** Run `npm test -- test/runtime test/cli`, `npm run typecheck`, and `npm run build`. Commit with `feat: run and resume supervised council decisions`.
 
 ## Task 8: Skill package, qualification, and deployment gate
@@ -336,14 +362,14 @@ expect(await runScenario('restart-after-launch')).toMatchObject({ duplicateLaunc
 - Produces: an explicit-invocation skill package, a dry-run installation manifest, and a documented deployment decision.
 
 - [ ] **Step 1: Load the skill-authoring requirements.** Read `skill-creator` and `superpowers:writing-skills` before authoring the actual skill. Use supported client metadata for explicit invocation, verified against the installed client. The skill must never start a costly Council from an ordinary unrelated question.
-- [ ] **Step 2: Add failing skill contract tests.** Confirm the package invokes the real CLI through argv, requires a topic and handoff, preserves current policy gates, and handles `action_required: 'candidate'` without inventing votes.
+- [ ] **Step 2: Add failing skill contract tests.** Confirm the package invokes the real CLI through argv, requires a topic and handoff, preserves current policy gates, forwards an explicit configuration path only to `start`, and handles `action_required: 'candidate'` without inventing votes. Confirm package-root `council.yaml` is included in the package with the exact default roster.
 - [ ] **Step 3: Verify red.** Run `npm test -- test/skill test/cli/end-to-end.test.ts`.
 - [ ] **Step 4: Write the skill and launcher.** Set the skill name to `the-council`. In `agents/openai.yaml`, set `policy.allow_implicit_invocation: false`, display name `The Council`, and a default prompt that explicitly mentions `$the-council`. Reference the handoff, orchestration, Orca CLI, and language skills by their actual locations. Resolve the repository's built CLI from the skill's real path, so a later symlink installation stays valid. Reject a missing build with an actionable error. Do not run dependency installation implicitly.
-- [ ] **Step 5: Write the operational runbook.** Include start/resume/cancel commands, an unresolved example, the diagrams, real-versus-unknown lifecycle, current route limitations, and owned-resource cleanup. List the 3-round, 42-attempt, 30-minute, and 3-hour defaults.
+- [ ] **Step 5: Write the operational runbook.** Include start/resume/cancel commands, an unresolved example, the diagrams, real-versus-unknown lifecycle, current route limitations, and owned-resource cleanup. Show how to edit package-root `council.yaml` or supply `--config`, with exact Sol Max/Sonnet High examples and a separately configured judge. Explain validation, new-model qualification, saved-run behavior, and the absence of hot reload. List the 3-round, 42-attempt, 30-minute, and 3-hour defaults.
 - [ ] **Step 6: Verify the complete local package.** Run `npm test`, `npm run typecheck`, `npm run build`, and `npm pack --dry-run`. Confirm runtime artifacts and secrets are absent from the package.
 - [ ] **Step 7: Reconcile implementation with the diagrams.** Check all 14 state IDs and the named reviewer/judge phases. Validate/export the canonical Mermaid source with the diagram skill. Inspect the visible maps before deployment.
 - [ ] **Step 8: Obtain fresh independent change review.** Use a permitted different-family reviewer through Orca. Give it the approved design, plan, diff, tests, qualification evidence, and ruling ledger. Follow the selected Superpowers execution workflow's exact review seats and fix budgets.
-- [ ] **Step 9: Enforce the deployment gate.** Require passing fake tests, qualified exact live routes, current policy permission for Ultra, observed allowance, effective containment, and settled resources. A supplied-text Argon assessment alone is insufficient.
+- [ ] **Step 9: Enforce the deployment gate.** Require passing fake tests, qualified exact live routes for the selected configuration, current policy permission and controls for any configured Ultra role, observed allowance, effective containment, and settled resources. A supplied-text Argon assessment alone is insufficient.
 - [ ] **Step 10: Prepare installation for explicit approval.** Default proposal: a symlink from `/Users/aaat/.agents/skills/the-council` to this repository's `skills/the-council`. If the target exists, preserve it and stop for a scoped decision. Show exact targets, package version, checks, and rollback before the user approves this persistent installation.
 - [ ] **Step 11: Install only after that deployment approval.** Record the owned link/path and existing state. Verify discovery from a fresh session. Rollback removes only the task-owned link after all Council processes settle. Do not restore whole global settings files or modify model policy.
 - [ ] **Step 12: Commit this deliverable.** Commit the local skill, tests, runbook, and qualification record with `feat: package council skill with deployment controls`.
@@ -355,8 +381,9 @@ expect(await runScenario('restart-after-launch')).toMatchObject({ duplicateLaunc
 | Same-version unanimity, equal reviewer authority, owned objections | Tasks 1–2 |
 | Pure control determinism and recorded external inputs | Tasks 2–3 |
 | Handoff for fresh and long sessions; missing temporary context | Tasks 4 and 7 |
-| Exact three-family roster and fresh Astra judge | Tasks 4–5 and 7 |
-| Astra caller and four-stream limits | Tasks 4–5 and 7 |
+| YAML roster, unchanged defaults, exact three-family reviewers, and separately configured fresh judge | Tasks 1, 4–5, 7–8 |
+| Immutable configuration, stable seats, and saved-roster recovery | Tasks 1–4 and 7 |
+| Configured model conflicts, Astra caller, and four-stream limits | Tasks 4–5 and 7 |
 | Evidence provenance versus claim support | Task 6 |
 | Three admitted rounds, early pause, bounded correction | Tasks 1–2, 5, and 7 |
 | No duplicate external effects after crash | Tasks 3, 5, and 7 |
@@ -376,6 +403,8 @@ Only the main coordinator dispatches implementers and reviewers. Keep one writer
 - XState pure transitions: <https://stately.ai/docs/pure-transitions>.
 - XState persistence: <https://stately.ai/docs/persistence>.
 - Zod strict object schemas: <https://zod.dev/api>.
+- YAML `2.9.1` parser options: <https://github.com/eemeli/yaml/blob/v2.9.1/src/options.ts>.
+- YAML `2.9.1` single-document decoding: <https://github.com/eemeli/yaml/blob/v2.9.1/src/public-api.ts>.
 - better-sqlite3 transactions: <https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md>.
 - SQLite durability setting: <https://github.com/WiseLibs/better-sqlite3/blob/master/docs/performance.md>.
 - Vitest CLI: <https://vitest.dev/guide/cli>.
@@ -388,6 +417,10 @@ Only the main coordinator dispatches implementers and reviewers. Keep one writer
 
 Coordinator self-review is complete. The coverage table maps each approved requirement to an owning task.
 
-A fresh Argon High review returned **READY**, with no material findings. It checked the plan and canonical diagram against the approved design.
+A fresh Argon High review returned **READY** for the base plan, with no material findings. It checked the plan and canonical diagram against the approved design.
 
-See [the independent review record](../reviews/2026-10-23-the-council-plan-review.md). Implementation and deployment have not started. The user must review the plan and select execution.
+See [the base review record](../reviews/2026-10-23-the-council-plan-review.md). A fresh Argon High review of the authorized YAML amendment returned **READY**, with no material findings.
+
+See [the configuration amendment review](../reviews/2026-10-24-the-council-config-review.md). Only status and review-evidence text changed after that review.
+
+Implementation and deployment have not started. The user must review the plan and select execution.

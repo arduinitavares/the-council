@@ -26,6 +26,7 @@ import type {
   LaunchReceipt,
   SyntheticDriver,
   WorkerSpec,
+  PreparedWorkerInput,
 } from "../../src/orca/transport.js";
 import { createPrivateWorkerCwd } from "../../src/orca/client.js";
 import type { ResourceProof } from "../../src/orca/observations.js";
@@ -96,19 +97,33 @@ export function fixture() {
     store.commitTransition("run1", s.revision, event, reduceRun(s, event));
     return event;
   };
-  const ref = store.artifacts.putArtifact(
-    Buffer.from("preflight"),
-    "preflight",
-  );
-  commit({
-    kind: "PREFLIGHT",
-    data: {
-      status: "pass",
-      attestation: ref,
-      code: null,
-      resourcesSettled: true,
-    },
-  });
+  const access = {
+    actionClass: "supplied-packet-read-only" as const,
+    requiredRoots: [], grantedRoots: [], receiptId: "fixture-access",
+  };
+  const admissions = new Map<AttemptBinding["phase"], import("../../src/domain/contracts.js").ArtifactRef>();
+  const admit = (phase: AttemptBinding["phase"], resourcesSettled = false) => {
+    const s = store.load("run1");
+    const roles = phase === "judge" ? ["judge" as const] : ["openai", "gemini", "claude"] as const;
+    const base: Omit<AdmissionEvidence, "setHash"> = {
+      kind: "phase", runId: "run1", host: "fixture",
+      versions: { orca: "fixture", codex: "fixture", antigravity: "fixture" },
+      observedAt: 10000, configHash: s.context.config.configHash,
+      profileHash: s.context.profile.profileHash, policyHash: "a".repeat(64),
+      scopeHash: hashArtifact("run-scope", s.context.request.scope as unknown as JsonValue),
+      accessHash: hashArtifact("access-facts", access), phase,
+      assignments: roles.map(role => ({ role, selection: role === "judge" ? s.context.config.resolved.judge : s.context.config.resolved.reviewers[role] })),
+      assignmentReceiptId: "fixture-assignment", callerReceiptId: "fixture-caller",
+      observationReceiptRefs: [], activeObservations: [], authorizationReceiptId: "fixture-auth",
+      bounds: { maxWorkerCalls: 27, activeMs: 10800000 },
+    };
+    const admission = { ...base, setHash: hashArtifact("launch-admission", base as unknown as JsonValue) };
+    const ref = store.artifacts.putArtifact(Buffer.from(canonicalJson(admission)), "preflight");
+    admissions.set(phase, ref);
+    commit({ kind: "PREFLIGHT", data: { status: "pass", attestation: ref, code: null, resourcesSettled } }, "adapter", phase);
+    return ref;
+  };
+  const ref = admit("clarify", true);
   const reservation = Object.values(
     store.load("run1").context.issuedLogicalTasks,
   ).find((task) => task.reservation.role === "openai")!.reservation;
@@ -241,68 +256,19 @@ export function fixture() {
   };
   const directories = new Map([[reservation.logicalTaskKey, cwd]]);
   const prepare = (
-    fence: WorkerSpec["fence"],
     target: LaunchReservation = reservation,
-  ): WorkerSpec => {
+  ): PreparedWorkerInput => {
     const s = store.load("run1"),
       q = s.context.issuedLogicalTasks[target.logicalTaskKey]!.reservation;
     if (!directories.has(q.logicalTaskKey))
       directories.set(q.logicalTaskKey, createPrivateWorkerCwd(q));
-    const access = {
-      actionClass: "supplied-packet-read-only" as const,
-      requiredRoots: [],
-      grantedRoots: [],
-      receiptId: "fixture-access",
-    };
-    const base: Omit<AdmissionEvidence, "setHash"> = {
-      kind: "phase",
-      runId: "run1",
-      host: "fixture",
-      versions: { orca: "fixture", codex: "fixture", antigravity: "fixture" },
-      observedAt: 10000,
-      configHash: s.context.config.configHash,
-      profileHash: s.context.profile.profileHash,
-      policyHash: "a".repeat(64),
-      scopeHash: hashArtifact(
-        "run-scope",
-        s.context.request.scope as unknown as JsonValue,
-      ),
-      accessHash: hashArtifact("access-facts", access),
-      phase: q.phase,
-      assignments: [{ role: q.role, selection: q.requested }],
-      assignmentReceiptId: "fixture-assignment",
-      callerReceiptId: "fixture-caller",
-      observationReceiptRefs: [],
-      activeObservations: [],
-      authorizationReceiptId: "fixture-auth",
-      bounds: { maxWorkerCalls: 27, activeMs: 10800000 },
-    };
+    const admissionReceipt = s.context.preflightAttestation ?? admissions.get(q.phase)!;
+    const admission = JSON.parse(Buffer.from(store.artifacts.readArtifact(admissionReceipt)).toString("utf8")) as AdmissionEvidence;
     const text = JSON.stringify({
       phase: q.phase,
       role: q.role,
       inputHash: q.bindings.inputHash,
     });
-    const admission = {
-      ...base,
-      setHash: hashArtifact("launch-admission", base as unknown as JsonValue),
-    };
-    const admissionReceipt = store.artifacts.putArtifact(
-      Buffer.from(canonicalJson(admission)),
-      "preflight",
-    );
-    commit(
-      {
-        kind: "PREFLIGHT",
-        data: {
-          status: "pass",
-          attestation: admissionReceipt,
-          code: null,
-          resourcesSettled: false,
-        },
-      },
-      "adapter",
-      q.phase,
-    );
     const routeEvidence = {
       admission,
       role: q.role,
@@ -316,8 +282,8 @@ export function fixture() {
       },
       qualification: {
         id: "fixture-qualified",
-        host: base.host,
-        versions: base.versions,
+        host: admission.host,
+        versions: admission.versions,
         actionClass: "supplied-packet-read-only" as const,
         requested: q.requested,
         exposed: q.requested,
@@ -357,8 +323,6 @@ export function fixture() {
       access,
       workspace: { id: "fixture-workspace", path: workspace },
       cwd: directories.get(q.logicalTaskKey)!,
-      deadline: s.context.control.workerDeadlines[q.logicalTaskKey]!,
-      fence,
     };
   };
   const armProof = (binding: AttemptBinding) => {
@@ -414,6 +378,11 @@ export function fixture() {
     store,
     reservation,
     prepare,
+    fenced: (fence: WorkerSpec["fence"], target: LaunchReservation = reservation): WorkerSpec => ({
+      ...prepare(target), fence,
+      deadline: store.load("run1").context.control.workerDeadlines[target.logicalTaskKey]!,
+    }),
+    admit,
     driver,
     commit,
     now,

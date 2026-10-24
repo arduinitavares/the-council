@@ -200,3 +200,27 @@ it("cannot claim aggregate settlement without the registered watchdog arming rec
   expect((await t.resources(r.binding)).settled).toBe(false);
   f.store.close();
 });
+
+it("observes an owned lost connection through the transport as unverifiable", async () => {
+  const { fixture } = await import("./fixtures.js"),
+    { OrcaTransport } = await import("../../src/orca/transport.js"),
+    { WorkerBridge } = await import("../../src/workers/bridge.js");
+  const f = fixture(), t = new OrcaTransport(f.store, {
+    ...f.driver, observe: async () => { throw new Error("lost connection"); },
+  }), w = new WorkerBridge(f.store, t, f.now),
+    receipt = (await w.dispatch(f.reservation, f.prepare))!;
+  expect(await t.observe(receipt.binding)).toEqual({ status: "unverifiable", exitCode: null, rawReceipts: [] });
+  f.store.close();
+});
+
+it("rejects invalid output from an unowned binding without blocking current work", async () => {
+  const { fixture } = await import("./fixtures.js"),
+    { OrcaTransport } = await import("../../src/orca/transport.js"),
+    { WorkerBridge } = await import("../../src/workers/bridge.js");
+  const f = fixture(), t = new OrcaTransport(f.store, f.driver),
+    w = new WorkerBridge(f.store, t, f.now),
+    r = (await w.dispatch(f.reservation, f.prepare))!, before = f.store.load("run1");
+  expect(() => w.ingest(Buffer.from("invalid"), { ...r.binding, attemptId: "foreign" })).toThrow("OWNED_ATTEMPT_REQUIRED");
+  expect(f.store.load("run1")).toEqual(before);
+  f.store.close();
+});

@@ -67,6 +67,8 @@ export interface WorkerSpec {
   deadline: ActiveDeadline;
   fence: { eventId: string; intentHash: string; revision: number };
 }
+/** Frozen supplied inputs; the bridge adds only the real committed fence and deadline. */
+export type PreparedWorkerInput = Omit<WorkerSpec, "fence" | "deadline">;
 export interface EffectiveLaunchControls {
   selection: ModelSelection;
   workspace: { id: string; path: string };
@@ -278,32 +280,18 @@ export class OrcaTransport {
     )
       throw new Error("OWNED_ATTEMPT_REQUIRED");
   }
-  validateLaunch(spec: WorkerSpec): void {
-    const r = launchReservationSchema.parse(
-      spec.reservation,
-    ) as LaunchReservation;
+  validatePrepared(spec: PreparedWorkerInput): void {
+    if (!this.driver) throw new Error("UNQUALIFIED_ROUTE");
+    const r = launchReservationSchema.parse(spec.reservation) as LaunchReservation;
     const snapshot = this.store.load(r.bindings.runId),
-      task = snapshot.context.issuedLogicalTasks[r.logicalTaskKey];
-    const effect = this.store.effectRecord(r.effectKey);
+      task = snapshot.context.issuedLogicalTasks[r.logicalTaskKey],
+      effect = this.store.effectRecord(r.effectKey);
     if (
-      !task ||
-      task.stage !== "dispatched" ||
-      effect.status !== "dispatched" ||
-      effect.intent.kind !== "launch" ||
-      !same(task.reservation, r) ||
-      spec.fence.intentHash !== hash("effect", effect.intent)
+      !task || !same(task.reservation, r) || effect.intent.kind !== "launch" ||
+      !["pending_execution", "dispatched"].includes(task.stage) ||
+      effect.status !== task.stage
     )
-      throw new Error("LAUNCH_FENCE_REQUIRED");
-    const journal = this.store
-      .readJournal(r.bindings.runId)
-      .find((row) => row.event.id === spec.fence.eventId);
-    if (
-      !journal ||
-      journal.revision !== spec.fence.revision ||
-      journal.event.body.kind !== "LAUNCH_DISPATCHED" ||
-      journal.event.body.data.logicalTaskKey !== r.logicalTaskKey
-    )
-      throw new Error("LAUNCH_FENCE_REQUIRED");
+      throw new Error("RESERVATION_MISMATCH");
     if (
       !same(spec.config, snapshot.context.config) ||
       snapshot.context.inferenceBlock ||
@@ -393,13 +381,6 @@ export class OrcaTransport {
       throw new Error("WORKER_ROOT_SEPARATION_REQUIRED");
     validatePrivateWorkerCwd(spec.cwd, r);
     if (
-      !same(
-        spec.deadline,
-        snapshot.context.control.workerDeadlines[r.logicalTaskKey],
-      )
-    )
-      throw new Error("DEADLINE_BINDING_MISMATCH");
-    if (
       hash("rendered-worker-packet", spec.packet.text) !==
         spec.packet.renderedHash ||
       Buffer.byteLength(spec.packet.text) >
@@ -407,6 +388,9 @@ export class OrcaTransport {
     )
       throw new Error("PACKET_DELIVERY_UNQUALIFIED");
     if (
+      spec.packet.candidateHash !== ((r.phase === "judge" || r.phase === "ballot") ? snapshot.context.control.candidate?.hash : undefined) ||
+      spec.packet.evidenceHash !== ((r.phase === "judge" || r.phase === "ballot") ? snapshot.context.control.evidenceHash ?? undefined : undefined) ||
+      spec.packet.judgeHash !== (r.phase === "ballot" ? snapshot.context.control.judgeHash ?? undefined : undefined) ||
       !same(
         spec.packet.admittedMethodIds,
         snapshot.context.profile.admittedMethodIds,
@@ -425,6 +409,28 @@ export class OrcaTransport {
       )
     )
       throw new Error("PACKET_BINDING_MISMATCH");
+  }
+  validateLaunch(spec: WorkerSpec): void {
+    const r = launchReservationSchema.parse(spec.reservation) as LaunchReservation;
+    const snapshot = this.store.load(r.bindings.runId),
+      task = snapshot.context.issuedLogicalTasks[r.logicalTaskKey],
+      effect = this.store.effectRecord(r.effectKey);
+    if (
+      !task || task.stage !== "dispatched" || effect.status !== "dispatched" ||
+      effect.intent.kind !== "launch" || !same(task.reservation, r) ||
+      spec.fence.intentHash !== hash("effect", effect.intent)
+    )
+      throw new Error("LAUNCH_FENCE_REQUIRED");
+    const journal = this.store.readJournal(r.bindings.runId).find(row => row.event.id === spec.fence.eventId);
+    if (
+      !journal || journal.revision !== spec.fence.revision ||
+      journal.event.body.kind !== "LAUNCH_DISPATCHED" ||
+      journal.event.body.data.logicalTaskKey !== r.logicalTaskKey
+    )
+      throw new Error("LAUNCH_FENCE_REQUIRED");
+    if (!same(spec.deadline, snapshot.context.control.workerDeadlines[r.logicalTaskKey]))
+      throw new Error("DEADLINE_BINDING_MISMATCH");
+    this.validatePrepared(spec);
   }
   async launch(spec: WorkerSpec): Promise<LaunchReceipt> {
     if (!this.driver) throw new Error("UNQUALIFIED_ROUTE");
@@ -470,6 +476,18 @@ export class OrcaTransport {
     const prior = this.receipts.get(r.clientAttemptKey);
     if (prior && !same(prior, receipt))
       throw new Error("CONFLICTING_LAUNCH_RECEIPT");
+    const { receipt: artifact, ...envelope } = receipt;
+    if (
+      !same(
+        decodeStrictJson(
+          Buffer.from(this.store.artifacts.readArtifact(artifact)).toString(
+            "utf8",
+          ),
+        ),
+        envelope,
+      )
+    )
+      throw new Error("LAUNCH_RECEIPT_PROOF_MISMATCH");
     const controls = receipt.exposed;
     const delivered =
       controls?.delivery?.verified &&
@@ -492,18 +510,6 @@ export class OrcaTransport {
         receipt,
         delivered ? "UNQUALIFIED_ROUTE" : "INVALID_WORKER_RESULT",
       );
-    const { receipt: artifact, ...envelope } = receipt;
-    if (
-      !same(
-        decodeStrictJson(
-          Buffer.from(this.store.artifacts.readArtifact(artifact)).toString(
-            "utf8",
-          ),
-        ),
-        envelope,
-      )
-    )
-      throw new Error("LAUNCH_RECEIPT_PROOF_MISMATCH");
     this.receipts.set(r.clientAttemptKey, structuredClone(receipt));
     return structuredClone(receipt);
   }

@@ -15,6 +15,7 @@ import {
   OrcaTransport,
   type LaunchReceipt,
   type WorkerSpec,
+  type PreparedWorkerInput,
 } from "../orca/transport.js";
 import { armSyntheticWatchdog, type WatchdogRegistration } from "./watchdog.js";
 import { decodeProviderOutputWithReceipt } from "./protocol.js";
@@ -71,43 +72,58 @@ export class WorkerBridge {
     );
     return event;
   }
-  /** The caller supplies newly verified phase admission and frozen rendered text.
-   * No transport call occurs until the journal/outbox fence transaction succeeds. */
+  /** Commit phase PREFLIGHT before calling dispatch. Preparation must be journal-pure
+   * and return frozen original inputs, including during recovery (no new admission).
+   * The bridge adds the actual fence and reducer-issued deadline only after commit. */
   async dispatch(
     reservation: LaunchReservation,
-    prepare: (fence: WorkerSpec["fence"]) => WorkerSpec,
+    prepare: () => PreparedWorkerInput,
   ): Promise<LaunchReceipt | null> {
     const runId = reservation.bindings.runId,
       record = this.store.effectRecord(reservation.effectKey),
       action = reconciliationAction(record);
     if (action === "superseded") return null;
     if (action !== "dispatch-once") {
-      const row = this.store
-        .readJournal(runId)
-        .find(
-          (row) =>
-            row.event.body.kind === "LAUNCH_DISPATCHED" &&
-            row.event.body.data.logicalTaskKey === reservation.logicalTaskKey,
-        );
-      if (!row) throw new Error("MISSING_ORIGINAL_FENCE");
-      const receipt = await this.transport.recover(
-        prepare({
-          eventId: row.event.id,
-          revision: row.revision,
-          intentHash: hashArtifact("effect", record.intent),
-        }),
+      const row = this.store.readJournal(runId).find(
+        (row) => row.event.body.kind === "LAUNCH_DISPATCHED" &&
+          row.event.body.data.logicalTaskKey === reservation.logicalTaskKey,
       );
-      if (receipt && action === "inspect-original")
-        this.commit(
-          runId,
-          {
+      if (!row) throw new Error("MISSING_ORIGINAL_FENCE");
+      const prepared = prepare();
+      if (canonicalJson(prepared.reservation) !== canonicalJson(reservation))
+        throw new Error("RESERVATION_MISMATCH");
+      try {
+        const receipt = await this.transport.recover({
+          ...prepared,
+          deadline: this.store.load(runId).context.control.workerDeadlines[reservation.logicalTaskKey]!,
+          fence: {
+            eventId: row.event.id,
+            revision: row.revision,
+            intentHash: hashArtifact("effect", record.intent),
+          },
+        });
+        if (receipt && action === "inspect-original")
+          this.commit(runId, {
             kind: "LAUNCH_RECEIPT_RECORDED",
             data: { binding: receipt.binding },
-          },
-          reservation.phase,
-        );
-      return receipt;
+          }, reservation.phase);
+        return receipt;
+      } catch (error) {
+        if (error instanceof LaunchControlError && action === "inspect-original")
+          this.commit(runId, {
+            kind: "LAUNCH_RECEIPT_RECORDED",
+            data: {
+              binding: error.receipt.binding,
+              controlFailure: { code: error.terminalCode, receipt: error.receipt.receipt },
+            },
+          }, reservation.phase);
+        throw error;
+      }
     }
+    const prepared = structuredClone(prepare());
+    if (canonicalJson(prepared.reservation) !== canonicalJson(reservation))
+      throw new Error("RESERVATION_MISMATCH");
+    this.transport.validatePrepared(prepared);
     const event = this.commit(
       runId,
       {
@@ -122,9 +138,11 @@ export class WorkerBridge {
         revision: snapshot.revision,
         intentHash: hashArtifact("effect", record.intent),
       };
-    const spec = prepare(fence);
-    if (canonicalJson(spec.reservation) !== canonicalJson(reservation))
-      throw new Error("RESERVATION_MISMATCH");
+    const spec: WorkerSpec = {
+      ...prepared,
+      fence,
+      deadline: snapshot.context.control.workerDeadlines[reservation.logicalTaskKey]!,
+    };
     try {
       const receipt = await this.transport.launch(spec);
       this.commit(
@@ -135,15 +153,14 @@ export class WorkerBridge {
       return receipt;
     } catch (error) {
       if (error instanceof LaunchControlError) {
-        this.store.artifacts.putArtifact(
-          Buffer.from(canonicalJson(error.receipt)),
-          "rejected-launch",
-        );
         this.commit(
           runId,
           {
-            kind: "ERROR",
-            data: { code: error.terminalCode, terminalInference: true },
+            kind: "LAUNCH_RECEIPT_RECORDED",
+            data: {
+              binding: error.receipt.binding,
+              controlFailure: { code: error.terminalCode, receipt: error.receipt.receipt },
+            },
           },
           reservation.phase,
         );
@@ -209,12 +226,28 @@ export class WorkerBridge {
     return registration;
   }
   ingest(raw: Uint8Array, binding: AttemptBinding): WorkerResult {
+    const snapshot = this.store.load(binding.runId),
+      task = snapshot.context.issuedLogicalTasks[binding.logicalTaskKey];
+    if (
+      !task?.binding || task.stage !== "receipt_recorded" ||
+      canonicalJson(task.binding) !== canonicalJson(binding)
+    )
+      throw new Error("OWNED_ATTEMPT_REQUIRED");
     const decoded = decodeProviderOutputWithReceipt(raw, binding);
     this.store.artifacts.putArtifact(decoded.raw, "worker-raw");
     this.store.artifacts.putArtifact(
       Buffer.from(JSON.stringify(decoded.normalization)),
       "normalization",
     );
+    const c = snapshot.context;
+    const stale =
+      c.control.supersededTaskKeys.includes(binding.logicalTaskKey) ||
+      binding.configHash !== c.config.configHash ||
+      binding.profileHash !== c.profile.profileHash ||
+      binding.contextHash !== c.sharedContext.contextHash ||
+      binding.round !== (binding.phase === "clarify" ? 0 : c.roundsUsed) ||
+      binding.clarificationBatch !== (binding.phase === "clarify" ? c.clarificationBatchesUsed : null);
+    if (stale) return decoded.result;
     if (decoded.result.status === "invalid")
       this.commit(
         binding.runId,

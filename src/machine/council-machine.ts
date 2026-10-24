@@ -99,7 +99,8 @@ for (const state of [...activeStates, 'reconciling', 'settling'] as const) {
 }
 for (const kind of ['CANCEL', 'ERROR', 'DEADLINE'] as const)
   stateEventTargets.reconciling[kind] = ['settling'];
-stateEventTargets.reconciling.LAUNCH_RECEIPT_RECORDED = ['reconciling'];
+stateEventTargets.reconciling.LAUNCH_RECEIPT_RECORDED = ['reconciling', 'settling'];
+stateEventTargets.settling.LAUNCH_RECEIPT_RECORDED = ['settling'];
 for (const state of ['needs_user', 'needs_context', 'blocked'] as const) {
   Object.assign(stateEventTargets[state], {
     RESUME: ['reconciling'],

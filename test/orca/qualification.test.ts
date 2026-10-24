@@ -23,11 +23,7 @@ it("pins configured replacements and rejects unsupported overrides and the AGY p
   const m = await transport(),
     { fixture } = await import("./fixtures.js");
   const f = fixture(),
-    spec = f.prepare({
-      eventId: "candidate",
-      revision: 0,
-      intentHash: "a".repeat(64),
-    });
+    spec = f.prepare();
   const evidence = spec.routeEvidence;
   expect(
     m.selectionArgv(
@@ -102,11 +98,7 @@ it("passes a newly attested exact same-family model unchanged and rejects missin
     model: "gpt-9.7-approved",
     effort: "deep",
   };
-  const spec = f.prepare({
-    eventId: "candidate",
-    revision: 0,
-    intentHash: "a".repeat(64),
-  });
+  const spec = f.prepare();
   const admission = {
     ...spec.admission,
     assignments: [{ role: "openai" as const, selection }],
@@ -173,15 +165,17 @@ it("passes a newly attested exact same-family model unchanged and rejects missin
   f.store.close();
 });
 
-it("retains exact reducer input, context, profile, config and target hashes across all four phases", async () => {
+it("retains exact bindings across two clarification batches and two complete deliberation rounds", async () => {
   const { fixture } = await import("./fixtures.js"),
     { OrcaTransport } = await transport(),
     { WorkerBridge } = await import("../../src/workers/bridge.js"),
-    { makeConfirmation } = await import("../fixtures/builders.js");
+    { makeConfirmation, rawQuestion } = await import("../fixtures/builders.js");
   const f = fixture(),
     t = new OrcaTransport(f.store, f.driver),
     w = new WorkerBridge(f.store, t, f.now);
+  const history: { binding: import("../../src/domain/contracts.js").AttemptBinding; raw: Uint8Array }[] = [];
   const finish = async (phase: "clarify" | "review" | "judge" | "ballot") => {
+    f.admit(phase);
     const tasks = Object.values(
       f.store.load("run1").context.issuedLogicalTasks,
     ).filter(
@@ -190,7 +184,7 @@ it("retains exact reducer input, context, profile, config and target hashes acro
     );
     for (const task of tasks) {
       const q = task.reservation,
-        receipt = (await w.dispatch(q, (fence) => f.prepare(fence, q)))!,
+        receipt = (await w.dispatch(q, () => f.prepare(q)))!,
         b = receipt.binding;
       for (const [key, value] of Object.entries(q.bindings))
         expect(b[key as keyof typeof b]).toEqual(value);
@@ -207,8 +201,8 @@ it("retains exact reducer input, context, profile, config and target hashes acro
         phase === "clarify"
           ? {
               kind: "clarification",
-              ready: true,
-              questions: [],
+              ready: !(b.clarificationBatch === 1 && b.role === "openai"),
+              questions: b.clarificationBatch === 1 && b.role === "openai" ? [rawQuestion()] : [],
               methodIds: ["test-method"],
             }
           : phase === "review"
@@ -231,7 +225,7 @@ it("retains exact reducer input, context, profile, config and target hashes acro
               : {
                   kind: "ballot",
                   bindings: { ...bindings, judgeHash: b.judgeHash! },
-                  decision: "accept",
+                  decision: b.round === 1 && b.role === "claude" ? "reject" : "accept",
                   conditional: false,
                   newObjections: [],
                   missingInputQuestions: [],
@@ -245,49 +239,53 @@ it("retains exact reducer input, context, profile, config and target hashes acro
         "adapter",
         b.phase,
       );
-      expect(w.ingest(Buffer.from(JSON.stringify(raw)), b).status).toBe(
+      const rawBytes = Buffer.from(JSON.stringify(raw));
+      history.push({ binding: b, raw: rawBytes });
+      expect(w.ingest(rawBytes, b).status).toBe(
         "valid",
       );
       await w.observe(b);
     }
     f.commit({ kind: "PHASE_READY", data: {} }, "controller");
   };
+  const collectAndPublish = () => {
+    const s = f.store.load("run1"), questions = s.context.control.stagedQuestions.map(q => ({ ...q, disposition: "presented" as const }));
+    f.commit({ kind: "COLLECT_QUESTIONS", data: { batch: {
+      id: "fixture-batch-" + s.context.clarificationBatchesUsed,
+      origin: { kind: "clarification", batchIndex: s.context.clarificationBatchesUsed },
+      baseContextHash: s.context.sharedContext.contextHash,
+      questions, groups: [], aliases: [], presentedQuestionIds: questions.map(q => q.id),
+      sourceAnswers: questions.map(q => ({ id: "answer-" + q.id, questionId: q.id, status: "answered" as const, value: "fact", source: { author: "source", receiptId: "source-receipt" }, evidenceIds: [] })),
+    } } }, "controller");
+    f.commit({ kind: "PUBLISH_ANSWERS", data: {} }, "controller");
+  };
   await finish("clarify");
-  let s = f.store.load("run1");
-  f.commit(
-    {
-      kind: "COLLECT_QUESTIONS",
-      data: {
-        batch: {
-          id: "fixture-batch",
-          origin: { kind: "clarification", batchIndex: 1 },
-          baseContextHash: s.context.sharedContext.contextHash,
-          questions: [],
-          groups: [],
-          aliases: [],
-          sourceAnswers: [],
-          presentedQuestionIds: [],
-        },
-      },
-    },
-    "controller",
-  );
-  f.commit({ kind: "PUBLISH_ANSWERS", data: {} }, "controller");
-  f.commit({ kind: "ADMIT_ROUND", data: {} }, "controller");
-  await finish("review");
-  f.commit({ kind: "REQUEST_CANDIDATE", data: {} }, "controller");
-  f.commit(
-    {
-      kind: "CANDIDATE_FROZEN",
-      data: {
-        candidate: makeConfirmation().candidate,
-        evidenceHash: "a".repeat(64),
-      },
-    },
-    "controller",
-  );
-  await finish("judge");
-  await finish("ballot");
-  expect(f.counts().launches).toBe(10);
+  collectAndPublish();
+  expect(f.store.load("run1").context.clarificationBatchesUsed).toBe(2);
+  const beforeLate = f.store.load("run1");
+  expect(w.ingest(Buffer.from("invalid late output"), history[0]!.binding).status).toBe("invalid");
+  expect(w.ingest(history[0]!.raw, history[0]!.binding).status).toBe("valid");
+  expect(f.store.load("run1")).toEqual(beforeLate);
+  await finish("clarify");
+  collectAndPublish();
+  for (let round = 1; round <= 2; round++) {
+    f.commit({ kind: "ADMIT_ROUND", data: {} }, "controller");
+    await finish("review");
+    f.commit({ kind: "REQUEST_CANDIDATE", data: {} }, "controller");
+    f.commit({ kind: "CANDIDATE_FROZEN", data: { candidate: makeConfirmation().candidate, evidenceHash: "a".repeat(64) } }, "controller");
+    await finish("judge");
+    await finish("ballot");
+    if (round === 1) f.commit({ kind: "EVALUATE_ROUND", data: {} }, "controller");
+  }
+  const roundTwo = f.store.load("run1");
+  const oldBallot = history.find(item => item.binding.phase === "ballot" && item.binding.round === 1)!;
+  w.ingest(Buffer.from("invalid stale ballot"), oldBallot.binding);
+  w.ingest(oldBallot.raw, oldBallot.binding);
+  expect(f.store.load("run1")).toEqual(roundTwo);
+  expect(roundTwo.context.roundsUsed).toBe(2);
+  expect(roundTwo.context.inferenceBlock).toBeNull();
+  expect(roundTwo.context.callsReserved).toBe(20);
+  expect(f.counts().launches).toBe(20);
+  expect(f.store.readJournal("run1").filter(row => row.event.body.kind === "PREFLIGHT")).toHaveLength(9);
   f.store.close();
-});
+}, 20000);

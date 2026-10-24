@@ -692,7 +692,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     ? { kind: 'ok' as const, budget: { ...c.activeBudget, lastReceipt: e.clockReceipt }, deadline: c.activeBudget.deadline, expired: c.activeBudget.remainingMs === 0 }
     : accountBudget(c.activeBudget, e.clockReceipt, budgetEvent);
   if (budget.kind === 'clock-blocker') {
-    requireThat(b.kind !== 'CLOCK_CHECKPOINT' && !receiptOnly, budget.code);
+    requireThat(b.kind !== 'CLOCK_CHECKPOINT' && b.kind !== 'LAUNCH_RECEIPT_RECORDED' && !receiptOnly, budget.code);
     c.pauseReason = budget.code;
     reconcile();
   } else {
@@ -703,6 +703,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
         'CLOCK_CHECKPOINT',
         'EFFECT_RECEIPT_RECORDED',
         'WATCHDOG_ARMED',
+        'LAUNCH_RECEIPT_RECORDED',
         'SETTLED',
         'EXTEND',
         'RECONCILED',
@@ -874,7 +875,9 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
           requireThat(
             e.phase === binding.phase &&
               (phaseState[binding.phase] === from ||
-                (from === 'reconciling' && phaseState[binding.phase] === c.reconcileOriginState)),
+                (from === 'reconciling' && (phaseState[binding.phase] === c.reconcileOriginState ||
+                  (c.reconcileOriginState === 'settling' && phaseState[binding.phase] === c.resumeTarget))) ||
+                (from === 'settling' && phaseState[binding.phase] === c.resumeTarget)),
             'Receipt phase mismatch',
           );
           requireThat(
@@ -918,6 +921,20 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             },
           };
           c.expectedAttempts = { ...c.expectedAttempts, [binding.role]: binding };
+          if (b.data.controlFailure) {
+            c.inferenceBlock ??= b.data.controlFailure.code;
+            if (from === 'settling' || (from === 'reconciling' && c.reconcileOriginState === 'settling')) {
+              c.pendingOutcome = 'blocked';
+              c.pauseReason = c.inferenceBlock;
+              if (budget.expired) enter('settling');
+            } else pause(c.inferenceBlock, 'blocked', c.resumeTarget ?? (from === 'reconciling' ? c.reconcileOriginState! : from));
+            stop();
+          } else if (budget.expired) {
+            if (from !== 'settling')
+              pause(c.inferenceBlock ?? 'ACTIVE_DEADLINE', c.inferenceBlock ? 'blocked' : 'needs_user',
+                c.resumeTarget ?? (from === 'reconciling' ? c.reconcileOriginState! : from));
+            stop();
+          } else if (from === 'settling' || (from === 'reconciling' && c.inferenceBlock)) stop();
           break;
         }
         case 'WORKER_RESULT': {

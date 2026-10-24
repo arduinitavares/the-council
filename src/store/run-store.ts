@@ -9,6 +9,7 @@ import type { EffectIntent, JsonValue, RunSnapshot, TransitionResult, ValidatedE
 import { canonicalJson, hashArtifact } from '../domain/hash.js';
 import { hashSchema, idSchema, jsonValueSchema, runSnapshotSchema, validatedEventSchema, watchdogArmingProofSchema, watchdogLaunchProofSchema } from '../domain/schemas.js';
 import { createInitialSnapshot, reduceRun, restoreForReconciliation } from '../machine/reduce.js';
+import { launchReceiptSchema } from '../orca/transport.js';
 import { decodeStrictJson } from '../workers/strict-json.js';
 import { openArtifactStore, readArtifact, verifyConfiguration, type ArtifactStore } from './artifacts.js';
 
@@ -241,6 +242,13 @@ class SQLiteRunStore implements RunStore {
     const expected = reduceRun(reductionInput, event);
     requireThat(same(result, expected) && expected.snapshot.revision === expectedRevision + 1, 'TRANSITION_MISMATCH');
     const next = expected.snapshot;
+    if (event.body.kind === 'LAUNCH_RECEIPT_RECORDED' && event.body.data.controlFailure) {
+      const { binding, controlFailure } = event.body.data;
+      requireThat(controlFailure.receipt.kind === 'launch', 'LAUNCH_RECEIPT_PROOF_REQUIRED');
+      const proof = launchReceiptSchema.omit({ receipt: true }).parse(decodeStrictJson(Buffer.from(readArtifact(controlFailure.receipt, this.artifacts.root)).toString('utf8')));
+      const task = snapshot.context.issuedLogicalTasks[binding.logicalTaskKey];
+      requireThat(task && same(proof.binding, binding) && proof.clientAttemptKey === task.reservation.clientAttemptKey, 'LAUNCH_RECEIPT_PROOF_MISMATCH');
+    }
     let completedEffect: OutboxRow | undefined;
     if (event.body.kind === 'EFFECT_RECEIPT_RECORDED' || event.body.kind === 'WATCHDOG_ARMED') {
       const data = event.body.data;

@@ -151,7 +151,7 @@ export type ControlEventBody =
       data: { reason: string; outcome: 'needs_user' | 'needs_context' | 'blocked' };
     }
   | { kind: 'LAUNCH_DISPATCHED'; data: { logicalTaskKey: string } }
-  | { kind: 'LAUNCH_RECEIPT_RECORDED'; data: { binding: AttemptBinding } }
+  | { kind: 'LAUNCH_RECEIPT_RECORDED'; data: { binding: AttemptBinding; controlFailure?: { code: 'INVALID_WORKER_RESULT' | 'UNQUALIFIED_ROUTE'; receipt: ArtifactRef } } }
   | { kind: 'WATCHDOG_ARMED'; data: WatchdogArming }
   | { kind: 'EFFECT_RECEIPT_RECORDED'; data: { key: string; intentHash: string; receipt: ArtifactRef } }
   | { kind: 'WORKER_RESULT'; data: { payload: BoundWorkerPayload; artifact: ArtifactRef } }

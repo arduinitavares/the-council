@@ -309,7 +309,7 @@ export const controlEventBodySchema = z.discriminatedUnion('kind', [
     }),
   ),
   body('LAUNCH_DISPATCHED', z.strictObject({ logicalTaskKey: idSchema })),
-  body('LAUNCH_RECEIPT_RECORDED', z.strictObject({ binding: attemptBindingSchema })),
+  body('LAUNCH_RECEIPT_RECORDED', z.strictObject({ binding: attemptBindingSchema, controlFailure: z.strictObject({ code: z.enum(['INVALID_WORKER_RESULT', 'UNQUALIFIED_ROUTE']), receipt: artifactRefSchema }).optional() })),
   body('WATCHDOG_ARMED', watchdogArmingSchema),
   body('EFFECT_RECEIPT_RECORDED', z.strictObject({ key: idSchema, intentHash: hashSchema, receipt: artifactRefSchema })),
   body(

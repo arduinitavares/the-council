@@ -514,3 +514,18 @@ it("allows watchdog completion only after positive worker and child settlement",
   });
   f.store.close();
 });
+
+it("revalidates the actual committed deadline before calling the driver", async () => {
+  const { fixture } = await import("./fixtures.js"),
+    { OrcaTransport } = await import("../../src/orca/transport.js"),
+    { hashArtifact } = await import("../../src/domain/hash.js");
+  const f = fixture(), t = new OrcaTransport(f.store, f.driver), event = f.commit({
+    kind: "LAUNCH_DISPATCHED", data: { logicalTaskKey: f.reservation.logicalTaskKey },
+  }, "controller", f.reservation.phase);
+  const spec = f.fenced({ eventId: event.id, revision: f.store.load("run1").revision,
+    intentHash: hashArtifact("effect", f.store.effectRecord(f.reservation.effectKey).intent) });
+  await expect(t.launch({ ...spec, deadline: { ...spec.deadline, wallMs: spec.deadline.wallMs + 1 } })).rejects.toThrow("DEADLINE_BINDING_MISMATCH");
+  expect(f.counts().launches).toBe(0);
+  expect(f.store.effectRecord(f.reservation.effectKey).status).toBe("dispatched");
+  f.store.close();
+});

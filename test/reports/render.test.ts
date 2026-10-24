@@ -8,7 +8,7 @@ import { createEvidenceCollector, freezeEvidenceBundle, readEvidenceReceipt } fr
 import { openArtifactStore } from '../../src/store/artifacts.js';
 import { createInitialSnapshot } from '../../src/machine/reduce.js';
 import { request } from '../machine/helpers.js';
-import { H, config, makeBallot, makeBinding, makeConfirmation, makeObjection, makeQuestion } from '../fixtures/builders.js';
+import { H, OTHER, config, makeBallot, makeBinding, makeConfirmation, makeObjection, makeQuestion } from '../fixtures/builders.js';
 
 function reportInput() {
   const artifacts = openArtifactStore(join(realpathSync(mkdtempSync(join(tmpdir(), 'council-report-'))), 'artifacts'));
@@ -44,6 +44,84 @@ it('refuses consensus with substituted accepted attempts or mismatched exposed s
   expect(renderReport({ ...fresh, settings: [{ role: 'openai', requested: config.reviewers.openai, exposed: { ...config.reviewers.openai, model: 'unexpected-model' }, receiptId: 'actual-settings' }] }).outcome).toBe('blocked');
 });
 
+it.each(['runId', 'configHash', 'profileHash', 'contextHash', 'round', 'candidateHash', 'evidenceHash'] as const)('refuses a judge payload with stale %s', field => {
+  const input = reportInput(), bindings = input.snapshot.context.control.judge!.bindings;
+  if (field === 'round') bindings.round++;
+  else bindings[field] = field === 'runId' ? 'other-run' : OTHER;
+  expect(renderReport(input).outcome).toBe('blocked');
+});
+
+it('refuses a judge configured for a different model', () => {
+  const input = reportInput(), binding = input.snapshot.context.control.judge!.binding;
+  binding.configured = binding.requested = { ...config.judge, model: 'different-judge' };
+  expect(renderReport(input).outcome).toBe('blocked');
+});
+
+it('refuses a substituted judge attempt when the accepted attempt is retained', () => {
+  const input = reportInput(), c = input.snapshot.context;
+  c.expectedAttempts = { ...c.expectedAttempts, judge: { ...c.control.judge!.binding, attemptId: 'other-judge-attempt' } };
+  expect(renderReport(input).outcome).toBe('blocked');
+});
+
+it.each(['runId', 'configHash', 'profileHash', 'contextHash', 'round', 'candidateHash', 'evidenceHash'] as const)('refuses a judge attempt with stale %s even when the expected attempt map has advanced to ballots', field => {
+  const input = reportInput(), binding = input.snapshot.context.control.judge!.binding;
+  if (field === 'round') binding.round++;
+  else binding[field] = field === 'runId' ? 'other-run' : OTHER;
+  if (field === 'runId' && binding.authority.kind === 'supervised') binding.authority.runId = 'other-run';
+  expect(renderReport(input).outcome).toBe('blocked');
+});
+
+it('accepts a retained matching judge attempt without requiring it after the phase map advances', () => {
+  const input = reportInput(), c = input.snapshot.context;
+  c.expectedAttempts = { ...c.expectedAttempts, judge: c.control.judge!.binding };
+  expect(renderReport(input).outcome).toBe('completed');
+});
+
+it('binds rendered bytes to the frozen candidate hash as well as its text reference', () => {
+  const input = reportInput(), c = input.snapshot.context;
+  c.control.candidate!.hash = OTHER;
+  c.control.confirmation!.expected.candidateHash = OTHER;
+  c.control.judge!.bindings.candidateHash = OTHER;
+  c.control.judge!.binding.candidateHash = OTHER;
+  for (const ballot of c.ballots) { ballot.bindings.candidateHash = OTHER; ballot.binding.candidateHash = OTHER; }
+  expect(() => renderReport(input)).toThrow('REPORT_CANDIDATE_MISMATCH');
+});
+
+it.each([false, true])('requires a record for every required evidence ID, acknowledged=%s', acknowledged => {
+  const input = reportInput(), c = input.snapshot.context;
+  c.requiredEvidenceIds = ['absent'];
+  c.control.candidate!.acknowledgedUnverifiedEvidenceIds = acknowledged ? ['absent'] : [];
+  const report = renderReport(input);
+  expect(report.outcome).toBe('blocked');
+  expect(JSON.parse(report.json).blockers).toContain('REQUIRED_EVIDENCE_MISSING:absent');
+});
+
+it.each(['unverified', 'invalid'] as const)('requires acknowledgement of %s required evidence', async status => {
+  const input = reportInput(), root = realpathSync(mkdtempSync(join(tmpdir(), 'report-required-'))), artifacts = openArtifactStore(join(root, 'artifacts'));
+  const address = 'https://approved.example/source', scope = { sourceRoots: [root], allowedSourceAddresses: [address], checks: [] };
+  const collector = createEvidenceCollector({ artifacts, environment: {}, sourceManifest: [{ kind: 'source', address, revision: 'v1' }],
+    retrieve: async () => ({ kind: 'observed', bytes: Buffer.from('Observed bytes.'), revision: status === 'invalid' ? 'v2' : null, receiptId: 'source-receipt' }), executeCheck: async () => { throw new Error('check'); } });
+  const record = await collector.collectEvidence({ id: 'e1', claimId: 'c1', source: address, reason: 'required source' }, scope);
+  const c = input.snapshot.context, hash = freezeEvidenceBundle([record], []).hash;
+  c.request.scope = scope; c.requiredEvidenceIds = ['e1']; c.control.evidence = [record]; c.control.evidenceHash = hash;
+  c.control.confirmation!.expected.evidenceHash = hash; c.control.judge!.bindings.evidenceHash = hash; c.control.judge!.binding.evidenceHash = hash;
+  for (const ballot of c.ballots) { ballot.bindings.evidenceHash = hash; ballot.binding.evidenceHash = hash; }
+  const withReceipts = { ...input, evidenceReceipts: [readEvidenceReceipt(record, artifacts)] };
+  expect(record.status).toBe(status);
+  const report = renderReport(withReceipts);
+  expect(report.outcome).toBe('blocked');
+  expect(JSON.parse(report.json).blockers).toContain('REQUIRED_EVIDENCE_UNACKNOWLEDGED:e1');
+  c.control.candidate!.acknowledgedUnverifiedEvidenceIds = ['e1'];
+  expect(renderReport(withReceipts).outcome).toBe('completed');
+});
+
+it('rejects duplicate evidence IDs even without an accepted bundle hash', () => {
+  const input = reportInput(), c = input.snapshot.context;
+  const record = { requestId: 'duplicate', status: 'unverified' as const, sourceLocation: 'https://approved.example/source', contentHash: H, observationReceipt: 'unavailable' };
+  c.control.evidenceHash = null; c.control.evidence = [record, record];
+  expect(() => renderReport(input)).toThrow('DUPLICATE_EVIDENCE_ID');
+});
+
 it('reports unresolved disagreement at round three as needs_user and preserves objection ownership', () => {
   const input = reportInput(); input.snapshot.state = 'needs_user'; input.snapshot.context.pendingOutcome = null; input.snapshot.context.roundsUsed = 3;
   input.snapshot.context.objections = [makeObjection()]; input.snapshot.context.control.confirmation = null;
@@ -69,6 +147,40 @@ it('shows operational blockers and actual unsettled resources even when a caller
   expect(report.outcome).toBe('blocked');
   expect(report.settlement).toBe('unverifiable');
   expect(report.markdown).toContain('OWNERSHIP_UNKNOWN'); expect(report.markdown).toContain('resource-1');
+});
+
+it.each(['input', 'settings', 'resources', 'inference', 'pending'] as const)('keeps a needs_context snapshot blocked by %s operational facts', kind => {
+  const input = reportInput(), c = input.snapshot.context;
+  input.snapshot.state = 'needs_context'; c.pendingOutcome = 'needs_context';
+  if (kind === 'inference') c.inferenceBlock = 'PERMISSION_DENIED';
+  if (kind === 'pending') c.pendingOutcome = 'blocked';
+  const report = renderReport({ ...input,
+    blockers: kind === 'input' ? ['EVIDENCE_ACTION_DENIED:e1'] : [],
+    settings: kind === 'settings' ? [{ role: 'openai', requested: config.reviewers.openai, exposed: { ...config.reviewers.openai, model: 'unexpected-model' }, receiptId: 'actual-settings' }] : [],
+    resources: kind === 'resources' ? [{ id: 'worker', status: 'unverifiable', receiptId: 'resource-observation' }] : [],
+  });
+  expect(report.outcome).toBe('blocked');
+});
+
+it.each(['preflight', 'clarifying', 'collecting_questions', 'publishing_answers', 'prepare_round', 'reviewing', 'prepare_candidate', 'judging', 'confirming', 'evaluate_round', 'settling', 'reconciling'] as const)('does not report an active %s snapshot as settled user action', state => {
+  const input = reportInput(); input.snapshot.state = state; input.snapshot.context.pendingOutcome = null;
+  const report = renderReport(input), data = JSON.parse(report.json);
+  expect(report.outcome).toBe('blocked');
+  expect(data.blockers).toContain('RUN_NOT_AT_TERMINAL_OR_PAUSE_STATE');
+  expect(data.state).toBe(state);
+  expect(data.pendingOutcome).toBeNull();
+  expect(data.form).toBe('operational blocker');
+});
+
+it.each(['needs_context', 'needs_user'] as const)('reports a positively settled pending %s outcome and the actual accepted state', pendingOutcome => {
+  const input = reportInput(); input.snapshot.state = 'settling'; input.snapshot.context.pendingOutcome = pendingOutcome;
+  const report = renderReport(input), data = JSON.parse(report.json);
+  expect(report.outcome).toBe(pendingOutcome);
+  expect(data.state).toBe('settling'); expect(data.pendingOutcome).toBe(pendingOutcome);
+  expect(report.markdown).toContain('Accepted state: settling.');
+  expect(report.markdown).toContain(`Pending outcome: ${pendingOutcome}.`);
+  const unsettled = renderReport({ ...input, resources: [{ id: 'worker', status: 'live', receiptId: 'live-resource' }] });
+  expect(unsettled.outcome).toBe('blocked'); expect(unsettled.settlement).toBe('unverifiable');
 });
 
 it('renders cancellation without creating a vote or claiming resource settlement', () => {

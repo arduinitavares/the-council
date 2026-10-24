@@ -57,7 +57,7 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
   const frozen = c.control.candidate;
   let candidateText: string | null = null;
   if (frozen) {
-    if (!input.candidate || canonicalJson(input.candidate.ref) !== canonicalJson(frozen.text) || !artifactDigest(frozen.text, input.candidate.bytes)) throw new Error('REPORT_CANDIDATE_MISMATCH');
+    if (frozen.hash !== frozen.text.sha256 || !input.candidate || canonicalJson(input.candidate.ref) !== canonicalJson(frozen.text) || !artifactDigest(frozen.text, input.candidate.bytes)) throw new Error('REPORT_CANDIDATE_MISMATCH');
     candidateText = Buffer.from(input.candidate.bytes).toString('utf8');
     if (!Buffer.from(candidateText).equals(Buffer.from(input.candidate.bytes))) throw new Error('REPORT_CANDIDATE_NOT_UTF8');
   } else if (input.candidate !== null) throw new Error('REPORT_CANDIDATE_UNBOUND');
@@ -75,6 +75,7 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
     if (ref.kind !== 'evidence-receipt' || !artifactDigest(ref, Buffer.from(canonicalJson(receipt))) || record.status !== receipt.status || record.contentHash !== receipt.contentHash || record.sourceLocation !== receipt.sourceLocation || receipt.scopeHash !== hashArtifact('evidence-scope', c.request.scope as unknown as JsonValue)) throw new Error('REPORT_EVIDENCE_RECEIPT_MISMATCH');
     receiptIds.add(record.requestId);
   }
+  const evidenceBundle = freezeEvidenceBundle(c.control.evidence, []);
   const answerView = latestAnswers(c.questionLedger);
   const missingEvidence = c.requiredEvidenceIds.filter(id => !c.control.evidence.some(record => record.requestId === id && (record.status === 'verified' || record.status === 'not_applicable')));
   const unavailableReceiptDetails = c.control.evidence.filter(record => !receiptIds.has(record.requestId)).map(record => record.requestId);
@@ -88,23 +89,31 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
     contextHash: c.sharedContext.contextHash, round: c.roundsUsed, candidateHash: frozen.hash,
     evidenceHash: c.control.evidenceHash, judgeHash: c.control.judgeHash,
   } : null;
+  const judge = c.control.judge;
   const confirmationBound = confirmation !== null && expected !== null && c.control.judge !== null &&
     canonicalJson(confirmation.expected) === canonicalJson(expected) && canonicalJson(confirmation.config) === canonicalJson(c.config.resolved) &&
     canonicalJson(confirmation.candidate) === canonicalJson(frozen) && canonicalJson(confirmation.ballots) === canonicalJson(c.ballots) &&
     canonicalJson(confirmation.objections) === canonicalJson(c.objections) && canonicalJson(confirmation.questionLedger) === canonicalJson(c.questionLedger) &&
     (['openai', 'gemini', 'claude'] as const).every(seat => c.expectedAttempts[seat] && canonicalJson(confirmation.expectedAttempts[seat]) === canonicalJson(c.expectedAttempts[seat])) &&
-    canonicalJson(confirmation.judgeChallengeIds) === canonicalJson(c.control.judge.challenges.map(challenge => challenge.id));
+    canonicalJson(confirmation.judgeChallengeIds) === canonicalJson(c.control.judge.challenges.map(challenge => challenge.id)) &&
+    judge !== null && canonicalJson(judge.bindings) === canonicalJson({ runId: expected.runId, configHash: expected.configHash, profileHash: expected.profileHash, contextHash: expected.contextHash, round: expected.round, candidateHash: expected.candidateHash, evidenceHash: expected.evidenceHash }) &&
+    Object.entries(judge.bindings).every(([key, value]) => judge.binding[key as keyof typeof judge.binding] === value) &&
+    canonicalJson(judge.binding.configured) === canonicalJson(c.config.resolved.judge) &&
+    (!c.expectedAttempts.judge || canonicalJson(judge.binding) === canonicalJson(c.expectedAttempts.judge));
   const blockers = [...input.blockers, ...(c.inferenceBlock ? [c.inferenceBlock] : []), ...(settlement === 'unverifiable' ? ['RESOURCES_NOT_POSITIVELY_SETTLED'] : []),
-    ...(c.control.evidenceHash !== null && freezeEvidenceBundle(c.control.evidence, []).hash !== c.control.evidenceHash ? ['EVIDENCE_BUNDLE_DRIFT'] : []),
+    ...(c.control.evidenceHash !== null && evidenceBundle.hash !== c.control.evidenceHash ? ['EVIDENCE_BUNDLE_DRIFT'] : []),
+    ...(snapshot.state === 'completed' ? c.requiredEvidenceIds.filter(id => !c.control.evidence.some(record => record.requestId === id)).map(id => `REQUIRED_EVIDENCE_MISSING:${id}`) : []),
+    ...(snapshot.state === 'completed' ? missingEvidence.filter(id => !frozen?.acknowledgedUnverifiedEvidenceIds.includes(id)).map(id => `REQUIRED_EVIDENCE_UNACKNOWLEDGED:${id}`) : []),
     ...input.evidenceReceipts.filter(receipt => receipt.denied).map(receipt => `EVIDENCE_ACTION_DENIED:${receipt.request.id}`),
     ...input.settings.filter(setting => setting.exposed !== null && canonicalJson(setting.requested) !== canonicalJson(setting.exposed)).map(setting => `EXPOSED_SETTINGS_MISMATCH:${setting.role}`)];
   let outcome: ReportArtifacts['outcome'];
   if (snapshot.state === 'cancelled' || c.pendingOutcome === 'cancelled') outcome = 'cancelled';
-  else if (snapshot.state === 'needs_context') outcome = 'needs_context';
   else if (snapshot.state === 'blocked' || c.pendingOutcome === 'blocked' || blockers.length) outcome = 'blocked';
+  else if (snapshot.state === 'needs_context' || c.pendingOutcome === 'needs_context') outcome = 'needs_context';
   else if (snapshot.state === 'completed' && consensus.kind === 'unanimous' && confirmationBound) outcome = 'completed';
   else if (snapshot.state === 'completed') { outcome = 'blocked'; blockers.push('COMPLETED_CONSENSUS_NOT_VERIFIED'); }
-  else outcome = 'needs_user';
+  else if (snapshot.state === 'needs_user' || c.pendingOutcome === 'needs_user') outcome = 'needs_user';
+  else { outcome = 'blocked'; blockers.push('RUN_NOT_AT_TERMINAL_OR_PAUSE_STATE'); }
   const form = outcome === 'completed' ? 'consensus' : outcome === 'cancelled' ? 'cancellation' : outcome === 'needs_user' ? 'unresolved disagreement' : 'operational blocker';
   const mapping = (['openai', 'gemini', 'claude', 'judge'] as const).map(role => ({
     role, configured: role === 'judge' ? c.config.resolved.judge : c.config.resolved.reviewers[role],
@@ -114,7 +123,7 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
   }));
   const languageProfile = { name: 'Issue 9-oriented scoped surface profile', dictionaryVerified: false, certified: false, technicalCorrectnessChecked: false } as const;
   const data = {
-    version: 1, runId: c.request.runId, outcome, form, state: snapshot.state, settlement, consensus, confirmationBound,
+    version: 1, runId: c.request.runId, outcome, form, state: snapshot.state, pendingOutcome: c.pendingOutcome, settlement, consensus, confirmationBound,
     candidate: frozen, candidateText, ballots: c.ballots, alternatives: input.alternatives, objections: c.objections,
     questions: c.questionLedger.questions, answers: c.questionLedger.answers, userDirections: c.sharedContext.userDirections,
     evidence: c.control.evidence, evidenceReceipts: input.evidenceReceipts, missingEvidence, unavailableReceiptDetails,
@@ -130,7 +139,7 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
     'Answer history:', structured(c.questionLedger.answers.filter(answer => answer.questionId === question.id)),
   ].join('\n\n')).join('\n\n') || 'No shared questions recorded.';
   const sections: [string, string][] = [
-    ['Decision', `Report form: ${form}.\nOutcome: ${outcome}.\nAccepted state: ${snapshot.state}.\nResource settlement: ${settlement}.\n\n${structured(consensus)}`],
+    ['Decision', `Report form: ${form}.\nOutcome: ${outcome}.\nAccepted state: ${snapshot.state}.\nPending outcome: ${c.pendingOutcome ?? 'none'}.\nResource settlement: ${settlement}.\n\n${structured(consensus)}`],
     ['Candidate', candidateText === null ? 'No frozen candidate recorded.' : literal(candidateText)],
     ['Assumptions', lines(frozen?.assumptions ?? [])],
     ['Tradeoffs', lines(frozen?.tradeoffs ?? [])],

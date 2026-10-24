@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { createEvidenceCollector, createNodeEvidenceIO, readEvidenceReceipt } from '../../src/evidence/adapter.js';
+import { createEvidenceCollector, createNodeEvidenceIO, readEvidenceReceipt, type CheckObservation } from '../../src/evidence/adapter.js';
 import { openArtifactStore } from '../../src/store/artifacts.js';
 import type { RunScope } from '../../src/domain/contracts.js';
 import { canonicalJson } from '../../src/domain/hash.js';
@@ -115,6 +115,66 @@ it('retains original unsettled check identity when a later request is stopped wi
   expect(receipt.checkResource?.id).toBe('original');
   expect(receipt.checkResourceState).toBe('unverifiable');
   expect(receipt.priorObservationReceipt).toBe(original.observationReceipt);
+});
+
+it.each(['overflow-unverified', 'overflow-completed', 'missing-resource', 'thrown-error', 'invalid-observation'] as const)('latches an unverifiable check after %s and retains the original receipt', async failure => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'check-failure-latch-'))), artifacts = openArtifactStore(join(root, 'artifacts'));
+  const check = { id: 'unknown', argv: ['/declared/check'], cwd: root, declaredEffects: [], outputTargets: [] };
+  const scope = { sourceRoots: [root], allowedSourceAddresses: [], checks: [check] };
+  const resource = { id: 'original-resource', pid: 123, processGroupId: 123, startedAtMs: 10, parentExitCode: 0, parentSignal: null, settlement: 'unverifiable' as const, stopRequested: true, settlementReceiptId: null };
+  let calls = 0;
+  const collector = createEvidenceCollector({ artifacts, environment: {}, maxBytes: 4,
+    sourceManifest: [{ kind: 'check', address: 'check:unknown', checkId: check.id, revision: 'v1' }],
+    retrieve: async () => { throw new Error('source'); }, executeCheck: async (): Promise<CheckObservation> => {
+      calls++;
+      if (failure === 'thrown-error') throw new Error('Runner failed after a possible start');
+      if (failure === 'invalid-observation') return { kind: 'unverified', reason: 'Malformed receipt after a possible start', receiptId: '' };
+      if (failure === 'missing-resource') return { kind: 'unverified', reason: 'Resource identity unavailable', receiptId: 'original-observation' };
+      const output = { executed: check, stdout: Buffer.from('12345'), stderr: Buffer.alloc(0), receiptId: 'original-observation', resource };
+      return failure === 'overflow-completed' ? { kind: 'completed', ...output, exitCode: 0 } : { kind: 'unverified', ...output, reason: 'Output overflow' };
+    } });
+  const original = await collector.collectEvidence({ id: 'e1', claimId: 'c', source: 'check:unknown', reason: 'run' }, scope);
+  const before = readEvidenceReceipt(original, artifacts);
+  const later = await collector.collectEvidence({ id: 'e2', claimId: 'c', source: 'check:unknown', reason: 'retry' }, scope);
+  const receipt = readEvidenceReceipt(later, artifacts);
+  expect(calls).toBe(1);
+  expect(before.checkResourceState).toBe('unverifiable');
+  expect(receipt).toMatchObject({ checkResourceState: 'unverifiable', checkResource: before.checkResource, denied: false, priorObservationReceipt: original.observationReceipt, uncertainty: ['AFFECTED_ACTION_STOPPED'] });
+  expect(readEvidenceReceipt(original, artifacts)).toEqual(before);
+});
+
+it('retains a stopped check resource through a redirect without inventing a permission denial', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'check-redirect-latch-'))), artifacts = openArtifactStore(join(root, 'artifacts'));
+  const check = { id: 'unknown', argv: ['/declared/check'], cwd: root, declaredEffects: [], outputTargets: [] };
+  const checkAddress = 'https://approved.example/check', source = 'https://approved.example/source';
+  const scope = { sourceRoots: [root], allowedSourceAddresses: [checkAddress, source], checks: [check] };
+  const resource = { id: 'original-resource', pid: 123, processGroupId: 123, startedAtMs: 10, parentExitCode: 0, parentSignal: null, settlement: 'unverifiable' as const, stopRequested: true, settlementReceiptId: null };
+  const retrieved: string[] = [];
+  let calls = 0;
+  const collector = createEvidenceCollector({ artifacts, environment: {}, sourceManifest: [{ kind: 'check', address: checkAddress, checkId: check.id, revision: 'v1' }, { kind: 'source', address: source, revision: 'v1' }],
+    retrieve: async ({ address }) => { retrieved.push(address); return { kind: 'redirect', address: checkAddress, receiptId: 'redirect-receipt' }; },
+    executeCheck: async () => { calls++; return { kind: 'unverified', reason: 'CHECK_RESOURCES_UNVERIFIABLE', receiptId: 'original-observation', resource }; } });
+  const original = await collector.collectEvidence({ id: 'e1', claimId: 'c', source: checkAddress, reason: 'run' }, scope);
+  const redirected = await collector.collectEvidence({ id: 'e2', claimId: 'c', source, reason: 'read' }, scope);
+  expect(readEvidenceReceipt(redirected, artifacts)).toMatchObject({ denied: false, uncertainty: ['AFFECTED_ACTION_STOPPED'], priorObservationReceipt: original.observationReceipt, checkResource: resource, checkResourceState: 'unverifiable' });
+  expect(retrieved).toEqual([source]); expect(calls).toBe(1);
+});
+
+it.each(['not-started', 'settled-overflow'] as const)('permits another observation after a %s check has no unsettled resource', async state => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'check-settled-retry-'))), artifacts = openArtifactStore(join(root, 'artifacts'));
+  const check = { id: 'retry', argv: ['/declared/check'], cwd: root, declaredEffects: [], outputTargets: [] };
+  const scope = { sourceRoots: [root], allowedSourceAddresses: [], checks: [check] };
+  let calls = 0;
+  const collector = createEvidenceCollector({ artifacts, environment: {}, maxBytes: 4, sourceManifest: [{ kind: 'check', address: 'check:retry', checkId: check.id, revision: 'v1' }],
+    retrieve: async () => { throw new Error('source'); }, executeCheck: async (): Promise<CheckObservation> => {
+      calls++;
+      return state === 'not-started' ? { kind: 'unverified', reason: 'CHECK_RUNNER_UNQUALIFIED', receiptId: `not-started-${calls}`, notStarted: true }
+        : { kind: 'completed', executed: check, stdout: Buffer.from('12345'), stderr: Buffer.alloc(0), exitCode: 0, receiptId: `settled-${calls}`, resource: { id: 'settled-resource', pid: 123, processGroupId: 123, startedAtMs: 10, parentExitCode: 0, parentSignal: null, settlement: 'settled', stopRequested: true, settlementReceiptId: 'settled-receipt' } };
+    } });
+  await collector.collectEvidence({ id: 'e1', claimId: 'c', source: 'check:retry', reason: 'run' }, scope);
+  const later = await collector.collectEvidence({ id: 'e2', claimId: 'c', source: 'check:retry', reason: 'retry' }, scope);
+  expect(calls).toBe(2);
+  expect(readEvidenceReceipt(later, artifacts).priorObservationReceipt).toBeNull();
 });
 
 it('does not spawn a concrete check without existing containment qualification', async () => {

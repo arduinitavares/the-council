@@ -103,7 +103,7 @@ export function createEvidenceCollector(dependencies: EvidenceDependencies) {
       };
       const fail = (reason: string, actualDenial = false) => {
         receipt.uncertainty.push(reason); receipt.denied = actualDenial;
-        if (actualDenial) stopped.add(request.source);
+        if (actualDenial || receipt.checkResourceState === 'unverifiable') stopped.add(request.source);
         return save();
       };
       const retain = (prior: EvidenceReceipt) => Object.assign(receipt, {
@@ -161,7 +161,12 @@ export function createEvidenceCollector(dependencies: EvidenceDependencies) {
           for (let hop = 0; ; hop++) {
             if (seen.has(address) || hop > maxRedirects) return fail('SOURCE_REDIRECT_LIMIT');
             seen.add(address);
-            if (stopped.has(address)) return fail('AFFECTED_ACTION_DENIED', true);
+            if (stopped.has(address)) {
+              const prior = stoppedReceipts.get(address);
+              if (prior) { retain(prior.receipt); receipt.priorObservationReceipt = prior.record.observationReceipt; }
+              const actualDenial = prior?.receipt.denied ?? true;
+              return fail(actualDenial ? 'AFFECTED_ACTION_DENIED' : 'AFFECTED_ACTION_STOPPED', actualDenial);
+            }
             // This is the last operation before invoking the one-hop retrieval dependency.
             const decision = sourceDecision(address, scope, environment);
             if (decision.kind !== 'ready') return fail(decision.reason);

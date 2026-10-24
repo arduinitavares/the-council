@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bindWorkerPayload } from '../../src/domain/schemas.js';
-import type { ReviewerSeat } from '../../src/domain/contracts.js';
+import type { ControlState, ReviewerSeat, ValidatedEvent } from '../../src/domain/contracts.js';
 import { H, clock, rawQuestion } from '../fixtures/builders.js';
 import {
   createInitialSnapshot,
@@ -1013,4 +1013,47 @@ it('provider exit without watchdog/child settlement stays in reconciliation and 
   expect(f.s.state).toBe('reconciling');
   expect(f.s.context.deadlines).toContainEqual(deadline);
   expect(r.intents.some((i) => i.kind === 'observe' && i.key.includes(key))).toBe(true);
+});
+
+describe('accepted non-launch effect receipts', () => {
+  const states: ControlState[] = ['preflight', 'needs_context', 'clarifying', 'collecting_questions', 'publishing_answers', 'prepare_round', 'reviewing', 'prepare_candidate', 'judging', 'confirming', 'evaluate_round', 'reconciling', 'needs_user', 'blocked', 'settling', 'completed', 'cancelled'];
+  const receiptEvent = (snapshot: Flow['s']): ValidatedEvent => ({
+    id: 'effect-receipt', runId: 'run1', schemaVersion: 1,
+    actor: { kind: 'adapter', receiptId: 'host-owned' }, round: 0, phase: null,
+    clockReceipt: clock(10010, 110),
+    body: { kind: 'EFFECT_RECEIPT_RECORDED', data: { key: 'effect', intentHash: H, receipt: artifact } },
+  });
+  for (const state of states) {
+    it(`records bookkeeping in ${state} with fixed counters, stages and no effects`, () => {
+      const f = new Flow();
+      f.s.state = state;
+      if (state === 'reconciling') f.s.context.reconcileOriginState = 'preflight';
+      if (state === 'completed' || state === 'cancelled') f.s.context.activeBudget.status = 'settled';
+      const before = structuredClone(f.s);
+      const r = reduceRun(f.s, receiptEvent(f.s));
+      expect(r.snapshot.state).toBe(state);
+      expect(r.snapshot.revision).toBe(1);
+      expect(r.intents).toEqual([]);
+      expect(r.snapshot.context.callsReserved).toBe(0);
+      expect(r.snapshot.context.roundsUsed).toBe(0);
+      expect(r.snapshot.context.clarificationBatchesUsed).toBe(0);
+      expect(r.snapshot.context.issuedLogicalTasks).toEqual(before.context.issuedLogicalTasks);
+      expect(r.snapshot.context.activeBudget.status).toBe(before.context.activeBudget.status);
+      expect(r.snapshot.context.activeBudget.remainingMs).toBe(before.context.activeBudget.remainingMs);
+      expect(r.snapshot.context.inferenceBlock).toBeNull();
+      expect(r.snapshot.context.control.settledResourceTasks).toEqual([]);
+    });
+  }
+  it('requires adapter origin and rejects clock regression without recording completion', () => {
+    const f = new Flow(); f.pass();
+    const e = receiptEvent(f.s);
+    expect(() => reduceRun(f.s, { ...e, actor: { kind: 'user', receiptId: 'wrong' } })).toThrow('Adapter actor required');
+    expect(() => reduceRun(f.s, { ...e, clockReceipt: clock(9999, 1) })).toThrow('MONOTONIC_CLOCK_REGRESSION');
+    const expired = { ...e, clockReceipt: clock(20000000, 20000000) };
+    const r = reduceRun(f.s, expired);
+    expect(r.snapshot.state).toBe('clarifying');
+    expect(r.snapshot.context.activeBudget.remainingMs).toBe(0);
+    expect(r.snapshot.context.callsReserved).toBe(3);
+    expect(r.intents).toEqual([]);
+  });
 });

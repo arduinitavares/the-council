@@ -151,6 +151,7 @@ export type ControlEventBody =
     }
   | { kind: 'LAUNCH_DISPATCHED'; data: { logicalTaskKey: string } }
   | { kind: 'LAUNCH_RECEIPT_RECORDED'; data: { binding: AttemptBinding } }
+  | { kind: 'EFFECT_RECEIPT_RECORDED'; data: { key: string; intentHash: string; receipt: ArtifactRef } }
   | { kind: 'WORKER_RESULT'; data: { payload: BoundWorkerPayload; artifact: ArtifactRef } }
   | { kind: 'WORKER_OBSERVED'; data: { logicalTaskKey: string; observation: WorkerObservation } }
   | { kind: 'COLLECT_QUESTIONS'; data: { batch: QuestionBatch } }

@@ -307,6 +307,7 @@ export const controlEventBodySchema = z.discriminatedUnion('kind', [
   ),
   body('LAUNCH_DISPATCHED', z.strictObject({ logicalTaskKey: idSchema })),
   body('LAUNCH_RECEIPT_RECORDED', z.strictObject({ binding: attemptBindingSchema })),
+  body('EFFECT_RECEIPT_RECORDED', z.strictObject({ key: idSchema, intentHash: hashSchema, receipt: artifactRefSchema })),
   body(
     'WORKER_RESULT',
     z.strictObject({ payload: boundWorkerPayloadSchema, artifact: artifactRefSchema }),

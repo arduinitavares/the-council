@@ -1,0 +1,57 @@
+import { createHash } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { expect, it } from 'vitest';
+import { canonicalJson, hashArtifact } from '../../src/domain/hash.js';
+import type { JsonValue } from '../../src/domain/contracts.js';
+import { Flow } from '../machine/helpers.js';
+
+it('keeps one writer while readers see committed snapshots; release requires revision', async () => {
+  const { openRunStore, openRunReader } = await import('../../src/store/run-store.js');
+  const root = mkdtempSync(join(tmpdir(), 'council-writer-'));
+  const a = openRunStore(root), b = openRunStore(root), flow = new Flow();
+  const raw = Buffer.from('version: 1\n'), config = flow.s.context.config;
+  config.rawArtifact = a.artifacts.putArtifact(raw, 'raw-config');
+  config.configArtifact = a.artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
+  config.rawSha256 = createHash('sha256').update(raw).digest('hex');
+  config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+  flow.s.context.request.config = structuredClone(config);
+  a.createRun(flow.s);
+  const reader = openRunReader(root);
+  expect(reader.load('run1').revision).toBe(0);
+  const r = flow.pass(), e = flow.events.at(-1)!;
+  expect(() => b.commitTransition('run1', 0, e, r)).toThrow('WRITER_LEASE_HELD');
+  a.commitTransition('run1', 0, e, r);
+  expect(reader.load('run1').revision).toBe(1);
+  expect(() => a.releaseRun('run1', 0)).toThrow('REVISION_CONFLICT');
+  a.releaseRun('run1', 1);
+  const next = flow.send('CLOCK_CHECKPOINT');
+  b.commitTransition('run1', 1, flow.events.at(-1)!, next);
+  const db = new Database(join(root, 'journal.sqlite'));
+  const lease = db.prepare('SELECT generation, pid, process_start, host FROM writer_leases WHERE run_id = ?').get('run1');
+  expect(lease).toMatchObject({ generation: 2, pid: process.pid, process_start: expect.any(String), host: expect.any(String) });
+  db.close();
+  reader.close(); a.close(); b.close();
+});
+
+it('does not steal foreign-host or unverifiable owner leases and refuses corrupt saved config', async () => {
+  const { openRunStore } = await import('../../src/store/run-store.js');
+  const root = mkdtempSync(join(tmpdir(), 'council-lease-'));
+  const a = openRunStore(root), b = openRunStore(root), flow = new Flow();
+  const raw = Buffer.from('version: 1\n'), config = flow.s.context.config;
+  config.rawArtifact = a.artifacts.putArtifact(raw, 'raw-config');
+  config.configArtifact = a.artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
+  config.rawSha256 = createHash('sha256').update(raw).digest('hex');
+  config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+  flow.s.context.request.config = structuredClone(config);
+  a.createRun(flow.s);
+  const db = new Database(join(root, 'journal.sqlite'));
+  db.prepare('UPDATE writer_leases SET host = ? WHERE run_id = ?').run('unverifiable-remote', 'run1');
+  const r = flow.pass();
+  expect(() => b.commitTransition('run1', 0, flow.events.at(-1)!, r)).toThrow('WRITER_LEASE_HELD');
+  writeFileSync(config.configArtifact.path, '{}');
+  expect(() => b.load('run1')).toThrow('ARTIFACT_CORRUPT');
+  db.close(); a.close(); b.close();
+});

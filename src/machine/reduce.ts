@@ -242,14 +242,16 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     return { snapshot, intents: [] };
   }
   requireThat(e.runId === c.request.runId && e.round === c.roundsUsed, 'Event run/round mismatch');
-  requireThat(!['completed', 'cancelled'].includes(from), 'RUN_SETTLED');
   const b = e.body;
+  const receiptOnly = b.kind === 'EFFECT_RECEIPT_RECORDED';
+  requireThat(receiptOnly || !['completed', 'cancelled'].includes(from), 'RUN_SETTLED');
   requireThat(stateEventTargets[from][b.kind], 'Event not legal in this state');
   if (b.kind === 'CONTEXT_UPDATE')
     requireThat(from !== 'clarifying', 'CONTEXT_UPDATE_DURING_CLARIFICATION');
   if (b.kind === 'RESUME')
     requireThat(!c.inferenceBlock, 'Terminal inference block permits inspection only');
   const adapterKinds = [
+    'EFFECT_RECEIPT_RECORDED',
     'LAUNCH_RECEIPT_RECORDED',
     'WORKER_RESULT',
     'WORKER_OBSERVED',
@@ -667,9 +669,23 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
       'Invalid bounded extension',
     );
   }
-  const budget = accountBudget(c.activeBudget, e.clockReceipt, budgetEvent);
+  // A bookkeeping receipt never reopens a closed active interval. Its recorded
+  // clock still advances monotonically, without charging human wait or terminal time.
+  const closedReceipt = receiptOnly && c.activeBudget.status !== 'active';
+  if (closedReceipt) {
+    const last = c.activeBudget.lastReceipt;
+    requireThat(
+      last.processEpoch === e.clockReceipt.processEpoch
+        ? e.clockReceipt.monotonicMs >= last.monotonicMs
+        : e.clockReceipt.wallMs >= last.wallMs,
+      'RECEIPT_CLOCK_REGRESSION',
+    );
+  }
+  const budget = closedReceipt
+    ? { kind: 'ok' as const, budget: { ...c.activeBudget, lastReceipt: e.clockReceipt }, deadline: c.activeBudget.deadline, expired: c.activeBudget.remainingMs === 0 }
+    : accountBudget(c.activeBudget, e.clockReceipt, budgetEvent);
   if (budget.kind === 'clock-blocker') {
-    requireThat(b.kind !== 'CLOCK_CHECKPOINT', budget.code);
+    requireThat(b.kind !== 'CLOCK_CHECKPOINT' && !receiptOnly, budget.code);
     c.pauseReason = budget.code;
     reconcile();
   } else {
@@ -678,6 +694,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
       budget.expired &&
       ![
         'CLOCK_CHECKPOINT',
+        'EFFECT_RECEIPT_RECORDED',
         'SETTLED',
         'EXTEND',
         'RECONCILED',
@@ -691,6 +708,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     } else
       switch (b.kind) {
         case 'CLOCK_CHECKPOINT':
+        case 'EFFECT_RECEIPT_RECORDED':
           break;
         case 'CANCEL':
           requireThat(

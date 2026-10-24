@@ -1,0 +1,6 @@
+interface:
+  display_name: "The Council"
+  short_description: "Run an explicitly requested Council decision"
+  default_prompt: "Use $the-council to assess this topic with a scoped handoff and report the recorded decision or blockers."
+policy:
+  allow_implicit_invocation: false

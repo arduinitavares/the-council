@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "bin": { "council": "dist/cli/index.js" },
+  "files": [
+    "dist/",
+    "council.yaml",
+    "skills/the-council/",
+    "docs/runbook.md",
+    "docs/qualification/local-macos.md",
+    "docs/superpowers/diagrams/"
+  ],
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",

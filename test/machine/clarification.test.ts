@@ -41,7 +41,11 @@ describe('clarification protocol', () => {
       f.publish();
       expect(f.s.state).toBe('settling');
       expect(f.s.context.pauseReason).toBe('CLARIFICATION_LIMIT');
+      expect(f.s.context.resumeTarget).toBe('prepare_round');
       expect(f.s.context.pendingOutcome).toBe('needs_user');
+      f.settle();
+      expect(f.s.state).toBe('needs_user');
+      expect(f.s.context.resumeTarget).toBe('prepare_round');
     });
   it('partial human replies reserve no worker and preserve the open batch', () => {
     const f = new Flow();
@@ -117,10 +121,11 @@ describe('clarification protocol', () => {
       g.s.context.questionLedger.questions.some((q) => q.disposition === 'deferred' && q.blocking),
     ).toBe(true);
   });
-  it('promotes a previous deferred item during round-origin collection', () => {
+  it('synthetic prior deferred item is promoted during round-origin collection', () => {
     const f = new Flow();
     f.ready();
     const q = makeQuestion({ blocking: false });
+    f.s = structuredClone(f.s); // Isolate the synthetic ledger from recorded transition snapshots.
     f.s.context.questionLedger.questions = [q];
     f.send('ADMIT_ROUND');
     f.reviews([rawQuestion({ blocking: false })]);
@@ -162,10 +167,15 @@ describe('clarification protocol', () => {
         ],
       },
     });
+    expect(f.s.context.resumeTarget).toBe('prepare_round');
     f.resume();
+    expect(f.results.at(-2)?.snapshot.state).toBe('preflight');
+    expect(f.results.at(-2)?.snapshot.context.resumeTarget).toBe('prepare_round');
     expect(f.s.state).toBe('publishing_answers');
+    expect(f.s.context.resumeTarget).toBe('prepare_round');
     f.publish();
     expect(f.s.state).toBe('prepare_round');
+    expect(f.s.context.resumeTarget).toBeNull();
     expect(f.s.context.callsReserved).toBe(6);
     expect(f.s.context.questionLedger.answers).toHaveLength(2);
   });

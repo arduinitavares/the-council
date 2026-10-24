@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bindWorkerPayload } from '../../src/domain/schemas.js';
 import type { ReviewerSeat } from '../../src/domain/contracts.js';
 import { H, clock, rawQuestion } from '../fixtures/builders.js';
 import {
@@ -154,7 +155,12 @@ describe('deterministic replay and recovery', () => {
     expect(f.s.context.reconcileOriginState).toBe('clarifying');
     expect(f.s.context.callsReserved).toBe(reserved);
     expect(r.intents.every((i) => i.kind !== 'launch')).toBe(true);
-    expect(() => f.settle()).toThrow();
+    f.send('CANCEL');
+    expect(f.s.state).toBe('settling');
+    const unsettled = structuredClone(f.s);
+    expect(() => f.settle()).toThrow('Settlement proof incomplete');
+    expect(f.s).toEqual(unsettled);
+    expect(f.s.context.callsReserved).toBe(reserved);
   });
   it('duplicate events apply budget and effects once; conflicting duplicates fail', () => {
     const f = new Flow();
@@ -209,6 +215,35 @@ it('active context update at a candidate boundary returns to preflight before ju
   expect(f.s.state).toBe('prepare_round');
   expect(f.s.context.roundsUsed).toBe(1);
   expect(f.s.context.control.candidate).toBeNull();
+});
+it('a settled judge phase applies a context remedy through preflight before any ballot launch', () => {
+  const f = new Flow();
+  f.ready();
+  f.send('ADMIT_ROUND');
+  f.reviews();
+  f.candidate();
+  f.judge(false);
+  expect(f.s.state).toBe('judging');
+  const calls = f.s.context.callsReserved;
+  f.send('CONTEXT_UPDATE', {
+    update: {
+      requestId: 'judge-remedy',
+      runId: 'run1',
+      baseContextHash: f.s.context.sharedContext.contextHash,
+      userDirections: [artifact],
+    },
+  });
+  const result = f.send('PHASE_READY');
+  expect(f.s.state).toBe('preflight');
+  expect(f.s.context.resumeTarget).toBe('prepare_round');
+  expect(result.intents.some((i) => i.kind === 'launch')).toBe(false);
+  f.pass();
+  expect(f.s.state).toBe('prepare_round');
+  expect(f.s.context.callsReserved).toBe(calls);
+  expect(f.s.context.roundsUsed).toBe(1);
+  expect(
+    Object.values(f.s.context.issuedLogicalTasks).some((t) => t.reservation.phase === 'ballot'),
+  ).toBe(false);
 });
 for (const phase of ['review', 'ballot'] as const)
   it(`publishes a queued context update before staged ${phase} questions and requests collection`, () => {
@@ -283,13 +318,15 @@ it('restores a settled pause with valid saved results and charges the resumed ac
   expect(f.s.context.activeBudget.remainingMs).toBe(paused.remainingMs - 1);
   expect(f.s.context.callsReserved).toBe(calls);
 });
-it('keeps an actual historical missing result terminally blocked when restoring a pause', () => {
+it('synthetic corrupted history with a missing actual result remains terminally blocked on restore', () => {
   const f = new Flow();
   f.ready();
   f.send('ADMIT_ROUND');
   f.reviews();
   const key = Object.keys(f.s.context.control.savedResults)[0]!;
   expect(f.s.context.issuedLogicalTasks[key]?.stage).toBe('receipt_recorded');
+  const recordedHistory = structuredClone(f.results);
+  f.s = structuredClone(f.s); // Deliberately corrupted persisted negative fixture.
   const { [key]: _missing, ...remainingResults } = f.s.context.control.savedResults;
   f.s.context.control.savedResults = remainingResults;
   f.send('REQUIRE_INPUT', { reason: 'MISSING_HANDOFF', outcome: 'needs_context' });
@@ -321,6 +358,7 @@ it('keeps an actual historical missing result terminally blocked when restoring 
       },
     }),
   ).toThrow(/Invalid bounded extension/);
+  expect(f.results.slice(0, recordedHistory.length)).toEqual(recordedHistory);
 });
 it('context update can invalidate unissued review slots without extra inference', () => {
   const f = new Flow();
@@ -356,18 +394,21 @@ it('context update can invalidate unissued review slots without extra inference'
 it('saved valid exited results return to their phase before ingestion', () => {
   const f = new Flow();
   f.pass();
-  f.clarify(); // complete a saved wave, then recreate an interrupted checkpoint immediately before ingestion
-  const saved = Object.values(f.s.context.control.savedResults)[0]!;
-  const key = saved.payload.binding.logicalTaskKey;
-  const task = f.s.context.issuedLogicalTasks[key]!;
-  f.s.state = 'clarifying';
-  f.s.context.control.phasePayloads = {};
-  f.s.context.control.phaseArtifacts = {};
-  delete (f.s.context.control.savedResults as Record<string, unknown>)[key];
-  f.s.context.issuedLogicalTasks = {
-    ...f.s.context.issuedLogicalTasks,
-    [key]: { ...task, settlement: 'unverifiable' },
+  const binding = f.launch('clarify', 'openai');
+  const key = binding.logicalTaskKey;
+  const saved = {
+    payload: bindWorkerPayload(
+      {
+        kind: 'clarification',
+        ready: true,
+        questions: [],
+        methodIds: ['test-method'],
+      },
+      binding,
+    ),
+    artifact,
   };
+  expect(f.s.context.control.savedResults[key]).toBeUndefined();
   f.s = restoreForReconciliation(f.s);
   const r = f.send('RECONCILED', {
     ownership: true,
@@ -384,15 +425,15 @@ it('saved valid exited results return to their phase before ingestion', () => {
   });
   expect(r.snapshot.state).toBe('clarifying');
   expect(r.intents.some((i) => i.kind === 'launch')).toBe(false);
+  expect(f.s.context.control.phasePayloads.openai).toBeUndefined();
+  expect(f.s.context.control.savedResults[key]).toEqual(saved);
   f.send('WORKER_RESULT', saved, 'clarify');
   expect(f.s.context.control.phasePayloads.openai).toEqual(saved.payload);
 });
-it('a failed attempt terminally blocks inference while unknown work cannot settle', () => {
+it('a dispatched attempt failing on its first observation terminally blocks inference', () => {
   const f = new Flow();
   f.pass();
-  f.clarify();
-  f.s.state = 'clarifying';
-  const key = Object.keys(f.s.context.issuedLogicalTasks)[0]!;
+  const key = f.launch('clarify', 'openai').logicalTaskKey;
   f.send(
     'WORKER_OBSERVED',
     {
@@ -407,6 +448,54 @@ it('a failed attempt terminally blocks inference while unknown work cannot settl
   expect(f.s.context.activeBudget.status).toBe('settled');
   expect(() => f.send('RESUME')).toThrow();
 });
+for (const reason of ['failed', 'invalid', 'timed-out', 'cancelled'] as const)
+  it(`reconciling routes ${reason} work to settling without replacement inference`, () => {
+    const f = new Flow();
+    f.pass();
+    const key = f.launch('clarify', 'openai').logicalTaskKey;
+    const calls = f.s.context.callsReserved;
+    f.send('LIFECYCLE_UNKNOWN');
+    expect(f.s.state).toBe('reconciling');
+    expect(f.s.context.reconcileOriginState).toBe('clarifying');
+    let result;
+    if (reason === 'failed') {
+      result = f.send('RECONCILED', {
+        ownership: true,
+        priorControllerExited: false,
+        resourcesSettled: true,
+        receipt: artifact,
+        observations: [
+          {
+            logicalTaskKey: key,
+            observation: {
+              status: 'exited',
+              rawReceipts: [artifact],
+              exitCode: 2,
+            },
+          },
+        ],
+      });
+      expect(f.s.context.inferenceBlock).toBe('MISSING_REQUIRED_RESULT');
+    } else if (reason === 'invalid') {
+      result = f.send('ERROR', {
+        code: 'INVALID_WORKER_RESULT',
+        terminalInference: true,
+      });
+      expect(f.s.context.inferenceBlock).toBe('INVALID_WORKER_RESULT');
+    } else {
+      result = f.send(reason === 'timed-out' ? 'DEADLINE' : 'CANCEL');
+      expect(f.s.context.pauseReason).toBe(
+        reason === 'timed-out' ? 'ACTIVE_DEADLINE' : 'CANCELLED',
+      );
+    }
+    expect(f.s.state).toBe('settling');
+    expect(f.s.context.pendingOutcome).toBe(
+      reason === 'cancelled' ? 'cancelled' : reason === 'timed-out' ? 'needs_user' : 'blocked',
+    );
+    expect(f.s.context.callsReserved).toBe(calls);
+    expect(result.intents.some((i) => i.kind === 'launch' || i.kind === 'release')).toBe(false);
+    if (reason !== 'failed') expect(() => f.settle()).toThrow('Settlement proof incomplete');
+  });
 it('an active-budget-only extension cannot bypass an open nonblocking batch', () => {
   const f = new Flow();
   f.ready();
@@ -429,20 +518,71 @@ it('an active-budget-only extension cannot bypass an open nonblocking batch', ()
   f.resume();
   expect(f.s.state).toBe('settling');
   expect(f.s.context.pauseReason).toBe('AWAITING_ANSWERS');
+  expect(f.s.context.resumeTarget).toBe('publishing_answers');
   expect(f.s.context.callsReserved).toBe(before);
   expect(f.s.context.effectiveLimits.maxRounds).toBe(3);
 });
+for (const finalized of [true, false])
+  it(`synthetic overlapping preflight inputs prioritize ${finalized ? 'publication over staged collection' : 'staged collection over an open unfinalized batch'}`, () => {
+    const f = new Flow();
+    f.ready();
+    f.send('ADMIT_ROUND');
+    f.reviews([rawQuestion({ blocking: false })]);
+    const staged = structuredClone(f.s.context.control.stagedQuestions);
+    f.collect();
+    f.settle();
+    const batch = f.s.context.control.questionBatch!;
+    if (finalized)
+      f.send('ANSWER_BATCH', {
+        batch: {
+          requestId: 'priority-answer',
+          batchId: batch.id,
+          origin: batch.origin,
+          baseContextHash: batch.baseContextHash,
+          answers: batch.presentedQuestionIds.map((id) => ({
+            id: `priority-${id}`,
+            questionId: id,
+            status: 'answered',
+            value: 'fact',
+            source: { author: 'user', receiptId: 'receipt' },
+            evidenceIds: [],
+          })),
+          finalized: true,
+        },
+      });
+    const recordedHistory = structuredClone(f.results);
+    // Normal collection clears staged questions. Deliberately overlap these
+    // independently valid inputs on a clone to exercise competing route guards.
+    f.s = structuredClone(f.s);
+    f.s.context.control.stagedQuestions = staged;
+    expect(staged).toHaveLength(1);
+    expect(f.s.context.control.questionBatch).toEqual(batch);
+    expect(f.s.context.control.pendingAnswerBatch?.finalized ?? false).toBe(finalized);
+    const calls = f.s.context.callsReserved;
+    const result = f.resume();
+    expect(f.s.state).toBe(finalized ? 'publishing_answers' : 'collecting_questions');
+    expect(result.intents.filter((i) => i.kind === 'publish-context')).toHaveLength(
+      finalized ? 1 : 0,
+    );
+    expect(result.intents.filter((i) => i.kind === 'question-batch-request')).toHaveLength(
+      finalized ? 0 : 1,
+    );
+    expect(result.intents.some((i) => i.kind === 'launch')).toBe(false);
+    expect(f.s.context.callsReserved).toBe(calls);
+    expect(f.results.slice(0, recordedHistory.length)).toEqual(recordedHistory);
+  });
 it('restored live work requires a fresh positive observation before phase return', () => {
   const f = new Flow();
   f.pass();
-  f.clarify();
-  const key = Object.keys(f.s.context.issuedLogicalTasks)[0]!,
-    task = f.s.context.issuedLogicalTasks[key]!;
-  f.s.state = 'clarifying';
-  f.s.context.issuedLogicalTasks = {
-    ...f.s.context.issuedLogicalTasks,
-    [key]: { ...task, settlement: 'live' },
-  };
+  const key = f.launch('clarify', 'openai').logicalTaskKey;
+  f.send(
+    'WORKER_OBSERVED',
+    {
+      logicalTaskKey: key,
+      observation: { status: 'live', rawReceipts: [artifact], exitCode: null },
+    },
+    'clarify',
+  );
   f.s = restoreForReconciliation(f.s);
   const r = f.send('RECONCILED', {
     ownership: true,
@@ -470,9 +610,23 @@ it('restored live work requires a fresh positive observation before phase return
 it('resource settlement is separate from provider exit', () => {
   const f = new Flow();
   f.pass();
-  f.clarify();
-  f.s.state = 'clarifying';
-  f.s.context.control.settledResourceTasks = [];
+  f.finish(
+    'clarify',
+    () => ({
+      kind: 'clarification',
+      ready: true,
+      questions: [],
+      methodIds: ['test-method'],
+    }),
+    undefined,
+    false,
+    false,
+  );
+  expect(f.s.state).toBe('clarifying');
+  expect(
+    Object.values(f.s.context.issuedLogicalTasks).every((t) => t.settlement === 'settled'),
+  ).toBe(true);
+  expect(f.s.context.control.settledResourceTasks).toEqual([]);
   expect(() => f.send('PHASE_READY')).toThrow(/incomplete/);
   f.send('RESOURCES_SETTLED', {
     logicalTaskKeys: Object.keys(f.s.context.issuedLogicalTasks),
@@ -481,11 +635,11 @@ it('resource settlement is separate from provider exit', () => {
   f.send('PHASE_READY');
   expect(f.s.state).toBe('collecting_questions');
 });
-it('clock regressions preserve allowance and enter reconciliation', () => {
+it('rejects regressed clock receipts without changing state or allowance', () => {
   const f = new Flow();
   f.pass();
   const budget = structuredClone(f.s.context.activeBudget);
-  f.tick -= 5;
+  const before = structuredClone(f.s);
   const e = {
     ...f.events[0]!,
     id: 'clock-regression',
@@ -494,6 +648,7 @@ it('clock regressions preserve allowance and enter reconciliation', () => {
   } as import('../../src/domain/contracts.js').ValidatedEvent;
   expect(() => reduceRun(f.s, e)).toThrow(/REGRESSION/);
   expect(f.s.context.activeBudget).toEqual(budget);
+  expect(f.s).toEqual(before);
 });
 it('active crash downtime is charged with recorded wall receipts', () => {
   const f = new Flow();
@@ -621,7 +776,9 @@ it('saved settling phase returns to settling before its recorded terminal result
   const f = new Flow();
   f.ready();
   f.round();
-  f.s = restoreForReconciliation(f.s);
+  f.send('LIFECYCLE_UNKNOWN');
+  expect(f.s.state).toBe('reconciling');
+  expect(f.s.context.reconcileOriginState).toBe('settling');
   f.send('RECONCILED', {
     ownership: true,
     priorControllerExited: false,
@@ -641,6 +798,8 @@ it('a settled pause cannot bypass positive prior-controller exit', () => {
     code: 'ROUTE_GAP',
     resourcesSettled: true,
   });
+  expect(f.s.state).toBe('blocked');
+  expect(f.s.context.resumeTarget).toBe('clarifying');
   f.send('RESUME');
   expect(() =>
     f.send('RECONCILED', {
@@ -656,9 +815,19 @@ it('a settled pause cannot bypass positive prior-controller exit', () => {
 it('a positively settled required phase with a missing payload terminally blocks inference', () => {
   const f = new Flow();
   f.pass();
-  f.clarify();
-  f.s.state = 'clarifying';
-  f.s.context.control.phasePayloads = {};
+  for (const role of ['openai', 'gemini', 'claude'] as const) {
+    const key = f.launch('clarify', role).logicalTaskKey;
+    f.send(
+      'WORKER_OBSERVED',
+      {
+        logicalTaskKey: key,
+        observation: { status: 'exited', rawReceipts: [artifact], exitCode: 0 },
+      },
+      'clarify',
+    );
+    f.send('RESOURCES_SETTLED', { logicalTaskKeys: [key], receipt: artifact });
+  }
+  expect(f.s.context.control.phasePayloads).toEqual({});
   f.send('PHASE_READY');
   expect(f.s.state).toBe('settling');
   expect(f.s.context.inferenceBlock).toBe('MISSING_REQUIRED_RESULT');
@@ -816,12 +985,23 @@ it('replays a nonempty extension ledger, added budget and fourth round exactly t
 it('provider exit without watchdog/child settlement stays in reconciliation and retains its deadline', () => {
   const f = new Flow();
   f.pass();
-  f.clarify();
-  const key = Object.keys(f.s.context.issuedLogicalTasks)[0]!;
-  f.s.state = 'clarifying';
-  f.s.context.control.settledResourceTasks = f.s.context.control.settledResourceTasks.filter(
-    (k) => k !== key,
+  f.finish(
+    'clarify',
+    () => ({
+      kind: 'clarification',
+      ready: true,
+      questions: [],
+      methodIds: ['test-method'],
+    }),
+    ['openai'],
+    false,
+    false,
   );
+  const key = Object.keys(f.s.context.issuedLogicalTasks)[0]!;
+  const deadline = f.s.context.control.workerDeadlines[key];
+  expect(deadline).toBeDefined();
+  expect(f.s.context.issuedLogicalTasks[key]?.settlement).toBe('settled');
+  expect(f.s.context.control.settledResourceTasks).not.toContain(key);
   f.s = restoreForReconciliation(f.s);
   const r = f.send('RECONCILED', {
     ownership: true,
@@ -831,6 +1011,6 @@ it('provider exit without watchdog/child settlement stays in reconciliation and 
     observations: [],
   });
   expect(f.s.state).toBe('reconciling');
-  expect(f.s.context.deadlines).toContainEqual(f.s.context.control.workerDeadlines[key]);
+  expect(f.s.context.deadlines).toContainEqual(deadline);
   expect(r.intents.some((i) => i.kind === 'observe' && i.key.includes(key))).toBe(true);
 });

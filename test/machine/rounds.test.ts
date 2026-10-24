@@ -40,7 +40,9 @@ describe('round barriers and limits', () => {
     const roundThreeEvaluation = f.send('EVALUATE_ROUND');
     expect(roundThreeEvaluation.snapshot.state).toBe('settling');
     expect(roundThreeEvaluation.snapshot.context.pendingOutcome).toBe('needs_user');
+    expect(roundThreeEvaluation.snapshot.context.resumeTarget).toBe('prepare_round');
     f.settle();
+    expect(f.s.context.resumeTarget).toBe('prepare_round');
     const calls = f.s.context.callsReserved;
     f.send('EXTEND', {
       extension: {
@@ -146,6 +148,7 @@ it('round-three question answers publish before the limit guard', () => {
   f.publish();
   expect(f.s.state).toBe('settling');
   expect(f.s.context.pauseReason).toBe('ROUND_LIMIT');
+  expect(f.s.context.resumeTarget).toBe('prepare_round');
   expect(f.s.context.control.publications.at(-1)?.origin).toEqual({
     kind: 'deliberation',
     round: 3,
@@ -252,6 +255,7 @@ it('queued round-three human answers outrank the round limit on resume', () => {
   f.publish();
   expect(f.s.state).toBe('settling');
   expect(f.s.context.pauseReason).toBe('ROUND_LIMIT');
+  expect(f.s.context.resumeTarget).toBe('prepare_round');
   expect(f.s.context.roundsUsed).toBe(3);
 });
 it('coordinator-required evidence joins the frozen required set and blocks candidate freeze', () => {

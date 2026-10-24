@@ -115,50 +115,55 @@ export class Flow {
     });
     return this.pass();
   }
+  launch(p: WorkerPhase, role: WorkerRole): AttemptBinding {
+    const task = Object.values(this.s.context.issuedLogicalTasks).find(
+      (t) =>
+        t.reservation.phase === p &&
+        t.reservation.role === role &&
+        t.reservation.bindings.round === (p === 'clarify' ? 0 : this.s.context.roundsUsed) &&
+        t.reservation.bindings.clarificationBatch ===
+          (p === 'clarify' ? this.s.context.clarificationBatchesUsed : null),
+    )!;
+    const r = task.reservation;
+    const binding: AttemptBinding = {
+      ...r.bindings,
+      attemptId: `transport-${r.clientAttemptKey}`,
+      role,
+      phase: p,
+      requested: r.requested,
+      configured: r.requested,
+      authority: {
+        kind: 'supervised',
+        runId: 'run1',
+        taskId: `task-${r.logicalTaskKey}`,
+        dispatchId: `dispatch-${r.logicalTaskKey}`,
+        receiptId: 'receipt',
+      },
+      admittedMethodIds: ['test-method'],
+      inputQuestionIds: this.s.context.questionLedger.questions.map((q) => q.id),
+      inputObjectionIds: this.s.context.objections.map((o) => o.id),
+      inputEvidenceIds: this.s.context.control.evidence.map((e) => e.requestId),
+      ...(p === 'judge' || p === 'ballot'
+        ? {
+            candidateHash: this.s.context.control.candidate!.hash,
+            evidenceHash: this.s.context.control.evidenceHash!,
+          }
+        : {}),
+      ...(p === 'ballot' ? { judgeHash: this.s.context.control.judgeHash! } : {}),
+    };
+    this.send('LAUNCH_DISPATCHED', { logicalTaskKey: r.logicalTaskKey });
+    this.send('LAUNCH_RECEIPT_RECORDED', { binding }, p);
+    return binding;
+  }
   finish(
     p: WorkerPhase,
     raw: (role: WorkerRole) => WorkerPayload,
     order: readonly WorkerRole[] = p === 'judge' ? ['judge'] : ['openai', 'gemini', 'claude'],
     barrier = true,
+    settleResources = true,
   ) {
     for (const role of order) {
-      const task = Object.values(this.s.context.issuedLogicalTasks).find(
-        (t) =>
-          t.reservation.phase === p &&
-          t.reservation.role === role &&
-          t.reservation.bindings.round === (p === 'clarify' ? 0 : this.s.context.roundsUsed) &&
-          t.reservation.bindings.clarificationBatch ===
-            (p === 'clarify' ? this.s.context.clarificationBatchesUsed : null),
-      )!;
-      const r = task.reservation;
-      const binding: AttemptBinding = {
-        ...r.bindings,
-        attemptId: `transport-${r.clientAttemptKey}`,
-        role,
-        phase: p,
-        requested: r.requested,
-        configured: r.requested,
-        authority: {
-          kind: 'supervised',
-          runId: 'run1',
-          taskId: `task-${r.logicalTaskKey}`,
-          dispatchId: `dispatch-${r.logicalTaskKey}`,
-          receiptId: 'receipt',
-        },
-        admittedMethodIds: ['test-method'],
-        inputQuestionIds: this.s.context.questionLedger.questions.map((q) => q.id),
-        inputObjectionIds: this.s.context.objections.map((o) => o.id),
-        inputEvidenceIds: this.s.context.control.evidence.map((e) => e.requestId),
-        ...(p === 'judge' || p === 'ballot'
-          ? {
-              candidateHash: this.s.context.control.candidate!.hash,
-              evidenceHash: this.s.context.control.evidenceHash!,
-            }
-          : {}),
-        ...(p === 'ballot' ? { judgeHash: this.s.context.control.judgeHash! } : {}),
-      };
-      this.send('LAUNCH_DISPATCHED', { logicalTaskKey: r.logicalTaskKey });
-      this.send('LAUNCH_RECEIPT_RECORDED', { binding }, p);
+      const binding = this.launch(p, role);
       const payload = bindWorkerPayload(raw(role), binding);
       const roleIndex = ['openai', 'gemini', 'claude', 'judge'].indexOf(role);
       const resultArtifact = {
@@ -175,15 +180,20 @@ export class Flow {
       this.send(
         'WORKER_OBSERVED',
         {
-          logicalTaskKey: r.logicalTaskKey,
-          observation: { status: 'exited', rawReceipts: [lifecycleReceipt], exitCode: 0 },
+          logicalTaskKey: binding.logicalTaskKey,
+          observation: {
+            status: 'exited',
+            rawReceipts: [lifecycleReceipt],
+            exitCode: 0,
+          },
         },
         p,
       );
-      this.send('RESOURCES_SETTLED', {
-        logicalTaskKeys: [r.logicalTaskKey],
-        receipt: lifecycleReceipt,
-      });
+      if (settleResources)
+        this.send('RESOURCES_SETTLED', {
+          logicalTaskKeys: [binding.logicalTaskKey],
+          receipt: lifecycleReceipt,
+        });
     }
     if (barrier) return this.send('PHASE_READY');
     return this.results.at(-1)!;
@@ -279,23 +289,28 @@ export class Flow {
       evidenceHash: H,
     });
   }
-  judge() {
+  judge(barrier = true) {
     const c = this.s.context;
-    return this.finish('judge', () => ({
-      kind: 'judge',
-      bindings: {
-        runId: 'run1',
-        configHash: c.config.configHash,
-        profileHash: c.profile.profileHash,
-        contextHash: c.sharedContext.contextHash,
-        round: c.roundsUsed,
-        candidateHash: c.control.candidate!.hash,
-        evidenceHash: H,
-      },
-      assessments: [],
-      challenges: [],
-      methodIds: ['test-method'],
-    }));
+    return this.finish(
+      'judge',
+      () => ({
+        kind: 'judge',
+        bindings: {
+          runId: 'run1',
+          configHash: c.config.configHash,
+          profileHash: c.profile.profileHash,
+          contextHash: c.sharedContext.contextHash,
+          round: c.roundsUsed,
+          candidateHash: c.control.candidate!.hash,
+          evidenceHash: H,
+        },
+        assessments: [],
+        challenges: [],
+        methodIds: ['test-method'],
+      }),
+      undefined,
+      barrier,
+    );
   }
   ballots(reject = false, questions: readonly RawQuestion[] = [], barrier = true) {
     const c = this.s.context;

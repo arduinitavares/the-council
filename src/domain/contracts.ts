@@ -76,6 +76,7 @@ export type EffectKind = 'launch' | 'observe' | 'stop' | 'release' | 'evidence' 
 export type EffectIntent = { [K in EffectKind]: { key: string; kind: K; input: JsonValue } }[EffectKind];
 export interface IssuedLogicalTask { reservation: LaunchReservation; binding: AttemptBinding | null; stage: 'pending_execution' | 'dispatched' | 'receipt_recorded'; settlement: 'live' | 'unverifiable' | 'settled' }
 export interface RunContext {
+  control: PersistedControl;
   request: RunRequest; config: ConfigSnapshot; profile: ProfileSnapshot; sharedContext: SharedContext;
   clarificationBatchesUsed: number; roundsUsed: number; callsReserved: number; phaseResults: readonly ArtifactRef[];
   extensions: readonly BoundedExtension[]; effectiveLimits: EffectiveLimits; issuedLogicalTasks: Readonly<Record<string, IssuedLogicalTask>>;
@@ -88,5 +89,111 @@ export interface RunContext {
 export interface RunSnapshot { machineVersion: number; schemaVersion: number; revision: number; state: ControlState; context: RunContext }
 export interface TransitionResult { snapshot: RunSnapshot; intents: readonly EffectIntent[] }
 export type WorkerObservation = { status: 'live' | 'unverifiable' | 'exited'; rawReceipts: readonly ArtifactRef[]; exitCode: number | null };
-export interface ValidatedEvent { id: string; runId: string; schemaVersion: number; actor: { kind: 'adapter' | 'user' | 'controller'; receiptId: string }; round: number; phase: WorkerPhase | null; clockReceipt: ClockReceipt; body: { kind: string; data: JsonValue } }
-export interface RunOutcome { decision: 'unanimous' | 'unresolved' | 'cancelled' | 'blocked'; state: ControlState; settlement: 'settled' | 'unverifiable'; reports: readonly ArtifactRef[]; blockers: readonly string[] }
+export interface PublicationRecord {
+  kind: 'answer_batch' | 'answer_revision';
+  origin: BatchOrigin | null;
+  questionCount: number;
+  contextHash: string;
+  input: AnswerBatch | AnswerRevision;
+}
+/** All data needed to resume a phase is journaled, never held in an actor. */
+export interface PersistedControl {
+  stagedQuestions: readonly BoundQuestion[];
+  questionBatch: QuestionBatch | null;
+  pendingAnswerBatch: AnswerBatch | null;
+  pendingAnswerRevision: AnswerRevision | null;
+  phasePayloads: Readonly<Partial<Record<WorkerRole, BoundWorkerPayload>>>;
+  phaseArtifacts: Readonly<Partial<Record<WorkerRole, ArtifactRef>>>;
+  savedResults: Readonly<Record<string, { payload: BoundWorkerPayload; artifact: ArtifactRef }>>;
+  workerDeadlines: Readonly<Record<string, ActiveDeadline>>;
+  supersededTaskKeys: readonly string[];
+  settledResourceTasks: readonly string[];
+  currentWaveQuestionCount: number;
+  candidate: FrozenCandidate | null;
+  evidence: readonly EvidenceRecord[];
+  evidenceHash: string | null;
+  judge: (JudgePayload & { binding: AttemptBinding }) | null;
+  judgeHash: string | null;
+  confirmation: ConfirmationContext | null;
+  publications: readonly PublicationRecord[];
+  candidateRequested: boolean;
+  acceptedEvents: Readonly<Record<string, string>>;
+}
+export type ControlEventBody =
+  | {
+      kind: 'PREFLIGHT';
+      data: {
+        status: 'pass' | 'needs_context' | 'blocked';
+        attestation: ArtifactRef | null;
+        code: string | null;
+        resourcesSettled: boolean;
+      };
+    }
+  | {
+      kind:
+        | 'CLOCK_CHECKPOINT'
+        | 'ADMIT_ROUND'
+        | 'PHASE_READY'
+        | 'PUBLISH_ANSWERS'
+        | 'REQUEST_CANDIDATE'
+        | 'EVALUATE_ROUND'
+        | 'CANCEL'
+        | 'DEADLINE'
+        | 'LIFECYCLE_UNKNOWN'
+        | 'RESUME'
+        | 'APPLY_CONTEXT_UPDATE';
+      data: Record<string, never>;
+    }
+  | { kind: 'ERROR'; data: { code: string; terminalInference: boolean } }
+  | {
+      kind: 'REQUIRE_INPUT';
+      data: { reason: string; outcome: 'needs_user' | 'needs_context' | 'blocked' };
+    }
+  | { kind: 'LAUNCH_DISPATCHED'; data: { logicalTaskKey: string } }
+  | { kind: 'LAUNCH_RECEIPT_RECORDED'; data: { binding: AttemptBinding } }
+  | { kind: 'WORKER_RESULT'; data: { payload: BoundWorkerPayload; artifact: ArtifactRef } }
+  | { kind: 'WORKER_OBSERVED'; data: { logicalTaskKey: string; observation: WorkerObservation } }
+  | { kind: 'COLLECT_QUESTIONS'; data: { batch: QuestionBatch } }
+  | { kind: 'ANSWER_BATCH'; data: { batch: AnswerBatch } }
+  | { kind: 'ANSWER_REVISION'; data: { revision: AnswerRevision } }
+  | { kind: 'CONTEXT_UPDATE'; data: { update: ContextUpdate } }
+  | { kind: 'EVIDENCE_RECORDED'; data: { record: EvidenceRecord } }
+  | { kind: 'EVIDENCE_REQUESTED'; data: { request: EvidenceRequest } }
+  | { kind: 'CANDIDATE_FROZEN'; data: { candidate: FrozenCandidate; evidenceHash: string } }
+  | { kind: 'EXTEND'; data: { extension: BoundedExtension } }
+  | { kind: 'SETTLED'; data: { receipt: ArtifactRef } }
+  | {
+      kind: 'RESOURCES_SETTLED';
+      data: { logicalTaskKeys: readonly string[]; receipt: ArtifactRef };
+    }
+  | {
+      kind: 'RECONCILED';
+      data: {
+        ownership: boolean;
+        priorControllerExited: boolean;
+        resourcesSettled: boolean;
+        receipt: ArtifactRef;
+        observations: readonly {
+          logicalTaskKey: string;
+          observation: WorkerObservation;
+          savedResult?: { payload: BoundWorkerPayload; artifact: ArtifactRef };
+        }[];
+      };
+    };
+export interface ValidatedEvent {
+  id: string;
+  runId: string;
+  schemaVersion: number;
+  actor: { kind: 'adapter' | 'user' | 'controller'; receiptId: string };
+  round: number;
+  phase: WorkerPhase | null;
+  clockReceipt: ClockReceipt;
+  body: ControlEventBody;
+}
+export interface RunOutcome {
+  decision: 'unanimous' | 'unresolved' | 'cancelled' | 'blocked';
+  state: ControlState;
+  settlement: 'settled' | 'unverifiable';
+  reports: readonly ArtifactRef[];
+  blockers: readonly string[];
+}

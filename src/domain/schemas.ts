@@ -185,3 +185,270 @@ export function bindWorkerPayload(payload: WorkerPayload, binding: AttemptBindin
   }
   return { ...input, seat: reviewerSeatSchema.parse(trusted.role), binding: trusted, newObjections: bindObjections(input.newObjections), missingInputQuestions: bindQuestions(input.missingInputQuestions) };
 }
+
+// Persisted machine protocol. Strict bodies are decoded before any guard runs.
+export const controlStateSchema = z.enum([
+  'preflight',
+  'needs_context',
+  'clarifying',
+  'collecting_questions',
+  'publishing_answers',
+  'prepare_round',
+  'reviewing',
+  'prepare_candidate',
+  'judging',
+  'confirming',
+  'evaluate_round',
+  'reconciling',
+  'needs_user',
+  'blocked',
+  'settling',
+  'completed',
+  'cancelled',
+]);
+export const batchOriginSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('clarification'), batchIndex: positive }),
+  z.strictObject({ kind: z.literal('deliberation'), round: positive }),
+]);
+export const questionBatchSchema = z.strictObject({
+  id: idSchema,
+  origin: batchOriginSchema,
+  baseContextHash: hashSchema,
+  questions: z.array(questionSchema),
+  groups: z.array(z.strictObject({ id: idSchema, questionIds: z.array(idSchema) })),
+  aliases: z.array(z.strictObject({ questionId: idSchema, groupId: idSchema })),
+  sourceAnswers: z.array(answerSchema),
+  presentedQuestionIds: z.array(idSchema),
+});
+export const answerBatchSchema = z.strictObject({
+  requestId: idSchema,
+  batchId: idSchema,
+  origin: batchOriginSchema,
+  baseContextHash: hashSchema,
+  answers: z.array(answerSchema),
+  finalized: z.boolean(),
+});
+export const contextUpdateSchema = z.strictObject({
+  requestId: idSchema,
+  runId: localIdSchema,
+  baseContextHash: hashSchema,
+  userDirections: z.array(artifactRefSchema).min(1),
+});
+export const evidenceRecordSchema = z.strictObject({
+  requestId: idSchema,
+  status: z.enum(['verified', 'invalid', 'unverified', 'not_applicable']),
+  sourceLocation: nonempty,
+  contentHash: hashSchema,
+  observationReceipt: idSchema,
+});
+export const boundWorkerPayloadSchema = z.discriminatedUnion('kind', [
+  z
+    .strictObject({
+      kind: z.literal('clarification'),
+      ready: z.boolean(),
+      questions: z.array(boundQuestionSchema),
+      methodIds: z.array(idSchema),
+      binding: attemptBindingSchema,
+    })
+    .refine((p) => p.ready === (p.questions.length === 0), 'Readiness/questions conflict'),
+  reviewSchema.extend({
+    newObjections: z.array(objectionSchema),
+    missingInputQuestions: z.array(boundQuestionSchema),
+    binding: attemptBindingSchema,
+  }),
+  judgeSchema.extend({ binding: attemptBindingSchema }),
+  rawBallotSchema.extend({
+    newObjections: z.array(objectionSchema),
+    missingInputQuestions: z.array(boundQuestionSchema),
+    binding: attemptBindingSchema,
+    seat: reviewerSeatSchema,
+  }),
+]);
+export const workerObservationSchema = z.strictObject({
+  status: z.enum(['live', 'unverifiable', 'exited']),
+  rawReceipts: z.array(artifactRefSchema),
+  exitCode: z.number().int().nullable(),
+});
+const emptyBody = z.strictObject({});
+const body = <K extends string, S extends z.ZodType>(kind: K, data: S) =>
+  z.strictObject({ kind: z.literal(kind), data });
+export const controlEventBodySchema = z.discriminatedUnion('kind', [
+  body(
+    'PREFLIGHT',
+    z.strictObject({
+      status: z.enum(['pass', 'needs_context', 'blocked']),
+      attestation: artifactRefSchema.nullable(),
+      code: idSchema.nullable(),
+      resourcesSettled: z.boolean(),
+    }),
+  ),
+  ...(
+    [
+      'CLOCK_CHECKPOINT',
+      'ADMIT_ROUND',
+      'PHASE_READY',
+      'PUBLISH_ANSWERS',
+      'REQUEST_CANDIDATE',
+      'EVALUATE_ROUND',
+      'CANCEL',
+      'DEADLINE',
+      'LIFECYCLE_UNKNOWN',
+      'RESUME',
+      'APPLY_CONTEXT_UPDATE',
+    ] as const
+  ).map((kind) => body(kind, emptyBody)),
+  body('ERROR', z.strictObject({ code: idSchema, terminalInference: z.boolean() })),
+  body(
+    'REQUIRE_INPUT',
+    z.strictObject({
+      reason: idSchema,
+      outcome: z.enum(['needs_user', 'needs_context', 'blocked']),
+    }),
+  ),
+  body('LAUNCH_DISPATCHED', z.strictObject({ logicalTaskKey: idSchema })),
+  body('LAUNCH_RECEIPT_RECORDED', z.strictObject({ binding: attemptBindingSchema })),
+  body(
+    'WORKER_RESULT',
+    z.strictObject({ payload: boundWorkerPayloadSchema, artifact: artifactRefSchema }),
+  ),
+  body(
+    'WORKER_OBSERVED',
+    z.strictObject({ logicalTaskKey: idSchema, observation: workerObservationSchema }),
+  ),
+  body('COLLECT_QUESTIONS', z.strictObject({ batch: questionBatchSchema })),
+  body('ANSWER_BATCH', z.strictObject({ batch: answerBatchSchema })),
+  body('ANSWER_REVISION', z.strictObject({ revision: answerRevisionSchema })),
+  body('CONTEXT_UPDATE', z.strictObject({ update: contextUpdateSchema })),
+  body('EVIDENCE_RECORDED', z.strictObject({ record: evidenceRecordSchema })),
+  body('EVIDENCE_REQUESTED', z.strictObject({ request: evidenceRequestSchema })),
+  body(
+    'CANDIDATE_FROZEN',
+    z.strictObject({ candidate: frozenCandidateSchema, evidenceHash: hashSchema }),
+  ),
+  body('EXTEND', z.strictObject({ extension: boundedExtensionSchema })),
+  body('SETTLED', z.strictObject({ receipt: artifactRefSchema })),
+  body(
+    'RESOURCES_SETTLED',
+    z.strictObject({ logicalTaskKeys: z.array(idSchema), receipt: artifactRefSchema }),
+  ),
+  body(
+    'RECONCILED',
+    z.strictObject({
+      ownership: z.boolean(),
+      priorControllerExited: z.boolean(),
+      resourcesSettled: z.boolean(),
+      receipt: artifactRefSchema,
+      observations: z.array(
+        z.strictObject({
+          logicalTaskKey: idSchema,
+          observation: workerObservationSchema,
+          savedResult: z
+            .strictObject({ payload: boundWorkerPayloadSchema, artifact: artifactRefSchema })
+            .optional(),
+        }),
+      ),
+    }),
+  ),
+]);
+export const validatedEventSchema = z.strictObject({
+  id: idSchema,
+  runId: localIdSchema,
+  schemaVersion: z.literal(1),
+  actor: z.strictObject({ kind: z.enum(['adapter', 'user', 'controller']), receiptId: idSchema }),
+  round: natural,
+  phase: workerPhaseSchema.nullable(),
+  clockReceipt: clockReceiptSchema,
+  body: controlEventBodySchema,
+});
+const roleRecord = <S extends z.ZodType>(schema: S) => z.partialRecord(workerRoleSchema, schema);
+const reservationSchema = z.strictObject({
+  logicalTaskKey: idSchema,
+  effectKey: idSchema,
+  clientAttemptKey: idSchema,
+  role: workerRoleSchema,
+  phase: workerPhaseSchema,
+  requested: modelSelectionSchema,
+  bindings: phaseBindingsSchema,
+});
+export const persistedControlSchema = z.strictObject({
+  stagedQuestions: z.array(boundQuestionSchema),
+  questionBatch: questionBatchSchema.nullable(),
+  pendingAnswerBatch: answerBatchSchema.nullable(),
+  pendingAnswerRevision: answerRevisionSchema.nullable(),
+  workerDeadlines: z.record(idSchema, activeDeadlineSchema),
+  supersededTaskKeys: z.array(idSchema),
+  settledResourceTasks: z.array(idSchema),
+  currentWaveQuestionCount: natural,
+  phasePayloads: roleRecord(boundWorkerPayloadSchema),
+  phaseArtifacts: roleRecord(artifactRefSchema),
+  savedResults: z.record(
+    idSchema,
+    z.strictObject({ payload: boundWorkerPayloadSchema, artifact: artifactRefSchema }),
+  ),
+  candidate: frozenCandidateSchema.nullable(),
+  evidence: z.array(evidenceRecordSchema),
+  evidenceHash: hashSchema.nullable(),
+  judge: judgeSchema.extend({ binding: attemptBindingSchema }).nullable(),
+  judgeHash: hashSchema.nullable(),
+  confirmation: confirmationContextSchema.nullable(),
+  publications: z.array(
+    z.strictObject({
+      kind: z.enum(['answer_batch', 'answer_revision']),
+      origin: batchOriginSchema.nullable(),
+      questionCount: natural,
+      contextHash: hashSchema,
+      input: z.union([answerBatchSchema, answerRevisionSchema]),
+    }),
+  ),
+  candidateRequested: z.boolean(),
+  acceptedEvents: z.record(idSchema, hashSchema),
+});
+export const runSnapshotSchema = z.strictObject({
+  machineVersion: z.literal(1),
+  schemaVersion: z.literal(1),
+  revision: natural,
+  state: controlStateSchema,
+  context: z.strictObject({
+    request: runRequestSchema,
+    config: configSnapshotSchema,
+    profile: profileSnapshotSchema,
+    sharedContext: sharedContextSchema,
+    clarificationBatchesUsed: natural,
+    roundsUsed: natural,
+    callsReserved: natural,
+    phaseResults: z.array(artifactRefSchema),
+    extensions: z.array(boundedExtensionSchema),
+    effectiveLimits: z.strictObject({
+      maxClarificationBatches: positive,
+      maxRounds: positive,
+      activeBudgetMs: positive,
+      maxWorkerCalls: positive,
+    }),
+    issuedLogicalTasks: z.record(
+      idSchema,
+      z.strictObject({
+        reservation: reservationSchema,
+        binding: attemptBindingSchema.nullable(),
+        stage: z.enum(['pending_execution', 'dispatched', 'receipt_recorded']),
+        settlement: z.enum(['live', 'unverifiable', 'settled']),
+      }),
+    ),
+    requiredEvidenceIds: z.array(idSchema),
+    questionLedger: questionLedgerSchema,
+    inferenceBlock: idSchema.nullable(),
+    pendingEvidenceIds: z.array(idSchema),
+    expectedAttempts: roleRecord(attemptBindingSchema),
+    objections: z.array(objectionSchema),
+    ballots: z.array(ballotSchema),
+    pendingOutcome: z.string().nullable(),
+    pauseReason: z.string().nullable(),
+    resumeTarget: controlStateSchema.nullable(),
+    reconcileOriginState: controlStateSchema.nullable(),
+    pendingContextUpdate: contextUpdateSchema.nullable(),
+    preflightAttestation: artifactRefSchema.nullable(),
+    publicationKind: z.enum(['answer_batch', 'answer_revision']).nullable(),
+    deadlines: z.array(activeDeadlineSchema),
+    activeBudget: activeBudgetSchema,
+    control: persistedControlSchema,
+  }),
+});

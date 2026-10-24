@@ -1,0 +1,24 @@
+{
+  "name": "the-council",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "council": "dist/cli/index.js" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "xstate": "5.33.3",
+    "zod": "4.6.7",
+    "yaml": "2.9.1",
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "@types/node": "22.20.5",
+    "@types/better-sqlite3": "9.6.0"
+  }
+}

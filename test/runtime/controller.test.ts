@@ -38,7 +38,7 @@ import { submitControl } from '../../src/runtime/inbox.js';
 import { captureClock } from '../../src/runtime/clocks.js';
 import { inspectRun } from '../../src/cli/index.js';
 
-function scenario(settings: { disagree?: boolean; questionWaves?: number; childLive?: boolean; invalidOutput?: boolean; workerLive?: boolean; lookupMissing?: boolean } = {}) {
+function scenario(settings: { disagree?: boolean; questionWaves?: number; childLive?: boolean; invalidOutput?: boolean; workerLive?: boolean; lookupMissing?: boolean; judgeFamily?: 'gemini' | 'claude' } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'council-controller-'))), workspace = join(root, 'workspace'); mkdirSync(workspace);
   const runRoot = join(workspace, '.council', 'runs', 'run1');
   let store = openRunStore(runRoot), ticks = 100, wall = 10000, epoch = 'fake-controller-1';
@@ -46,6 +46,7 @@ function scenario(settings: { disagree?: boolean; questionWaves?: number; childL
   const put = (kind: string, value: unknown) => store.artifacts.putArtifact(Buffer.from(canonicalJson(value)), kind);
   const r = baseRequest(); r.workspace = workspace; r.scope = { sourceRoots: [workspace], allowedSourceAddresses: [], checks: [] };
   r.config.resolved = { version: 1, reviewers: { openai: { route: 'codex', model: 'gpt-6.1-sol', effort: 'max' }, gemini: { route: 'antigravity', model: 'gemini-4-argon-high', effort: 'high' }, claude: { route: 'antigravity', model: 'claude-sonnet-5-5-high', effort: 'high' } }, judge: { route: 'codex', model: 'gpt-6.1-sol', effort: 'max' } };
+  if (settings.judgeFamily) r.config.resolved.judge = r.config.resolved.reviewers[settings.judgeFamily];
   const raw = Buffer.from(canonicalJson(r.config.resolved));
   r.config.sourcePath = join(root, 'selected.yaml'); writeFileSync(r.config.sourcePath, raw);
   r.config.rawSha256 = createHash('sha256').update(raw).digest('hex'); r.config.rawArtifact = store.artifacts.putArtifact(raw, 'raw-config'); r.config.configArtifact = put('config', r.config.resolved); r.config.configHash = hashArtifact('council-config', r.config.resolved as unknown as JsonValue);
@@ -87,7 +88,7 @@ function scenario(settings: { disagree?: boolean; questionWaves?: number; childL
       policy: { path: policyPath, bytes: policy, hash: policyHash, readReceipt: 'fake-policy', admitted: selections.map(([role, selection]) => ({ role, ...selection })), maxVisibleWorkstreams: 4, maxAstra: 1, astraModels: ['gpt-6-astra'] },
       authorization: { id: 'synthetic-only-authorization', runId: 'run1', policyHash, configHash: s.context.config.configHash, profileHash: s.context.profile.profileHash, selections: selections.map(([role, selection]) => ({ role, ...selection })), expiresAt: now + 1000000, maxWorkerCalls: s.context.effectiveLimits.maxWorkerCalls, maxActiveMs: s.context.effectiveLimits.activeBudgetMs, extraAstraSlots: 0, purpose: 'Fake workflow only' },
       bounds: { maxWorkerCalls: s.context.effectiveLimits.maxWorkerCalls, activeMs: s.context.effectiveLimits.activeBudgetMs }, caller: { model: 'gpt-6.1-sol', receiptId: 'fake-caller' }, activeWorkers: Object.values(s.context.issuedLogicalTasks).filter(task => task.binding && task.stage !== 'pending_execution' && (task.settlement !== 'settled' || !s.context.control.settledResourceTasks.includes(task.reservation.logicalTaskKey))).map(task => ({ id: task.binding!.attemptId, model: task.binding!.requested.model, receiptId: task.binding!.authority.receiptId, assignment: { runId: 'run1', phase: task.reservation.phase, role: task.reservation.role, logicalTaskKey: task.reservation.logicalTaskKey } })), ...(pending ? { pendingAssignment: { ...pending, roles: [...pending.roles], receiptId: 'fake-pending' } } : {}), scope: JSON.parse(JSON.stringify(r.scope)),
-      catalog: selections.map(([role, selection]) => ({ ...selection, family: role === 'judge' ? 'openai' : role, efforts: [selection.effort], receiptId: 'fake-catalog', expiresAt: now + 1000000 })),
+      catalog: selections.map(([role, selection]) => ({ ...selection, family: role === 'judge' ? settings.judgeFamily ?? 'openai' : role, efforts: [selection.effort], receiptId: 'fake-catalog', expiresAt: now + 1000000 })),
       qualifications: selections.map(([, selection]) => ({ id: `synthetic-${selection.model}`, host: 'synthetic-test-host', versions: { orca: 'fake', codex: 'fake', antigravity: 'fake' }, actionClass: 'supplied-packet-read-only', requested: selection, exposed: selection, expiresAt: now + 1000000, throughOrca: true, helpersDisabled: true, terminalSandbox: true, accessControlled: true, roots: [], receiptRefs: ['synthetic-code-behavior-only'] })),
       access: { actionClass: 'supplied-packet-read-only', requiredRoots: [], grantedRoots: [], receiptId: 'fake-access' }, allowance: [{ route: 'codex', group: 'fake', state: 'available', receiptId: 'fake-quota' }, { route: 'antigravity', group: 'fake', state: 'available', receiptId: 'fake-quota' }] };
   };
@@ -767,4 +768,169 @@ for (const recorded of [false, true]) it(`fix1 inspect rejects a settled model-o
   const stdout: string[] = [];
   expect(await (await import('../../src/cli/index.js')).runCli(['cancel', '--workspace', f.request.workspace, '--run', 'run1', '--json'], { stdout: text => stdout.push(text), stderr: () => {}, wait: async () => {} })).not.toBe(130);
   expect(f.calls).toHaveLength(6); f.close();
+}, 60000);
+
+for (const judgeFamily of ['claude', 'gemini'] as const) it(`final fix admits a qualified ${judgeFamily} judge through prepared transport`, async () => {
+  const f = scenario({ judgeFamily });
+  try {
+    const result = await runController(f.options('start'));
+    expect(result, JSON.stringify(result)).toMatchObject({ state: 'completed', settlement: 'settled' });
+    const judge = f.calls.filter(call => call.reservation.role === 'judge');
+    expect(judge).toHaveLength(1);
+    expect(judge[0]!.reservation.requested).toEqual(f.request.config.resolved.reviewers[judgeFamily]);
+    expect(f.calls).toHaveLength(10);
+  } finally { f.close(); }
+}, 60000);
+
+it('final fix preserves current reviewer proposals without inventing rejection dispositions', async () => {
+  const f = scenario({ disagree: true }), options = f.options('start'), readResult = options.readResult!;
+  options.readResult = async binding => {
+    const payload = JSON.parse(Buffer.from((await readResult(binding))!).toString('utf8'));
+    if (payload.kind === 'review') payload.proposals = [`Round ${binding.round} proposal from ${binding.role}`];
+    return Buffer.from(JSON.stringify(payload));
+  };
+  try {
+    const result = await runController(options);
+    const report = JSON.parse(readFileSync(result.reports.find(ref => ref.kind === 'report-json')!.path, 'utf8'));
+    expect(report.counts.rounds).toBe(3);
+    expect(report.alternatives).toEqual([
+      { seat: 'openai', text: 'Round 3 proposal from openai' },
+      { seat: 'gemini', text: 'Round 3 proposal from gemini' },
+      { seat: 'claude', text: 'Round 3 proposal from claude' },
+    ]);
+    const markdown = readFileSync(result.reports.find(ref => ref.kind === 'report-markdown')!.path, 'utf8');
+    expect(markdown).toContain('## Alternatives');
+    expect(markdown).not.toContain('Rejected Alternatives');
+  } finally { f.close(); }
+}, 60000);
+
+import { evidenceResourcesSettled, effectOriginPath, markSemanticStarted } from '../../src/runtime/reconcile.js';
+for (const markerKind of ['evidence', 'semantic'] as const) it(`final fix retains original ${markerKind} start proof after origin sidecar loss`, async () => {
+  const f = scenario(), declared = checkOptions(f), options = f.options('start'); let executions = 0;
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  options.collectEvidence = async () => { executions++; throw new Error('FINAL_FIX_CRASH'); };
+  try {
+    await runController(options);
+    const intent = f.store().pendingEffects('run1').find(intent => intent.kind === 'evidence')!;
+    if (markerKind === 'semantic') {
+      renameSync(join(f.root, 'evidence-started'), join(f.root, 'retained-evidence-started'));
+      markSemanticStarted(f.root, intent);
+    }
+    const origin = f.store().readJournal('run1').find(row => row.intents.some(created => created.key === intent.key))!;
+    const sidecar = effectOriginPath(f.root, intent.key, origin.event.id);
+    renameSync(sidecar, `${sidecar}.retained`);
+    const before = f.store().load('run1'), projection = readExecutionProjection(f.root, 'run1');
+    expect(projection.effects.find(effect => effect.key === intent.key)).toMatchObject({ derived: 'held_may_have_executed' });
+    expect(evidenceResourcesSettled(f.root, before, projection)).toBe(false);
+    expect(f.inspect().settlement).toBe('unverifiable');
+    expect(f.store().load('run1')).toEqual(before);
+    expect(await f.resume()).toMatchObject({ settlement: 'unverifiable' });
+    expect(executions).toBe(1); expect(f.calls).toHaveLength(6);
+  } finally { f.close(); }
+}, 60000);
+
+it('final fix requires origin and protocol proof for pending unstarted evidence', async () => {
+  const f = scenario(), declared = checkOptions(f), options = f.options('start');
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  // Missing collector returns before the producing journal creates a start marker.
+  try {
+    await runController(options);
+    const snapshot = f.store().load('run1');
+    expect(evidenceResourcesSettled(f.root, snapshot)).toBe(true);
+    const intent = f.store().pendingEffects('run1').find(intent => intent.kind === 'evidence')!;
+    const origin = f.store().readJournal('run1').find(row => row.intents.some(created => created.key === intent.key))!;
+    const sidecar = effectOriginPath(f.root, intent.key, origin.event.id);
+    renameSync(sidecar, `${sidecar}.retained`);
+    expect(readExecutionProjection(f.root, 'run1').effects.find(effect => effect.key === intent.key)).toMatchObject({ reason: 'ORIGIN_CHECKPOINT_UNAVAILABLE' });
+    expect(evidenceResourcesSettled(f.root, snapshot)).toBe(false);
+    renameSync(`${sidecar}.retained`, sidecar);
+    renameSync(join(f.root, 'runtime-protocol.json'), join(f.root, 'retained-runtime-protocol.json'));
+    expect(evidenceResourcesSettled(f.root, snapshot)).toBe(false);
+    expect(f.inspect().settlement).toBe('unverifiable');
+    expect(f.calls).toHaveLength(6);
+  } finally { f.close(); }
+}, 60000);
+
+for (const missing of ['result', 'marker', 'origin', 'protocol', 'malformed-marker', 'mismatched-marker', 'mismatched-result'] as const) it(`final fix refuses completed evidence with ${missing} proof unavailable`, async () => {
+  const f = scenario(), declared = checkOptions(f), options = f.options('start'); let executions = 0;
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  options.collectEvidence = async (request, snapshot) => { executions++; return declared.collector.collectEvidence(request, snapshot.context.request.scope); };
+  try {
+    expect(await runController(options)).toMatchObject({ state: 'completed', settlement: 'settled' });
+    const snapshot = f.store().load('run1');
+    const row = f.store().readJournal('run1').find(row => row.intents.some(intent => intent.kind === 'evidence'))!;
+    const intent = row.intents.find(intent => intent.kind === 'evidence')!;
+    const marker = join(f.root, 'evidence-started', `${hashArtifact('evidence-effect-key', intent.key)}.json`);
+    const result = join(f.root, 'evidence-results', `${hashArtifact('evidence-effect-key', intent.key)}.json`);
+    const file = missing === 'result' || missing === 'mismatched-result' ? result : missing === 'origin' ? effectOriginPath(f.root, intent.key, row.event.id) : missing === 'protocol' ? join(f.root, 'runtime-protocol.json') : marker;
+    if (missing === 'malformed-marker') writeFileSync(file, '{broken');
+    else if (missing === 'mismatched-marker') writeFileSync(file, canonicalJson(f.request.sharedContext.handoff));
+    else if (missing === 'mismatched-result') {
+      const markerRef = JSON.parse(readFileSync(marker, 'utf8'));
+      const completion = f.store().artifacts.putArtifact(Buffer.from(canonicalJson({ marker: f.request.sharedContext.handoff, record: snapshot.context.control.evidence[0] })), 'evidence-execution-result');
+      expect(markerRef).not.toEqual(f.request.sharedContext.handoff);
+      writeFileSync(file, canonicalJson(completion));
+    } else renameSync(file, `${file}.retained`);
+    expect(evidenceResourcesSettled(f.root, snapshot)).toBe(false);
+    expect(f.inspect().settlement).toBe('unverifiable');
+    const reopened = await f.resume();
+    expect(reopened.settlement).toBe('unverifiable');
+    expect(executions).toBe(1); expect(f.calls).toHaveLength(10);
+    expect(f.store().load('run1')).toEqual(snapshot);
+  } finally { f.close(); }
+}, 60000);
+
+for (const interruption of ['cancel', 'context', 'deadline'] as const) it(`final fix keeps positive evidence sidecar without typed CAS unsettled after ${interruption}`, async () => {
+  const f = scenario(), declared = checkOptions(f), options = f.options('start'), target = f.store(); let executions = 0;
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  options.collectEvidence = async (request, snapshot) => { executions++; return declared.collector.collectEvidence(request, snapshot.context.request.scope); };
+  options.store = new Proxy(target, { get(store, property) {
+    if (property === 'commitTransition') return (...args: Parameters<typeof target.commitTransition>) => {
+      if (args[2].body.kind === 'EVIDENCE_RECORDED') throw new Error('FINAL_FIX_BEFORE_TYPED_CAS');
+      return store.commitTransition(...args);
+    };
+    const value = Reflect.get(store, property); return typeof value === 'function' ? value.bind(store) : value;
+  } });
+  try {
+    expect(await runController(options)).toMatchObject({ state: 'prepare_candidate', settlement: 'unverifiable' });
+    const before = f.store().load('run1');
+    expect(before.context.control.evidence).toHaveLength(0);
+    if (interruption === 'cancel') await submitControl(f.root, { kind: 'cancel', runId: 'run1', requestId: 'final-cancel' });
+    if (interruption === 'context') await submitControl(f.root, { kind: 'context_update', runId: 'run1', requestId: 'final-context', update: { runId: 'run1', requestId: 'final-context', baseContextHash: before.context.sharedContext.contextHash, userDirections: [f.store().artifacts.putArtifact(Buffer.from('Interrupt this original evidence'), 'user-direction')] } });
+    const result = await f.resume(interruption === 'deadline' ? 11000000 : 0);
+    expect(result).toMatchObject({ settlement: 'unverifiable' });
+    if (interruption === 'cancel') expect(latestReport(f, result).settlement).toBe('unverifiable');
+    expect(evidenceResourcesSettled(f.root, f.store().load('run1'))).toBe(false);
+    expect(f.store().readJournal('run1').filter(row => row.event.body.kind === 'EVIDENCE_RECORDED')).toHaveLength(0);
+    expect(executions).toBe(1); expect(f.calls).toHaveLength(6);
+    expect(f.store().load('run1').context.activeBudget.status).toBe('active');
+    if (interruption === 'context') {
+      expect(f.store().load('run1').context.sharedContext.contextHash).toBe(before.context.sharedContext.contextHash);
+      expect(f.store().load('run1').context.pendingContextUpdate?.requestId).toBe('final-context');
+    }
+  } finally { f.close(); }
+}, 60000);
+
+it('final fix retains accepted settled evidence from earlier rounds after the current evidence bundle changes', async () => {
+  const f = scenario({ disagree: true }), declared = checkOptions(f), options = f.options('start'); let executions = 0;
+  options.evidenceManifest = declared.evidenceManifest; options.coordinatorEvidence = async () => [declared.requested];
+  options.collectEvidence = async (request, snapshot) => {
+    executions++;
+    const id = `round-${snapshot.context.roundsUsed}`;
+    const collector = createEvidenceCollector({ sourceManifest: declared.evidenceManifest, environment: {}, artifacts: f.store().artifacts,
+      retrieve: async () => { throw new Error('UNEXPECTED_RETRIEVAL'); },
+      executeCheck: async ({ check }) => ({ kind: 'completed', executed: check, stdout: Buffer.from(id), stderr: Buffer.alloc(0), exitCode: 0, receiptId: `${id}-check`, resource: { id, pid: 12345, processGroupId: 12345, startedAtMs: snapshot.context.roundsUsed, parentExitCode: 0, parentSignal: null, settlement: 'settled', stopRequested: false, settlementReceiptId: `${id}-exit` } }),
+    });
+    return collector.collectEvidence(request, snapshot.context.request.scope);
+  };
+  try {
+    const result = await runController(options);
+    expect(result, JSON.stringify(result)).toMatchObject({ state: 'needs_user', settlement: 'settled' });
+    expect(executions).toBe(3); expect(f.calls).toHaveLength(24);
+    const before = f.store().load('run1');
+    expect(f.store().readJournal('run1').filter(row => row.event.body.kind === 'EVIDENCE_RECORDED')).toHaveLength(3);
+    expect(f.inspect().settlement).toBe('settled');
+    expect(evidenceResourcesSettled(f.root, before)).toBe(true);
+    expect(f.store().load('run1')).toEqual(before);
+  } finally { f.close(); }
 }, 60000);

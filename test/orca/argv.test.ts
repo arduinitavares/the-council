@@ -85,3 +85,32 @@ it("resolves a single configured executable and never falls back after a missing
     "ORCA_EXECUTABLE_UNAVAILABLE",
   );
 });
+
+import { selectionArgv } from '../../src/orca/transport.js';
+import { fixture } from './fixtures.js';
+import { hashArtifact } from '../../src/domain/hash.js';
+import type { JsonValue } from '../../src/domain/contracts.js';
+it.each([
+  { family: 'claude' as const, model: 'claude-sonnet-5-5-high' },
+  { family: 'gemini' as const, model: 'gemini-4-argon-high' },
+])('final fix routes admitted $family judges and retains exact reviewer and admission guards', ({ family, model }) => {
+  const f = fixture();
+  try {
+    const selection = { route: 'antigravity' as const, model, effort: 'high' };
+    const prior = f.prepare().routeEvidence;
+    const { setHash: _hash, ...base } = prior.admission;
+    const value = { ...base, phase: 'judge' as const, assignments: [{ role: 'judge' as const, selection }] };
+    const admission = { ...value, setHash: hashArtifact('launch-admission', value as unknown as JsonValue) };
+    const evidence = { ...prior, role: 'judge' as const, admission,
+      catalog: { ...prior.catalog, ...selection, family, efforts: ['high'] },
+      qualification: { ...prior.qualification, requested: selection, exposed: selection } };
+    expect(selectionArgv(selection, evidence)).toEqual(['--agent', 'antigravity', '--model', model, '--effort', 'high']);
+    const reviewerValue = { ...base, phase: 'review' as const, assignments: [{ role: 'openai' as const, selection }] };
+    const reviewerAdmission = { ...reviewerValue, setHash: hashArtifact('launch-admission', reviewerValue as unknown as JsonValue) };
+    expect(() => selectionArgv(selection, { ...evidence, role: 'openai', admission: reviewerAdmission })).toThrow('UNSUPPORTED_MODEL_OVERRIDE');
+    expect(() => selectionArgv({ ...selection, route: 'codex' }, evidence)).toThrow('UNSUPPORTED_MODEL_OVERRIDE');
+    expect(() => selectionArgv(selection, { ...evidence, catalog: { ...evidence.catalog, expiresAt: evidence.now } })).toThrow('UNSUPPORTED_MODEL_OVERRIDE');
+    expect(() => selectionArgv(selection, { ...evidence, admission: { ...admission, assignments: [] } })).toThrow('UNSUPPORTED_MODEL_OVERRIDE');
+    expect(() => selectionArgv(selection, { ...evidence, qualification: { ...evidence.qualification, expiresAt: evidence.now } })).toThrow('UNSUPPORTED_MODEL_OVERRIDE');
+  } finally { f.store.close(); }
+});

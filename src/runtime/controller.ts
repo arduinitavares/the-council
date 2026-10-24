@@ -243,10 +243,16 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
       if (canonicalJson(proof.binding) !== canonicalJson(task.binding)) throw new Error('LAUNCH_PROOF_BINDING_MISMATCH');
       settings.push({ role: task.binding.role, requested: task.binding.requested, exposed: proof.exposed.selection, receiptId: ref.sha256 });
     }
+    const alternatives = seats.flatMap(seat => Object.values(c.control.savedResults).flatMap(({ payload }) =>
+      payload.kind === 'review' && payload.binding.role === seat && payload.binding.round === c.roundsUsed && payload.binding.contextHash === c.sharedContext.contextHash
+        ? payload.proposals.map(text => ({ seat, text })) : []));
+    const execution = readExecutionProjection(root, runId), evidenceSettled = evidenceResourcesSettled(root, s, execution);
+    const diagnostics = put('runtime-diagnostics', { execution, evidenceResourcesSettled: evidenceSettled });
+    const resources: import('../reports/render.js').ReportResource[] = Object.values(c.issuedLogicalTasks).filter(t => t.stage !== 'pending_execution').map(t => ({ id: t.reservation.logicalTaskKey, status: t.settlement, receiptId: t.binding?.authority.receiptId ?? 'unavailable' }));
+    if (!evidenceSettled) resources.push({ id: `${runId}/evidence-execution`, status: 'unverifiable', receiptId: diagnostics.sha256 });
     const report = renderReport({ snapshot: s, candidate: c.control.candidate ? { ref: c.control.candidate.text, bytes: store.artifacts.readArtifact(c.control.candidate.text) } : null,
-      settings, resources: Object.values(c.issuedLogicalTasks).filter(t => t.stage !== 'pending_execution').map(t => ({ id: t.reservation.logicalTaskKey, status: t.settlement, receiptId: t.binding?.authority.receiptId ?? 'unavailable' })), alternatives: [], evidenceReceipts: c.control.evidence.map(record => readEvidenceReceipt(record, store.artifacts)), blockers });
+      settings, resources, alternatives, evidenceReceipts: c.control.evidence.map(record => readEvidenceReceipt(record, store.artifacts)), blockers });
     const markdown = store.artifacts.putArtifact(Buffer.from(report.markdown), 'report-markdown'), structured = store.artifacts.putArtifact(Buffer.from(report.json), 'report-json');
-    const diagnostics = put('runtime-diagnostics', { execution: readExecutionProjection(root, runId) });
     reports.push(markdown, structured, diagnostics);
     return { markdown, structured };
   };
@@ -377,7 +383,13 @@ export async function runController(options: ControllerOptions): Promise<RunOutc
       }
       const pending = store.pendingEffects(runId);
       const launch = pending.find(intent => intent.kind === 'launch');
-      if (c.pendingContextUpdate && resourcesSettled(s) && ['prepare_candidate', 'evaluate_round'].includes(s.state)) { commit({ kind: 'PHASE_READY', data: {} }); continue; }
+      if (c.pendingContextUpdate && resourcesSettled(s) && ['prepare_candidate', 'evaluate_round'].includes(s.state)) {
+        if (!evidenceSafe(s)) {
+          commit({ kind: 'LIFECYCLE_UNKNOWN', data: {} }, 'adapter');
+          blockers.push('EVIDENCE_EXECUTION_UNVERIFIABLE'); return outcome();
+        }
+        commit({ kind: 'PHASE_READY', data: {} }); continue;
+      }
       if (launch && !c.pendingContextUpdate) {
         const reservation = launch.input as unknown as LaunchReservation;
         const roles = pending.filter(intent => intent.kind === 'launch' && (intent.input as unknown as LaunchReservation).phase === reservation.phase).map(intent => (intent.input as unknown as LaunchReservation).role);

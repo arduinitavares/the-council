@@ -191,12 +191,11 @@ export function selectionArgv(
   )
     return fail();
   const { catalog, admission, role, qualification, now } = evidence;
-  const family = role === "judge" ? "openai" : role;
+  const family = catalog.family;
+  const expectedRoute = { openai: "codex", gemini: "antigravity", claude: "antigravity" } as const;
   if (
-    (family === "openai"
-      ? selection.route !== "codex"
-      : selection.route !== "antigravity") ||
-    catalog.family !== family ||
+    selection.route !== expectedRoute[family] ||
+    (role !== "judge" && family !== role) ||
     catalog.route !== selection.route ||
     catalog.model !== selection.model ||
     !catalog.efforts.includes(selection.effort) ||

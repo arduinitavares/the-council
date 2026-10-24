@@ -1,13 +1,14 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const temp = realpathSync(mkdtempSync(join(tmpdir(), 'council-packed-')));
+afterAll(() => { rmSync(temp, { recursive: true }); });
 let files: string[] = [], packed = '';
 function writeInput(input: string, workspace: string, runId: string): void {
   writeFileSync(input, JSON.stringify({ runId, topic: 'Disposable packaging qualification', scope: { sourceRoots: [workspace], allowedSourceAddresses: [], checks: [] }, handoff: { decision: 'Package smoke check', outcome: 'No model launches', requirements: [], priorities: [], constraints: [], excludedActions: ['Live inference'], priorDecisions: [], references: [], uncertainties: [], candidates: [], suggestedSkills: ['verify-evidence'], sensitiveExclusions: [], permittedSources: [], permittedCommands: [], permittedEffects: [], workerAccess: 'Supplied packet only' } }));
@@ -22,7 +23,7 @@ beforeAll(() => {
 }, 60000);
 
 it('ships the exact default roster, built store asset and skill while excluding runtime and development data', () => {
-  expect(files).toEqual(expect.arrayContaining(['dist/cli/index.js', 'dist/store/schema.sql', 'council.yaml', 'skills/the-council/SKILL.md', 'skills/the-council/scripts/run-council.mjs', 'docs/runbook.md']));
+  expect(files).toEqual(expect.arrayContaining(['dist/cli/index.js', 'dist/store/schema.sql', 'council.yaml', 'skills/the-council/SKILL.md', 'skills/the-council/scripts/run-council.mjs', 'skills/the-council/agents/openai.yaml', 'skills/the-council/references/communication.md', 'docs/runbook.md']));
   expect(files.filter(path => /(^|\/)(?:node_modules|\.superpowers|\.council|test|src|coverage)(?:\/|$)|(^|\/)\.env(?:[./]|$)|\.(?:sqlite3?|db|jsonl|pem|key)$/.test(path))).toEqual([]);
   expect(parse(readFileSync(join(packed, 'council.yaml'), 'utf8'))).toEqual({ version: 1, reviewers: { openai: { route: 'codex', model: 'gpt-6-astra', effort: 'ultra' }, gemini: { route: 'antigravity', model: 'gemini-4-argon-high', effort: 'high' }, claude: { route: 'antigravity', model: 'claude-opus-5-5-high', effort: 'high' } }, judge: { route: 'codex', model: 'gpt-6-astra', effort: 'ultra' } });
 });

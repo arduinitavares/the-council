@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { ArtifactRef, RunSnapshot } from '../domain/contracts.js';
-import { openRunReader as openProjectionReader, type RunStore } from '../store/run-store.js';
+import { openRunReader as openProjectionReader, type EffectRecord, type JournalEntry, type RunStore } from '../store/run-store.js';
 import { canonicalJson, hashArtifact } from '../domain/hash.js';
 import type { PreparedWorkerInput } from '../orca/transport.js';
 import { readBoundedJson, publishAtomic } from './inbox.js';
@@ -75,11 +75,12 @@ export interface EvidenceExecutionMarker {
 }
 export interface RecoveredEvidence { marker: ArtifactRef; record: EvidenceRecord }
 export type RecoverEvidence = (intent: EffectIntent, snapshot: RunSnapshot, marker: EvidenceExecutionMarker) => Promise<RecoveredEvidence | null>;
+type EvidenceJournalStore = Pick<RunStore, 'artifacts' | 'effectRecord' | 'pendingEffects'>;
 /** Durable markers own lifecycle uncertainty even if no machine event was accepted. */
 export class EvidenceExecutionJournal {
   private readonly protocol: ArtifactRef | null;
   private readonly manifest: SourceManifest;
-  constructor(private readonly root: string, private readonly store: RunStore, snapshot: RunSnapshot, initialize: boolean, manifest: SourceManifest = []) {
+  constructor(private readonly root: string, private readonly store: EvidenceJournalStore, snapshot: RunSnapshot, initialize: boolean, manifest: SourceManifest = []) {
     const file = join(root, 'runtime-protocol.json');
     if (initialize) {
       const value = evidenceProtocolSchema.parse({ version: 1, identity: 'council-foreground/effects-before-execution/v1', runId: snapshot.context.request.runId, configHash: snapshot.context.config.configHash, profileHash: snapshot.context.profile.profileHash, scopeHash: hashArtifact('evidence-scope', snapshot.context.request.scope as unknown as import('../domain/contracts.js').JsonValue), root, manifest });
@@ -104,7 +105,9 @@ export class EvidenceExecutionJournal {
     const directory = join(this.root, 'evidence-started');
     if (!existsSync(directory)) return [];
     if (realpathSync(directory) !== directory) throw new Error('EVIDENCE_MARKER_PATH_INVALID');
-    return readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort().map(name => {
+    const names = readdirSync(directory).sort();
+    if (names.some(name => !/^[a-f0-9]{64}\.json$/.test(name))) throw new Error('EVIDENCE_MARKER_PATH_INVALID');
+    return names.map(name => {
       const marker = this.decode(artifactRefSchema.parse(readBoundedJson(join(directory, name))));
       if (this.filename(marker.effectKey) !== name) throw new Error('EVIDENCE_MARKER_CONFLICT');
       const effect = this.store.effectRecord(marker.effectKey);
@@ -213,6 +216,12 @@ export function markSemanticStarted(root: string, intent: EffectIntent): void {
   publishAtomic(join(root, 'semantic-started', `${hashArtifact('effect-key', intent.key)}.json`), { key: intent.key, intentHash: hashArtifact('effect', intent) });
 }
 const projectionIntentSchema = z.strictObject({ key: idSchema, kind: z.enum(['launch', 'observe', 'stop', 'release', 'evidence', 'question-batch-request', 'candidate-request', 'publish-context', 'evaluate-round', 'report', 'deadline']), input: jsonValueSchema });
+function readEffectOrigin(root: string, intent: EffectIntent, row: JournalEntry, artifacts: ArtifactStore): RunSnapshot {
+  const proof = z.strictObject({ intentHash: hashSchema, eventId: idSchema, snapshot: artifactRefSchema }).parse(readBoundedJson(effectOriginPath(root, intent.key, row.event.id)));
+  const origin = runSnapshotSchema.parse(JSON.parse(Buffer.from(artifacts.readArtifact(proof.snapshot)).toString('utf8'))) as RunSnapshot;
+  if (proof.intentHash !== hashArtifact('effect', intent) || proof.eventId !== row.event.id || hashArtifact('checkpoint', JSON.parse(canonicalJson(origin)) as JsonValue) !== row.checkpointHash || origin.context.request.runId !== row.runId) throw new Error('EFFECT_ORIGIN_CONFLICT');
+  return origin;
+}
 /** Read-only projection. Raw SQL status is never changed or called completed. */
 export function readExecutionProjection(root: string, runId: string) {
   const reader = openProjectionReader(root);
@@ -226,39 +235,37 @@ export function readExecutionProjection(root: string, runId: string) {
     } finally { db.close(); }
     const consistent = revision === snapshot.revision && (!journal.length || journal.at(-1)!.checkpointHash === hashArtifact('checkpoint', JSON.parse(canonicalJson(snapshot)) as JsonValue));
     const artifactRoot = join(root, 'artifacts');
+    const artifacts: ArtifactStore = { root: artifactRoot, readArtifact: ref => readArtifact(ref, artifactRoot), putArtifact: () => { throw new Error('EXECUTION_PROJECTION_READ_ONLY'); } };
     const protocolFile = join(root, 'runtime-protocol.json');
     let qualifiedProtocol = false;
     if (existsSync(protocolFile)) {
-      const ref = artifactRefSchema.parse(readBoundedJson(protocolFile));
-      const protocol = evidenceProtocolSchema.parse(JSON.parse(Buffer.from(readArtifact(ref, artifactRoot)).toString('utf8')));
-      qualifiedProtocol = protocol.identity === 'council-foreground/effects-before-execution/v1' && protocol.root === root && protocol.runId === runId && protocol.scopeHash === hashArtifact('evidence-scope', c.request.scope as unknown as JsonValue);
+      try {
+        const ref = artifactRefSchema.parse(readBoundedJson(protocolFile));
+        const protocol = evidenceProtocolSchema.parse(JSON.parse(Buffer.from(readArtifact(ref, artifactRoot)).toString('utf8')));
+        qualifiedProtocol = protocol.identity === 'council-foreground/effects-before-execution/v1' && protocol.root === root && protocol.runId === runId && protocol.configHash === c.config.configHash && protocol.profileHash === c.profile.profileHash && protocol.scopeHash === hashArtifact('evidence-scope', c.request.scope as unknown as JsonValue);
+      } catch { /* An absent or invalid protocol never proves an effect was unsent. */ }
     }
     return { revision: snapshot.revision, consistent, rawPendingCount: rows.length, effects: rows.map(row => {
       const intent = projectionIntentSchema.parse(JSON.parse(row.intent)) as EffectIntent, intentHash = hashArtifact('effect', intent);
       if (row.intent_hash !== intentHash) throw new Error('OUTBOX_CORRUPT');
       const base = { key: intent.key, kind: intent.kind, intentHash, rawStatus: row.status };
+      // A start marker owns uncertainty independently of the origin sidecar.
+      const evidenceMarker = existsSync(join(root, 'evidence-started', `${hashArtifact('evidence-effect-key', intent.key)}.json`));
+      const startedFile = join(root, 'semantic-started', `${hashArtifact('effect-key', intent.key)}.json`);
+      if (evidenceMarker || existsSync(startedFile)) return { ...base, derived: 'held_may_have_executed', reason: 'ORIGINAL_IDENTITY_AND_RECEIPTS_REQUIRED' };
       if (!consistent) return { ...base, derived: 'held', reason: 'SNAPSHOT_ADVANCED_RETRY' };
       if (!projectedKinds.has(intent.kind)) return { ...base, derived: 'retained', reason: 'NO_SUPERSESSION_AUTHORITY' };
       const originRow = journal.find(entry => entry.intents.some(created => created.key === intent.key && hashArtifact('effect', created) === intentHash));
       if (!originRow) return { ...base, derived: 'held', reason: 'ORIGIN_UNKNOWN' };
       const file = effectOriginPath(root, intent.key, originRow.event.id);
       if (!existsSync(file)) return { ...base, derived: 'held', reason: 'ORIGIN_CHECKPOINT_UNAVAILABLE' };
-      const proof = z.strictObject({ intentHash: hashSchema, eventId: idSchema, snapshot: artifactRefSchema }).parse(readBoundedJson(file));
-      const origin = runSnapshotSchema.parse(JSON.parse(Buffer.from(readArtifact(proof.snapshot, artifactRoot)).toString('utf8'))) as RunSnapshot;
-      if (proof.intentHash !== intentHash || proof.eventId !== originRow.event.id || hashArtifact('checkpoint', JSON.parse(canonicalJson(origin)) as JsonValue) !== originRow.checkpointHash || origin.context.request.runId !== runId) throw new Error('EFFECT_ORIGIN_CONFLICT');
+      let origin: RunSnapshot;
+      try { origin = readEffectOrigin(root, intent, originRow, artifacts); }
+      catch { return { ...base, derived: 'held', reason: 'ORIGIN_CHECKPOINT_UNVERIFIABLE' }; }
       const binding = { contextHash: origin.context.sharedContext.contextHash, round: origin.context.roundsUsed, clarificationBatch: origin.context.clarificationBatchesUsed, originEventId: originRow.event.id };
-      const evidenceMarker = existsSync(join(root, 'evidence-started', `${hashArtifact('evidence-effect-key', intent.key)}.json`));
-      const startedFile = join(root, 'semantic-started', `${hashArtifact('effect-key', intent.key)}.json`);
-      let started = evidenceMarker;
-      if (existsSync(startedFile)) {
-        const marker = z.strictObject({ key: idSchema, intentHash: hashSchema }).parse(readBoundedJson(startedFile));
-        if (marker.key !== intent.key || marker.intentHash !== intentHash) throw new Error('SEMANTIC_MARKER_CONFLICT');
-        started = true;
-      }
-      if (started) return { ...base, binding, derived: 'held_may_have_executed', reason: 'ORIGINAL_IDENTITY_AND_RECEIPTS_REQUIRED' };
       const invalidated = binding.contextHash !== c.sharedContext.contextHash || binding.round < c.roundsUsed || binding.round === 0 && binding.clarificationBatch < c.clarificationBatchesUsed;
+      if (!qualifiedProtocol && (intent.kind === 'evidence' || invalidated)) return { ...base, binding, derived: 'held', reason: 'UNSENT_PROTOCOL_UNPROVEN' };
       if (invalidated && qualifiedProtocol) return { ...base, binding, derived: 'superseded_unexecuted', reason: 'ACCEPTED_CONTEXT_OR_WAVE_INVALIDATION', currentContextHash: c.sharedContext.contextHash, currentRound: c.roundsUsed };
-      if (invalidated) return { ...base, binding, derived: 'held', reason: 'UNSENT_PROTOCOL_UNPROVEN' };
       if (['reconciling', 'preflight'].includes(snapshot.state) || c.pendingContextUpdate) return { ...base, binding, derived: 'held', reason: 'TRANSIENT_BOUNDARY' };
       const phase = { evidence: 'prepare_candidate', 'question-batch-request': 'collecting_questions', 'candidate-request': 'prepare_candidate', 'evaluate-round': 'evaluate_round' }[intent.kind as 'evidence'];
       return { ...base, binding, derived: snapshot.state === phase ? 'eligible' : 'held', reason: snapshot.state === phase ? 'CURRENT_CORRELATION' : 'WAITING_BARRIER' };
@@ -274,9 +281,60 @@ export function evidenceResourcesSettled(root: string, snapshot: RunSnapshot, ex
     readArtifact: ref => readArtifact(ref, artifactRoot),
     putArtifact: () => { throw new Error('EVIDENCE_SETTLEMENT_READ_ONLY'); },
   };
-  if (!snapshot.context.control.evidence.every(record => readEvidenceReceipt(record, artifacts).checkResourceState !== 'unverifiable')) return false;
-  if (!execution && !existsSync(join(root, 'evidence-started'))) return true;
-  const projection = execution ?? readExecutionProjection(root, snapshot.context.request.runId);
-  return projection.consistent && projection.revision === snapshot.revision &&
-    !projection.effects.some(effect => effect.kind === 'evidence' && effect.derived === 'held_may_have_executed');
+  try {
+    if (!snapshot.context.control.evidence.every(record => readEvidenceReceipt(record, artifacts).checkResourceState !== 'unverifiable')) return false;
+    const projection = execution ?? readExecutionProjection(root, snapshot.context.request.runId);
+    if (!projection.consistent || projection.revision !== snapshot.revision || projection.effects.some(effect => effect.kind === 'evidence' &&
+      !(effect.derived === 'eligible' || effect.derived === 'superseded_unexecuted' || effect.derived === 'held' && ['TRANSIENT_BOUNDARY', 'WAITING_BARRIER'].includes(effect.reason)))) return false;
+
+    const runId = snapshot.context.request.runId, reader = openProjectionReader(root);
+    let db: Database.Database | undefined;
+    try {
+      db = new Database(join(root, 'journal.sqlite'), { readonly: true, fileMustExist: true });
+      const database = db;
+      const records = db.transaction(() => {
+        const checkpoint = database.prepare('SELECT revision FROM checkpoints WHERE run_id = ?').get(runId) as { revision: number };
+        if (checkpoint.revision !== snapshot.revision) throw new Error('SNAPSHOT_ADVANCED_RETRY');
+        const rows = database.prepare('SELECT intent, intent_hash, status, receipt FROM outbox WHERE run_id = ?').all(runId) as { intent: string; intent_hash: string; status: EffectRecord['status']; receipt: string | null }[];
+        return rows.map(row => {
+          const intent = projectionIntentSchema.parse(JSON.parse(row.intent)) as EffectIntent;
+          if (hashArtifact('effect', intent) !== row.intent_hash) throw new Error('OUTBOX_CORRUPT');
+          const status = z.enum(['pending_execution', 'dispatched', 'receipt_recorded', 'superseded']).parse(row.status);
+          const receipt = row.receipt === null ? null : z.strictObject({ eventId: idSchema, value: jsonValueSchema }).parse(JSON.parse(row.receipt));
+          return { intent, status, receipt };
+        });
+      }).deferred();
+      if (canonicalJson(reader.load(runId)) !== canonicalJson(snapshot)) return false;
+      const evidence = records.filter(record => record.intent.kind === 'evidence');
+      if (!evidence.length && !snapshot.context.control.evidence.length && !existsSync(join(root, 'evidence-started'))) return true;
+      const journal = reader.readJournal(runId);
+      const readOnlyStore: EvidenceJournalStore = {
+        artifacts,
+        effectRecord: key => { const record = records.find(record => record.intent.key === key); if (!record) throw new Error('EVIDENCE_MARKER_CONFLICT'); return record; },
+        pendingEffects: () => records.filter(record => record.status === 'pending_execution').map(record => record.intent),
+      };
+      const proof = new EvidenceExecutionJournal(root, readOnlyStore, snapshot, false);
+      const markers = proof.markers(), completed: EvidenceRecord[] = [];
+      for (const effect of evidence) {
+        const intentHash = hashArtifact('effect', effect.intent);
+        const originRow = journal.find(row => row.intents.some(intent => intent.key === effect.intent.key && hashArtifact('effect', intent) === intentHash));
+        if (!originRow) return false;
+        const origin = readEffectOrigin(root, effect.intent, originRow, artifacts);
+        const marker = markers.find(marker => marker.effectKey === effect.intent.key);
+        if (!marker) {
+          // Only positively proven unstarted work needs no completion receipt.
+          if (effect.status !== 'pending_execution' || !projection.effects.some(item => item.key === effect.intent.key) ||
+            journal.some(row => row.event.id === effect.intent.key && row.event.body.kind === 'EVIDENCE_RECORDED')) return false;
+          continue;
+        }
+        if (marker.contextHash !== origin.context.sharedContext.contextHash || marker.round !== origin.context.roundsUsed) return false;
+        const record = proof.result(marker);
+        if (!record || readEvidenceReceipt(record, artifacts).checkResourceState === 'unverifiable') return false;
+        // A positive sidecar never substitutes for the accepted typed CAS event.
+        if (!journal.some(row => row.event.id === marker.effectKey && row.event.body.kind === 'EVIDENCE_RECORDED' && canonicalJson(row.event.body.data.record) === canonicalJson(record))) return false;
+        completed.push(record);
+      }
+      return snapshot.context.control.evidence.every(record => completed.some(value => canonicalJson(value) === canonicalJson(record)));
+    } finally { db?.close(); reader.close(); }
+  } catch { return false; }
 }

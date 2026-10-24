@@ -1,15 +1,22 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { controlRequestSchema } from '../../src/runtime/inbox.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const skill = join(root, 'skills/the-council');
 const launcher = join(skill, 'scripts/run-council.mjs');
+const ownedTemps: string[] = [];
+function ownedTemp(prefix: string): string {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  ownedTemps.push(directory);
+  return directory;
+}
+afterAll(() => { for (const directory of ownedTemps) rmSync(directory, { recursive: true }); });
 const read = (path: string) => existsSync(path) ? readFileSync(path, 'utf8') : '';
 beforeAll(() => { execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'pipe' }); }, 60000);
 
@@ -21,7 +28,7 @@ it('exposes an explicit-only skill to the client with the correct invocation pro
 });
 
 it('resolves the real built CLI from a symlinked skill even with an unrelated cwd', () => {
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'council-skill-link-')));
+  const cwd = ownedTemp('council-skill-link-');
   symlinkSync(skill, join(cwd, 'installed'), 'dir');
   const result = spawnSync(process.execPath, [join(cwd, 'installed/scripts/run-council.mjs'), 'bogus'], { cwd, encoding: 'utf8' });
   expect(result.status, result.stderr).toBe(4);
@@ -30,7 +37,7 @@ it('resolves the real built CLI from a symlinked skill even with an unrelated cw
 
 it('fails with an actionable build error and performs no implicit installation', () => {
   expect(existsSync(launcher), 'Task8 launcher is missing').toBe(true);
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'council-no-build-')));
+  const cwd = ownedTemp('council-no-build-');
   const copy = join(cwd, 'skills/the-council/scripts/run-council.mjs');
   mkdirSync(dirname(copy), { recursive: true }); copyFileSync(launcher, copy);
   const result = spawnSync(process.execPath, [copy, 'inspect'], { cwd, encoding: 'utf8' });
@@ -41,7 +48,7 @@ it('fails with an actionable build error and performs no implicit installation',
 });
 
 it.each(['topic', 'handoff'])('rejects an otherwise complete request missing %s through the real CLI decoder', missing => {
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'council-invalid-input-')));
+  const cwd = ownedTemp('council-invalid-input-');
   const input: Record<string, unknown> = { topic: 'Decision', scope: { sourceRoots: [cwd], allowedSourceAddresses: [], checks: [] }, handoff: { decision: 'Choose an approach', outcome: 'A decision', requirements: [], priorities: [], constraints: [], excludedActions: [], priorDecisions: [], references: [], uncertainties: [], candidates: [], suggestedSkills: ['verify-evidence'], sensitiveExclusions: [], permittedSources: [], permittedCommands: [], permittedEffects: [], workerAccess: 'Supplied packet only' } };
   delete input[missing];
   const path = join(cwd, 'request.json'); writeFileSync(path, JSON.stringify(input));

@@ -28,7 +28,9 @@ export function accountBudget(budget: ActiveBudget, observation: ClockReceipt, e
     next = { ...next, status: 'active', intervalEpoch: budget.intervalEpoch + 1, startReceipt: { ...observation }, lastReceipt: { ...observation }, deadline: { wallMs: observation.wallMs + budget.remainingMs, monotonicMs: observation.monotonicMs + budget.remainingMs, processEpoch: observation.processEpoch } };
   } else if (event.kind === 'terminal-settlement') next.status = 'settled';
   if (event.kind === 'authorized-extension' && !budget.appliedExtensionIds.includes(event.extensionId)) {
-    next = { ...next, totalMs: next.totalMs + event.additionalMs, remainingMs: next.remainingMs + event.additionalMs, appliedExtensionIds: [...next.appliedExtensionIds, event.extensionId] };
+    const totalMs = next.totalMs + event.additionalMs;
+    // Accrued work includes overrun even after the displayed balance reaches zero.
+    next = { ...next, totalMs, remainingMs: Math.max(0, totalMs - next.accruedMs), appliedExtensionIds: [...next.appliedExtensionIds, event.extensionId] };
     if (!Number.isSafeInteger(next.totalMs) || !Number.isFinite(next.remainingMs) || next.remainingMs > Number.MAX_SAFE_INTEGER) return blocked('BUDGET_OVERFLOW');
     if (next.deadline) next.deadline = { ...next.deadline, wallMs: next.deadline.wallMs + event.additionalMs, monotonicMs: next.deadline.monotonicMs + event.additionalMs };
   }

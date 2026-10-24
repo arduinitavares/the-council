@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { parseWorkerPayload, bindWorkerPayload, namespaceItem, councilConfigSchema, artifactRefSchema, runRequestSchema, boundedExtensionSchema } from '../../src/domain/schemas.js';
-import { makeBinding, rawQuestion, config, H, roundBindings, OTHER } from '../fixtures/builders.js';
+import { parseWorkerPayload, bindWorkerPayload, namespaceItem, councilConfigSchema, artifactRefSchema, runRequestSchema, boundedExtensionSchema, ballotSchema, confirmationContextSchema } from '../../src/domain/schemas.js';
+import { makeBinding, makeConfirmation, rawQuestion, config, H, roundBindings, OTHER } from '../fixtures/builders.js';
 
 const wire = () => ({ kind: 'clarification', ready: false, questions: [rawQuestion()], methodIds: ['test-method'] });
 const clarifyBinding = () => makeBinding('openai', { phase: 'clarify', round: 0, clarificationBatch: 1 });
 describe('strict worker boundary', () => {
+  it('accepts bound ballot metadata at confirmation while rejecting unknown or invalid fields', () => {
+    const raw = { kind: 'ballot', bindings: roundBindings, decision: 'accept', conditional: false, newObjections: [], missingInputQuestions: [], dispositions: [], challengeResponses: [], reason: 'Accept', methodIds: ['test-method'] };
+    const bound = bindWorkerPayload(parseWorkerPayload(JSON.stringify(raw)), makeBinding());
+    if (bound.kind !== 'ballot') throw Error('wrong kind');
+    expect(ballotSchema.parse(bound)).toEqual(bound);
+    expect(confirmationContextSchema.safeParse(makeConfirmation({ ballots: [bound] })).success).toBe(true);
+    expect(ballotSchema.safeParse({ ...bound, authority: 'forged' }).success).toBe(false);
+    expect(ballotSchema.safeParse({ ...bound, kind: 'review' }).success).toBe(false);
+    expect(ballotSchema.safeParse({ ...bound, methodIds: [123] }).success).toBe(false);
+    expect(() => parseWorkerPayload({ ...raw, seat: 'openai' })).toThrow();
+  });
   it('accepts content-only wire output, binds actual provenance and preserves exact text', () => {
     const result = bindWorkerPayload(parseWorkerPayload(wire()), clarifyBinding());
     expect(result.kind).toBe('clarification');

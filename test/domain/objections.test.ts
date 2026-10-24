@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { applyOwnedDispositions, registerObjections } from '../../src/domain/objections.js';
+import { bindWorkerPayload, parseWorkerPayload } from '../../src/domain/schemas.js';
 import { makeConfirmation, makeBallot, makeObjection, makeBinding, OTHER } from '../fixtures/builders.js';
 
 describe('objection ownership', () => {
+  it('applies frozen owner dispositions from parsed and receipt-bound ballot output', () => {
+    const objection = makeObjection();
+    const binding = makeBinding('openai', { inputObjectionIds: [objection.id], inputEvidenceIds: ['evidence1'] });
+    const disposition = { objectionId: objection.id, status: 'closed' as const, reason: 'Resolved by frozen evidence', evidenceIds: ['evidence1'] };
+    const context = makeConfirmation();
+    const raw = { kind: 'ballot', bindings: context.expected, decision: 'accept', conditional: false, newObjections: [], missingInputQuestions: [], dispositions: [disposition], challengeResponses: [], reason: 'Accept', methodIds: ['test-method'] };
+    const bound = bindWorkerPayload(parseWorkerPayload(JSON.stringify(raw)), binding);
+    if (bound.kind !== 'ballot') throw Error('wrong kind');
+    const confirmation = { ...context, objections: [objection], inputObjectionIds: [objection.id], ballots: [bound], expectedAttempts: { ...context.expectedAttempts, openai: binding } };
+    const ledger = applyOwnedDispositions(confirmation);
+    expect(ledger).toEqual([{ ...objection, status: 'closed', history: [{ ...disposition, seat: 'openai', attemptId: 'attempt-openai' }] }]);
+    expect(applyOwnedDispositions({ ...confirmation, objections: ledger })).toEqual(ledger);
+    expect(objection.status).toBe('open');
+    const unexpectedBallot = { ...bound, unexpected: true };
+    expect(() => applyOwnedDispositions({ ...confirmation, ballots: [unexpectedBallot] })).toThrow();
+  });
   it('applies only owner closure of a frozen input and appends history', () => {
     const o = makeObjection(); const d = { objectionId: o.id, status: 'closed' as const, reason: 'Resolved by frozen candidate', evidenceIds: [] };
     const a = makeBallot('openai', { binding: makeBinding('openai', { inputObjectionIds: [o.id] }), dispositions: [d] });

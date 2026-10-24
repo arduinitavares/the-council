@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateConsensus } from '../../src/domain/consensus.js';
+import { bindWorkerPayload, parseWorkerPayload } from '../../src/domain/schemas.js';
 import { makeConfirmation, makeBallot, makeQuestion, makeLedger, makeObjection, OTHER } from '../fixtures/builders.js';
 
 describe('unanimous acceptance', () => {
+  it('accepts current ballots through the actual parse and receipt-binding pipeline', () => {
+    const context = makeConfirmation();
+    const ballots = (['openai', 'gemini', 'claude'] as const).map(seat => {
+      const raw = { kind: 'ballot', bindings: context.expected, decision: 'accept', conditional: false, newObjections: [], missingInputQuestions: [], dispositions: [], challengeResponses: [{ challengeId: 'challenge1', response: 'Addressed', evidenceIds: [] }], reason: 'Accept the frozen candidate', methodIds: ['test-method'] };
+      const bound = bindWorkerPayload(parseWorkerPayload(JSON.stringify(raw)), context.expectedAttempts[seat]);
+      if (bound.kind !== 'ballot') throw Error('wrong kind');
+      return bound;
+    });
+    expect(evaluateConsensus({ ...context, ballots })).toEqual({ kind: 'unanimous' });
+    const unexpectedBallot = { ...ballots[0]!, unexpected: true };
+    expect(evaluateConsensus({ ...context, ballots: [unexpectedBallot, ...ballots.slice(1)] })).toEqual({ kind: 'unresolved', reasons: ['INVALID_CONFIRMATION_CONTEXT'] });
+  });
   it('accepts precisely three current unconditional acceptances', () => {
     expect(evaluateConsensus(makeConfirmation())).toEqual({ kind: 'unanimous' });
   });

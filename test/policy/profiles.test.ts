@@ -2,15 +2,20 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { freezeProfile, initialProfileInput } from '../../src/input/profiles.js';
+import { freezeProfile } from '../../src/input/profiles.js';
 import { createHash } from 'node:crypto';
+import { testProfileInput } from './profile-fixture.js';
 
 it('freezes a small supplied-text hybrid catalogue with exact bundles and explicit adaptations', () => {
-  const root = mkdtempSync(join(tmpdir(), 'profile-test-')), input = initialProfileInput(join(root, 'artifacts'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'profile-test-'))), input = testProfileInput(root);
   const profile = freezeProfile(input);
   expect(profile.admittedMethodIds).toEqual(['verify-evidence', 'challenge-claims', 'explain-uncertainty']);
   expect(profile.sources.length).toBeGreaterThan(3); expect(profile.adaptations.every(a => a.retained.length && a.replaced.length && a.excluded.length)).toBe(true);
   expect(freezeProfile(input).profileHash).toBe(profile.profileHash);
+  for (const source of profile.sources) {
+    expect(source.path.startsWith(join(root, 'profile-sources') + '/')).toBe(true);
+    expect(source.sha256).toBe(createHash('sha256').update(`Synthetic Council test source: ${source.id}.\n`).digest('hex'));
+  }
   for (const permission of ['private-interview', 'hidden-helper', 'write', 'install', 'conflicting-output']) {
     const unsafe = structuredClone(input); unsafe.methods[0]!.permissions = [permission];
     expect(() => freezeProfile(unsafe)).toThrow('PROFILE_UNSAFE_METHOD');
@@ -28,7 +33,7 @@ it('freezes a small supplied-text hybrid catalogue with exact bundles and explic
 });
 
 it('bounds source reads before any profile artifacts are written', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'large-profile-'))), input = initialProfileInput(join(root, 'artifacts'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'large-profile-'))), input = testProfileInput(root);
   const path = join(root, 'large.md'), bytes = Buffer.alloc(8 * 1024 * 1024 + 1, 32); writeFileSync(path, bytes);
   input.methods[0]!.sources = [{ id: 'oversized', path, sha256: createHash('sha256').update(bytes).digest('hex'), revision: 'fixture' }];
   expect(() => freezeProfile(input)).toThrow('PROFILE_SOURCE_TOO_LARGE');

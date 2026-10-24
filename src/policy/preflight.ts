@@ -245,6 +245,18 @@ export function runPreflight(input: PreflightInput): PreflightDecision {
     const receipt = x.qualifications.find(receipt => receipt.id === control.qualificationId && receipt.protectedPaths?.includes(control.path));
     if (!receipt || qualifySelection({ selection: receipt.requested, host: x.host, versions: x.versions, actionClass: x.access.actionClass, roots: x.access.requiredRoots, now: x.now }, [receipt]).kind !== 'ready') return fail('ACCESS_CONTROL_UNQUALIFIED', [control.receiptId]);
   }
+  // A path exemption applies to every worker receiving these grants. Prove the
+  // control for each exact roster selection, including roles outside a pending wave.
+  for (const path of new Set((x.scopeControls ?? []).map(control => control.path))) {
+    if (!x.access.grantedRoots.some(root => pathWithin(path, root))) continue;
+    const controls = x.scopeControls!.filter(control => control.path === path);
+    const qualifications = x.qualifications.filter(receipt => receipt.protectedPaths?.includes(path) && controls.some(control => control.qualificationId === receipt.id));
+    for (const [, selection] of roster) {
+      const qualification = qualifySelection({ selection, host: x.host, versions: x.versions, actionClass: x.access.actionClass, roots: x.access.grantedRoots, now: x.now }, qualifications);
+      if (qualification.kind !== 'ready') return fail('ACCESS_CONTROL_UNQUALIFIED', controls.map(control => control.receiptId));
+      receipts.push(...qualification.receiptRefs);
+    }
+  }
   for (const protectedPath of [x.policy.path, x.artifactRoot]) if (x.access.grantedRoots.some(root => pathWithin(protectedPath, root)) && !x.scopeControls?.some(control => control.path === protectedPath)) return fail('SCOPE_PROTECTED_PATH');
   const workerAccess = validateWorkerRoots(x.access.grantedRoots, { controls: x.scopeControls ?? [], protectedPaths: [x.policy.path, x.artifactRoot, ...(x.protectedPaths ?? [])] });
   if (workerAccess.kind !== 'ready') return fail(workerAccess.reason, [x.access.receiptId, ...workerAccess.receiptRefs]);

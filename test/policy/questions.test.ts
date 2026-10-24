@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Answer, AnswerBatch, BoundQuestion, QuestionLedger, WorkerResult } from '../../src/domain/contracts.js';
 import { bindWorkerPayload } from '../../src/domain/schemas.js';
 import { canonicalJson } from '../../src/domain/hash.js';
+import { unresolvedBlockingQuestions } from '../../src/domain/questions.js';
 import { buildQuestionBatch, validateAnswerBatch, validateAnswerRevision } from '../../src/input/questions.js';
-import { H, OTHER, makeBinding, makeQuestion, rawQuestion } from '../fixtures/builders.js';
+import { H, OTHER, makeBinding, makeQuestion, rawQuestion, roundBindings } from '../fixtures/builders.js';
 import { Flow, request } from '../machine/helpers.js';
 
 const origin = { kind: 'clarification' as const, batchIndex: 1 };
@@ -13,6 +14,13 @@ function result(seat: 'openai' | 'gemini' | 'claude', questions: readonly Return
   return { status: 'valid', binding, payload: bindWorkerPayload({ kind: 'clarification', ready: !questions.length, questions, methodIds: [] }, binding) };
 }
 const wave = (questions: readonly ReturnType<typeof rawQuestion>[] = [], batch = 1, contextHash = H, ids: readonly string[] = []) => [result('claude', [], batch, contextHash, ids), result('openai', questions, batch, contextHash, ids), result('gemini', [], batch, contextHash, ids)];
+function deliberationResult(seat: 'openai' | 'gemini' | 'claude', phase: 'review' | 'ballot', questions: readonly ReturnType<typeof rawQuestion>[] = [], inputQuestionIds: readonly string[] = []): WorkerResult {
+  const binding = makeBinding(seat, { phase, logicalTaskKey: `${phase}-${seat}`, inputQuestionIds });
+  const payload = phase === 'review'
+    ? bindWorkerPayload({ kind: 'review', proposals: [], newObjections: [], evidenceRequests: [], missingInputQuestions: questions, methodIds: [] }, binding)
+    : bindWorkerPayload({ kind: 'ballot', bindings: roundBindings, decision: 'accept', conditional: false, newObjections: [], missingInputQuestions: questions, dispositions: [], challengeResponses: [], reason: 'Accept', methodIds: [] }, binding);
+  return { status: 'valid', binding, payload };
+}
 function answer(questionId: string, id = 'a1', status: Answer['status'] = 'answered'): Answer { return { id, questionId, status, value: status === 'answered' ? 'Fact' : null, source: { author: 'user', receiptId: 'receipt' }, evidenceIds: [] }; }
 function reply(batch: ReturnType<typeof buildQuestionBatch>, answers: readonly Answer[], finalized = true): AnswerBatch { return { requestId: 'request', batchId: batch.id, origin: batch.origin, baseContextHash: batch.baseContextHash, answers, finalized }; }
 
@@ -48,7 +56,7 @@ describe('common question compilation and publication decisions', () => {
     expect(validateAnswerBatch(second, reply(second, []))).toMatchObject({ kind: 'invalid', reason: 'QUESTION_LEDGER_REQUIRED' });
     expect(validateAnswerBatch(second, reply(second, []), { ...prior, contextHash: H })).toMatchObject({ kind: 'invalid', reason: 'STALE_CONTEXT' });
   });
-  it('retains earlier unknown blockers omitted by current ballots and rejects stale old batches', () => {
+  it('retains earlier unknown blockers omitted by a later clarification wave and rejects stale old batches', () => {
     const question = makeQuestion({ disposition: 'presented' }), prior = { ...empty, questions: [question], answers: [answer(question.id, 'old', 'unknown')] };
     const second = buildQuestionBatch(prior, { kind: 'clarification', batchIndex: 2 }, wave([], 2, H, [question.id]), { id: 'b2', groups: [] }, []);
     expect(second.questions).toEqual([]);
@@ -57,6 +65,36 @@ describe('common question compilation and publication decisions', () => {
     const revision = { requestId: 'correct', runId: 'run1', baseContextHash: H, unresolvedQuestionIds: [question.id], answers: [{ ...answer(question.id, 'new'), supersededAnswerId: 'old' }] };
     expect(validateAnswerRevision(request().sharedContext, prior, revision).kind).toBe('ready-for-publication');
     expect(validateAnswerRevision(request().sharedContext, prior, { ...revision, baseContextHash: OTHER }).kind).toBe('invalid');
+  });
+  it('retains an earlier unknown blocker omitted by real round-origin ballots', () => {
+    const question = makeQuestion({ disposition: 'presented' });
+    const prior = { ...empty, questions: [question], answers: [answer(question.id, 'old', 'unknown')] };
+    const ballots = (['claude', 'openai', 'gemini'] as const).map(seat => deliberationResult(seat, 'ballot', [], [question.id]));
+    const batch = buildQuestionBatch(prior, { kind: 'deliberation', round: 1 }, ballots, { id: 'round-ballots', groups: [] }, []);
+    expect(batch.questions).toEqual([]); expect(batch.sourceAnswers).toEqual([]);
+    const decision = validateAnswerBatch(batch, reply(batch, []), prior);
+    expect(decision).toMatchObject({ kind: 'unresolved-blocking', questionIds: [question.id] });
+    expect(unresolvedBlockingQuestions(decision.ledger!).map(q => q.id)).toEqual([question.id]);
+    expect(decision.ledger!.answers).toEqual(prior.answers);
+  });
+  it('compiles review missing-input questions with deliberation origins in stable seat order', () => {
+    const reviews = [deliberationResult('claude', 'review'), deliberationResult('gemini', 'review', [rawQuestion({ id: 'gemini-input' })]), deliberationResult('openai', 'review', [rawQuestion()])];
+    const batch = buildQuestionBatch(empty, { kind: 'deliberation', round: 1 }, reviews, { id: 'round-reviews', groups: [] }, []);
+    expect(batch.origin).toEqual({ kind: 'deliberation', round: 1 });
+    expect(batch.presentedQuestionIds).toEqual(['run1/review/r1/openai/question/q1', 'run1/review/r1/gemini/question/gemini-input']);
+    expect(batch.questions.map(q => q.origin)).toEqual([
+      expect.objectContaining({ seat: 'openai', phase: 'review', round: 1, clarificationBatch: null }),
+      expect.objectContaining({ seat: 'gemini', phase: 'review', round: 1, clarificationBatch: null }),
+    ]);
+    expect(validateAnswerBatch(batch, reply(batch, batch.questions.map((q, i) => answer(q.id, `review-answer-${i}`))), empty).kind).toBe('ready-for-publication');
+  });
+  it('rejects mismatched ballot seats and mixed review/ballot deliberation waves', () => {
+    const ballots = (['openai', 'gemini', 'claude'] as const).map(seat => deliberationResult(seat, 'ballot'));
+    const forged = structuredClone(ballots), first = forged[0]!;
+    if (first.status === 'valid' && first.payload.kind === 'ballot') first.payload.seat = 'gemini';
+    expect(() => buildQuestionBatch(empty, { kind: 'deliberation', round: 1 }, forged, { id: 'wrong-seat', groups: [] }, [])).toThrow('QUESTION_ORIGIN_INVALID');
+    const mixed = [ballots[0]!, deliberationResult('gemini', 'review'), ballots[2]!];
+    expect(() => buildQuestionBatch(empty, { kind: 'deliberation', round: 1 }, mixed, { id: 'mixed-phase', groups: [] }, [])).toThrow('QUESTION_ORIGIN_INVALID');
   });
   it('requires prior-published dependencies for a deferred first revision answer', () => {
     const q1 = makeQuestion({ disposition: 'presented' }), q2 = makeQuestion({ id: 'run1/clarify/c1/openai/question/q2', dependencyIds: [q1.id] });

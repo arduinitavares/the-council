@@ -6,12 +6,13 @@ import { describe, expect, it } from 'vitest';
 import { parseCouncilConfig } from '../../src/config/load.js';
 import { canonicalJson, hashArtifact } from '../../src/domain/hash.js';
 import type { JsonValue, WorkerRole } from '../../src/domain/contracts.js';
-import { freezeProfile, initialProfileInput } from '../../src/input/profiles.js';
-import { runPreflight, type PreflightInput } from '../../src/policy/preflight.js';
+import { freezeProfile } from '../../src/input/profiles.js';
+import { runPreflight, validateSourceAddress, type PreflightInput } from '../../src/policy/preflight.js';
+import { testProfileInput } from './profile-fixture.js';
 
 function fixture(): PreflightInput {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'preflight-'))), config = parseCouncilConfig(readFileSync(new URL('../../council.yaml', import.meta.url)));
-  const profile = freezeProfile(initialProfileInput(join(root, 'artifacts'))), bytes = Buffer.from('Current human policy; interpreted by caller.');
+  const profile = freezeProfile(testProfileInput(root)), bytes = Buffer.from('Current human policy; interpreted by caller.');
   const policyHash = createHash('sha256').update(bytes).digest('hex');
   const policyPath = join(root, 'policy.md'), handoffPath = join(root, 'handoff.md'); writeFileSync(policyPath, bytes); writeFileSync(handoffPath, 'Decision context');
   const selections = [...Object.entries(config.reviewers), ['judge', config.judge]] as [WorkerRole, typeof config.judge][];
@@ -26,7 +27,51 @@ function fixture(): PreflightInput {
     access: { actionClass: 'supplied-packet-read-only', requiredRoots: [], grantedRoots: [], receiptId: 'access' }, allowance: [{ route: 'codex', group: 'subscription', state: 'unknown', receiptId: 'quota' }, { route: 'antigravity', group: 'subscription', state: 'available', receiptId: 'quota' }],
   };
 }
+function controlledFixture(): PreflightInput {
+  const x = fixture(), root = join(x.scope.sourceRoots[0]!, 'worker-source');
+  mkdirSync(root); writeFileSync(join(root, 'AGENTS.md'), 'Protected original instructions');
+  x.access = { ...x.access, actionClass: 'source-read-only', requiredRoots: [root], grantedRoots: [root] };
+  for (const qualification of x.qualifications) { qualification.actionClass = 'source-read-only'; qualification.roots = [root]; }
+  return x;
+}
+function addProtectedControls(x: PreflightInput, qualifications = x.qualifications): void {
+  const path = join(x.access.grantedRoots[0]!, 'AGENTS.md');
+  x.scopeControls = qualifications.map(qualification => {
+    qualification.protectedPaths = [path];
+    return { path, receiptId: `deny-${qualification.id}`, qualificationId: qualification.id };
+  });
+}
 describe('attested dynamic model and launch admission', () => {
+  it('rejects a protected-path control qualified only for Codex when Antigravity receives the same grant', () => {
+    const x = controlledFixture();
+    expect(runPreflight(x).reason).toBe('SCOPE_PROTECTED_PATH');
+    addProtectedControls(x, x.qualifications.filter(q => q.requested.route === 'codex'));
+    expect(runPreflight(x)).toMatchObject({ kind: 'blocked', reason: 'ACCESS_CONTROL_UNQUALIFIED' });
+  });
+  it.each([
+    { route: 'codex' as const, model: 'gpt-6-astra', effort: 'high' },
+    { route: 'codex' as const, model: 'gpt-6.1-sol', effort: 'max' },
+  ])('rejects a control without exact judge selection qualification: $model/$effort', selection => {
+    const x = controlledFixture(); addProtectedControls(x);
+    x.config.judge = selection;
+    x.configHash = hashArtifact('council-config', x.config as unknown as JsonValue); x.authorization.configHash = x.configHash;
+    for (const list of [x.policy.admitted, x.authorization.selections]) list[list.findIndex(entry => entry.role === 'judge')] = { role: 'judge', ...selection };
+    for (const entry of x.catalog) if (entry.route === selection.route && entry.model === selection.model) entry.efforts.push(selection.effort);
+    x.catalog.push({ ...selection, family: 'openai', efforts: [selection.effort], receiptId: 'replacement-catalog', expiresAt: 10000 });
+    x.qualifications.push({ ...x.qualifications[0]!, id: 'replacement-qualified', requested: selection, exposed: selection, protectedPaths: [] });
+    // Conservative all-roster checks also cover a judge outside this pending wave.
+    x.pendingAssignment = { phase: 'review', roles: ['gemini'], receiptId: 'pending-gemini' };
+    expect(runPreflight(x)).toMatchObject({ kind: 'blocked', reason: 'ACCESS_CONTROL_UNQUALIFIED' });
+    addProtectedControls(x);
+    expect(runPreflight(x).kind).toBe('ready');
+  });
+  it('admits a protected grant with controls qualified for every exact roster selection while keeping source reads denied', () => {
+    const x = controlledFixture(); addProtectedControls(x);
+    const decision = runPreflight(x);
+    expect(decision.kind).toBe('ready');
+    expect(decision.receiptRefs).toEqual(expect.arrayContaining(x.scopeControls!.map(control => control.receiptId)));
+    expect(validateSourceAddress(x.scopeControls![0]!.path, x.scope).reason).toBe('SCOPE_PROTECTED_PATH');
+  });
   it('requires current evidence and separates reasons', () => {
     const good = fixture(); expect(runPreflight(good).kind).toBe('ready');
     const cases: [string, (x: PreflightInput) => void][] = [

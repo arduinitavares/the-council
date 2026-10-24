@@ -2,7 +2,7 @@
 
 Date: 2026-10-23
 
-Status: Draft for builder check and user approval. This document authorizes no implementation or installation.
+Status: Ready for user approval after a fresh independent builder check. This document authorizes no implementation or installation.
 
 ## Purpose
 
@@ -62,7 +62,7 @@ The builder will select and pin a supported stable XState release. The design us
 
 | Component | Responsibility | Authority limit |
 | --- | --- | --- |
-| Calling agent | Select topic context and explain the result | Cannot vote for a reviewer |
+| Calling agent | Select topic context, compile candidates, and explain the result | Cannot vote for a reviewer |
 | Skill | Apply required skills and start or resume the runner | Cannot bypass runner checks |
 | XState runner | Validate events, advance states, enforce limits, and record effects | Cannot decide whether an argument is true |
 | Orca adapter | Start workers, deliver messages, inspect evidence, and settle resources | Uses real Orca identities and receipts |
@@ -73,6 +73,22 @@ The builder will select and pin a supported stable XState release. The design us
 The coordinator owns the proposal artifact. Each reviewer can propose amendments. No reviewer has privileged access to that artifact.
 
 The coordinator records each material amendment and its source. It cannot remove an objection without the objection owner's explicit disposition.
+
+### Calling agent bridge
+
+The current calling agent is the coordinator and candidate author. The runner does not launch another model to compile a candidate.
+
+At `prepare_candidate`, the runner yields a structured request to that agent. It supplies the common input, reviewer outputs, alternatives, and objections.
+
+The calling agent proposes one candidate against the stated requirements. It records why it selected that proposal and how it treated each alternative.
+
+The skill keeps the calling agent in the supervised loop. The agent submits the candidate through a validated runner operation.
+
+The runner checks the candidate's structure and bindings. It then records the immutable candidate and starts the judge phase.
+
+Candidate synthesis remains a model judgment. Its output becomes recorded input to the deterministic state machine.
+
+The three reviewers can reject that synthesis. The calling agent has no additional acceptance authority.
 
 ## Model selection and placement
 
@@ -105,7 +121,11 @@ All reviewer tasks must settle before the judge starts. The judge must settle be
 
 This order prevents concurrent Astra reviewer and judge workers. The runner also checks other active Astra ownership, including the calling session.
 
-An active Astra caller does not stop counting while it waits. If it conflicts, the run requires an actual ownership handoff or specific additional-concurrency authorization.
+An active Astra caller does not stop counting while it waits. The first version returns `blocked` before worker launch when that conflict exists.
+
+The result explains two remedies: resume from a non-Astra calling agent, or obtain specific additional-concurrency authorization.
+
+The first version does not transfer ownership automatically. It does not detach a hidden coordinator or end the calling session itself.
 
 The runner cannot solve this conflict by silently changing the caller's model or bypassing Orca.
 
@@ -150,7 +170,13 @@ Each round has one candidate proposal and one fresh judge. A candidate has an im
 
 Fresh final-response tasks avoid relying on an unqualified session-resume route. They retain the same three logical reviewer seats.
 
-This can require seven inference tasks per round: three initial reviews, one judge, and three final responses. Three rounds can require 21 tasks.
+This can require seven logical worker tasks per round: three initial reviews, one judge, and three final responses. Three rounds can require 21 tasks.
+
+The calling agent's synthesis uses its current session. It is additional model work, but it does not create an eighth worker entry.
+
+Each logical worker output permits at most one fresh format-correction attempt. Therefore, three rounds can require at most 42 worker attempts.
+
+Qualification runs are separate, explicit prerequisites. They cannot become hidden retries inside this attempt limit.
 
 These are bounded ordinary entries, not an AGY managed batch. No Boost, Teamwork, or internal delegation is part of this design.
 
@@ -166,7 +192,23 @@ Evidence records contain a source reference, relevant location, revision or retr
 
 A test record also identifies the exact command, working directory, input revision, observed output, and permitted effects.
 
-Evidence status is one of `verified`, `contradicted`, `unverified`, or `not_applicable`. A model's assertion alone cannot establish `verified`.
+Evidence status is one of `verified`, `invalid`, `unverified`, or `not_applicable`. A model's assertion alone cannot establish `verified`.
+
+Here, `verified` means that the adapter observed the source or check result and validated its provenance. It does not establish a claim's universal truth.
+
+The judge records a separate claim assessment: `supported`, `contradicted`, or `unresolved`. The final report keeps provenance and claim assessment separate.
+
+The coordinator-owned evidence adapter performs permitted source retrieval and check execution. Reviewers submit evidence requests as data in their reports.
+
+The adapter services those requests before candidate freeze. It uses only the preflight's allowed sources, exact commands, working directories, and declared effects.
+
+For a source, it records the retrieved content hash and location. For a command, it records the execution receipt and output hash.
+
+It checks those observations against the permitted request. Unknown outcomes and mismatches cannot receive `verified` status.
+
+The first version does not rely on workers to execute checks. An evidence request cannot authorize a new host command or access grant.
+
+A request outside the declared scope requires a user decision or remains unverified. Material missing evidence blocks candidate freeze unless the candidate states the uncertainty.
 
 The judge explains how each cited source supports the claim. It checks contrary evidence and states source-access limits.
 
@@ -177,6 +219,14 @@ An objection states the disputed claim, supporting evidence or missing evidence,
 An objection remains open until its owner explicitly withdraws it, records a supported resolution, or rejects the candidate because it remains unresolved.
 
 An objection cannot disappear because the coordinator summarizes it differently. All reviewers receive the complete current objection record.
+
+The round input contains an immutable objection snapshot. A final reviewer response can append a disposition for that reviewer's own objection.
+
+The runner collects all final responses before it applies their disposition events. It then evaluates the consensus guard against the resulting objection state.
+
+Other seats cannot close that objection. All dispositions remain in the event history. A new objection prevents consensus for that candidate.
+
+A closure can cite only the frozen evidence and candidate. A material new fact or candidate amendment requires the next round.
 
 The judge's challenges are visible to all reviewers. Each reviewer must address them in its final response.
 
@@ -262,6 +312,16 @@ The runner retains late responses from a superseded attempt as evidence. They ca
 
 A malformed result permits at most one syntax-only correction under the same assignment. This rule permits no retry of a denied action.
 
+The original attempt must settle first. The adapter then starts a fresh session for a format-correction sub-attempt under that logical assignment.
+
+The effect registry links the correction to the original attempt and raw response hash. The adapter does not resume an unqualified provider session.
+
+The correction receives the original response, output schema, and frozen identity bindings. It must preserve the original decision and all material literals.
+
+The validator accepts a correction only when the original content and decision are unambiguous. A changed or guessed decision blocks the seat.
+
+The correction counts toward the invocation's worker-attempt limit. It creates no new proposal or deliberation round.
+
 Unresolved malformed output blocks that seat. It never becomes a negative vote or a substitute model.
 
 ## Persistence and restart recovery
@@ -292,7 +352,11 @@ The first version has no automatic destructive retention cleanup. The store refe
 
 ## Limits and user intervention
 
-The default is three complete rounds. The maximum applies to proposal deliberation, not to permission retries or hidden extra rounds.
+The default maximum is three admitted rounds. A round becomes admitted when its first initial-review inference starts.
+
+A pause after that point consumes the round. It cannot create a free repeat. A pause before any inference consumes no round.
+
+The maximum applies to proposal deliberation. There are no permission retries or hidden extra rounds.
 
 Coordinator-proposed operational defaults are 30 minutes per worker attempt and three hours per invocation. The user can change them before launch.
 
@@ -300,7 +364,13 @@ These are observed deadlines, not provider token or billing caps. An expired dea
 
 The deadline remains active until owned resources settle. The runner must report any unknown or unverified shutdown state.
 
-If all reviewers explicitly report that progress requires the same missing fact or user priority, the run can request that input before round three.
+If all three initial reviews identify the same missing-fact or user-priority ID, the runner can pause immediately after `reviewing`.
+
+That transition goes to `needs_user` without a judge or final-response phase. The admitted round still counts.
+
+After new user input, the next candidate uses a new round and a new input snapshot. The maximum stays unchanged unless the user authorizes an extension.
+
+Different free-text descriptions do not satisfy this guard. The runner uses shared issue IDs and explicit missing-input reports.
 
 The unresolved report states the competing positions, supporting evidence, disputed assumptions, attempted resolutions, and smallest useful next step.
 
@@ -401,12 +471,16 @@ Current preflight observations: Orca CLI `1.4.237`; AGY CLI `1.4.6`. Versions al
 
 The coordinator completed a structural self-check and a language surface scan. The scan does not establish ASD-STE100 conformance.
 
-A fresh Argon High builder check remains pending. Antigravity stopped at its trust prompt for this new workspace before task submission.
+A fresh Argon High builder check completed through a supplied-text Antigravity assessment in an Orca-owned terminal.
 
-That prompt requests persistent permission to read, edit, and execute files in `/Users/aaat/projects/the-council`.
+The reviewer identified six planning questions. This revision records the coordinator's choices for all six. The review record is in `../reviews/2026-10-23-the-council-builder-check.md`.
 
-The coordinator granted no trust and cancelled the owned session. No independent review result exists yet.
+The provider used the exact High model, made no tool calls, and exited with code `0`. Settings bytes stayed unchanged.
 
-The user requested another attempt. That retry reproduced the same startup prompt before task submission. A separate debugging chat now investigates the cause.
+The initial commit `307fbd7` now supplies the repository's base branch. The original terminal trust prompt was a separate startup issue.
 
-This gap does not prevent the user from inspecting this draft. The draft remains unreviewed and unapproved.
+The supplied-text route qualifies assessment only. A fresh check of the substantive revision returned `nothing important left`.
+
+That check used a new Argon High session and made no tool calls. The provider and terminal exited with code `0`.
+
+The coordinator then updated only status and review-evidence text. The user has not approved the design.

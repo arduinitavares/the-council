@@ -80,8 +80,13 @@ export function renderReport(raw: ReportInput): ReportArtifacts {
   const missingEvidence = c.requiredEvidenceIds.filter(id => !c.control.evidence.some(record => record.requestId === id && (record.status === 'verified' || record.status === 'not_applicable')));
   const unavailableReceiptDetails = c.control.evidence.filter(record => !receiptIds.has(record.requestId)).map(record => record.requestId);
   const evidenceChecks = input.evidenceReceipts.filter(receipt => receipt.command !== null).map(receipt => ({ requestId: receipt.request.id, state: receipt.checkResourceState, resource: receipt.checkResource }));
-  const owned = Object.entries(c.issuedLogicalTasks).map(([id, task]) => ({ id, stage: task.stage, status: task.settlement, authority: task.binding?.authority ?? null }));
-  const settlement: ReportArtifacts['settlement'] = !unavailableReceiptDetails.length && owned.every(resource => resource.status === 'settled') && input.resources.every(resource => resource.status === 'settled') && evidenceChecks.every(check => check.state !== 'unverifiable') ? 'settled' : 'unverifiable';
+  const owned = Object.entries(c.issuedLogicalTasks).map(([id, task]) => {
+    const unissued = task.stage === 'pending_execution' && task.binding === null &&
+      id === task.reservation.logicalTaskKey && !Object.hasOwn(c.control.workerDeadlines, id);
+    return { id, stage: task.stage, status: task.settlement, authority: task.binding?.authority ?? null,
+      physicalState: unissued ? 'reserved_unissued' : task.stage !== 'pending_execution' && task.binding !== null ? 'issued' : 'inconsistent' };
+  });
+  const settlement: ReportArtifacts['settlement'] = !unavailableReceiptDetails.length && owned.every(resource => resource.physicalState === 'reserved_unissued' || resource.physicalState === 'issued' && resource.status === 'settled') && input.resources.every(resource => resource.status === 'settled') && evidenceChecks.every(check => check.state !== 'unverifiable') ? 'settled' : 'unverifiable';
   const confirmation = c.control.confirmation;
   const consensus = confirmation ? evaluateConsensus(confirmation) : { kind: 'unresolved' as const, reasons: ['NO_ACCEPTED_CONFIRMATION'] };
   const expected = frozen && c.control.evidenceHash && c.control.judgeHash ? {

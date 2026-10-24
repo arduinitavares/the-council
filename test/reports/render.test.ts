@@ -267,3 +267,30 @@ it('reports inconsistent governed terms as advice without changing the text', ()
   expect(findings.every(f => f.severity === 'advisory')).toBe(true);
   expect(text).toBe('The voter accepts the proposal; the evidence is certified.');
 });
+
+import { Flow } from '../machine/helpers.js';
+function withUnissuedReservation() {
+  const input = reportInput(), flow = new Flow(); flow.pass();
+  const task = Object.values(flow.s.context.issuedLogicalTasks)[0]!, key = task.reservation.logicalTaskKey;
+  input.snapshot.context.issuedLogicalTasks = { [key]: structuredClone(task) };
+  input.snapshot.context.control.supersededTaskKeys = [key];
+  input.snapshot.context.callsReserved++;
+  return { input, key };
+}
+it('reports superseded unfenced reservations separately without inventing physical resource settlement', () => {
+  const { input, key } = withUnissuedReservation(), before = structuredClone(input.snapshot);
+  const report = renderReport(input), data = JSON.parse(report.json);
+  expect(report.outcome).toBe('completed'); expect(report.settlement).toBe('settled');
+  expect(data.resources.accepted[0]).toMatchObject({ id: key, stage: 'pending_execution', status: 'unverifiable', physicalState: 'reserved_unissued' });
+  expect(data.counts.callsReserved).toBe(11);
+  expect(input.snapshot).toEqual(before);
+});
+it.each(['binding', 'deadline', 'dispatched_without_binding', 'actual_unknown'] as const)('does not hide inconsistent or actually issued resources: %s', fault => {
+  const { input, key } = withUnissuedReservation(), task = structuredClone(input.snapshot.context.issuedLogicalTasks[key]!);
+  if (fault === 'binding') task.binding = makeBinding('openai');
+  if (fault === 'deadline') input.snapshot.context.control.workerDeadlines = { [key]: { wallMs: 1000, monotonicMs: 100, processEpoch: 'epoch' } };
+  if (fault === 'dispatched_without_binding') { task.stage = 'dispatched'; task.settlement = 'settled'; }
+  if (fault === 'actual_unknown') { task.stage = 'receipt_recorded'; task.binding = makeBinding('openai'); }
+  input.snapshot.context.issuedLogicalTasks = { [key]: task };
+  expect(renderReport(input)).toMatchObject({ outcome: 'blocked', settlement: 'unverifiable' });
+});

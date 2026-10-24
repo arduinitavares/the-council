@@ -1,0 +1,724 @@
+[
+  {
+    "id": "frame",
+    "activity": "Clarify a problem or decision",
+    "skills": [
+      "define-the-problem",
+      "superpowers:brainstorming",
+      "grilling"
+    ],
+    "application": "Use before Council admission when goals, constraints, or priorities are missing. The coordinator owns the interview. Workers report missing-input IDs instead of starting private question loops.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Problem, priorities, constraints, one-question discovery, and the original stop conditions.",
+      "replaced": "Human questions move to the coordinator before admission or to shared missing-input IDs.",
+      "excluded": "Private user interviews by reviewers and premature solution proposals under define-the-problem."
+    },
+    "source_candidates": [
+      {
+        "id": "96ac7ffe7ab6",
+        "qualified_name": "define-the-problem",
+        "canonical_path": "/Users/aaat/.agents/skills/define-the-problem/SKILL.md",
+        "entry_sha256": "7715f99803430f14a1e15680a0311be38de9eb2eb22248b4ff2f48eb995c197e",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "ca552cb2b525",
+        "qualified_name": "superpowers:brainstorming",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/brainstorming/SKILL.md",
+        "entry_sha256": "61a7ef918652108c76a3fd01e02dd92d39996c6b46d4cb2819cbd03f6c45e46a",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "3d543a532d11",
+        "qualified_name": "grilling",
+        "canonical_path": "/Users/aaat/.agents/skills/grilling/SKILL.md",
+        "entry_sha256": "befdff1e27a1dfe2a294d5871169ac1afe16d983911daa4f32627514a48c1e15",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "research",
+    "activity": "Research facts and compare options",
+    "skills": [
+      "research",
+      "find-docs",
+      "openai-docs",
+      "defuddle"
+    ],
+    "application": "Use primary-source claims, contrary evidence, and provenance. The coordinator or evidence adapter owns retrieval. research launches a background agent as written, so a worker uses an explicit Council adaptation.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Primary-source claims, contrary evidence, locations, revision/retrieval time, and explicit uncertainty.",
+      "replaced": "The coordinator/evidence adapter retrieves and records the evidence.",
+      "excluded": "Worker-created research agents, unrestricted browsing, and worker repository writes."
+    },
+    "source_candidates": [
+      {
+        "id": "c44712809554",
+        "qualified_name": "research",
+        "canonical_path": "/Users/aaat/.agents/skills/research/SKILL.md",
+        "entry_sha256": "985569f15739c713d6784887c3d186d4ef9ac85bec5ad9c068d25bf0739928e4",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "fa84406755b4",
+        "qualified_name": "find-docs",
+        "canonical_path": "/Users/aaat/.agents/skills/find-docs/SKILL.md",
+        "entry_sha256": "07a303410be5f3f924dbd4e43e6af64bc55ed2122f77b0539d31ecc667549773",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "b7c8a44d5225",
+        "qualified_name": "find-docs",
+        "canonical_path": "/Users/aaat/.gemini/skills/find-docs/SKILL.md",
+        "entry_sha256": "a6483e5c3f37fb1659f4963926a78b97d4e1632f75f9bcc2bbc8a5698253de35",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "2a42d178ceff",
+        "qualified_name": "openai-docs",
+        "canonical_path": "/Users/aaat/.codex/skills/.system/openai-docs/SKILL.md",
+        "entry_sha256": "aa6829e21df2223167c85d2e49b6337a7345c84c1033f1ec10182c7882b36d45",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "fe8398b1fd5e",
+        "qualified_name": "defuddle",
+        "canonical_path": "/Users/aaat/.agents/skills/defuddle/SKILL.md",
+        "entry_sha256": "8669cdcc9f7b4679a49753d2d7f8ee4d90c3119305d866d6c439aa1cbacb83f3",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "understand",
+    "activity": "Understand existing software",
+    "skills": [
+      "bounded-codebase-investigation",
+      "understand-chat",
+      "understand-explain",
+      "understand-diff"
+    ],
+    "application": "Start with bounded, read-only evidence and exact revisions. Existing CodeGraph or Understand Anything artifacts can support the packet. Do not silently start indexing or a dashboard.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Bounded path map, exact revision, evidence locations, read-only reasoning, and safe-shell pairing where commands are used.",
+      "replaced": "The adapter performs approved commands and supplies current artifacts.",
+      "excluded": "Silent indexing, dashboards, missing-helper substitution, and broad worker filesystem access."
+    },
+    "source_candidates": [
+      {
+        "id": "e48cd404770e",
+        "qualified_name": "bounded-codebase-investigation",
+        "canonical_path": "/Users/aaat/.agents/skills/bounded-codebase-investigation/SKILL.md",
+        "entry_sha256": "1d8a6762682ed3b148df3d354bf8abd2b4ae2e35f2e188e8b7838563106b1cf2",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "60ab14f3ef4f",
+        "qualified_name": "understand-chat",
+        "canonical_path": "/Users/aaat/.understand-anything/repo/understand-anything-plugin/skills/understand-chat/SKILL.md",
+        "entry_sha256": "5f1da70e0849ec2f3005fc232a95ab5f4b1c09cc062ced13945ce8516ca0e5f7",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "302225983be8",
+        "qualified_name": "understand-explain",
+        "canonical_path": "/Users/aaat/.understand-anything/repo/understand-anything-plugin/skills/understand-explain/SKILL.md",
+        "entry_sha256": "661389c81c9133e6cdc99ba033678300ba7a7a377031396b259a23dad39496fe",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "65a2a14b3a27",
+        "qualified_name": "understand-diff",
+        "canonical_path": "/Users/aaat/.understand-anything/repo/understand-anything-plugin/skills/understand-diff/SKILL.md",
+        "entry_sha256": "fc8dc1b216ee1a480daff421c41c27218d7a0db881d35d0c22e9858de5189379",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "architecture",
+    "activity": "Choose or challenge an architecture",
+    "skills": [
+      "codebase-design",
+      "domain-modeling",
+      "improve-codebase-architecture"
+    ],
+    "application": "Use tradeoffs, module depth, interfaces, seams, domain terms, and concrete scenarios. Keep glossary writes, HTML generation, interviews, and helper launches with the coordinator or outside the Council run.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Deep-module vocabulary, domain scenarios, alternatives, assumptions, tradeoffs, and source-based friction.",
+      "replaced": "Coordinator-owned context requests and separately approved documentation.",
+      "excluded": "improve-codebase-architecture auto-invocation, helper spawning, interactive grilling, and glossary/HTML writes by seats."
+    },
+    "source_candidates": [
+      {
+        "id": "7e81d91822e8",
+        "qualified_name": "codebase-design",
+        "canonical_path": "/Users/aaat/.agents/skills/codebase-design/SKILL.md",
+        "entry_sha256": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "b9b2b3e7d09a",
+        "qualified_name": "domain-modeling",
+        "canonical_path": "/Users/aaat/.agents/skills/domain-modeling/SKILL.md",
+        "entry_sha256": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "a0035b263a93",
+        "qualified_name": "improve-codebase-architecture",
+        "canonical_path": "/Users/aaat/.agents/skills/improve-codebase-architecture/SKILL.md",
+        "entry_sha256": "552240a5ab5cec6b67c15dd1ad6e9f6962b1bca6ce870059a8c2713760c20392",
+        "selection_hold": "explicit user invocation required by metadata",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "change-review",
+    "activity": "Review a code change",
+    "skills": [
+      "review-agent",
+      "code-review",
+      "superpowers:requesting-code-review",
+      "superpowers:receiving-code-review"
+    ],
+    "application": "Pin the diff and requirements. Keep Standards and Spec findings separate. review-agent is read-only and prohibits delegation. code-review requires two subagents, so preserve its method in an explicitly adapted Council profile.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Pinned comparison, originating requirements, Standards/Spec separation, actionable defects, and real evidence.",
+      "replaced": "Missing fixed point/spec is a shared missing-input request. Any approved review dispatch stays with the coordinator through Orca.",
+      "excluded": "Tracker setup, nested Standards/Spec agents within each seat, commits, publishing, or source fixes."
+    },
+    "source_candidates": [
+      {
+        "id": "e58fee6b1f6a",
+        "qualified_name": "review-agent",
+        "canonical_path": "/Users/aaat/.codex/skills/.system/review-agent/SKILL.md",
+        "entry_sha256": "07079efd0dc76f05fade424e5dfb048dce1de2df7626e1a4f56292a4f3f92228",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "364193ac07eb",
+        "qualified_name": "code-review",
+        "canonical_path": "/Users/aaat/.agents/skills/code-review/SKILL.md",
+        "entry_sha256": "09eb147f793e4647949edd32dbad278f0554dfb56e0d46b699cd4c2c55bf0357",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "b3c4fa1a084f",
+        "qualified_name": "superpowers:requesting-code-review",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/requesting-code-review/SKILL.md",
+        "entry_sha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "874c4e6f33ad",
+        "qualified_name": "superpowers:receiving-code-review",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/receiving-code-review/SKILL.md",
+        "entry_sha256": "091df1629510af1b92fc4abd6f96732ebedb4cb2c0f3457e8f2740b0504a2438",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      }
+    ]
+  },
+  {
+    "id": "debug",
+    "activity": "Diagnose a failure or regression",
+    "skills": [
+      "superpowers:systematic-debugging",
+      "diagnosing-bugs",
+      "bounded-codebase-investigation"
+    ],
+    "application": "Demand reproduction evidence, competing hypotheses, and decisive checks. The evidence adapter owns approved checks. The full diagnosis-to-fix workflows do not authorize source edits during assessment.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Reproduction evidence before diagnosis, ranked falsifiable hypotheses, decisive checks, and redacted evidence.",
+      "replaced": "The adapter runs bounded checks. Missing reproduction evidence remains unresolved instead of a guessed diagnosis.",
+      "excluded": "Worker instrumentation, source changes, fixes, and regression-test implementation."
+    },
+    "source_candidates": [
+      {
+        "id": "6c07cad0fb33",
+        "qualified_name": "superpowers:systematic-debugging",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/systematic-debugging/SKILL.md",
+        "entry_sha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "88bb1c128411",
+        "qualified_name": "diagnosing-bugs",
+        "canonical_path": "/Users/aaat/.agents/skills/diagnosing-bugs/SKILL.md",
+        "entry_sha256": "849198df88cdb65fd0d97236604c1fca7ff2f22d2f705f9724a800d0266b118d",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "e48cd404770e",
+        "qualified_name": "bounded-codebase-investigation",
+        "canonical_path": "/Users/aaat/.agents/skills/bounded-codebase-investigation/SKILL.md",
+        "entry_sha256": "1d8a6762682ed3b148df3d354bf8abd2b4ae2e35f2e188e8b7838563106b1cf2",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "validate",
+    "activity": "Check evidence and proposed validation",
+    "skills": [
+      "superpowers:verification-before-completion",
+      "pyrepo-check",
+      "tdd",
+      "superpowers:test-driven-development"
+    ],
+    "application": "Separate observed checks from proposed tests. Verification guidance is broadly useful. pyrepo-check is Python-specific. TDD implementation belongs after a separate implementation decision, not inside a reviewer seat.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Fresh inspected evidence, actual versus proposed checks, exact commands/revisions, and meaningful failure cases.",
+      "replaced": "Approved checks run through the adapter. GCP actions require auth verification and applicable resource attribution.",
+      "excluded": "Treating a test proposal as a passing test, or treating TDD as authority to implement."
+    },
+    "source_candidates": [
+      {
+        "id": "ea79781cca32",
+        "qualified_name": "superpowers:verification-before-completion",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/verification-before-completion/SKILL.md",
+        "entry_sha256": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "41e6b40a0644",
+        "qualified_name": "pyrepo-check",
+        "canonical_path": "/Users/aaat/.agents/skills/pyrepo-check/SKILL.md",
+        "entry_sha256": "dde9d3decba85c95ee5476e31061695124cc931c1bfa811e3c8053366ffd4b8e",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "e74cfaffc6e4",
+        "qualified_name": "tdd",
+        "canonical_path": "/Users/aaat/.agents/skills/tdd/SKILL.md",
+        "entry_sha256": "5505d25bbaa8fc14a79e4d20163936958992a2995b7f1dd1d6197edc9ed722e0",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "9053a7e29917",
+        "qualified_name": "superpowers:test-driven-development",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/test-driven-development/SKILL.md",
+        "entry_sha256": "64b03fce4aee5a97a93160cea8111f3ba13a17b7c001db4bd5836d67fd10705d",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      }
+    ]
+  },
+  {
+    "id": "feedback",
+    "activity": "Challenge arguments and receive feedback",
+    "skills": [
+      "superpowers:receiving-code-review"
+    ],
+    "application": "Each seat verifies the opposing claim before assent or rejection. Record evidence, uncertainty, and owned objections. The judge cannot supply reviewer acceptance.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Read, understand, verify, evaluate, and explicitly accept or challenge each material claim. Stop unsupported decisions when inputs are unclear.",
+      "replaced": "Ambiguity becomes a shared unresolved issue or missing-input ID.",
+      "excluded": "Automatic implementation of feedback, private interviews, and changing consensus to majority/ruling authority."
+    },
+    "source_candidates": [
+      {
+        "id": "874c4e6f33ad",
+        "qualified_name": "superpowers:receiving-code-review",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/receiving-code-review/SKILL.md",
+        "entry_sha256": "091df1629510af1b92fc4abd6f96732ebedb4cb2c0f3457e8f2740b0504a2438",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      }
+    ]
+  },
+  {
+    "id": "plan",
+    "activity": "Assess a plan and its dependencies",
+    "skills": [
+      "superpowers:writing-plans",
+      "adaptive-planning",
+      "wayfinder"
+    ],
+    "application": "Use coverage, ordering, interfaces, and validation criteria. Adaptive Planning can inform readiness. Full plan-authoring, ticket creation, and tracker updates remain coordinator-owned workflows.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Coverage, dependencies, named interfaces, readiness, scope, validation, and explicit assumptions.",
+      "replaced": "The coordinator owns authoring and the selected Superpowers flow.",
+      "excluded": "Worker ticket creation, tracker updates, execution, or substituting another outer development methodology."
+    },
+    "source_candidates": [
+      {
+        "id": "18177b31b5c6",
+        "qualified_name": "superpowers:writing-plans",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/writing-plans/SKILL.md",
+        "entry_sha256": "a6c67c1900064347c2a329990dd3c555657c51c3ec53b259a08aa01a2c26139a",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "4d70abc72512",
+        "qualified_name": "adaptive-planning",
+        "canonical_path": "/Users/aaat/.agents/skills/adaptive-planning/SKILL.md",
+        "entry_sha256": "d5d53ffaece909c654f62ee8c478b889f244584cde8fd18fd5290c3cb8fd3664",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "4d116d9c7530",
+        "qualified_name": "wayfinder",
+        "canonical_path": "/Users/aaat/.agents/skills/wayfinder/SKILL.md",
+        "entry_sha256": "9be7b478c389605a24517d27752f278933588da97a1b5921b165f455edf4c5b7",
+        "selection_hold": "explicit user invocation required by metadata",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "data",
+    "activity": "Decide from data or metrics",
+    "skills": [
+      "data-analytics:analyze-data-quality",
+      "data-analytics:validate-data",
+      "data-analytics:product-business-analysis",
+      "data-analytics:metric-diagnostics",
+      "bigquery-sql",
+      "schema-mapping",
+      "ml-best-practices"
+    ],
+    "application": "Conditional specialist pack: use when the decision depends on quantitative evidence. Inspect the exact focused skill and its required context first. Authenticated queries, cloud actions, and report writes need their own qualified adapter scope.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Relevant context, data quality, reproducibility, limitations, and observed calculations.",
+      "replaced": "Authenticated retrieval and calculation are separately scoped adapter tasks.",
+      "excluded": "General admission of the specialist pack without source/dependency review or authority to change datasets."
+    },
+    "source_candidates": [
+      {
+        "id": "10789c15d22d",
+        "qualified_name": "data-analytics:analyze-data-quality",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/data-analytics/1.0.11/skills/analyze-data-quality/SKILL.md",
+        "entry_sha256": "b55f1fea16306899bc28060d2a46c5318e15f85da62f3f533926861458a6dc15",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "c92bcb40480d",
+        "qualified_name": "data-analytics:validate-data",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/data-analytics/1.0.11/skills/validate-data/SKILL.md",
+        "entry_sha256": "8f67c4ccd8fe55555a3d0f1d0a1d798279d08ef40473b19c228422123ae587dd",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "6efcc14ad9d9",
+        "qualified_name": "data-analytics:product-business-analysis",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/data-analytics/1.0.11/skills/product-business-analysis/SKILL.md",
+        "entry_sha256": "036b89f9cc9c982fad224cd17e3d93339e5eef8080bbe3d8d2b28731a0a62113",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "2c849838dc88",
+        "qualified_name": "data-analytics:metric-diagnostics",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/data-analytics/1.0.11/skills/metric-diagnostics/SKILL.md",
+        "entry_sha256": "e3a591bf256a84cfdb59efdc4ff5a1e6938d7e2a2a42f43144e5ad204bf054b2",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "23d27bda9498",
+        "qualified_name": "bigquery-sql",
+        "canonical_path": "/Users/aaat/.agents/skills/bigquery-sql/SKILL.md",
+        "entry_sha256": "7bdd109924142ac3207e5b883cb0bb9fea1c349141b9870b5f2b20ee74a87b6f",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "e5c866ab67c1",
+        "qualified_name": "schema-mapping",
+        "canonical_path": "/Users/aaat/.agents/skills/schema-mapping/SKILL.md",
+        "entry_sha256": "8ece5fa91050ef54af7e2ceab130a60d3f8990760969f8e37f1dea824b1d0811",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "a7113566729d",
+        "qualified_name": "ml-best-practices",
+        "canonical_path": "/Users/aaat/.agents/skills/ml-best-practices/SKILL.md",
+        "entry_sha256": "ae010fd52e6b29f9c18302c4bdb36ce444bfc5581a52a0e036ae1f0b6ab44473",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "communicate",
+    "activity": "Explain a decision and its uncertainty",
+    "skills": [
+      "simplified-technical-english",
+      "stop-slop",
+      "pstack-plugin:unslop",
+      "mermaid-diagrams:mermaid-diagrams",
+      "presentation-quality"
+    ],
+    "application": "STE-oriented language and protected literals apply to Council communications. Other style guidance must remain compatible. Diagrams are coordinator artifacts; do not let a format requirement change technical meaning.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Issue 9-oriented structure, protected technical literals, exact uncertainty, and consistent terms.",
+      "replaced": "The coordinator renders diagrams and documents. Conflicting style rules stay subordinate to preserved meaning and the Council contract.",
+      "excluded": "ASD certification claims, promotion, external publication, or changes to technical facts for style."
+    },
+    "source_candidates": [
+      {
+        "id": "e99631810886",
+        "qualified_name": "simplified-technical-english",
+        "canonical_path": "/Users/aaat/.agents/skills/simplified-technical-english/SKILL.md",
+        "entry_sha256": "42dd19481ffeeede508917869d3e24df14283943c6ba87e06a4c033ffe9a78ba",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "9b2636ee9430",
+        "qualified_name": "stop-slop",
+        "canonical_path": "/Users/aaat/.agents/skills/stop-slop/SKILL.md",
+        "entry_sha256": "7432a1d9ebdd42b27666da8458af252edf549f723fb14bcd4791425103930310",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "4bfcf7f8dff4",
+        "qualified_name": "pstack-plugin:unslop",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/pstack-plugin/0.2.0/skills/unslop/SKILL.md",
+        "entry_sha256": "181883e539caec8258ec9129e3ba5f133409144a2cbf2aa361158ab94cfc3441",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "a7cc7e1ee893",
+        "qualified_name": "mermaid-diagrams:mermaid-diagrams",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/mermaid-diagrams/2.1.0/skills/mermaid-diagrams/SKILL.md",
+        "entry_sha256": "22a13e249b232824736040247f3c8f78bc3ad477f03850dd24c9a3fa8bf15f26",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "a48f9196c4c5",
+        "qualified_name": "presentation-quality",
+        "canonical_path": "/Users/aaat/.agents/skills/presentation-quality/SKILL.md",
+        "entry_sha256": "f951fd4e92468fb23415d32ef9de35d3bd50de9d5426e9bd209c12f68a0c3de9",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "operate",
+    "activity": "Coordinate workers and preserve scope",
+    "skills": [
+      "handoff",
+      "orchestration",
+      "orca-cli",
+      "safe-shell-commands",
+      "accidental-data-loss-prevention"
+    ],
+    "application": "Coordinator infrastructure, not a reviewer menu. Preserve exact model/effort, owned lifecycle, scope, settlement, and the shared handoff. These skills never grant extra permissions.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Current host policy, explicit model/effort, scope, ownership, denial stops, settlement evidence, handoff, and source provenance.",
+      "replaced": "Only the coordinator owns Orca placement, slots, lifecycle, and writes.",
+      "excluded": "Independent worker helpers, invented lifecycle IDs, or grants inferred from a skill."
+    },
+    "source_candidates": [
+      {
+        "id": "f545eacead5f",
+        "qualified_name": "handoff",
+        "canonical_path": "/Users/aaat/.agents/skills/handoff/SKILL.md",
+        "entry_sha256": "4cbb043950dad2ffd3662ff1a5a0b51ae676004b5cae10e3787e8ee7a4ee69d3",
+        "selection_hold": "explicit user invocation required by metadata",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "7aed7f8cde49",
+        "qualified_name": "orchestration",
+        "canonical_path": "/Users/aaat/.agents/skills/orchestration/SKILL.md",
+        "entry_sha256": "cd1b364bf35781bad06bf75ab1766afa8d6cec69cb2060529691d89871a2098a",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "c1eec77648bb",
+        "qualified_name": "orca-cli",
+        "canonical_path": "/Users/aaat/.agents/skills/orca-cli/SKILL.md",
+        "entry_sha256": "aa76f86505010096e8ea9edda1705a78aae7af45e54485f3fe0460664c1d9e4a",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "b2e63c2590e1",
+        "qualified_name": "safe-shell-commands",
+        "canonical_path": "/Users/aaat/.agents/skills/safe-shell-commands/SKILL.md",
+        "entry_sha256": "527462915fa0b9f8dae84874106cf0d68dbfb873d01fd684cdca73a4e4531e1f",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "10812ea2e3e5",
+        "qualified_name": "accidental-data-loss-prevention",
+        "canonical_path": "/Users/aaat/.agents/skills/accidental-data-loss-prevention/SKILL.md",
+        "entry_sha256": "82769e3c99fbbae081420ea62d6e3318eaf80b9c97da12a62c1cf97049826878",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  },
+  {
+    "id": "discover",
+    "activity": "Discover or maintain skills",
+    "skills": [
+      "find-skills",
+      "ask-matt",
+      "skill-creator",
+      "skill-installer",
+      "skill-repair",
+      "superpowers:writing-skills"
+    ],
+    "application": "Use this inventory first. find-skills searches the external ecosystem. ask-matt is a local router but is explicit-only and assumes its own engineering flow. Creation, installation, update, and repair are separate explicit tasks.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Local search first, a concrete capability gap, source inspection, and explicit provenance.",
+      "replaced": "The coordinator assesses a request and can run bounded ecosystem discovery. The user retains installation/persistent-change authority.",
+      "excluded": "Automatic installation, updates, repairs, registry churn during a round, or activation of disabled/explicit-only originals."
+    },
+    "source_candidates": [
+      {
+        "id": "6c7cbd23d316",
+        "qualified_name": "find-skills",
+        "canonical_path": "/Users/aaat/.agents/skills/find-skills/SKILL.md",
+        "entry_sha256": "c00eeea0e13e74fe4a9d84ba0a8542205a1b736d65f13134fe1a6647eb14976f",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "4025cb32425d",
+        "qualified_name": "ask-matt",
+        "canonical_path": "/Users/aaat/.agents/skills/ask-matt/SKILL.md",
+        "entry_sha256": "1371f5ce005de0992a44b137748bfb960a56948aa9871b405fe9d90b24332e3c",
+        "selection_hold": "explicit user invocation required by metadata",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "c04f2b5b2a20",
+        "qualified_name": "skill-creator",
+        "canonical_path": "/Users/aaat/.codex/skills/.system/skill-creator/SKILL.md",
+        "entry_sha256": "6656e54755638e8efcf275a472b9672eaa8a9a1b9e59dc210e275b03b59e1e66",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "f8c0f8f0a2de",
+        "qualified_name": "skill-installer",
+        "canonical_path": "/Users/aaat/.codex/skills/.system/skill-installer/SKILL.md",
+        "entry_sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "51cc81b95d98",
+        "qualified_name": "skill-repair",
+        "canonical_path": "/Users/aaat/.agents/skills/skill-repair/SKILL.md",
+        "entry_sha256": "7ed4b7eb5d82d14686967967159aa472869313bd9804ced44b16eab4884b7f00",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "d49d017be889",
+        "qualified_name": "superpowers:writing-skills",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/openai-curated-remote/superpowers/7.0.1/skills/writing-skills/SKILL.md",
+        "entry_sha256": "8cb3ac68c6d8c4bb46886b998b09af7989643cab8bd0e46ee86dd62e64546bbe",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      }
+    ]
+  },
+  {
+    "id": "specialist",
+    "activity": "Add topic-specific expertise",
+    "skills": [
+      "gcp-spark-troubleshooting",
+      "firebase:firebase-security-rules-auditor",
+      "notebook-guidance",
+      "hallmark"
+    ],
+    "application": "Select only for the actual topic after source inspection. These are candidates, not admitted runtime methods. Security, reliability, scalability, and API-design profile coverage still needs a focused source review. Software Architect is held out for its persistent promotional output.",
+    "status": "proposal; not admitted",
+    "adaptation": {
+      "retained": "Only topic-relevant domain checks that have been inspected and supported by current evidence.",
+      "replaced": "Each candidate needs a separate scoped source/dependency and output-contract review before admission.",
+      "excluded": "Wholesale plugin activation, inherited Codex exposure in AGY, promotional requirements, or claiming expertise from an artifact template."
+    },
+    "source_candidates": [
+      {
+        "id": "be8be4ac29dc",
+        "qualified_name": "gcp-spark-troubleshooting",
+        "canonical_path": "/Users/aaat/.agents/skills/gcp-spark-troubleshooting/SKILL.md",
+        "entry_sha256": "04922deb2fb8d9ef378833b865a10e12c3fe3b99951f00b196b3e8c6b36205d4",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "cae638cbb48d",
+        "qualified_name": "firebase:firebase-security-rules-auditor",
+        "canonical_path": "/Users/aaat/.codex/plugins/cache/firebase/firebase/1.1.0/skills/firebase-security-rules-auditor/SKILL.md",
+        "entry_sha256": "6522cd9e61ca577e80326b7204b69883822e1bdf1846b0c829c43993fdeb3b4a",
+        "selection_hold": "none",
+        "provider_exposure": "Codex filesystem/package source; AGY does not inherit Codex plugins"
+      },
+      {
+        "id": "223fd3be4501",
+        "qualified_name": "notebook-guidance",
+        "canonical_path": "/Users/aaat/.agents/skills/notebook-guidance/SKILL.md",
+        "entry_sha256": "58c40fdc7a764e999bb033e943714ea0560dd27b06a00bf0def424f5ba9cf0ff",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      },
+      {
+        "id": "59bc6afc2837",
+        "qualified_name": "hallmark",
+        "canonical_path": "/Users/aaat/.agents/skills/hallmark/SKILL.md",
+        "entry_sha256": "59469635bbbd21acddbc664d95e8d97147f454b2d8f4a0a89c7d2c5afbe67577",
+        "selection_hold": "none",
+        "provider_exposure": "shared or other-agent file; per-session discovery unverified"
+      }
+    ]
+  }
+]

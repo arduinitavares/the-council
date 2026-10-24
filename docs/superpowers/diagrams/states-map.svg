@@ -1,86 +1,77 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1040" viewBox="0 0 1700 1040">
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1190" viewBox="0 0 1700 1190">
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#476783"/></marker></defs>
-<rect width="1700" height="1040" fill="#ffffff"/>
-<text x="60" y="52" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#142b44" text-anchor="start" font-weight="700">The Council: state map</text>
-<text x="60" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#51667b" text-anchor="start" font-weight="400">Main decision path. Global stop and restart handling is expanded in the recovery map.</text>
+<rect width="1700" height="1190" fill="#ffffff"/>
+<text x="60" y="52" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#142b44" text-anchor="start" font-weight="700">The Council: 17 control states</text>
+<text x="60" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#51667b" text-anchor="start" font-weight="400">Main paths shown below. The canonical Mermaid model lists global handlers and each saved-phase recovery edge.</text>
 <polyline points="310,195 380,195" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="288.5" y="115" width="113.0" height="26" rx="4" fill="white"/>
-<text x="345.0" y="132" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">checks pass</text>
 <polyline points="630,195 700,195" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="608.5" y="115" width="113.0" height="26" rx="4" fill="white"/>
-<text x="665.0" y="132" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">admit round</text>
 <polyline points="950,195 1020,195" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="902.0" y="115" width="165.9" height="26" rx="4" fill="white"/>
-<text x="985.0" y="132" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">3 reviews settled</text>
 <polyline points="1270,195 1340,195" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1226.4" y="115" width="157.1" height="26" rx="4" fill="white"/>
-<text x="1305.0" y="132" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">freeze candidate</text>
-<polyline points="1465,240 1465,350" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1354.4" y="285" width="201.2" height="26" rx="4" fill="white"/>
-<text x="1455" y="302" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">judge result and exit</text>
-<polyline points="1340,395 1270,395" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1195.6" y="316" width="218.9" height="26" rx="4" fill="white"/>
-<text x="1305" y="333" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">3 final replies settled</text>
-<polyline points="1020,395 950,395" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="897.6" y="316" width="174.8" height="26" rx="4" fill="white"/>
-<text x="985" y="333" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">unanimous or limit</text>
-<polyline points="1020,410 980,410 980,110 505,110 505,150" fill="none" stroke="#ad7b27" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="621.2" y="88" width="227.7" height="26" rx="4" fill="white"/>
-<text x="735" y="105" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">disagree + rounds remain</text>
-<polyline points="185,240 185,350" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="119.7" y="283" width="130.7" height="26" rx="4" fill="white"/>
-<text x="185" y="300" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">missing input</text>
-<polyline points="700,405 340,405 340,560 185,560 185,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="407.0" y="371" width="165.9" height="26" rx="4" fill="white"/>
-<text x="490" y="388" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">lifecycle unknown</text>
-<polyline points="310,655 350,655 350,475 760,475 760,440" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="443.5" y="450" width="113.0" height="26" rx="4" fill="white"/>
-<text x="500" y="467" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">exit proved</text>
-<polyline points="825,440 825,530" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round"/>
-<polyline points="505,530 1465,530" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round"/>
-<polyline points="505,530 505,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="457.3" y="571" width="95.4" height="26" rx="4" fill="white"/>
-<text x="505" y="588" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">consensus</text>
-<polyline points="825,530 825,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="772.9" y="571" width="104.2" height="26" rx="4" fill="white"/>
-<text x="825" y="588" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">unresolved</text>
-<polyline points="1145,530 1145,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1070.8" y="571" width="148.3" height="26" rx="4" fill="white"/>
-<text x="1145" y="588" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">operational gap</text>
-<polyline points="1465,530 1465,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1404.1" y="571" width="121.8" height="26" rx="4" fill="white"/>
-<text x="1465" y="588" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">cancellation</text>
+<polyline points="1340,415 1270,415" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<polyline points="1020,415 950,415" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<polyline points="700,415 630,415" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<polyline points="380,415 310,415" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<polyline points="1465,240 1465,370" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1398.5" y="291" width="113.0" height="26" rx="4" fill="white"/>
+<text x="1455" y="308" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">admit round</text>
+<polyline points="185,460 185,520 825,520 825,590" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="428.5" y="493" width="263.0" height="26" rx="4" fill="white"/>
+<text x="560" y="510" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">decision or unresolved limit</text>
+<polyline points="825,680 825,735 505,735 505,810" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="482.3" y="705" width="95.4" height="26" rx="4" fill="white"/>
+<text x="530" y="722" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">consensus</text>
+<polyline points="825,680 825,735 1145,735 1145,810" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1119.1" y="705" width="121.8" height="26" rx="4" fill="white"/>
+<text x="1180" y="722" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">cancellation</text>
+<polyline points="950,635 1020,635" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="953.5" y="556" width="113.0" height="26" rx="4" fill="white"/>
+<text x="1010" y="573" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">human input</text>
+<polyline points="950,655 985,655 985,710 1465,710 1465,680" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1305.8" y="686" width="148.3" height="26" rx="4" fill="white"/>
+<text x="1380" y="703" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">operational gap</text>
+<polyline points="700,635 630,635" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<rect x="621.1" y="556" width="77.7" height="26" rx="4" fill="white"/>
+<text x="660" y="573" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">unknown</text>
+<polyline points="185,240 35,240 35,635 60,635" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<polyline points="1145,240 1145,290 505,290 505,240" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<rect x="645.0" y="265" width="360.0" height="26" rx="4" fill="white"/>
+<text x="825" y="282" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">second clarification wave after answers</text>
 <rect x="60" y="150" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
 <text x="185.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">preflight</text>
 <rect x="380" y="150" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="505.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">prepare_round</text>
-<rect x="700" y="150" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="825.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reviewing</text>
-<rect x="1020" y="150" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="1145.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">prepare_candidate</text>
+<text x="505.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">clarifying</text>
+<rect x="700" y="150" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="825.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">collecting_questions</text>
+<rect x="1020" y="150" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="1145.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">publishing_answers</text>
 <rect x="1340" y="150" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="1465.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">judging</text>
-<rect x="60" y="350" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
-<text x="185.0" y="402.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">needs_context</text>
-<rect x="1340" y="350" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="1465.0" y="402.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">confirming</text>
-<rect x="1020" y="350" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="1145.0" y="402.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">evaluate_round</text>
-<rect x="700" y="350" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="825.0" y="402.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">settling</text>
-<rect x="60" y="610" width="250" height="90" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
-<text x="185.0" y="662.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reconciling</text>
-<rect x="380" y="610" width="250" height="90" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
-<text x="505.0" y="662.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">completed</text>
-<rect x="700" y="610" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
-<text x="825.0" y="662.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">needs_user</text>
-<rect x="1020" y="610" width="250" height="90" rx="14" fill="#fff0ee" stroke="#b95c51" stroke-width="2"/>
-<text x="1145.0" y="662.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">blocked</text>
-<rect x="1340" y="610" width="250" height="90" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
-<text x="1465.0" y="662.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">cancelled</text>
-<text x="60" y="790" font-family="Arial, Helvetica, sans-serif" font-size="23" fill="#17364e" text-anchor="start" font-weight="600">Default limit: 3 admitted rounds. The first initial-review inference consumes the round.</text>
-<text x="60" y="840" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#51667b" text-anchor="start" font-weight="400">An early missing-input pause still consumes that round. A fourth round needs user authorization.</text>
-<text x="60" y="890" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#51667b" text-anchor="start" font-weight="400">Consensus requires the same candidate, evidence bundle, and judge report in all three final replies.</text>
-<text x="60" y="940" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#51667b" text-anchor="start" font-weight="400">New input or an authorized remedy returns to preflight. Restarts enter reconciling before new effects.</text>
-<text x="60" y="990" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#51667b" text-anchor="start" font-weight="400">Selected return paths are summarized here. The editable Mermaid source contains the full transition map.</text>
+<text x="1465.0" y="202.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">prepare_round</text>
+<rect x="60" y="370" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="185.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">evaluate_round</text>
+<rect x="380" y="370" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="505.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">confirming</text>
+<rect x="700" y="370" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="825.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">judging</text>
+<rect x="1020" y="370" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="1145.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">prepare_candidate</text>
+<rect x="1340" y="370" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="1465.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reviewing</text>
+<rect x="60" y="590" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="185.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">needs_context</text>
+<rect x="380" y="590" width="250" height="90" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
+<text x="505.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reconciling</text>
+<rect x="700" y="590" width="250" height="90" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="825.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">settling</text>
+<rect x="1020" y="590" width="250" height="90" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="1145.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">needs_user</text>
+<rect x="1340" y="590" width="250" height="90" rx="14" fill="#fff0ee" stroke="#b95c51" stroke-width="2"/>
+<text x="1465.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">blocked</text>
+<rect x="380" y="810" width="250" height="90" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
+<text x="505.0" y="862.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">completed</text>
+<rect x="1020" y="810" width="250" height="90" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
+<text x="1145.0" y="862.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">cancelled</text>
+<text x="60" y="975" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#233d55" text-anchor="start" font-weight="600">2 clarification batches → up to 3 deliberation rounds. Default maximum: 6 + 21 = 27 worker calls.</text>
+<text x="60" y="1025" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#233d55" text-anchor="start" font-weight="400">All-ready waves may skip clarification. New answers reach every seat through one shared context revision.</text>
+<text x="60" y="1075" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#233d55" text-anchor="start" font-weight="400">Evidence collection finishes before candidate synthesis. A late blocking question consumes its deliberation round.</text>
+<text x="60" y="1125" font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#233d55" text-anchor="start" font-weight="400">Every active phase can settle or reconcile. Positive live recovery observes the same attempt; it does not relaunch.</text>
 </svg>

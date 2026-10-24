@@ -61,6 +61,16 @@
             "id": "judge",
             "label": "Fresh Astra judge / Ultra",
             "class": "judge"
+          },
+          {
+            "id": "profile",
+            "label": "Frozen admitted methods / source adaptations",
+            "class": "store"
+          },
+          {
+            "id": "context",
+            "label": "Shared question and answer ledger / context hash",
+            "class": "store"
           }
         ],
         "edges": [
@@ -118,6 +128,16 @@
             "from": "core",
             "to": "caller",
             "label": "action request or final report"
+          },
+          {
+            "from": "profile",
+            "to": "skill",
+            "label": "same immutable inputs for all seats"
+          },
+          {
+            "from": "context",
+            "to": "skill",
+            "label": "same immutable inputs for all seats"
           }
         ]
       },
@@ -144,8 +164,8 @@
       "id": "states",
       "title": "Council control states",
       "kind": "state",
-      "description": "New runs start at preflight. Restored runs enter reconciling. Every decision outcome requires resource settlement.",
-      "accessibility": "The workflow collects three reviews, freezes a candidate, obtains a fresh judge report, and collects three final responses. Unanimous acceptance completes the run. The third unresolved round returns to the user.",
+      "description": "Normative 17-state contract. New runs start at preflight; restoreForReconciliation externally selects reconciling before effects. Guards on saved phase/target make return edges mutually exclusive.",
+      "accessibility": "Up to two shared clarification waves precede three deliberation rounds. Human wait occurs only with settled resources. Every answer is shared. Unknown lifecycle remains in reconciliation.",
       "data": {
         "initial": "preflight",
         "states": [
@@ -156,6 +176,18 @@
           {
             "id": "needs_context",
             "label": "needs_context"
+          },
+          {
+            "id": "clarifying",
+            "label": "clarifying"
+          },
+          {
+            "id": "collecting_questions",
+            "label": "collecting_questions"
+          },
+          {
+            "id": "publishing_answers",
+            "label": "publishing_answers"
           },
           {
             "id": "prepare_round",
@@ -186,8 +218,8 @@
             "label": "settling"
           },
           {
-            "id": "completed",
-            "label": "completed"
+            "id": "reconciling",
+            "label": "reconciling"
           },
           {
             "id": "needs_user",
@@ -198,114 +230,384 @@
             "label": "blocked"
           },
           {
-            "id": "cancelled",
-            "label": "cancelled"
+            "id": "completed",
+            "label": "completed"
           },
           {
-            "id": "reconciling",
-            "label": "reconciling"
+            "id": "cancelled",
+            "label": "cancelled"
           }
         ],
         "transitions": [
           {
             "from": "preflight",
             "to": "needs_context",
-            "label": "missing input"
-          },
-          {
-            "from": "needs_context",
-            "to": "preflight",
-            "label": "context supplied"
+            "label": "missing context; no owned live resources"
           },
           {
             "from": "preflight",
             "to": "blocked",
-            "label": "policy or route gap"
+            "label": "policy or route gap; no owned live resources"
+          },
+          {
+            "from": "preflight",
+            "to": "clarifying",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (checks pass; admit new/next batch once OR saved clarifying remedy with original admission/reservations and no repeated inference)"
+          },
+          {
+            "from": "preflight",
+            "to": "publishing_answers",
+            "label": "checks pass; valid finalized queued AnswerBatch OR current-hash AnswerRevision; highest continuation priority"
+          },
+          {
+            "from": "preflight",
+            "to": "collecting_questions",
+            "label": "checks pass; no eligible publication; saved staged-question collection target"
           },
           {
             "from": "preflight",
             "to": "prepare_round",
-            "label": "checks pass"
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved next-round target; no blocking ledger item; roundsUsed < effective.maxRounds; budget/attestation/inference gates pass)"
+          },
+          {
+            "from": "clarifying",
+            "to": "collecting_questions",
+            "label": "three valid clarification results and resources settled"
+          },
+          {
+            "from": "collecting_questions",
+            "to": "publishing_answers",
+            "label": "source/empty answers complete; answer_batch kind; empty all-ready ledger preserves context hash/revision"
+          },
+          {
+            "from": "collecting_questions",
+            "to": "settling",
+            "label": "human questions frozen; pending needs_user"
+          },
+          {
+            "from": "publishing_answers",
+            "to": "clarifying",
+            "label": "answer_batch only; clarification origin; roundsUsed = 0; current wave had questions; used < effective.maxClarificationBatches"
+          },
+          {
+            "from": "publishing_answers",
+            "to": "prepare_round",
+            "label": "(no blocking ledger item) AND (roundsUsed < effective.maxRounds) AND (all-ready OR final clarification OR deliberation continuation OR answer_revision target)"
+          },
+          {
+            "from": "publishing_answers",
+            "to": "settling",
+            "label": "(blocking ledger item AND (final clarification OR all-ready wave OR deliberation OR answer revision)) OR (roundsUsed >= effective.maxRounds)"
           },
           {
             "from": "prepare_round",
             "to": "reviewing",
-            "label": "admit round and launch three"
+            "label": "journaled ADMIT_ROUND; reserve round/calls once; launch three independent reviews"
           },
           {
             "from": "reviewing",
             "to": "prepare_candidate",
-            "label": "three reviews settled"
+            "label": "pendingContextUpdate = null AND (three valid reviews and resources settled)"
           },
           {
-            "from": "reviewing",
-            "to": "settling",
-            "label": "same missing input / needs_user"
+            "from": "prepare_candidate",
+            "to": "prepare_candidate",
+            "label": "pendingContextUpdate = null AND (complete permitted evidence before candidate request)"
           },
           {
             "from": "prepare_candidate",
             "to": "judging",
-            "label": "candidate frozen"
+            "label": "pendingContextUpdate = null AND (evidence complete; immutable candidate and evidence frozen)"
           },
           {
             "from": "judging",
             "to": "confirming",
-            "label": "judge report and exit verified"
+            "label": "pendingContextUpdate = null AND (judge report and all judge resources settled)"
           },
           {
             "from": "confirming",
             "to": "evaluate_round",
-            "label": "three final responses settled"
+            "label": "pendingContextUpdate = null AND (three valid responses/resources settled; commit evaluate-round intent)"
           },
           {
             "from": "evaluate_round",
             "to": "prepare_round",
-            "label": "disagreement and rounds remain"
+            "label": "pendingContextUpdate = null AND (journaled EVALUATE_ROUND; disagreement; effective round allowance remains)"
           },
           {
             "from": "evaluate_round",
             "to": "settling",
-            "label": "unanimous or round limit"
+            "label": "pendingContextUpdate = null AND (journaled EVALUATE_ROUND; unanimous OR effective round limit)"
           },
           {
-            "from": "settling",
-            "to": "completed",
-            "label": "consensus; all resources settled"
+            "from": "preflight",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
           },
           {
-            "from": "settling",
-            "to": "needs_user",
-            "label": "unresolved; all resources settled"
-          },
-          {
-            "from": "settling",
-            "to": "blocked",
-            "label": "operational gap; settled"
-          },
-          {
-            "from": "settling",
-            "to": "cancelled",
-            "label": "cancel requested; settled"
-          },
-          {
-            "from": "settling",
+            "from": "preflight",
             "to": "reconciling",
-            "label": "lifecycle unknown"
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "clarifying",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "clarifying",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "collecting_questions",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "collecting_questions",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "publishing_answers",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "prepare_round",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "prepare_round",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "reviewing",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "reviewing",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "prepare_candidate",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "prepare_candidate",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "judging",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "judging",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "confirming",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "confirming",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "evaluate_round",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "evaluate_round",
+            "to": "reconciling",
+            "label": "external identity or lifecycle uncertain; no new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "preflight",
+            "label": "(origin preflight AND current ownership) OR (origin settled pause AND prior exit/resources settled AND valid saved target)"
+          },
+          {
+            "from": "reconciling",
+            "to": "clarifying",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "collecting_questions",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "publishing_answers",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "prepare_round",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "reviewing",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "prepare_candidate",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "judging",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "confirming",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "evaluate_round",
+            "label": "reconcileOriginState = this exact active phase; all tasks live/valid-exited/proven pending; no unknown; resume attestation before new launch"
           },
           {
             "from": "reconciling",
             "to": "settling",
-            "label": "exit and ownership established"
+            "label": "failed / invalid / timed-out / cancelled attempt OR saved settling phase; account resources"
+          },
+          {
+            "from": "reconciling",
+            "to": "reconciling",
+            "label": "unverifiable; observe existing resources"
+          },
+          {
+            "from": "settling",
+            "to": "reconciling",
+            "label": "lifecycle unknown; keep budget active"
+          },
+          {
+            "from": "settling",
+            "to": "completed",
+            "label": "consensus; every owned resource positively settled"
+          },
+          {
+            "from": "settling",
+            "to": "needs_user",
+            "label": "human action; every owned resource positively settled"
+          },
+          {
+            "from": "settling",
+            "to": "blocked",
+            "label": "operational gap; every owned resource positively settled"
+          },
+          {
+            "from": "settling",
+            "to": "cancelled",
+            "label": "cancelled; every owned resource positively settled"
           },
           {
             "from": "needs_user",
-            "to": "preflight",
-            "label": "new input and rounds authorized"
+            "to": "reconciling",
+            "label": "correlated input or authorized remedy; acquire prior owner settlement"
+          },
+          {
+            "from": "needs_context",
+            "to": "reconciling",
+            "label": "correlated input or authorized remedy; acquire prior owner settlement"
           },
           {
             "from": "blocked",
+            "to": "reconciling",
+            "label": "specific remedy; excludes invalid/missing-result inference replacement"
+          },
+          {
+            "from": "reviewing",
+            "to": "collecting_questions",
+            "label": "pendingContextUpdate = null AND (all results/resources settled; commit objections/dispositions; any missingInputQuestions diverts; freeze round-origin batch)"
+          },
+          {
+            "from": "confirming",
+            "to": "collecting_questions",
+            "label": "pendingContextUpdate = null AND (all results/resources settled; commit objections/dispositions; any missingInputQuestions diverts; freeze round-origin batch)"
+          },
+          {
+            "from": "preflight",
+            "to": "reviewing",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved remedy target only; valid preserved results / unissued effects; no issued inference retry)"
+          },
+          {
+            "from": "preflight",
+            "to": "prepare_candidate",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved remedy target only; valid preserved results / unissued effects; no issued inference retry)"
+          },
+          {
+            "from": "preflight",
+            "to": "judging",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved remedy target only; valid preserved results / unissued effects; no issued inference retry)"
+          },
+          {
+            "from": "preflight",
+            "to": "confirming",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved remedy target only; valid preserved results / unissued effects; no issued inference retry)"
+          },
+          {
+            "from": "preflight",
+            "to": "evaluate_round",
+            "label": "checks pass; no eligible publication/collection; no open unfinalized QuestionBatch; (saved remedy target only; valid preserved results / unissued effects; no issued inference retry)"
+          },
+          {
+            "from": "publishing_answers",
+            "to": "settling",
+            "label": "cancel / operational failure / deadline / required user input"
+          },
+          {
+            "from": "reviewing",
             "to": "preflight",
-            "label": "specific remedy authorized"
+            "label": "accepted pending ContextUpdate; phase resources settled; commit ledger; invalidate consumed round; next-round/question/limit target"
+          },
+          {
+            "from": "prepare_candidate",
+            "to": "preflight",
+            "label": "accepted pending ContextUpdate; phase resources settled; commit ledger; invalidate consumed round; next-round/question/limit target"
+          },
+          {
+            "from": "judging",
+            "to": "preflight",
+            "label": "accepted pending ContextUpdate; phase resources settled; commit ledger; invalidate consumed round; next-round/question/limit target"
+          },
+          {
+            "from": "confirming",
+            "to": "preflight",
+            "label": "accepted pending ContextUpdate; phase resources settled; commit ledger; invalidate consumed round; next-round/question/limit target"
+          },
+          {
+            "from": "evaluate_round",
+            "to": "preflight",
+            "label": "accepted pending ContextUpdate; phase resources settled; commit ledger; invalidate consumed round; next-round/question/limit target"
+          },
+          {
+            "from": "preflight",
+            "to": "settling",
+            "label": "no eligible publication; no collection target; (open unfinalized QuestionBatch OR unresolved/unavailable requested continuation); a valid admitted mid-round remedy is not next-round exhaustion"
+          },
+          {
+            "from": "settling",
+            "to": "needs_context",
+            "label": "missing required context; all owned external resources positively settled"
           }
         ]
       }
@@ -320,7 +622,7 @@
         "nodes": [
           {
             "id": "active",
-            "label": "Any active phase",
+            "label": "Any active phase / worker and owned watchdog",
             "class": "coord"
           },
           {
@@ -357,6 +659,21 @@
             "id": "restore",
             "label": "Restart / persisted checkpoint",
             "class": "store"
+          },
+          {
+            "id": "humanpause",
+            "label": "Verified settled human wait / save remaining active budget",
+            "class": "store"
+          },
+          {
+            "id": "durableinbox",
+            "label": "Durable answers / partial drafts do not launch",
+            "class": "store"
+          },
+          {
+            "id": "resumeinbox",
+            "label": "Resume / reconcile then consume queued controls",
+            "class": "coord"
           }
         ],
         "edges": [
@@ -409,6 +726,31 @@
             "from": "settling",
             "to": "outcome",
             "label": "all owned resources settled"
+          },
+          {
+            "from": "humanpause",
+            "to": "durableinbox",
+            "label": "overnight wait consumes zero active budget"
+          },
+          {
+            "from": "durableinbox",
+            "to": "resumeinbox",
+            "label": "finalized complete answer batch"
+          },
+          {
+            "from": "resumeinbox",
+            "to": "humanpause",
+            "label": "partial or unresolved; remain paused"
+          },
+          {
+            "from": "outcome",
+            "to": "humanpause",
+            "label": "settled needs_user"
+          },
+          {
+            "from": "resumeinbox",
+            "to": "reconciling",
+            "label": "recheck ownership; then preflight and queued controls"
           }
         ]
       },
@@ -430,6 +772,105 @@
           "definition": "fill:#fff2db,stroke:#9a6a17,color:#664300"
         }
       ]
+    },
+    {
+      "id": "clarification",
+      "title": "Shared clarification and budgets",
+      "kind": "flowchart",
+      "description": "Two optional clarification waves are separate from three deliberation rounds. No judge is called for questions.",
+      "data": {
+        "direction": "TB",
+        "nodes": [
+          {
+            "id": "wave",
+            "label": "Clarification wave / three fresh seats"
+          },
+          {
+            "id": "barrier",
+            "label": "Settle all three / freeze common questions"
+          },
+          {
+            "id": "ready",
+            "label": "All seats ready / no questions"
+          },
+          {
+            "id": "answers",
+            "label": "One user batch / source answers / durable drafts"
+          },
+          {
+            "id": "publish",
+            "label": "Publish common context / every question and answer"
+          },
+          {
+            "id": "followup",
+            "label": "Wave one had questions / run second wave"
+          },
+          {
+            "id": "limit",
+            "label": "Unresolved blocking or deferred question at limit / needs_user"
+          },
+          {
+            "id": "deliberate",
+            "label": "Deliberation / up to three rounds / fresh judge per round"
+          }
+        ],
+        "edges": [
+          {
+            "from": "wave",
+            "to": "barrier"
+          },
+          {
+            "from": "barrier",
+            "to": "ready",
+            "label": "no questions"
+          },
+          {
+            "from": "ready",
+            "to": "deliberate",
+            "label": "no earlier blocking issue"
+          },
+          {
+            "from": "barrier",
+            "to": "answers",
+            "label": "questions exist"
+          },
+          {
+            "from": "answers",
+            "to": "publish",
+            "label": "all statuses finalized; no partial launch"
+          },
+          {
+            "from": "publish",
+            "to": "followup",
+            "label": "after wave one"
+          },
+          {
+            "from": "followup",
+            "to": "wave",
+            "label": "reserve second batch"
+          },
+          {
+            "from": "publish",
+            "to": "deliberate",
+            "label": "after wave two; blocking issues resolved"
+          },
+          {
+            "from": "publish",
+            "to": "limit",
+            "label": "blocking unknown or declined at limit"
+          },
+          {
+            "from": "ready",
+            "to": "limit",
+            "label": "earlier blocking answer still unresolved, even with unused extended allowance"
+          },
+          {
+            "from": "barrier",
+            "to": "publish",
+            "label": "questions answered entirely from authorized sources"
+          }
+        ]
+      }
     }
   ]
 }

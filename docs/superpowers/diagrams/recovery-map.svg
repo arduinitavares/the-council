@@ -1,60 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1030" viewBox="0 0 1560 1030">
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="1070" viewBox="0 0 1660 1070">
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#476783"/></marker></defs>
-<rect width="1560" height="1030" fill="#ffffff"/>
-<text x="60" y="52" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#142b44" text-anchor="start" font-weight="700">The Council: cancellation and recovery</text>
-<text x="60" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#51667b" text-anchor="start" font-weight="400">A timeout or an empty observation is not proof that a worker exited.</text>
-<polyline points="800,250 800,350" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="911.8" y="285" width="236.5" height="26" rx="4" fill="white"/>
-<text x="1030" y="302" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">cancel / error / deadline</text>
-<polyline points="280,250 280,560" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="197.0" y="318" width="165.9" height="26" rx="4" fill="white"/>
-<text x="280" y="335" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">resume checkpoint</text>
-<polyline points="640,400 280,400 280,560" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="377.0" y="368" width="165.9" height="26" rx="4" fill="white"/>
-<text x="460" y="385" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">lifecycle unknown</text>
-<polyline points="940,400 1120,400" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="902.9" y="310" width="254.1" height="26" rx="4" fill="white"/>
-<text x="1030" y="327" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">all owned resources settled</text>
-<polyline points="480,610 620,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="493.5" y="574" width="113.0" height="26" rx="4" fill="white"/>
-<text x="550" y="591" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">live proved</text>
-<polyline points="280,660 280,760" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="214.7" y="703" width="130.7" height="26" rx="4" fill="white"/>
-<text x="280" y="720" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">still unknown</text>
-<polyline points="480,640 520,640 520,710 1290,710 1290,660" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="953.5" y="685" width="113.0" height="26" rx="4" fill="white"/>
-<text x="1010" y="702" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">exit proved</text>
-<polyline points="620,610 560,610 560,200 640,200" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="445.0" y="483" width="210.0" height="26" rx="4" fill="white"/>
-<text x="550" y="500" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">reconnect same attempt</text>
-<polyline points="100,805 50,805 50,610 100,610" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<polyline points="1290,560 1290,500 800,500 800,450" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
-<rect x="1072.6" y="473" width="174.8" height="26" rx="4" fill="white"/>
-<text x="1160" y="490" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">settle and release</text>
-<rect x="100" y="150" width="360" height="100" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
-<text x="280.0" y="192.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Restart</text>
-<text x="280.0" y="222.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">persisted checkpoint</text>
-<rect x="640" y="150" width="320" height="100" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="800.0" y="192.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Any active phase</text>
-<text x="800.0" y="222.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">owned worker attempts</text>
-<rect x="640" y="350" width="320" height="100" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
-<text x="800.0" y="392.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">settling</text>
-<text x="800.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">stop owned work</text>
-<rect x="1120" y="350" width="340" height="100" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
-<text x="1290.0" y="392.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Recorded outcome</text>
-<text x="1290.0" y="422.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">consensus / user / blocker</text>
-<rect x="100" y="560" width="380" height="100" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
-<text x="290.0" y="602.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reconciling</text>
-<text x="290.0" y="632.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">inspect real ownership</text>
-<rect x="620" y="560" width="300" height="100" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
-<text x="770.0" y="602.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Same attempt live</text>
-<text x="770.0" y="632.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">reconnect; do not duplicate</text>
-<rect x="1120" y="560" width="340" height="100" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
-<text x="1290.0" y="602.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Exit established</text>
-<text x="1290.0" y="632.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">safe cleanup is possible</text>
-<rect x="100" y="760" width="360" height="100" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
-<text x="280.0" y="802.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Status stays unknown</text>
-<text x="280.0" y="832.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">observe again</text>
-<text x="60" y="930" font-family="Arial, Helvetica, sans-serif" font-size="23" fill="#17364e" text-anchor="start" font-weight="600">The deadline remains active until resource settlement. Never release or replace on silence.</text>
-<text x="60" y="980" font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#51667b" text-anchor="start" font-weight="400">This map summarizes global handlers. It adds no model role and no extra acceptance vote.</text>
+<rect width="1660" height="1070" fill="#ffffff"/>
+<text x="60" y="52" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#142b44" text-anchor="start" font-weight="700">The Council: pause, resume, and recovery</text>
+<text x="60" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#51667b" text-anchor="start" font-weight="400">Three-hour active-work budget. Human wait pauses it only after every owned worker and resource has settled.</text>
+<rect x="70" y="150" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="270.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Any active phase</text>
+<text x="270.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">work / crash downtime charged</text>
+<rect x="620" y="150" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="820.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">settling</text>
+<text x="820.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">stop and inspect owned resources</text>
+<rect x="1170" y="150" width="400" height="110" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="1370.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Settled human wait</text>
+<text x="1370.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">save remaining time / exit</text>
+<rect x="70" y="440" width="400" height="110" rx="14" fill="#f0f3f7" stroke="#758395" stroke-width="2"/>
+<text x="270.0" y="487.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">reconciling</text>
+<text x="270.0" y="517.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">restore always enters here</text>
+<rect x="620" y="440" width="400" height="110" rx="14" fill="#fff0ee" stroke="#b95c51" stroke-width="2"/>
+<text x="820.0" y="487.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Unknown lifecycle</text>
+<text x="820.0" y="517.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">keep observing / clock active</text>
+<rect x="1170" y="440" width="400" height="110" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2"/>
+<text x="1370.0" y="487.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Durable answer inbox</text>
+<text x="1370.0" y="517.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">partial replies stay paused</text>
+<rect x="70" y="740" width="400" height="110" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
+<text x="270.0" y="787.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Same attempt live</text>
+<text x="270.0" y="817.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">resume saved phase / no duplicate</text>
+<rect x="620" y="740" width="400" height="110" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2"/>
+<text x="820.0" y="787.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Exit positively established</text>
+<text x="820.0" y="817.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">process result / settle safely</text>
+<rect x="1170" y="740" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2"/>
+<text x="1370.0" y="787.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Finalized answers / resume</text>
+<text x="1370.0" y="817.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">reconcile → preflight → consume</text>
+<polyline points="470,205 620,205" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="492.9" y="118" width="104.2" height="26" rx="4" fill="white"/>
+<text x="545" y="135" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">stop event</text>
+<polyline points="1020,205 1170,205" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1038.5" y="118" width="113.0" height="26" rx="4" fill="white"/>
+<text x="1095" y="135" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">all settled</text>
+<polyline points="820,260 820,440" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="841.1" y="333" width="77.7" height="26" rx="4" fill="white"/>
+<text x="880" y="350" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">unknown</text>
+<polyline points="620,495 470,495" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="479.7" y="401" width="130.7" height="26" rx="4" fill="white"/>
+<text x="545" y="418" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">observe again</text>
+<polyline points="270,260 270,440" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<rect x="181.8" y="333" width="236.5" height="26" rx="4" fill="white"/>
+<text x="300" y="350" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">restore / lost connection</text>
+<polyline points="270,550 270,740" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="293.5" y="633" width="113.0" height="26" rx="4" fill="white"/>
+<text x="350" y="650" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">live proved</text>
+<polyline points="470,525 540,525 540,795 620,795" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="503.5" y="673" width="113.0" height="26" rx="4" fill="white"/>
+<text x="560" y="690" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">exit proved</text>
+<polyline points="1370,260 1370,440" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1225.3" y="333" width="289.4" height="26" rx="4" fill="white"/>
+<text x="1370" y="350" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">wait hours or days: zero charge</text>
+<polyline points="1370,550 1370,740" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1238.5" y="633" width="263.0" height="26" rx="4" fill="white"/>
+<text x="1370" y="650" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">no worker for partial drafts</text>
+<polyline points="1170,825 1120,825 1120,945 40,945 40,495 70,495" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<text x="830" y="1015" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#233d55" text-anchor="middle" font-weight="600">Unknown exit never becomes settlement. Resume opens a new active interval using only saved remaining time.</text>
 </svg>

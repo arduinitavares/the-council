@@ -1,0 +1,2893 @@
+{
+  "scope": "enumeration of intended documentation predicates; not execution of XState or product code",
+  "case_count": 288,
+  "default_maxRounds": 3,
+  "clarification_limits": [
+    2,
+    3,
+    4
+  ],
+  "all_cases_have_one_exit": true,
+  "cases": [
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 2,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 3,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 1,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 2,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "clarifying"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 3,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_batch",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_batch",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "clarification",
+      "kind": "answer_revision",
+      "roundsUsed": 0,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 1,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": false,
+      "next": "prepare_round"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 2,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": false,
+      "blocking": true,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": false,
+      "next": "settling"
+    },
+    {
+      "maxClarificationBatches": 4,
+      "batchesUsed": 4,
+      "origin": "deliberation",
+      "kind": "answer_revision",
+      "roundsUsed": 3,
+      "allReady": true,
+      "blocking": true,
+      "next": "settling"
+    }
+  ]
+}

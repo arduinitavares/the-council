@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="1010" viewBox="0 0 1660 1010">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#476783" /></marker></defs>
+<rect width="1660" height="1010" fill="#ffffff" />
+<text x="60" y="52" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#142b44" text-anchor="start" font-weight="700">The Council: shared clarification</text>
+<text x="60" y="88" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#51667b" text-anchor="start" font-weight="400">Two batches are separate from three deliberation rounds. Each wave contains one fresh task per reviewer seat.</text>
+<rect x="70" y="150" width="400" height="110" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2" />
+<text x="270.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Clarification wave</text>
+<text x="270.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">OpenAI / Gemini / Claude</text>
+<rect x="620" y="150" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2" />
+<text x="820.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Phase barrier</text>
+<text x="820.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">all results and resources settled</text>
+<rect x="1170" y="150" width="400" height="110" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2" />
+<text x="1370.0" y="197.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Common question batch</text>
+<text x="1370.0" y="227.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">preserve origins / group duplicates</text>
+<rect x="1170" y="430" width="400" height="110" rx="14" fill="#fff3d9" stroke="#b77b1c" stroke-width="2" />
+<text x="1370.0" y="477.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">One answer batch</text>
+<text x="1370.0" y="507.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">source facts + all human answers</text>
+<rect x="620" y="430" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2" />
+<text x="820.0" y="477.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Publish shared context</text>
+<text x="820.0" y="507.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">same complete ledger to all seats</text>
+<rect x="70" y="430" width="400" height="110" rx="14" fill="#e9f6ee" stroke="#39805a" stroke-width="2" />
+<text x="270.0" y="477.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Second wave if needed</text>
+<text x="270.0" y="507.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">follow-up questions / no judge</text>
+<rect x="620" y="730" width="400" height="110" rx="14" fill="#eaf2ff" stroke="#3972b7" stroke-width="2" />
+<text x="820.0" y="777.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">Start deliberation</text>
+<text x="820.0" y="807.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">up to 3 rounds / fresh judges</text>
+<rect x="1170" y="730" width="400" height="110" rx="14" fill="#fff0ee" stroke="#b95c51" stroke-width="2" />
+<text x="1370.0" y="777.0" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#17364e" text-anchor="middle" font-weight="600">needs_user at limit</text>
+<text x="1370.0" y="807.0" font-family="Arial, Helvetica, sans-serif" font-size="19" fill="#17364e" text-anchor="middle" font-weight="400">unresolved blocking question</text>
+<polyline points="470,205 620,205" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<polyline points="1020,205 1170,205" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<polyline points="1370,260 1370,430" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<polyline points="1170,485 1020,485" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<rect x="995.0" y="393" width="210.0" height="26" rx="4" fill="white" />
+<text x="1100" y="410" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">all statuses finalized</text>
+<polyline points="620,485 470,485" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<rect x="475.3" y="393" width="139.5" height="26" rx="4" fill="white" />
+<text x="545" y="410" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">after wave one</text>
+<polyline points="270,430 270,260" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<polyline points="820,540 820,730" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<rect x="626.8" y="623" width="386.4" height="26" rx="4" fill="white" />
+<text x="820" y="640" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">after final wave; blocking issues resolved</text>
+<polyline points="1020,520 1100,520 1100,785 1170,785" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#arrow)" />
+<rect x="1006.8" y="658" width="236.5" height="26" rx="4" fill="white" />
+<text x="1125" y="675" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">blocking issue unresolved</text>
+<polyline points="700,260 700,330 550,330 550,785 620,785" fill="none" stroke="#476783" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow)" />
+<rect x="480.3" y="648" width="139.5" height="26" rx="4" fill="white" />
+<text x="550" y="665" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle" font-weight="400">all-ready; no earlier blocker</text>
+<text x="830" y="915" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#233d55" text-anchor="middle" font-weight="600">Partial replies are saved as drafts. They do not start any worker.</text>
+<text x="830" y="963" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#233d55" text-anchor="middle" font-weight="400">Late questions during deliberation require a new consumed round after answers. No hidden extra wave.</text>
+<polyline points="820,260 820,430" fill="none" stroke="#476783" stroke-width="2.5" stroke-dasharray="8 6" marker-end="url(#arrow)" /><rect x="715" y="330" width="210" height="32" rx="4" fill="white" /><text x="820" y="352" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#233d55" text-anchor="middle">source answers only</text></svg>

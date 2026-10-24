@@ -1,0 +1,1459 @@
+{
+  "baseline_head": "3c4510e153dc0cf2b8353c83eeadd8fff1533729",
+  "review_scope": "documentation only; no runtime implementation",
+  "tools": {
+    "orca": "/usr/local/bin/orca",
+    "orca_version": "1.4.237",
+    "agy": "/Users/aaat/.local/bin/agy",
+    "agy_version": "1.4.7"
+  },
+  "workspace": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/projects/the-council",
+  "host": "local macOS",
+  "cwd": "/Users/aaat/projects/the-council",
+  "mode": "plan",
+  "sandbox": true,
+  "exposed_permission_mode": "request-review",
+  "effective_grants": "existing only; no new grant or settings edit",
+  "authority": "terminal/process ownership only; not Run/Task/Dispatch",
+  "allowance": "not exposed by catalogue; bounded review assignments",
+  "round_one_manifest": {
+    "docs/superpowers/specs/2026-10-23-the-council-design.md": {
+      "sha256": "07130181cc66208306b0b6f01fca957296f4ffd2897e2ef88c79077407fc03c4",
+      "bytes": 48275
+    },
+    "docs/superpowers/plans/2026-10-23-the-council-implementation-plan.md": {
+      "sha256": "15557e86aad10d1908571f432c16b7ba31c16460d4f1fe084ebc51049ed93bf5",
+      "bytes": 58276
+    },
+    "docs/superpowers/diagrams/the-council.json": {
+      "sha256": "70c1a397af9a0a41068d87993e215407a0d0abe724bf7c9dbc7b2e31a5b02a51",
+      "bytes": 24267
+    },
+    "docs/superpowers/diagrams/README.md": {
+      "sha256": "8c554b2e5c7eccb0b9b69b865814ae11d49aa6165911c3e8705f60fc7396f207",
+      "bytes": 3209
+    },
+    "packet": {
+      "sha256": "57da3d10337351e43047514a9d0f9cfbe4bc38481da1841b052379f0fcf9cc61",
+      "bytes": 186420,
+      "source_note": "historical review status omitted from prose; requirements preserved"
+    }
+  },
+  "opus_dispositions": {
+    "F1": "accepted: deferred blocking records survive at limit",
+    "F2": "accepted: answer origin guards route deliberation to next counted round",
+    "F3": "accepted: active owner consumes inbox with <=1000 ms wait",
+    "F4": "accepted: watchdog has owned identity/key, stop-only authority and settlement receipts",
+    "F5": "ambiguity accepted; replacement feature not adopted. Invalid output terminally blocks inference for that run; explicit new run required",
+    "M1": "historical version-specific warning; current version qualification still required",
+    "M2": "source-only questions still require second wave; explicit test added",
+    "M3": "guard already prevents consensus; retain payload as evidence instead of turning a contradictory acceptance into synthetic assent"
+  },
+  "round_one_manifest_note": "Original note overstates historical-status exclusion: plan review status was omitted; spec historical Design check status remained in that first packet. Both reviewers still reported fresh material findings. Round two omits both status sections.",
+  "round_two_manifest": {
+    "docs/superpowers/specs/2026-10-23-the-council-design.md": {
+      "sha256": "09d00a8aec6edb592715f82ed09e8c215dfe22f2d156c0893aa7e08d0a1f5bb1",
+      "bytes": 54007
+    },
+    "docs/superpowers/plans/2026-10-23-the-council-implementation-plan.md": {
+      "sha256": "091d9bc7756d47d645f681088e737b565aee57fd027740658f588357ae58e81b",
+      "bytes": 62967
+    },
+    "docs/superpowers/diagrams/the-council.json": {
+      "sha256": "4abc9861dba735b3007d5f845f3aab3d561715571e5e3e21d77115c0cd4a56d7",
+      "bytes": 26073
+    },
+    "docs/superpowers/diagrams/README.md": {
+      "sha256": "c117b685ecd3282c134bc793d1c94737c9279f4ba67ca1cf2cc5fa7c2355388f",
+      "bytes": 3502
+    },
+    "packet": {
+      "sha256": "d1d43e09e7e112087adc3da275a63407560c25a3f13147cea1ebe45aca6cc6a6",
+      "bytes": 197327,
+      "source_note": "historical review status omitted from prose; requirements preserved"
+    }
+  },
+  "round_three_manifest": {
+    "docs/superpowers/specs/2026-10-23-the-council-design.md": {
+      "sha256": "6d72e23a3bc0a580345dcec0b940d8717a8a42864ce5cf1ab7d5fe8706f56087",
+      "bytes": 58224,
+      "review_body_sha256": "1da41df36cef2fd49a3076ecf671a0df1746dc35b79e2e952df4f8194c5f1560"
+    },
+    "docs/superpowers/plans/2026-10-23-the-council-implementation-plan.md": {
+      "sha256": "74601abbb834c6d548ac634e4e844b52e983f4bb555c83f409d32124527183a3",
+      "bytes": 67444,
+      "review_body_sha256": "98a54430aa19486776ac168321b3c1e7a04a5269cdbdf05914fed9bb23d634a4"
+    },
+    "docs/superpowers/diagrams/the-council.json": {
+      "sha256": "5719b74b3df07e004ead03a41e7473a9def18524384b174f87a1cc70c3d7d70e",
+      "bytes": 26755,
+      "review_body_sha256": "15d79ca7d73b191cf115ce10bf2c66edcaa91e2621f88c03d6d207fb74596ff1"
+    },
+    "docs/superpowers/diagrams/README.md": {
+      "sha256": "c117b685ecd3282c134bc793d1c94737c9279f4ba67ca1cf2cc5fa7c2355388f",
+      "bytes": 3502,
+      "review_body_sha256": "c117b685ecd3282c134bc793d1c94737c9279f4ba67ca1cf2cc5fa7c2355388f"
+    },
+    "packet": {
+      "sha256": "1167b3ee6f3d941413b39db12ec822a49de19724e4f682bb0bc5d175553d06f4",
+      "bytes": 177960,
+      "receipt_marker": "COUNCIL-END-5da76df289524f838ea5e2e1466c3077",
+      "policy_note": "applicable policy excerpts; assignment commentary and managed-only sections omitted; full native Ultra control retained; no managed route authorized"
+    }
+  },
+  "closure_manifest": {
+    "docs/superpowers/specs/2026-10-23-the-council-design.md": {
+      "sha256": "ff3bc6612e0359a602fc0faf249a3efdecea9e08df6e74c60fb004a1026f2bdb",
+      "reviewed_sections": [
+        "## Confirmed requirements",
+        "## Shared clarification before deliberation",
+        "## Exact consensus rule",
+        "## XState and determinism",
+        "## Persistence and restart recovery",
+        "## Limits and user intervention"
+      ]
+    },
+    "docs/superpowers/plans/2026-10-23-the-council-implementation-plan.md": {
+      "sha256": "e008649307fdd7e7d094fed4413e40da68cef9a65defc9333381f98e7a1ce671",
+      "reviewed_sections": [
+        "## Global Constraints",
+        "## Shared contracts",
+        "## Task 1: Strict protocol and unanimous acceptance",
+        "## Task 2: Pure XState control machine",
+        "## Task 3: Transactional journal, artifacts, and effect outbox",
+        "## Task 7: Foreground controller, caller bridge, and CLI"
+      ]
+    },
+    "docs/superpowers/diagrams/the-council.json": {
+      "sha256": "f85e7e49a0d0bb1cd872cfbd2aca586ed39e7eac3925a7e5ca99c928308e46dc",
+      "reviewed_sections": [
+        "complete"
+      ]
+    },
+    "docs/superpowers/diagrams/README.md": {
+      "sha256": "c117b685ecd3282c134bc793d1c94737c9279f4ba67ca1cf2cc5fa7c2355388f",
+      "reviewed_sections": [
+        "complete"
+      ]
+    },
+    "packet": {
+      "sha256": "3ca059a06e7e85bd7051347791565e40b70e3b68e1a69092da2fbd89736e7204",
+      "bytes": 126798,
+      "receipt_marker": "COUNCIL-CLOSURE-d0cf7940c1e64da98cac305703ae0d3f",
+      "scope": "focused current contracts and complete canonical diagrams; unchanged omitted prose not recertified"
+    }
+  },
+  "assessments": [
+    {
+      "assignment": "argon-high-fixture",
+      "init": {
+        "model": "gemini-4-argon-high",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "gemini-4-argon-high",
+          "effort": "high"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "24bcc6bf5f33ea21732c6d9bac1db0f40103c05bb665702dc41e7f406bfd6253",
+        "prompt_bytes": 585,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "gemini-4-argon-high",
+          "--effort",
+          "high",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "2m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/argon-high/fixture-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792846900.440892,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 28823,
+        "exit_code": 0,
+        "finished_wall": 1792846962.488797,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "4bbbfd6e-a4e5-44ee-bcee-dc7ce40153e9",
+      "usage": {
+        "input_tokens": 2775,
+        "output_tokens": 343,
+        "thinking_tokens": 325,
+        "cache_read_tokens": 19503,
+        "total_tokens": 3118
+      },
+      "end_marker_confirmed": null,
+      "response_sha256": "6f16c836375a7f255dd48e3fb5f574adc16935d25339e7da90787c9e771cb30c"
+    },
+    {
+      "assignment": "opus-low-review",
+      "init": {
+        "model": "claude-opus-5-5-low",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "claude-opus-5-5-low",
+          "effort": "low"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "57da3d10337351e43047514a9d0f9cfbe4bc38481da1841b052379f0fcf9cc61",
+        "prompt_bytes": 186420,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "claude-opus-5-5-low",
+          "--effort",
+          "low",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/opus-low/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792846942.496021,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 29088,
+        "exit_code": 0,
+        "finished_wall": 1792847044.448382,
+        "final_event_seen": false,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "4b5f308c-ce81-40d8-ba4c-c8349c6a4bfe",
+      "usage": {
+        "input_tokens": 94684,
+        "output_tokens": 5677,
+        "thinking_tokens": 0,
+        "cache_read_tokens": 5644,
+        "total_tokens": 100361
+      },
+      "end_marker_confirmed": null,
+      "response_sha256": "648586c8f2f30b5a202e3a43e8deea33f8efb29fb8e1940a78fc0b8856eada90"
+    },
+    {
+      "assignment": "argon-high-review",
+      "init": {
+        "model": "gemini-4-argon-high",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "gemini-4-argon-high",
+          "effort": "high"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "57da3d10337351e43047514a9d0f9cfbe4bc38481da1841b052379f0fcf9cc61",
+        "prompt_bytes": 186420,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "gemini-4-argon-high",
+          "--effort",
+          "high",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/argon-high/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792846992.5683079,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 30394,
+        "exit_code": 0,
+        "finished_wall": 1792847403.193703,
+        "final_event_seen": false,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "e1be01f1-7859-4a55-b518-6f81af565dd5",
+      "usage": {
+        "input_tokens": 48142,
+        "output_tokens": 34190,
+        "thinking_tokens": 30049,
+        "cache_read_tokens": 20224,
+        "total_tokens": 82332
+      },
+      "end_marker_confirmed": null,
+      "response_sha256": "db7528bf45634ba73d80aa98ab75025fdf187772e1ed572438990ba6039fdb6c"
+    },
+    {
+      "assignment": "opus-low-check-review",
+      "init": {
+        "model": "claude-opus-5-5-low",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "claude-opus-5-5-low",
+          "effort": "low"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "3eab9ade597d78aba2755cb8fca47e3d7b88dba2a0c3c3bbb788558d3c3ad8a0",
+        "prompt_bytes": 198220,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "claude-opus-5-5-low",
+          "--effort",
+          "low",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/opus-low-check/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792847568.379413,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 42781,
+        "exit_code": 0,
+        "finished_wall": 1792847671.9567301,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "1a577c56-be65-4cdb-b868-c7eaf35b151b",
+      "usage": {
+        "input_tokens": 100576,
+        "output_tokens": 6135,
+        "thinking_tokens": 0,
+        "cache_read_tokens": 0,
+        "total_tokens": 106711
+      },
+      "end_marker_confirmed": null,
+      "response_sha256": "d1f22060fbabe09f7c61ec90ed37ab44436c39ebbe227b35384755f975b103a9"
+    },
+    {
+      "assignment": "argon-high-check-review",
+      "init": {
+        "model": "gemini-4-argon-high",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "gemini-4-argon-high",
+          "effort": "high"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "3eab9ade597d78aba2755cb8fca47e3d7b88dba2a0c3c3bbb788558d3c3ad8a0",
+        "prompt_bytes": 198220,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "gemini-4-argon-high",
+          "--effort",
+          "high",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/argon-high-check/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792847571.7424781,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [
+          {
+            "signal": "SIGINT",
+            "at_wall": 1792848086.83082,
+            "owned_live": [
+              {
+                "pid": 42840,
+                "ppid": 42839,
+                "pgid": 42840,
+                "stat": "Ss",
+                "comm": "/Users/aaat/.local/bin/agy"
+              },
+              {
+                "pid": 42858,
+                "ppid": 42840,
+                "pgid": 42840,
+                "stat": "S",
+                "comm": "node"
+              },
+              {
+                "pid": 42862,
+                "ppid": 42858,
+                "pgid": 42840,
+                "stat": "S",
+                "comm": "/opt/homebrew/lib/node_modules/@colbymchenry/codegraph/node_modules/@colbymchenry/codegraph-darwin-arm64/node"
+              },
+              {
+                "pid": 42867,
+                "ppid": 42862,
+                "pgid": 42840,
+                "stat": "S",
+                "comm": "/opt/homebrew/lib/node_modules/@colbymchenry/codegraph/node_modules/@colbymchenry/codegraph-darwin-arm64/node"
+              }
+            ]
+          },
+          {
+            "signal": "SIGTERM",
+            "at_wall": 1792848102.102458,
+            "owned_live": [
+              {
+                "pid": 42840,
+                "ppid": 42839,
+                "pgid": 42840,
+                "stat": "Ss",
+                "comm": "/Users/aaat/.local/bin/agy"
+              }
+            ]
+          },
+          {
+            "signal": "SIGKILL",
+            "at_wall": 1792848117.3686452,
+            "owned_live": [
+              {
+                "pid": 42840,
+                "ppid": 42839,
+                "pgid": 42840,
+                "stat": "Ss",
+                "comm": "/Users/aaat/.local/bin/agy"
+              }
+            ]
+          }
+        ],
+        "provider_pid": 42840,
+        "exit_code": -9,
+        "finished_wall": 1792848118.495413,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "f7dce11a-903c-4c9c-a7f3-bd64d0b3ab7b",
+      "usage": {
+        "input_tokens": 47040,
+        "output_tokens": 38749,
+        "thinking_tokens": 32951,
+        "cache_read_tokens": 21143,
+        "total_tokens": 85789
+      },
+      "end_marker_confirmed": null,
+      "response_sha256": "74b2137c27127e2f624a8f1fafe93d9ca3a01f1cf358398c5335ca4cda07513f"
+    },
+    {
+      "assignment": "opus-low-final-review",
+      "init": {
+        "model": "claude-opus-5-5-low",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "claude-opus-5-5-low",
+          "effort": "low"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "1167b3ee6f3d941413b39db12ec822a49de19724e4f682bb0bc5d175553d06f4",
+        "prompt_bytes": 177960,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "claude-opus-5-5-low",
+          "--effort",
+          "low",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/opus-low-final/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792848391.5308,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 47614,
+        "exit_code": 0,
+        "finished_wall": 1792848483.138358,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "666c9d90-4a58-444b-9a51-62666445a894",
+      "usage": {
+        "input_tokens": 97581,
+        "output_tokens": 5137,
+        "thinking_tokens": 0,
+        "cache_read_tokens": 0,
+        "total_tokens": 102718
+      },
+      "end_marker_confirmed": true,
+      "response_sha256": "b2b5529aca809cf3cc9e636227b5cf2d966025a75551e9ab9e565f5317792722"
+    },
+    {
+      "assignment": "argon-high-final-review",
+      "init": {
+        "model": "gemini-4-argon-high",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "gemini-4-argon-high",
+          "effort": "high"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "1167b3ee6f3d941413b39db12ec822a49de19724e4f682bb0bc5d175553d06f4",
+        "prompt_bytes": 177960,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "gemini-4-argon-high",
+          "--effort",
+          "high",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/argon-high-final/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792848393.133256,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 47689,
+        "exit_code": 0,
+        "finished_wall": 1792849034.015877,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "c526d2e3-7e4f-41d5-aebb-44d6774e0429",
+      "usage": {
+        "input_tokens": 40173,
+        "output_tokens": 54509,
+        "thinking_tokens": 48499,
+        "cache_read_tokens": 21143,
+        "total_tokens": 94682
+      },
+      "end_marker_confirmed": true,
+      "response_sha256": "70bc57e818971090c4fc22b0919ffa9378f49077f63777f7c9f2b5cdd178c5f4"
+    },
+    {
+      "assignment": "opus-low-closure-review",
+      "init": {
+        "model": "claude-opus-5-5-low",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "claude-opus-5-5-low",
+          "effort": "low"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "3ca059a06e7e85bd7051347791565e40b70e3b68e1a69092da2fbd89736e7204",
+        "prompt_bytes": 126798,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "claude-opus-5-5-low",
+          "--effort",
+          "low",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/opus-low-closure/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792849629.4177248,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 58031,
+        "exit_code": 0,
+        "finished_wall": 1792849715.301682,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "2f593ab4-e6e6-44be-ba97-32e345e7d1cd",
+      "usage": {
+        "input_tokens": 79137,
+        "output_tokens": 4684,
+        "thinking_tokens": 0,
+        "cache_read_tokens": 0,
+        "total_tokens": 83821
+      },
+      "end_marker_confirmed": true,
+      "response_sha256": "10aaf095441c1b4d7260918bb17c93fffe59ccee1c7731224906739e58523fc8"
+    },
+    {
+      "assignment": "argon-high-closure-review",
+      "init": {
+        "model": "gemini-4-argon-high",
+        "cwd": "/Users/aaat/projects/the-council",
+        "tools": [
+          "ask_custom_permission",
+          "ask_permission",
+          "ask_question",
+          "browser_click_element",
+          "browser_drag_pixel_to_pixel",
+          "browser_get_dom",
+          "browser_get_network_request",
+          "browser_input",
+          "browser_list_network_requests",
+          "browser_mouse_down",
+          "browser_mouse_up",
+          "browser_move_mouse",
+          "browser_press_key",
+          "browser_refresh_page",
+          "browser_resize_window",
+          "browser_scroll",
+          "browser_scroll_dom",
+          "browser_select_option",
+          "browser_subagent",
+          "call_mcp_tool",
+          "capture_browser_console_logs",
+          "capture_browser_screenshot",
+          "click_browser_pixel",
+          "command_status",
+          "define_subagent",
+          "delete_knowledge",
+          "execute_browser_javascript",
+          "find_by_name",
+          "finish",
+          "generate_image",
+          "grep_search",
+          "invoke_subagent",
+          "list_browser_pages",
+          "list_dir",
+          "list_permissions",
+          "list_plugin_accounts",
+          "list_resources",
+          "manage_inbox",
+          "manage_subagents",
+          "manage_task",
+          "multi_replace_file_content",
+          "notebook_edit",
+          "notebook_execution",
+          "open_browser_url",
+          "read_browser_page",
+          "read_resource",
+          "read_url_content",
+          "replace_file_content",
+          "run_command",
+          "run_workflow",
+          "schedule",
+          "search_marketplace",
+          "search_web",
+          "sed_file",
+          "send_command_input",
+          "send_message",
+          "view_file",
+          "wait",
+          "wait_5_seconds",
+          "write_to_file"
+        ],
+        "permission_mode": "request-review",
+        "expanded_commands": [
+          {
+            "name": "plan",
+            "type": "system"
+          }
+        ]
+      },
+      "step_types": [
+        "agent_response",
+        "user_input"
+      ],
+      "final_status": "SUCCESS",
+      "result_observed": true,
+      "receipt": {
+        "cwd": "/Users/aaat/projects/the-council",
+        "selection": {
+          "model": "gemini-4-argon-high",
+          "effort": "high"
+        },
+        "mode": "plan",
+        "sandbox": true,
+        "prompt_sha256": "3ca059a06e7e85bd7051347791565e40b70e3b68e1a69092da2fbd89736e7204",
+        "prompt_bytes": 126798,
+        "argv_without_prompt": [
+          "/Users/aaat/.local/bin/agy",
+          "--model",
+          "gemini-4-argon-high",
+          "--effort",
+          "high",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--print-timeout",
+          "20m",
+          "--output-format",
+          "stream-json",
+          "--log-file",
+          "/private/var/folders/fh/0bmky89j2d54xdptjs_1mrjm0000gn/T/council-shared-clarification-reviews-tozg511z/argon-high-closure/review-cli.log",
+          "--print"
+        ],
+        "start_wall": 1792849630.788537,
+        "settings_before_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "authority": "owned terminal/process only",
+        "signals": [],
+        "provider_pid": 58074,
+        "exit_code": 0,
+        "finished_wall": 1792850048.0663092,
+        "final_event_seen": true,
+        "settings_after_sha256": "ca0e87694003cac47b23f373d721b3b052c6f54ee1a6ff80204dd1778cfc0e95",
+        "settings_unchanged": true,
+        "owned_processes_remaining": [],
+        "owned_live_remaining": [],
+        "settlement": "settled"
+      },
+      "conversation_id": "b1fe210b-d1ad-4f1e-8d1e-450eb148173f",
+      "usage": {
+        "input_tokens": 27787,
+        "output_tokens": 35872,
+        "thinking_tokens": 31671,
+        "cache_read_tokens": 21143,
+        "total_tokens": 63659
+      },
+      "end_marker_confirmed": true,
+      "response_sha256": "8ce0a9ca19274cdd6e2dbafb26387150e1e19d53a81339ce0a89c79be0a977e2"
+    }
+  ],
+  "argon_dispositions": {
+    "C-01": "accepted: review/ballot question barrier freezes round-origin batch; origin and remaining-round guards enforce next counted round",
+    "C-02": "accepted: compiler consumes prior ledger and promotes deferred questions; AnswerRevision binds current context hash after finalized batch",
+    "C-03": "accepted: new objections must be open; dispositions restricted to frozen input IDs; nonempty new ballot objections always block current-round consensus",
+    "C-04": "accepted: live inbox consumption; settled user-remedy states pause budget; guarded preflight returns to saved active phase without repeated inference",
+    "note1": "accepted: explicit material/unverified evidence acknowledgment IDs keep the freeze guard structural",
+    "note2": "accepted: explanatory ready-to-limit edge added"
+  },
+  "final_document_manifest": {
+    "specs/2026-10-23-the-council-design.md": {
+      "sha256": "e6ebf2273c2b32afcc716a5e57f14bde97b47aad557842a416cb3027fd674c03",
+      "bytes": 65574
+    },
+    "plans/2026-10-23-the-council-implementation-plan.md": {
+      "sha256": "9fa3fcb0a2ea1649b728cad9b255244cdfd752048be36abd82d220e1f00a9374",
+      "bytes": 76929
+    },
+    "diagrams/the-council.json": {
+      "sha256": "b1759c9a5ea25d211033301a8aebaf08f7d7ce8b6f314340d1a7c232f210b832",
+      "bytes": 30154
+    },
+    "diagrams/the-council.md": {
+      "sha256": "b5b9b8fec15187c93e16c471cfad3d21fc1c3209f09c8e532b4288db4bd0270b",
+      "bytes": 43342
+    },
+    "diagrams/README.md": {
+      "sha256": "c117b685ecd3282c134bc793d1c94737c9279f4ba67ca1cf2cc5fa7c2355388f",
+      "bytes": 3502
+    }
+  },
+  "final_corrections_note": "Applied direct bounded guard/target corrections from the last fresh opinions; statically checked; no later whole-artifact model READY verdict claimed.",
+  "settlement_summary": {
+    "jobs": 9,
+    "all_results_observed": true,
+    "all_processes_settled": true,
+    "all_settings_bytes_unchanged": true,
+    "forced_exit_jobs": [
+      "argon-high-check-review"
+    ],
+    "all_owned_terminals_closed": true,
+    "no_runtime_implementation_or_deployment": true
+  },
+  "static_verification": {
+    "canonical_diagrams": 4,
+    "control_states": 17,
+    "exact_duplicate_edges": 0,
+    "ordered_tasks": 8,
+    "local_links_and_fences": "passed",
+    "default_models": "unchanged",
+    "publication_design_cases": 288,
+    "preflight_design_cases": 384,
+    "runtime_tests": "not run; application not implemented"
+  }
+}

@@ -2,7 +2,7 @@
 
 Date: 2026-10-23
 
-Status: Ready for user approval after a fresh independent builder check. This document authorizes no implementation or installation.
+Status: Approved by the user on 2026-10-23 after a fresh independent builder check. Implementation planning is authorized. This document authorizes no implementation or installation.
 
 ## Purpose
 
@@ -483,4 +483,4 @@ The supplied-text route qualifies assessment only. A fresh check of the substant
 
 That check used a new Argon High session and made no tool calls. The provider and terminal exited with code `0`.
 
-The coordinator then updated only status and review-evidence text. The user has not approved the design.
+The coordinator then updated only status and review-evidence text. The user approved the design on 2026-10-23 and requested the implementation plan and state diagrams.

@@ -1,0 +1,435 @@
+{
+  "version": 2,
+  "title": "The Council: nodes and states",
+  "description": "Implementation planning diagrams for the approved Council design. They show proposed software, not a deployed system.",
+  "diagrams": [
+    {
+      "id": "components",
+      "title": "Council component nodes",
+      "kind": "flowchart",
+      "description": "The calling agent authors candidates. The state machine selects transitions. Orca owns worker lifecycle.",
+      "accessibility": "Three equal reviewers and one fresh judge connect through an Orca adapter to a deterministic controller and its journal.",
+      "data": {
+        "direction": "TB",
+        "nodes": [
+          {
+            "id": "caller",
+            "label": "Calling agent / candidate author",
+            "class": "coord"
+          },
+          {
+            "id": "skill",
+            "label": "Council skill / supervised loop",
+            "class": "coord"
+          },
+          {
+            "id": "core",
+            "label": "XState core / pure transitions",
+            "class": "coord"
+          },
+          {
+            "id": "journal",
+            "label": "SQLite / events and effect intents",
+            "class": "store"
+          },
+          {
+            "id": "evidence",
+            "label": "Evidence adapter / allowed checks",
+            "class": "store"
+          },
+          {
+            "id": "orca",
+            "label": "Orca adapter / lifecycle receipts",
+            "class": "coord"
+          },
+          {
+            "id": "astra",
+            "label": "Astra reviewer / Ultra",
+            "class": "reviewer"
+          },
+          {
+            "id": "argon",
+            "label": "Argon reviewer / High",
+            "class": "reviewer"
+          },
+          {
+            "id": "opus",
+            "label": "Opus reviewer / High",
+            "class": "reviewer"
+          },
+          {
+            "id": "judge",
+            "label": "Fresh Astra judge / Ultra",
+            "class": "judge"
+          }
+        ],
+        "edges": [
+          {
+            "from": "caller",
+            "to": "skill",
+            "label": "input and candidate"
+          },
+          {
+            "from": "skill",
+            "to": "core",
+            "label": "validated events"
+          },
+          {
+            "from": "core",
+            "to": "journal",
+            "label": "atomic checkpoint and intents"
+          },
+          {
+            "from": "core",
+            "to": "evidence",
+            "label": "allowed evidence requests"
+          },
+          {
+            "from": "core",
+            "to": "orca",
+            "label": "launch or reconcile intents"
+          },
+          {
+            "from": "orca",
+            "to": "astra",
+            "label": "reviewer phase"
+          },
+          {
+            "from": "orca",
+            "to": "argon",
+            "label": "reviewer phase"
+          },
+          {
+            "from": "orca",
+            "to": "opus",
+            "label": "reviewer phase"
+          },
+          {
+            "from": "orca",
+            "to": "judge",
+            "label": "between reviewer phases"
+          },
+          {
+            "from": "orca",
+            "to": "core",
+            "label": "validated results"
+          },
+          {
+            "from": "core",
+            "to": "caller",
+            "label": "action request or final report"
+          }
+        ]
+      },
+      "styles": [
+        {
+          "name": "coord",
+          "definition": "fill:#e8f1ff,stroke:#285b9a,color:#172f52"
+        },
+        {
+          "name": "store",
+          "definition": "fill:#f2f4f7,stroke:#667085,color:#273142"
+        },
+        {
+          "name": "reviewer",
+          "definition": "fill:#eaf7ef,stroke:#35724c,color:#194a2b"
+        },
+        {
+          "name": "judge",
+          "definition": "fill:#fff2db,stroke:#9a6a17,color:#664300"
+        }
+      ]
+    },
+    {
+      "id": "states",
+      "title": "Council control states",
+      "kind": "state",
+      "description": "New runs start at preflight. Restored runs enter reconciling. Every decision outcome requires resource settlement.",
+      "accessibility": "The workflow collects three reviews, freezes a candidate, obtains a fresh judge report, and collects three final responses. Unanimous acceptance completes the run. The third unresolved round returns to the user.",
+      "data": {
+        "initial": "preflight",
+        "states": [
+          {
+            "id": "preflight",
+            "label": "preflight"
+          },
+          {
+            "id": "needs_context",
+            "label": "needs_context"
+          },
+          {
+            "id": "prepare_round",
+            "label": "prepare_round"
+          },
+          {
+            "id": "reviewing",
+            "label": "reviewing"
+          },
+          {
+            "id": "prepare_candidate",
+            "label": "prepare_candidate"
+          },
+          {
+            "id": "judging",
+            "label": "judging"
+          },
+          {
+            "id": "confirming",
+            "label": "confirming"
+          },
+          {
+            "id": "evaluate_round",
+            "label": "evaluate_round"
+          },
+          {
+            "id": "settling",
+            "label": "settling"
+          },
+          {
+            "id": "completed",
+            "label": "completed"
+          },
+          {
+            "id": "needs_user",
+            "label": "needs_user"
+          },
+          {
+            "id": "blocked",
+            "label": "blocked"
+          },
+          {
+            "id": "cancelled",
+            "label": "cancelled"
+          },
+          {
+            "id": "reconciling",
+            "label": "reconciling"
+          }
+        ],
+        "transitions": [
+          {
+            "from": "preflight",
+            "to": "needs_context",
+            "label": "missing input"
+          },
+          {
+            "from": "needs_context",
+            "to": "preflight",
+            "label": "context supplied"
+          },
+          {
+            "from": "preflight",
+            "to": "blocked",
+            "label": "policy or route gap"
+          },
+          {
+            "from": "preflight",
+            "to": "prepare_round",
+            "label": "checks pass"
+          },
+          {
+            "from": "prepare_round",
+            "to": "reviewing",
+            "label": "admit round and launch three"
+          },
+          {
+            "from": "reviewing",
+            "to": "prepare_candidate",
+            "label": "three reviews settled"
+          },
+          {
+            "from": "reviewing",
+            "to": "settling",
+            "label": "same missing input / needs_user"
+          },
+          {
+            "from": "prepare_candidate",
+            "to": "judging",
+            "label": "candidate frozen"
+          },
+          {
+            "from": "judging",
+            "to": "confirming",
+            "label": "judge report and exit verified"
+          },
+          {
+            "from": "confirming",
+            "to": "evaluate_round",
+            "label": "three final responses settled"
+          },
+          {
+            "from": "evaluate_round",
+            "to": "prepare_round",
+            "label": "disagreement and rounds remain"
+          },
+          {
+            "from": "evaluate_round",
+            "to": "settling",
+            "label": "unanimous or round limit"
+          },
+          {
+            "from": "settling",
+            "to": "completed",
+            "label": "consensus; all resources settled"
+          },
+          {
+            "from": "settling",
+            "to": "needs_user",
+            "label": "unresolved; all resources settled"
+          },
+          {
+            "from": "settling",
+            "to": "blocked",
+            "label": "operational gap; settled"
+          },
+          {
+            "from": "settling",
+            "to": "cancelled",
+            "label": "cancel requested; settled"
+          },
+          {
+            "from": "settling",
+            "to": "reconciling",
+            "label": "lifecycle unknown"
+          },
+          {
+            "from": "reconciling",
+            "to": "settling",
+            "label": "exit and ownership established"
+          },
+          {
+            "from": "needs_user",
+            "to": "preflight",
+            "label": "new input and rounds authorized"
+          },
+          {
+            "from": "blocked",
+            "to": "preflight",
+            "label": "specific remedy authorized"
+          }
+        ]
+      }
+    },
+    {
+      "id": "recovery",
+      "title": "Global cancellation and recovery",
+      "kind": "flowchart",
+      "description": "This view summarizes transitions that apply to every active phase. It does not introduce another model role.",
+      "data": {
+        "direction": "TB",
+        "nodes": [
+          {
+            "id": "active",
+            "label": "Any active phase",
+            "class": "coord"
+          },
+          {
+            "id": "settling",
+            "label": "settling / stop owned work",
+            "class": "coord"
+          },
+          {
+            "id": "reconciling",
+            "label": "reconciling / inspect ownership",
+            "class": "store"
+          },
+          {
+            "id": "live",
+            "label": "Same attempt proved live",
+            "class": "reviewer"
+          },
+          {
+            "id": "unknown",
+            "label": "Unknown / keep state unknown",
+            "class": "judge"
+          },
+          {
+            "id": "exit",
+            "label": "Exit proved / safe cleanup",
+            "class": "reviewer"
+          },
+          {
+            "id": "outcome",
+            "label": "Publish recorded outcome",
+            "class": "store"
+          },
+          {
+            "id": "restore",
+            "label": "Restart / persisted checkpoint",
+            "class": "store"
+          }
+        ],
+        "edges": [
+          {
+            "from": "active",
+            "to": "settling",
+            "label": "error, cancellation, or deadline"
+          },
+          {
+            "from": "settling",
+            "to": "reconciling",
+            "label": "missing exit proof"
+          },
+          {
+            "from": "restore",
+            "to": "reconciling",
+            "label": "no blind re-launch"
+          },
+          {
+            "from": "reconciling",
+            "to": "live",
+            "label": "positive liveness"
+          },
+          {
+            "from": "live",
+            "to": "active",
+            "label": "reconnect; preserve attempt"
+          },
+          {
+            "from": "reconciling",
+            "to": "unknown",
+            "label": "insufficient evidence"
+          },
+          {
+            "from": "unknown",
+            "to": "reconciling",
+            "label": "observe again"
+          },
+          {
+            "from": "reconciling",
+            "to": "exit",
+            "label": "positive exit evidence"
+          },
+          {
+            "from": "exit",
+            "to": "settling",
+            "label": "settle and release"
+          },
+          {
+            "from": "settling",
+            "to": "outcome",
+            "label": "all owned resources settled"
+          }
+        ]
+      },
+      "styles": [
+        {
+          "name": "coord",
+          "definition": "fill:#e8f1ff,stroke:#285b9a,color:#172f52"
+        },
+        {
+          "name": "store",
+          "definition": "fill:#f2f4f7,stroke:#667085,color:#273142"
+        },
+        {
+          "name": "reviewer",
+          "definition": "fill:#eaf7ef,stroke:#35724c,color:#194a2b"
+        },
+        {
+          "name": "judge",
+          "definition": "fill:#fff2db,stroke:#9a6a17,color:#664300"
+        }
+      ]
+    }
+  ]
+}

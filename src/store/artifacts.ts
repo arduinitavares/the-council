@@ -82,5 +82,5 @@ export function verifyConfiguration(input: ConfigSnapshot, root: string): void {
   if (createHash('sha256').update(raw).digest('hex') !== config.rawSha256) throw new Error('CONFIG_RAW_HASH_MISMATCH');
   const canonical = readArtifact(config.configArtifact, root);
   if (!Buffer.from(canonical).equals(Buffer.from(canonicalJson(config.resolved)))) throw new Error('CONFIG_CANONICAL_MISMATCH');
-  if (config.configHash !== hashArtifact('config', config.resolved as unknown as JsonValue)) throw new Error('CONFIG_HASH_MISMATCH');
+  if (config.configHash !== hashArtifact('council-config', config.resolved as unknown as JsonValue)) throw new Error('CONFIG_HASH_MISMATCH');
 }

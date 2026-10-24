@@ -32,9 +32,12 @@ describe('immutable artifacts', () => {
       rawArtifact: store.putArtifact(raw, 'raw-config'),
       configArtifact: store.putArtifact(Buffer.from(canonicalJson(resolved)), 'config'),
       rawSha256: createHash('sha256').update(raw).digest('hex'),
-      configHash: hashArtifact('config', resolved as unknown as import('../../src/domain/contracts.js').JsonValue),
+      configHash: createHash('sha256').update('council:v1:council-config\n').update(canonicalJson(resolved)).digest('hex'),
     };
+    expect(config.configArtifact.kind).toBe('config');
+    expect(config.configArtifact.sha256).not.toBe(config.configHash);
     expect(() => verifyConfiguration(config, store.root)).not.toThrow();
+    expect(() => verifyConfiguration({ ...config, configHash: hashArtifact('config', resolved as unknown as import('../../src/domain/contracts.js').JsonValue) }, store.root)).toThrow('CONFIG_HASH_MISMATCH');
     expect(() => verifyConfiguration({ ...config, rawSha256: '0'.repeat(64) }, store.root)).toThrow('CONFIG_RAW_HASH_MISMATCH');
     writeFileSync(config.rawArtifact.path, 'changed raw');
     expect(() => verifyConfiguration(config, store.root)).toThrow('ARTIFACT_CORRUPT');

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bindWorkerPayload } from '../../src/domain/schemas.js';
+import { canonicalJson } from '../../src/domain/hash.js';
 import type { ControlState, ReviewerSeat, ValidatedEvent } from '../../src/domain/contracts.js';
 import { H, clock, rawQuestion } from '../fixtures/builders.js';
 import {
@@ -9,6 +10,46 @@ import {
 } from '../../src/machine/reduce.js';
 import { Flow, request, artifact } from './helpers.js';
 describe('deterministic replay and recovery', () => {
+  for (const boundary of ['stop', 'observe', 'settle', 'reconcile', 'supersede'] as const) {
+    it(`keeps ${boundary} output identical across task-map insertion orders and canonical storage`, () => {
+      const f = new Flow();
+      let kind: ValidatedEvent['body']['kind'], data: unknown = {};
+      if (boundary === 'stop' || boundary === 'observe') {
+        f.pass();
+        for (const role of ['openai', 'gemini', 'claude'] as const) f.launch('clarify', role);
+        kind = boundary === 'stop' ? 'CANCEL' : 'LIFECYCLE_UNKNOWN';
+      } else if (boundary === 'reconcile') {
+        f.pass();
+        f.finish('clarify', () => ({ kind: 'clarification', ready: true, questions: [], methodIds: ['test-method'] }), undefined, false, false);
+        f.send('LIFECYCLE_UNKNOWN');
+        kind = 'RECONCILED';
+        data = { ownership: true, priorControllerExited: true, resourcesSettled: true, receipt: artifact, observations: [] };
+      } else {
+        f.ready();
+        if (boundary === 'settle') {
+          f.send('REQUIRE_INPUT', { reason: 'MISSING_INPUT', outcome: 'needs_context' });
+          kind = 'SETTLED'; data = { receipt: artifact };
+        } else {
+          f.send('ADMIT_ROUND');
+          f.send('CONTEXT_UPDATE', { update: { requestId: 'deterministic-update', runId: 'run1', baseContextHash: f.s.context.sharedContext.contextHash, userDirections: [artifact] } });
+          f.send('PHASE_READY');
+          kind = 'APPLY_CONTEXT_UPDATE';
+        }
+      }
+      const before = f.s, result = f.send(kind, data), event = f.events.at(-1)!;
+      const reordered = structuredClone(before);
+      reordered.context.issuedLogicalTasks = Object.fromEntries(Object.entries(reordered.context.issuedLogicalTasks).reverse());
+      expect(reduceRun(reordered, event)).toEqual(result);
+      expect(reduceRun(JSON.parse(canonicalJson(before)), event)).toEqual(result);
+      if (boundary === 'stop' || boundary === 'observe' || boundary === 'settle')
+        expect(result.intents.filter(intent => intent.kind === (boundary === 'settle' ? 'release' : boundary)).map(intent => intent.key.split('/')[3])).toEqual(['claude', 'gemini', 'openai']);
+      if (boundary === 'settle' || boundary === 'reconcile')
+        expect(result.snapshot.context.control.settledResourceTasks).toEqual(['run1/c1/clarify/claude/inference', 'run1/c1/clarify/gemini/inference', 'run1/c1/clarify/openai/inference']);
+      if (boundary === 'supersede')
+        expect(result.snapshot.context.control.supersededTaskKeys).toEqual(['run1/r1/review/claude/inference', 'run1/r1/review/gemini/inference', 'run1/r1/review/openai/inference']);
+    });
+  }
+
   it('replays snapshots, intents, budgets, deadlines and reservations identically', () => {
     const original = new Flow();
     original.ready();

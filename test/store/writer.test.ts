@@ -16,7 +16,7 @@ it('keeps one writer while readers see committed snapshots; release requires rev
   config.rawArtifact = a.artifacts.putArtifact(raw, 'raw-config');
   config.configArtifact = a.artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
   config.rawSha256 = createHash('sha256').update(raw).digest('hex');
-  config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+  config.configHash = hashArtifact('council-config', config.resolved as unknown as JsonValue);
   flow.s.context.request.config = structuredClone(config);
   a.createRun(flow.s);
   const reader = openRunReader(root);
@@ -44,7 +44,7 @@ it('does not steal foreign-host or unverifiable owner leases and refuses corrupt
   config.rawArtifact = a.artifacts.putArtifact(raw, 'raw-config');
   config.configArtifact = a.artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
   config.rawSha256 = createHash('sha256').update(raw).digest('hex');
-  config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+  config.configHash = hashArtifact('council-config', config.resolved as unknown as JsonValue);
   flow.s.context.request.config = structuredClone(config);
   a.createRun(flow.s);
   const db = new Database(join(root, 'journal.sqlite'));

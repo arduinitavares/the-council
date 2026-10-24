@@ -20,7 +20,7 @@ async function fixture() {
   config.rawArtifact = store.artifacts.putArtifact(raw, 'raw-config');
   config.configArtifact = store.artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
   config.rawSha256 = createHash('sha256').update(raw).digest('hex');
-  config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+  config.configHash = hashArtifact('council-config', config.resolved as unknown as JsonValue);
   flow.s.context.request.config = structuredClone(config);
   store.createRun(flow.s);
   return { root, store, flow, openRunStore };
@@ -204,7 +204,7 @@ describe('transactional journal/checkpoint/outbox', () => {
     store.close();
   });
 
-  it('rejects wrong effect key/hash, corrupt proof, and generic launch completion', async () => {
+  it('rejects wrong effect key/hash and generic launch completion', async () => {
     const { store, flow } = await fixture();
     const admitted = flow.pass();
     store.commitTransition('run1', 0, flow.events.at(-1)!, admitted);
@@ -226,15 +226,62 @@ describe('transactional journal/checkpoint/outbox', () => {
     if (deadline) throw new Error('Fixture unexpectedly has another effect');
     const fence = flow.send('LAUNCH_DISPATCHED', { logicalTaskKey: String((launch.input as { logicalTaskKey: string }).logicalTaskKey) });
     store.commitTransition('run1', 1, flow.events.at(-1)!, fence);
-    const effect = fence.intents[0]!;
-    const corrupt = make(effect.key, hashArtifact('effect', effect as unknown as JsonValue));
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(proof.path, 'corrupt');
-    expect(() => store.commitTransition('run1', 2, corrupt, reduceRun(flow.s, corrupt))).toThrow('ARTIFACT_CORRUPT');
     expect(store.load('run1').revision).toBe(2);
     expect(store.effectRecord(launch.key).status).toBe('dispatched');
     store.close();
   });
+
+  it('rejects corrupt proof for an eligible report completion', async () => {
+    const { store, flow } = await fixture();
+    const cancel = flow.send('CANCEL');
+    store.commitTransition('run1', 0, flow.events.at(-1)!, cancel);
+    const settled = flow.settle();
+    store.commitTransition('run1', 1, flow.events.at(-1)!, settled);
+    const report = settled.intents.find(i => i.kind === 'report')!;
+    const proof = store.artifacts.putArtifact(Buffer.from('real proof'), 'effect-receipt');
+    const event: ValidatedEvent = {
+      id: 'corrupt-completion', runId: 'run1', schemaVersion: 1,
+      actor: { kind: 'adapter', receiptId: 'host-adapter' }, round: 0, phase: null,
+      clockReceipt: clock(10020, 120),
+      body: { kind: 'EFFECT_RECEIPT_RECORDED', data: { key: report.key, intentHash: hashArtifact('effect', report as unknown as JsonValue), receipt: proof } },
+    };
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(proof.path, 'corrupt');
+    expect(() => store.commitTransition('run1', 2, event, reduceRun(flow.s, event))).toThrow('ARTIFACT_CORRUPT');
+    expect(store.load('run1')).toEqual(flow.s);
+    expect(store.effectRecord(report.key)).toMatchObject({ status: 'pending_execution', receipt: null });
+    store.close();
+  });
+
+  for (const kind of ['publish-context', 'release'] as const) {
+    it(`records and mirrors an eligible ${kind} completion with its immutable proof`, async () => {
+      const { store, flow } = await fixture();
+      if (kind === 'publish-context') flow.ready();
+      else {
+        flow.pass();
+        flow.finish('clarify', () => ({ kind: 'clarification', ready: true, questions: [], methodIds: ['test-method'] }), ['openai'], false);
+        flow.send('CANCEL'); flow.settle();
+      }
+      for (let index = 0; index < flow.events.length; index++)
+        store.commitTransition('run1', index, flow.events[index]!, flow.results[index]!);
+      const intent = store.pendingEffects('run1').find(i => i.kind === kind)!;
+      expect(intent).toBeDefined();
+      const proof = store.artifacts.putArtifact(Buffer.from(`inspected ${kind} completion`), 'effect-receipt');
+      const event: ValidatedEvent = {
+        id: 'allowed-completion', runId: 'run1', schemaVersion: 1,
+        actor: { kind: 'adapter', receiptId: 'host-adapter' }, round: 0, phase: null,
+        clockReceipt: clock(10001 + flow.tick, 101 + flow.tick),
+        body: { kind: 'EFFECT_RECEIPT_RECORDED', data: { key: intent.key, intentHash: hashArtifact('effect', intent as unknown as JsonValue), receipt: proof } },
+      };
+      const result = reduceRun(flow.s, event), receipt = { eventId: event.id, value: proof as unknown as JsonValue };
+      store.commitTransition('run1', flow.s.revision, event, result);
+      store.recordEffectReceipt(intent.key, receipt, result.snapshot.revision);
+      expect(store.effectRecord(intent.key)).toMatchObject({ status: 'receipt_recorded', receipt });
+      expect(store.pendingEffects('run1').map(i => i.key)).not.toContain(intent.key);
+      expect(store.readJournal('run1').at(-1)!.event).toEqual(event);
+      store.close();
+    });
+  }
 
   it('journals explicit recovery restoration and replays downtime and fixed launch fences exactly', async () => {
     const { store, flow, root, openRunStore } = await fixture();
@@ -273,6 +320,128 @@ describe('transactional journal/checkpoint/outbox', () => {
     expect(replay).toEqual(next.load('run1'));
     next.close();
   });
+
+  for (const kind of ['stop', 'observe', 'evidence', 'question-batch-request', 'candidate-request', 'evaluate-round', 'deadline'] as const) {
+    it(`rejects generic ${kind} completion before changing the journal, checkpoint, or outbox`, async () => {
+      const { store, flow, root } = await fixture();
+      if (kind === 'stop' || kind === 'observe' || kind === 'deadline') {
+        flow.pass();
+        const task = Object.values(flow.s.context.issuedLogicalTasks)[0]!;
+        flow.send('LAUNCH_DISPATCHED', { logicalTaskKey: task.reservation.logicalTaskKey });
+        if (kind === 'stop') flow.send('CANCEL');
+        if (kind === 'observe') flow.send('LIFECYCLE_UNKNOWN');
+      } else if (kind === 'question-batch-request') {
+        flow.pass(); flow.clarify();
+      } else {
+        flow.ready(); flow.send('ADMIT_ROUND'); flow.reviews();
+        if (kind === 'evidence') flow.send('EVIDENCE_REQUESTED', { request: { id: 'evidence1', claimId: 'claim1', source: 'local', reason: 'Verify claim' } });
+        if (kind === 'candidate-request') flow.send('REQUEST_CANDIDATE');
+        if (kind === 'evaluate-round') { flow.candidate(); flow.judge(); flow.ballots(); }
+      }
+      for (let index = 0; index < flow.events.length; index++)
+        store.commitTransition('run1', index, flow.events[index]!, flow.results[index]!);
+      const intent = store.pendingEffects('run1').find(i => i.kind === kind)!;
+      expect(intent).toBeDefined();
+      const proof = store.artifacts.putArtifact(Buffer.from('arbitrary immutable artifact'), 'effect-receipt');
+      const event: ValidatedEvent = {
+        id: 'unsupported-completion', runId: 'run1', schemaVersion: 1,
+        actor: { kind: 'adapter', receiptId: 'host-adapter' }, round: flow.s.context.roundsUsed, phase: null,
+        clockReceipt: clock(10001 + flow.tick, 101 + flow.tick),
+        body: { kind: 'EFFECT_RECEIPT_RECORDED', data: { key: intent.key, intentHash: hashArtifact('effect', intent as unknown as JsonValue), receipt: proof } },
+      };
+      const before = store.load('run1'), pending = store.pendingEffects('run1');
+      const db = new Database(join(root, 'journal.sqlite'));
+      const outbox = db.prepare('SELECT * FROM outbox ORDER BY key').all();
+      db.exec("CREATE TRIGGER forbid_receipt_journal BEFORE INSERT ON journal BEGIN SELECT RAISE(ABORT, 'UNSUPPORTED_RECEIPT_REACHED_JOURNAL'); END;");
+      db.exec("CREATE TRIGGER forbid_receipt_outbox BEFORE UPDATE ON outbox BEGIN SELECT RAISE(ABORT, 'UNSUPPORTED_RECEIPT_REACHED_OUTBOX'); END;");
+      try {
+        expect(() => store.commitTransition('run1', before.revision, event, reduceRun(before, event))).toThrow('GENERIC_EFFECT_RECEIPT_FORBIDDEN');
+        expect(store.load('run1')).toEqual(before);
+        expect(store.readJournal('run1')).toHaveLength(before.revision);
+        expect(store.pendingEffects('run1')).toEqual(pending);
+        expect(db.prepare('SELECT * FROM outbox ORDER BY key').all()).toEqual(outbox);
+      } finally { db.close(); store.close(); }
+    });
+  }
+
+  it('does not treat deadline expiry as proof that its watchdog was armed', async () => {
+    const { store, flow } = await fixture();
+    flow.pass();
+    const task = Object.values(flow.s.context.issuedLogicalTasks)[0]!;
+    const fence = flow.send('LAUNCH_DISPATCHED', { logicalTaskKey: task.reservation.logicalTaskKey });
+    const deadline = fence.intents.find(i => i.kind === 'deadline')!;
+    flow.send('DEADLINE');
+    for (let index = 0; index < flow.events.length; index++)
+      store.commitTransition('run1', index, flow.events[index]!, flow.results[index]!);
+    const event = flow.events.at(-1)!;
+    try {
+      expect(() => store.recordEffectReceipt(deadline.key, { eventId: event.id, value: {} }, flow.s.revision)).toThrow('UNACCEPTED_EFFECT_RECEIPT');
+      expect(store.effectRecord(deadline.key)).toMatchObject({ status: 'pending_execution', receipt: null });
+      expect(store.pendingEffects('run1').map(i => i.key)).toContain(deadline.key);
+    } finally { store.close(); }
+  });
+
+  for (const state of ['needs_user', 'needs_context', 'blocked'] as const) {
+    it(`restores a settled ${state} pause under a new owner without charging human wait`, async () => {
+      const { store, flow, root, openRunStore } = await fixture();
+      flow.ready();
+      const remainingBeforePause = flow.s.context.activeBudget.remainingMs;
+      flow.send('REQUIRE_INPUT', { reason: 'MISSING_INPUT', outcome: state });
+      const settled = flow.settle();
+      for (let index = 0; index < flow.events.length; index++)
+        store.commitTransition('run1', index, flow.events[index]!, flow.results[index]!);
+      const paused = store.load('run1');
+      expect(paused.state).toBe(state);
+      expect(paused.context.inferenceBlock).toBeNull();
+      expect(paused.context.activeBudget.status).toBe('paused');
+      expect(paused.context.activeBudget.remainingMs).toBe(remainingBeforePause - 2);
+      expect(paused.context.callsReserved).toBe(3);
+      expect(Object.values(paused.context.issuedLogicalTasks).every(task => task.settlement === 'settled')).toBe(true);
+      const report = settled.intents.find(i => i.kind === 'report')!;
+      store.close();
+      const next = openRunStore(root);
+      const make = (id: string, wall: number, mono: number, body: ValidatedEvent['body'], adapter = false): ValidatedEvent => ({
+        id, runId: 'run1', schemaVersion: 1, actor: { kind: adapter ? 'adapter' : 'controller', receiptId: 'new-owner' },
+        round: 0, phase: null, clockReceipt: clock(wall, mono, 'next-day'), body,
+      });
+      try {
+        const event = make('restore-paused-clock', 90000000, 1, { kind: 'CLOCK_CHECKPOINT', data: {} });
+        const restored = reduceRun(restoreForReconciliation(paused), event);
+        next.commitTransition('run1', paused.revision, event, restored, { restoreForReconciliation: true });
+        expect(next.load('run1').context.activeBudget.remainingMs).toBe(paused.context.activeBudget.remainingMs);
+        expect(next.load('run1').context.activeBudget.status).toBe('paused');
+        const uncertain = make('uncertain-recovery', 180000000, 2, { kind: 'RECONCILED', data: { ownership: false, priorControllerExited: false, resourcesSettled: false, receipt: artifact, observations: [] } }, true);
+        let before = next.load('run1');
+        next.commitTransition('run1', before.revision, uncertain, reduceRun(before, uncertain));
+        expect(next.load('run1').state).toBe('reconciling');
+        expect(next.load('run1').context.activeBudget.status).toBe('paused');
+        expect(next.load('run1').context.activeBudget.remainingMs).toBe(paused.context.activeBudget.remainingMs);
+        const positive = make('positive-recovery', 270000000, 3, { kind: 'RECONCILED', data: { ownership: true, priorControllerExited: true, resourcesSettled: true, receipt: artifact, observations: [] } }, true);
+        before = next.load('run1');
+        next.commitTransition('run1', before.revision, positive, reduceRun(before, positive));
+        expect(next.load('run1').state).toBe('preflight');
+        expect(next.load('run1').context.activeBudget.status).toBe('active');
+        expect(next.load('run1').context.activeBudget.remainingMs).toBe(paused.context.activeBudget.remainingMs);
+        const proof = next.artifacts.putArtifact(Buffer.from('inspected report completion'), 'effect-receipt');
+        const receipt = make('active-receipt', 270000025, 28, { kind: 'EFFECT_RECEIPT_RECORDED', data: { key: report.key, intentHash: hashArtifact('effect', report as unknown as JsonValue), receipt: proof } }, true);
+        before = next.load('run1');
+        next.commitTransition('run1', before.revision, receipt, reduceRun(before, receipt));
+        expect(next.load('run1').context.activeBudget.remainingMs).toBe(paused.context.activeBudget.remainingMs - 25);
+        expect(next.load('run1').context.callsReserved).toBe(paused.context.callsReserved);
+        let replay = createInitialSnapshot(paused.context.request);
+        const entries = next.readJournal('run1');
+        expect(entries.filter(entry => entry.restoration === 'reconcile').map(entry => entry.event.id)).toEqual(['restore-paused-clock']);
+        for (const entry of entries) {
+          expect(hashArtifact('checkpoint', replay as unknown as JsonValue)).toBe(entry.inputCheckpointHash);
+          const result = reduceRun(entry.restoration === 'reconcile' ? restoreForReconciliation(replay) : replay, entry.event);
+          expect(result.intents).toEqual(entry.intents);
+          expect(hashArtifact('checkpoint', result.snapshot as unknown as JsonValue)).toBe(entry.checkpointHash);
+          replay = result.snapshot;
+        }
+        expect(replay).toEqual(next.load('run1'));
+      } finally { next.close(); }
+    });
+  }
 
   it('resumes a released paused owner without charging the long human wait', async () => {
     const { store, flow, root, openRunStore } = await fixture();

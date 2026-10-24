@@ -65,6 +65,12 @@ function allSettled(c: RunContext): boolean {
         c.control.settledResourceTasks.includes(t.reservation.logicalTaskKey)),
   );
 }
+function orderedTasks(c: RunContext) {
+  return Object.values(c.issuedLogicalTasks).sort((a, b) => {
+    const left = a.reservation.logicalTaskKey, right = b.reservation.logicalTaskKey;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+}
 function taskCurrent(c: RunContext, b: AttemptBinding): boolean {
   return (
     b.runId === c.request.runId &&
@@ -318,7 +324,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     requireThat(c.reconcileOriginState, 'Missing reconciliation origin');
     c.preflightAttestation = null;
     enter('reconciling');
-    for (const t of Object.values(c.issuedLogicalTasks).filter(
+    for (const t of orderedTasks(c).filter(
       (t) =>
         t.stage !== 'pending_execution' &&
         (t.settlement !== 'settled' ||
@@ -331,7 +337,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
       });
   };
   const stop = () => {
-    for (const t of Object.values(c.issuedLogicalTasks).filter(
+    for (const t of orderedTasks(c).filter(
       (t) =>
         t.stage !== 'pending_execution' &&
         (t.settlement !== 'settled' ||
@@ -624,7 +630,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     c.control.supersededTaskKeys = [
       ...new Set([
         ...c.control.supersededTaskKeys,
-        ...Object.values(c.issuedLogicalTasks)
+        ...orderedTasks(c)
           .filter((t) => t.stage === 'pending_execution')
           .map((t) => t.reservation.logicalTaskKey),
       ]),
@@ -1446,7 +1452,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             c.control.settledResourceTasks = [
               ...new Set([
                 ...c.control.settledResourceTasks,
-                ...Object.values(c.issuedLogicalTasks)
+                ...orderedTasks(c)
                   .filter((t) => t.settlement === 'settled')
                   .map((t) => t.reservation.logicalTaskKey),
               ]),
@@ -1500,7 +1506,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
               c.pendingOutcome,
             'Settlement proof incomplete',
           );
-          c.control.settledResourceTasks = Object.values(c.issuedLogicalTasks)
+          c.control.settledResourceTasks = orderedTasks(c)
             .filter((t) => t.settlement === 'settled')
             .map((t) => t.reservation.logicalTaskKey);
           const outcome = c.pendingOutcome;
@@ -1509,7 +1515,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             'Invalid settled outcome',
           );
           enter(outcome as ControlState);
-          for (const t of Object.values(c.issuedLogicalTasks).filter(
+          for (const t of orderedTasks(c).filter(
             (t) => t.stage !== 'pending_execution',
           ))
             intents.push({

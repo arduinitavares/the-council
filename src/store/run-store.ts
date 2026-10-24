@@ -34,6 +34,7 @@ export interface RunStore extends RunReader {
 
 const receiptSchema = z.strictObject({ eventId: idSchema, value: jsonValueSchema });
 const optionsSchema = z.strictObject({ restoreForReconciliation: z.boolean().optional() });
+const genericReceiptKinds = new Set<EffectIntent['kind']>(['publish-context', 'report', 'release']);
 const intentSchema = z.strictObject({
   key: idSchema,
   kind: z.enum(['launch', 'observe', 'stop', 'release', 'evidence', 'question-batch-request', 'candidate-request', 'publish-context', 'evaluate-round', 'report', 'deadline']),
@@ -125,7 +126,7 @@ function acceptedReceiptValue(intent: EffectIntent, event: ValidatedEvent): unkn
   const taskKey = 'logicalTaskKey' in input ? input.logicalTaskKey : undefined;
   const body = event.body;
   if (body.kind === 'EFFECT_RECEIPT_RECORDED')
-    return intent.kind !== 'launch' && body.data.key === intent.key && body.data.intentHash === hash('effect', intent) ? body.data.receipt : undefined;
+    return genericReceiptKinds.has(intent.kind) && body.data.key === intent.key && body.data.intentHash === hash('effect', intent) ? body.data.receipt : undefined;
   switch (intent.kind) {
     case 'launch':
       return body.kind === 'LAUNCH_RECEIPT_RECORDED' && body.data.binding.logicalTaskKey === taskKey ? body.data.binding : undefined;
@@ -147,7 +148,8 @@ function acceptedReceiptValue(intent: EffectIntent, event: ValidatedEvent): unkn
     case 'evaluate-round':
       return body.kind === 'EVALUATE_ROUND' && event.id === intent.key ? body.data : undefined;
     case 'deadline':
-      return body.kind === 'DEADLINE' ? body.data : undefined;
+      // Expiry does not prove that the watchdog was armed.
+      return undefined;
     // These effects use the adapter-owned generic completion event above.
     case 'publish-context':
     case 'report': return undefined;
@@ -247,6 +249,7 @@ class SQLiteRunStore implements RunStore {
       const effect = decodeEffect(completedEffect);
       requireThat(completedEffect.intent_hash === data.intentHash, 'EFFECT_INTENT_HASH_MISMATCH');
       requireThat(effect.intent.kind !== 'launch', 'GENERIC_LAUNCH_RECEIPT_FORBIDDEN');
+      requireThat(genericReceiptKinds.has(effect.intent.kind), 'GENERIC_EFFECT_RECEIPT_FORBIDDEN');
       requireThat(completedEffect.created_revision < next.revision && completedEffect.status !== 'superseded', 'EFFECT_RECEIPT_NOT_ELIGIBLE');
       readArtifact(data.receipt, this.artifacts.root);
       if (effect.receipt) requireThat(same(effect.receipt.value, data.receipt), 'EFFECT_RECEIPT_CONFLICT');

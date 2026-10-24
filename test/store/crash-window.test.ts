@@ -22,7 +22,7 @@ for (const window of ['unsent', 'before-launch', 'after-launch', 'before-receipt
     config.rawArtifact = artifacts.putArtifact(raw, 'raw-config');
     config.configArtifact = artifacts.putArtifact(Buffer.from(canonicalJson(config.resolved)), 'config');
     config.rawSha256 = createHash('sha256').update(raw).digest('hex');
-    config.configHash = hashArtifact('config', config.resolved as unknown as JsonValue);
+    config.configHash = hashArtifact('council-config', config.resolved as unknown as JsonValue);
     flow.s.context.request.config = structuredClone(config);
     writeFileSync(join(root, 'initial.json'), canonicalJson(flow.s));
     const moduleUrl = new URL('../../dist/store/run-store.js', import.meta.url).href;

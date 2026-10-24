@@ -210,6 +210,118 @@ it('active context update at a candidate boundary returns to preflight before ju
   expect(f.s.context.roundsUsed).toBe(1);
   expect(f.s.context.control.candidate).toBeNull();
 });
+for (const phase of ['review', 'ballot'] as const)
+  it(`publishes a queued context update before staged ${phase} questions and requests collection`, () => {
+    const f = new Flow();
+    f.ready();
+    f.send('ADMIT_ROUND');
+    if (phase === 'ballot') {
+      f.reviews();
+      f.candidate();
+      f.judge();
+    }
+    const before = f.s.context.sharedContext;
+    if (phase === 'review') f.reviews([rawQuestion()], undefined, false);
+    else f.ballots(false, [rawQuestion()], false);
+    f.send('CONTEXT_UPDATE', {
+      update: {
+        requestId: `update-with-${phase}-questions`,
+        runId: 'run1',
+        baseContextHash: before.contextHash,
+        userDirections: [artifact],
+      },
+    });
+    f.send('PHASE_READY');
+    expect(f.s.state).toBe('preflight');
+    const staged = f.s.context.control.stagedQuestions;
+    const calls = f.s.context.callsReserved;
+    const routed = f.pass();
+    expect(f.s.state).toBe('collecting_questions');
+    expect.soft(f.s.context.pendingContextUpdate).toBeNull();
+    expect.soft(f.s.context.sharedContext.contextRevision).toBe(before.contextRevision + 1);
+    expect.soft(f.s.context.sharedContext.userDirections).toEqual([artifact]);
+    expect.soft(routed.intents.filter((i) => i.kind === 'publish-context')).toHaveLength(1);
+    expect(
+      routed.intents.filter((i) => i.kind === 'question-batch-request').map((i) => i.input),
+    ).toEqual([{ questions: staged, origin: { kind: 'deliberation', round: 1 } }]);
+    const publishedHash = f.s.context.sharedContext.contextHash;
+    expect(f.batch().baseContextHash).toBe(publishedHash);
+    f.collect('answered');
+    f.publish();
+    expect(f.s.state).toBe('prepare_round');
+    expect(f.s.context.sharedContext.userDirections).toEqual([artifact]);
+    expect(f.s.context.roundsUsed).toBe(1);
+    expect(f.s.context.callsReserved).toBe(calls);
+  });
+it('restores a settled pause with valid saved results and charges the resumed active interval', () => {
+  const f = new Flow();
+  f.ready();
+  f.send('ADMIT_ROUND');
+  f.reviews();
+  f.send('REQUIRE_INPUT', { reason: 'MISSING_HANDOFF', outcome: 'needs_context' });
+  f.settle();
+  const paused = f.s.context.activeBudget;
+  const calls = f.s.context.callsReserved;
+  const savedResults = f.s.context.control.savedResults;
+  f.tick += 1000; // A closed human wait must not be charged on restoration.
+  f.s = restoreForReconciliation(f.s);
+  const reconciled = f.send('RECONCILED', {
+    ownership: true,
+    priorControllerExited: true,
+    resourcesSettled: true,
+    receipt: artifact,
+    observations: [],
+  });
+  expect(f.s.state).toBe('preflight');
+  expect(f.s.context.activeBudget.status).toBe('active');
+  expect(f.s.context.activeBudget.remainingMs).toBe(paused.remainingMs);
+  expect(f.s.context.activeBudget.intervalEpoch).toBe(paused.intervalEpoch + 1);
+  expect(f.s.context.control.savedResults).toEqual(savedResults);
+  expect(reconciled.intents.some((i) => i.kind === 'launch')).toBe(false);
+  f.pass();
+  expect(f.s.state).toBe('prepare_candidate');
+  expect(f.s.context.activeBudget.remainingMs).toBe(paused.remainingMs - 1);
+  expect(f.s.context.callsReserved).toBe(calls);
+});
+it('keeps an actual historical missing result terminally blocked when restoring a pause', () => {
+  const f = new Flow();
+  f.ready();
+  f.send('ADMIT_ROUND');
+  f.reviews();
+  const key = Object.keys(f.s.context.control.savedResults)[0]!;
+  expect(f.s.context.issuedLogicalTasks[key]?.stage).toBe('receipt_recorded');
+  const { [key]: _missing, ...remainingResults } = f.s.context.control.savedResults;
+  f.s.context.control.savedResults = remainingResults;
+  f.send('REQUIRE_INPUT', { reason: 'MISSING_HANDOFF', outcome: 'needs_context' });
+  f.settle();
+  f.s = restoreForReconciliation(f.s);
+  const result = f.send('RECONCILED', {
+    ownership: true,
+    priorControllerExited: true,
+    resourcesSettled: true,
+    receipt: artifact,
+    observations: [],
+  });
+  expect(f.s.state).toBe('settling');
+  expect(f.s.context.inferenceBlock).toBe('MISSING_REQUIRED_RESULT');
+  expect(result.intents.some((i) => i.kind === 'launch')).toBe(false);
+  f.settle();
+  expect(f.s.state).toBe('blocked');
+  expect(() => f.send('RESUME')).toThrow(/Terminal inference block/);
+  expect(() =>
+    f.send('EXTEND', {
+      extension: {
+        id: 'cannot-repair',
+        baseRevision: f.s.revision,
+        authorizationReceipt: 'user-auth',
+        expiresAt: 100000,
+        additionalClarificationBatches: 0,
+        additionalRounds: 1,
+        additionalActiveBudgetMs: 1000,
+      },
+    }),
+  ).toThrow(/Invalid bounded extension/);
+});
 it('context update can invalidate unissued review slots without extra inference', () => {
   const f = new Flow();
   f.ready();
@@ -228,6 +340,18 @@ it('context update can invalidate unissued review slots without extra inference'
   f.pass();
   expect(f.s.state).toBe('prepare_round');
   expect(f.s.context.callsReserved).toBe(before);
+  f.s = restoreForReconciliation(f.s);
+  const reconciled = f.send('RECONCILED', {
+    ownership: true,
+    priorControllerExited: true,
+    resourcesSettled: true,
+    receipt: artifact,
+    observations: [],
+  });
+  expect(f.s.state).toBe('prepare_round');
+  expect(f.s.context.inferenceBlock).toBeNull();
+  expect(f.s.context.callsReserved).toBe(before);
+  expect(reconciled.intents.some((i) => i.kind === 'launch')).toBe(false);
 });
 it('saved valid exited results return to their phase before ingestion', () => {
   const f = new Flow();

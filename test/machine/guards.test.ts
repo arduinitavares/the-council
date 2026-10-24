@@ -159,6 +159,22 @@ describe('stable control and full admission guards', () => {
     s.context.pendingEvidenceIds = ['evidence1'];
     expect(() => step(s, 'REQUEST_CANDIDATE')).toThrow();
   });
+  it('rejects evidence requests after candidate admission without revoking the request', () => {
+    const s = initial('prepare_candidate');
+    s.context.control.candidateRequested = true;
+    const before = structuredClone(s);
+    expect(() =>
+      step(s, 'EVIDENCE_REQUESTED', {
+        request: {
+          id: 'late',
+          claimId: 'claim',
+          source: 'https://example.org',
+          reason: 'Late request',
+        },
+      }),
+    ).toThrow(/Unexpected or duplicate evidence request/);
+    expect(s).toEqual(before);
+  });
 });
 it('user-origin preflight cannot authorize inference', () => {
   const s = initial(),

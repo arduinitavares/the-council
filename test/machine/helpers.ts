@@ -256,6 +256,7 @@ export class Flow {
   reviews(
     questions: readonly RawQuestion[] = [],
     order: readonly WorkerRole[] = ['openai', 'gemini', 'claude'],
+    barrier = true,
   ) {
     return this.finish(
       'review',
@@ -268,9 +269,11 @@ export class Flow {
         methodIds: ['test-method'],
       }),
       order,
+      barrier,
     );
   }
   candidate() {
+    if (!this.s.context.control.candidateRequested) this.send('REQUEST_CANDIDATE');
     return this.send('CANDIDATE_FROZEN', {
       candidate: makeConfirmation().candidate,
       evidenceHash: H,
@@ -294,29 +297,34 @@ export class Flow {
       methodIds: ['test-method'],
     }));
   }
-  ballots(reject = false, questions: readonly RawQuestion[] = []) {
+  ballots(reject = false, questions: readonly RawQuestion[] = [], barrier = true) {
     const c = this.s.context;
-    return this.finish('ballot', (role) => ({
-      kind: 'ballot',
-      bindings: {
-        runId: 'run1',
-        configHash: c.config.configHash,
-        profileHash: c.profile.profileHash,
-        contextHash: c.sharedContext.contextHash,
-        round: c.roundsUsed,
-        candidateHash: c.control.candidate!.hash,
-        evidenceHash: H,
-        judgeHash: H,
-      },
-      decision: reject && role === 'claude' ? 'reject' : 'accept',
-      conditional: false,
-      newObjections: [],
-      missingInputQuestions: role === 'openai' ? questions : [],
-      dispositions: [],
-      challengeResponses: [],
-      reason: 'Accept the shared candidate.',
-      methodIds: ['test-method'],
-    }));
+    return this.finish(
+      'ballot',
+      (role) => ({
+        kind: 'ballot',
+        bindings: {
+          runId: 'run1',
+          configHash: c.config.configHash,
+          profileHash: c.profile.profileHash,
+          contextHash: c.sharedContext.contextHash,
+          round: c.roundsUsed,
+          candidateHash: c.control.candidate!.hash,
+          evidenceHash: H,
+          judgeHash: H,
+        },
+        decision: reject && role === 'claude' ? 'reject' : 'accept',
+        conditional: false,
+        newObjections: [],
+        missingInputQuestions: role === 'openai' ? questions : [],
+        dispositions: [],
+        challengeResponses: [],
+        reason: 'Accept the shared candidate.',
+        methodIds: ['test-method'],
+      }),
+      undefined,
+      barrier,
+    );
   }
   round(reject = false) {
     this.send('ADMIT_ROUND');

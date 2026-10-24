@@ -429,6 +429,13 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
     }
     if (c.control.stagedQuestions.length || c.resumeTarget === 'collecting_questions') {
       enter('collecting_questions');
+      emit('question-batch-request', 'compile-questions', {
+        questions: c.control.stagedQuestions,
+        origin:
+          c.roundsUsed === 0
+            ? { kind: 'clarification', batchIndex: c.clarificationBatchesUsed }
+            : { kind: 'deliberation', round: c.roundsUsed },
+      });
       return;
     }
     if (c.control.questionBatch) {
@@ -752,8 +759,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             if (
               c.pendingContextUpdate &&
               !c.control.questionBatch &&
-              !queuedPublication() &&
-              !c.control.stagedQuestions.length
+              !queuedPublication()
             )
               applyContext();
             preflightRoute();
@@ -1013,14 +1019,6 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             c.control.confirmation = confirmation();
             c.objections = applyOwnedDispositions(c.control.confirmation);
           }
-          if (c.pendingContextUpdate) {
-            requireThat(p !== 'clarify', 'Clarification context waits for publication');
-            c.resumeTarget = c.control.stagedQuestions.length
-              ? 'collecting_questions'
-              : 'prepare_round';
-            enter('preflight');
-            break;
-          }
           if (p === 'clarify' || c.control.stagedQuestions.length) {
             enter('collecting_questions');
             emit('question-batch-request', 'compile-questions', {
@@ -1044,10 +1042,6 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             c.pendingEvidenceIds = [...c.requiredEvidenceIds];
             enter('prepare_candidate');
             for (const r of requests) emit('evidence', r.id, r);
-            if (!requests.length) {
-              c.control.candidateRequested = true;
-              emit('candidate-request', 'candidate');
-            }
           } else if (p === 'judge') {
             const report = payloads[0];
             requireThat(report?.kind === 'judge', 'Missing judge report');
@@ -1285,6 +1279,7 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
             from === 'prepare_candidate' &&
               !c.pendingContextUpdate &&
               !c.control.candidate &&
+              !c.control.candidateRequested &&
               !c.requiredEvidenceIds.includes(b.data.request.id),
             'Unexpected or duplicate evidence request',
           );
@@ -1464,6 +1459,13 @@ export function reduceRun(snapshot: RunSnapshot, event: ValidatedEvent): Transit
               d.priorControllerExited && d.resourcesSettled && allSettled(c) && c.resumeTarget,
               'Prior owner/resource settlement required',
             );
+            if (c.activeBudget.status === 'paused') {
+              const resumed = accountBudget(c.activeBudget, e.clockReceipt, {
+                kind: 'resume-active',
+              });
+              requireThat(resumed.kind === 'ok', 'Cannot resume active budget');
+              c.activeBudget = resumed.budget;
+            }
             enter('preflight');
             break;
           }

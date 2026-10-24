@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { H, rawQuestion } from '../fixtures/builders.js';
+import { H, makeConfirmation, rawQuestion } from '../fixtures/builders.js';
 import { Flow, artifact } from './helpers.js';
 describe('round barriers and limits', () => {
   it('all three phase barriers settle before the next phase launches', () => {
@@ -280,6 +280,89 @@ it('coordinator-required evidence joins the frozen required set and blocks candi
   });
   f.candidate();
   expect(f.s.state).toBe('judging');
+});
+it('admits the complete evidence set only on an explicit candidate request', () => {
+  const f = new Flow();
+  f.ready();
+  f.send('ADMIT_ROUND');
+  const barrier = f.reviews();
+  expect(f.s.context.control.candidateRequested).toBe(false);
+  expect(barrier.intents.some((i) => i.kind === 'candidate-request')).toBe(false);
+  expect(() =>
+    f.send('CANDIDATE_FROZEN', { candidate: makeConfirmation().candidate, evidenceHash: H }),
+  ).toThrow(/Candidate boundary unavailable/);
+  f.send('EVIDENCE_REQUESTED', {
+    request: {
+      id: 'coordinator-final-check',
+      claimId: 'claim',
+      source: 'https://example.org',
+      reason: 'Check',
+    },
+  });
+  expect(() => f.send('REQUEST_CANDIDATE')).toThrow(/Evidence pending/);
+  expect(f.s.context.control.candidateRequested).toBe(false);
+  f.send('EVIDENCE_RECORDED', {
+    record: {
+      requestId: 'coordinator-final-check',
+      status: 'verified',
+      sourceLocation: 'https://example.org',
+      contentHash: H,
+      observationReceipt: 'receipt',
+    },
+  });
+  const requested = f.send('REQUEST_CANDIDATE');
+  expect(requested.intents.filter((i) => i.kind === 'candidate-request')).toHaveLength(1);
+  const frozen = f.s;
+  expect(() =>
+    f.send('EVIDENCE_REQUESTED', {
+      request: {
+        id: 'too-late',
+        claimId: 'claim',
+        source: 'https://example.org',
+        reason: 'Late',
+      },
+    }),
+  ).toThrow(/Unexpected or duplicate evidence request/);
+  expect(f.s).toBe(frozen);
+  expect(f.s.context.requiredEvidenceIds).toEqual(['coordinator-final-check']);
+  f.candidate();
+  expect(f.s.state).toBe('judging');
+});
+it('preserves an already registered review objection on prepare_candidate context diversion', () => {
+  const f = new Flow();
+  f.ready();
+  f.send('ADMIT_ROUND');
+  f.finish('review', (role) => ({
+    kind: 'review',
+    proposals: [],
+    methodIds: [],
+    evidenceRequests: [],
+    missingInputQuestions: [],
+    newObjections:
+      role === 'openai'
+        ? [{
+            id: 'objection',
+            claimId: 'claim',
+            claim: 'Needs evidence',
+            evidenceIds: [],
+            resolution: 'Supply evidence',
+            status: 'open',
+          }]
+        : [],
+  }));
+  const objections = f.s.context.objections;
+  expect(objections).toHaveLength(1);
+  f.send('CONTEXT_UPDATE', {
+    update: {
+      requestId: 'candidate-objection-update',
+      runId: 'run1',
+      baseContextHash: f.s.context.sharedContext.contextHash,
+      userDirections: [artifact],
+    },
+  });
+  expect(() => f.send('PHASE_READY')).not.toThrow();
+  expect(f.s.state).toBe('preflight');
+  expect(f.s.context.objections).toEqual(objections);
 });
 it('an unchanged empty publication carries a queued ContextUpdate to prepare_round for explicit application', () => {
   const f = new Flow();

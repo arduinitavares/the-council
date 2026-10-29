@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../domain/hash.js";
 import { selectionSchema } from "./config.js";
+import { scopedLaunchPlanSchema } from "./scoped-launch.js";
 import { proofKey } from "./preflight.js";
 import type { NativeEvidence, QualificationProof } from "./types.js";
 const observation = z.strictObject({
@@ -55,6 +56,11 @@ const scope = z.strictObject({
       allowance: observation,
       billing: observation,
       optionalTelemetry: observation,
+      scopedLaunchPlan: scopedLaunchPlanSchema.optional(),
+      policyAdmission: z.strictObject({
+        state: z.enum(["admitted", "conditional"]),
+        routeCell: z.string(), qualifier: z.string(), firstUseOnly: z.boolean(),
+      }).optional(),
     }),
   ),
 });

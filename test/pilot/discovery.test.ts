@@ -3,7 +3,7 @@ import { NativeHostInspector } from "../../src/pilot/discovery.js";
 import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { incidentRoster } from "./fixtures.js";
+import { incidentRoster, policyTable } from "./fixtures.js";
 import type { PilotRequest } from "../../src/pilot/types.js";
 it("uses supported provider catalog/usage sources while preserving actual missing controls and billing binding", async () => {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "pilot-host-")));
@@ -11,14 +11,12 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     const policy = join(workspace, "policy.md");
     writeFileSync(
       policy,
-      Object.values(incidentRoster.reviewers)
-        .map((s) => s.model)
-        .join("\n") +
-        "\n" +
-        incidentRoster.judge.model,
+      policyTable,
     );
     const calls: string[] = [];
     let catalogDenied = false;
+    let accountVariant = "fresh";
+    let supportDenied = false;
     const inspector = new NativeHostInspector(
       async (argv) =>
         argv[0] === "agent-context"
@@ -49,6 +47,18 @@ it("uses supported provider catalog/usage sources while preserving actual missin
             : { worktree: { id: "repo::B", path: workspace, hostId: "local" } },
       () => ({
         call: async (method, params) => {
+          if (method === "accounts.list") {
+            expect(params).toEqual({ refreshUsage: true });
+            calls.push("accounts.list");
+            if (accountVariant === "denied") throw Error("permission_denied");
+            if (accountVariant === "missing") return { rateLimits: {} };
+            const q = { provider: "codex", status: "ok", updatedAt: Date.now() - (accountVariant === "stale" ? 600000 : 0), session: null, weekly: accountVariant === "unknown" ? null : { usedPercent: accountVariant === "exhausted" ? 100 : 60, windowMinutes: 10080, resetsAt: 1800000000000 }, extraUsage: { enabled: true } };
+            return { rateLimits: { codex: q, cursor: { ...q, provider: "cursor", weekly: null, monthly: q.weekly, planType: "premium", buckets: [{name:"Cursor Models",...q.weekly}], usageMetadata: { source: "cli", authProvenance: "must-not-persist" } } } };
+          }
+          if (method === "agentSession.createSupport") {
+            if (supportDenied) throw Error("permission_denied");
+            return { agent: params.agent, supported: params.agent !== "cursor", ...(params.agent === "cursor" ? { reason: "agent" } : {seedOptions:{permissionMode:"full-access"}}) };
+          }
           if (catalogDenied && params.agent === "cursor")
             throw Error("permission_denied");
           return method === "settings.getAgentLaunch"
@@ -97,13 +107,38 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     expect(
       r.evidence.routes.find((r) => r.role === "gemini")?.allowance.state,
     ).toBe("verified");
-    expect(
-      r.evidence.routes.every(
-        (r) => r.controls.state === "missing" && r.billing.state === "missing",
-      ),
-    ).toBe(true);
+    expect(r.evidence.routes.every(r => r.controls.state === "missing")).toBe(true);
+    expect(r.evidence.routes.find(r => r.role === "openai")?.allowance.state).toBe("verified");
+    expect(r.evidence.routes.find(r => r.role === "xai")?.allowance.state).toBe("verified");
+    expect(JSON.parse(r.evidence.routes.find(r => r.role === "xai")!.allowance.detail)).toMatchObject({ windows: { monthly: {windowMinutes:10080,usedPercent:60} } });
+    expect(JSON.stringify(r.evidence)).not.toContain("must-not-persist");
+    expect(r.evidence.routes.find(r => r.role === "openai")?.billing.state).toBe("unknown");
+    expect(r.evidence.routes.find(r => r.role === "xai")?.billing.state).toBe("missing");
+    expect(calls).toContain("accounts.list");
+    const plan = r.evidence.routes.find(r => r.role === "xai")?.scopedLaunchPlan;
+    expect(plan).toMatchObject({
+      method: "agent.launch", promptSubmitted: false,
+      request: { agent: "cursor", target: { kind: "existing", worktree: `path:${workspace}` },
+        surface: "terminal", presentation: "background", sessionOptions: {model:"grok-4.7-xhigh",permissionMode:"own"} },
+      custody: "task-created-external", adoption: "worker-start --terminal",
+      structuredSupport: {state:"unsupported"},
+    });
+    expect(plan?.request.sessionOptions).not.toHaveProperty("effort");
+    expect(plan?.pendingControls).toContain("external-terminal-settlement-and-completion-relay");
     expect(calls).toContain("cursor:models");
     expect(calls).toContain("antigravity:usage");
+    expect(r.blockers.filter(b => b.control === "policy")).toEqual([]);
+    expect(r.evidence.routes.find(r => r.role === "xai")?.policyAdmission).toEqual({
+      state: "conditional", routeCell: "Cursor, pending host/action qualification",
+      qualifier: "pending host/action qualification", firstUseOnly: true,
+    });
+    writeFileSync(policy, policyTable.replace("Matching `xhigh`", "Matching `high`"));
+    const wrongEffort = await inspector.inspect({ workspace, policyPath: policy, config: incidentRoster } as PilotRequest);
+    expect(wrongEffort.blockers).toContainEqual(expect.objectContaining({ role: "xai", reason: "EXACT_SELECTION_NOT_IN_HOST_POLICY" }));
+    writeFileSync(policy, "Retired model mentions are not admission.\n" + Object.values(incidentRoster.reviewers).map(s => s.model).join("\n"));
+    const noTable = await inspector.inspect({ workspace, policyPath: policy, config: incidentRoster } as PilotRequest);
+    expect(noTable.blockers.filter(b => b.control === "policy")).toHaveLength(4);
+    writeFileSync(policy, policyTable);
     catalogDenied = true;
     const denied = await inspector.inspect({
       workspace,
@@ -113,6 +148,14 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     expect(
       denied.evidence.routes.find((r) => r.role === "xai")?.catalog.state,
     ).toBe("denied");
+    for (const [variant, expected] of [["stale","missing"],["unknown","unknown"],["exhausted","exhausted"],["denied","denied"],["missing","missing"]]) {
+      accountVariant = variant!;
+      const observed = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
+      expect(observed.evidence.routes.find(r => r.role === "openai")?.allowance.state, variant).toBe(expected);
+    }
+    supportDenied = true;
+    const refusedSupport = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
+    expect(refusedSupport.evidence.routes[0]?.controls.state).toBe("denied");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

@@ -21,6 +21,7 @@ const inputSchema = z.strictObject({
   maxTopicCalls: z.number().int().min(10).max(10),
   deadline: z.number().int().positive(),
   workerTimeoutMs: z.number().int().positive().max(120000),
+  proofTtlMs: z.number().int().positive().max(86400000).optional(),
 });
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -88,17 +89,20 @@ async function main(): Promise<void> {
   const policyPath = realpathSync(resolve(workspace, required("--policy")));
   const orca = opts.get("--orca") ?? "/usr/local/bin/orca";
   if (!isAbsolute(orca)) throw Error("ABSOLUTE_ORCA_EXECUTABLE_REQUIRED");
-  const journal = new PilotJournal(workspace, input.runId, {
-    runId: input.runId,
-    maxProbeCalls: input.maxProbeCalls,
-    maxTopicCalls: input.maxTopicCalls,
-    deadline: input.deadline,
-    workerTimeoutMs: input.workerTimeoutMs,
-    configHash: config.hash,
-  });
+  let journal: PilotJournal | undefined;
   let cache: QualificationCache | undefined;
   try {
+    // A competing cache writer does not reserve or consume this run identity.
     cache = new QualificationCache(workspace);
+    journal = new PilotJournal(workspace, input.runId, {
+      runId: input.runId,
+      maxProbeCalls: input.maxProbeCalls,
+      maxTopicCalls: input.maxTopicCalls,
+      deadline: input.deadline,
+      workerTimeoutMs: input.workerTimeoutMs,
+      proofTtlMs: input.proofTtlMs ?? 3600000,
+      configHash: config.hash,
+    });
     const client = await OrcaClient.connect({
       executable: orca,
       cwd: workspace,
@@ -112,6 +116,14 @@ async function main(): Promise<void> {
       const envelope: any = decodeStrictJson(
         new TextDecoder().decode(p.stdout),
       );
+      // agent-context is a CLI registry document, not an RPC envelope.
+      if (argv[0] === "agent-context") {
+        if (envelope.schemaVersion !== 1 || !Number.isSafeInteger(envelope.commandCount) ||
+            !Array.isArray(envelope.commands) || envelope.commandCount !== envelope.commands.length ||
+            !envelope.commands.every((entry:any) => typeof entry?.command === "string" && entry.command.length > 0))
+          throw Error("ORCA_COMMAND_REGISTRY_INVALID");
+        return envelope;
+      }
       if (envelope.ok !== true)
         throw Error(`ORCA_${envelope.error?.code ?? "INVALID_ENVELOPE"}`);
       return envelope.result;
@@ -137,8 +149,9 @@ async function main(): Promise<void> {
       { workspace, config: config.config, policyPath, ...input, proofs: [] },
       journal.wrap(driver),
     );
-    if (outcome.unresolved.length === 0 && outcome.proofs.length)
-      cache.write(outcome.proofs);
+    // Each proof already requires both positively released probes. A later
+    // unrelated topic cleanup failure must not discard that valid evidence.
+    if (outcome.proofs.length) cache.write(outcome.proofs);
     writeFileSync(
       resolve(journal.path, "outcome.json"),
       JSON.stringify(outcome, null, 2) + "\n",
@@ -157,21 +170,25 @@ async function main(): Promise<void> {
       }),
     );
     if (outcome.status === "prerequisites_not_verified") process.exitCode = 3;
+    else if (outcome.status === "invalid_request") process.exitCode = 2;
     else if (outcome.status === "failed") process.exitCode = 4;
   } finally {
     try {
       cache?.close();
     } finally {
-      journal.close();
+      journal?.close();
     }
   }
 }
 main().catch((error) => {
+  const reason = error instanceof Error ? error.message : "NATIVE_FAILURE";
+  const busy = reason === "QUALIFICATION_CACHE_BUSY_RECONCILE";
   console.log(
     JSON.stringify({
-      status: "invalid_request",
-      reason: error instanceof Error ? error.message : "NATIVE_FAILURE",
+      status: busy ? "prerequisites_not_verified" : "invalid_request",
+      reason,
+      ...(busy ? { calls: { probes: 0, topic: 0 } } : {}),
     }),
   );
-  process.exitCode = 2;
+  process.exitCode = busy ? 3 : 2;
 });

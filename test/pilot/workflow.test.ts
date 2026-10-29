@@ -4,6 +4,7 @@ import { OrcaPilotDriver } from "../../src/pilot/orca-driver.js";
 import { incidentRoster } from "./fixtures.js";
 import type { NativeEvidence, PilotRequest } from "../../src/pilot/types.js";
 import { canonicalJson, hashArtifact } from "../../src/domain/hash.js";
+import { proofKey } from "../../src/pilot/preflight.js";
 
 const now = 1_800_000_000_000;
 const evidence: NativeEvidence = {
@@ -71,6 +72,7 @@ function harness(
     unknown?: boolean;
     cancelUnknown?: boolean;
     releaseUnknown?: boolean;
+    judgeUnresolved?: boolean;
     evidence?: NativeEvidence;
   } = {},
 ) {
@@ -131,7 +133,7 @@ function harness(
       if (a.packet.phase === "review")
         payload = { assessment: "Supported by supplied text", objections: [] };
       if (a.packet.phase === "judge")
-        payload = { evidenceSupported: true, unresolved: [] };
+        payload = { evidenceSupported: !options.judgeUnresolved, unresolved: options.judgeUnresolved ? ["unsupported evidence"] : [] };
       if (a.packet.phase === "ballot")
         payload = {
           approve: !(options.disagree && a.packet.role === "xai"),
@@ -197,6 +199,8 @@ describe("native first use through Orca command adapter", () => {
     expect(r.results.filter((x) => x.phase === "ballot")).toHaveLength(3);
     expect(r.unresolved).toEqual([]);
     const launches = h.calls.filter((c) => c.argv[1] === "worker-start");
+    for (const launch of launches)
+      expect(launch.argv[launch.argv.indexOf("--retry-request")+1]).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
     expect(
       launches.slice(0, 8).every((c) => c.packet.phase.endsWith("probe")),
     ).toBe(true);
@@ -218,7 +222,7 @@ describe("bootstrap and lifecycle matrix (synthetic native-shaped subprocess fix
   ] as const)
     it(`blocks missing ${control} before any dependent call`, async () => {
       const e = structuredClone(evidence);
-      e.routes[0]![control].state = "missing";
+      e.routes[control === "billing" ? 2 : 0]![control].state = "missing";
       const h = harness({ evidence: e });
       const r = await runPilot(request, h.driver, () => now);
       expect(r.status).toBe("prerequisites_not_verified");
@@ -252,7 +256,7 @@ describe("bootstrap and lifecycle matrix (synthetic native-shaped subprocess fix
     expect(second.status).toBe("consensus");
     expect(second.calls).toEqual({ probes: 0, topic: 10 });
   });
-  for (const variation of ["foreign", "expired", "controls", "model"] as const)
+  for (const variation of ["foreign", "expired", "controls", "model", "version"] as const)
     it(`requalifies ${variation} proof before topic work`, async () => {
       const first = await runPilot(request, harness().driver, () => now);
       let proofs = structuredClone(first.proofs);
@@ -260,9 +264,24 @@ describe("bootstrap and lifecycle matrix (synthetic native-shaped subprocess fix
       if (variation === "expired")
         proofs = proofs.map((p) => ({ ...p, expiresAt: now - 1 }));
       if (variation === "foreign")
-        proofs = proofs.map((p) => ({ ...p, key: "project-A" }));
+        proofs = first.proofs.map((original) => {
+          const p=structuredClone(original);
+          const route = p.scope.routes.find(r => proofKey(p.scope,r) === p.key)!;
+          p.scope.workspace = "/project-A"; p.scope.workspaceId="repo::/project-A"; p.scope.roots=["/project-A"];
+          p.key=proofKey(p.scope,route); p.id=p.key;
+          return p;
+        });
       if (variation === "controls") e.controlsHash = "controls-v2";
-      if (variation === "model")
+      if (variation === "model") {
+        proofs = first.proofs.map(original => {
+          const p=structuredClone(original);
+          const route = p.scope.routes.find(r => proofKey(p.scope,r) === p.key)!;
+          route.selection.model += "-prior";
+          p.key=proofKey(p.scope,route); p.id=p.key;
+          return p;
+        });
+      }
+      if (variation === "version")
         e.versions = { ...e.versions, codex: "updated" };
       const r = await runPilot(
         { ...request, proofs },
@@ -321,7 +340,47 @@ describe("bootstrap and lifecycle matrix (synthetic native-shaped subprocess fix
     expect(r.status).toBe("failed");
     expect(r.unresolved).toHaveLength(1);
     expect(r.calls.topic).toBe(0);
+    expect(r.results[0]?.settlement).toBe("unknown");
   });
+});
+
+it("distinguishes an unresolved judge from voter disagreement", async () => {
+  const result = await runPilot(request,harness({judgeUnresolved:true}).driver,()=>now);
+  expect(result.results.filter(r=>r.phase==='ballot').every(r=>(r.payload as any).approve)).toBe(true);
+  expect(result.status).toBe('judge_unresolved');
+});
+
+it("reports insufficient budget as an invalid request before inference", async () => {
+  const r=await runPilot({...request,maxProbeCalls:7},harness().driver,()=>now);
+  expect(r.status).toBe('invalid_request');
+  expect(r.blockers).toContainEqual(expect.objectContaining({reason:'INSUFFICIENT_CALL_BUDGET'}));
+  expect(r.calls).toEqual({probes:0,topic:0});
+});
+
+it("permits explicitly conditional first-use probes once controls pass without unrelated historical proof", async () => {
+  const e=structuredClone(evidence);
+  e.routes[2]!.policyAdmission={state:'conditional',routeCell:'Cursor, pending host/action qualification',qualifier:'pending host/action qualification',firstUseOnly:true};
+  e.routes[0]!.billing.state='unknown'; e.routes[1]!.billing.state='unknown'; e.routes[3]!.billing.state='unknown';
+  const r=await runPilot(request,harness({evidence:e}).driver,()=>now);
+  expect(r.status).toBe('consensus');
+  expect(r.calls).toEqual({probes:8,topic:10});
+});
+
+it("reuses qualification after the previous run deadline and before its independent default one-hour TTL", async () => {
+  const first = await runPilot(request, harness().driver, () => now);
+  expect(first.proofs[0]?.expiresAt).toBe(now + 3600000);
+  const later = now + 200000;
+  const second = await runPilot({ ...request, deadline: later + 100000, proofs: first.proofs }, harness().driver, () => later);
+  expect(second.status).toBe("consensus");
+  expect(second.calls).toEqual({ probes: 0, topic: 10 });
+});
+
+it("bounds a separately configured proof TTL to 24 hours", async () => {
+  const valid = await runPilot({ ...request, proofTtlMs: 86400000 }, harness().driver, () => now);
+  expect(valid.proofs[0]?.expiresAt).toBe(now + 86400000);
+  const invalid = await runPilot({ ...request, proofTtlMs: 86400001 }, harness().driver, () => now);
+  expect(invalid.status).toBe("invalid_request");
+  expect(invalid.calls).toEqual({ probes: 0, topic: 0 });
 });
 
 it("retains an unknown cancellation without repeating the stop mutation", async () => {

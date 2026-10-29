@@ -1,6 +1,8 @@
 import { decodeStrictJson } from "../workers/strict-json.js";
+import { randomUUID } from "node:crypto";
 import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { selectionArgs } from "./config.js";
+import { mutationRequestId } from "./mutation-id.js";
 import type { Role } from "./config.js";
 import type {
   Attempt,
@@ -27,7 +29,7 @@ export class OrcaPilotDriver implements PilotDriver {
   inspect(request: PilotRequest) {
     return this.inspector.inspect(request);
   }
-  async begin(request: PilotRequest): Promise<string> {
+  async begin(request: PilotRequest, mutationRequestId=randomUUID()): Promise<string> {
     this.workspace = request.workspace;
     const r = await this.command(
       [
@@ -35,6 +37,7 @@ export class OrcaPilotDriver implements PilotDriver {
         "run-create",
         "--objective",
         "Bounded Council supplied-text pilot",
+        "--retry-request", mutationRequestId,
         "--json",
       ],
       this.workspace,
@@ -74,7 +77,7 @@ export class OrcaPilotDriver implements PilotDriver {
         "--spec",
         spec,
         "--retry-request",
-        attemptKey,
+        mutationRequestId(attemptKey),
         "--timeout-ms",
         String(
           Math.min(request.workerTimeoutMs, request.deadline - this.now()),
@@ -129,9 +132,10 @@ export class OrcaPilotDriver implements PilotDriver {
     };
   }
   async observe(a: Attempt, deadline: number): Promise<Result> {
-    // Bound polling; an unknown observation never creates a replacement attempt.
+    // Only the absolute inference deadline bounds polling. Contact loss never
+    // creates a replacement attempt or fabricates process exit.
     let completed = false;
-    for (let n = 0; n < 100 && this.now() < deadline; n++) {
+    for (let delay = 250; this.now() < deadline; delay = Math.min(1000, delay * 2)) {
       const r = await this.command(
         [
           "orchestration",
@@ -141,7 +145,7 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        5000,
+        Math.max(1, Math.min(5000, deadline - this.now())),
       );
       const d = r.dispatch;
       if (
@@ -158,7 +162,7 @@ export class OrcaPilotDriver implements PilotDriver {
         break;
       }
       await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(250, Math.max(0, deadline - this.now()))),
+        setTimeout(resolve, Math.min(delay, Math.max(0, deadline - this.now()))),
       );
     }
     if (!completed) throw new Error("NATIVE_RESULT_DEADLINE");
@@ -166,6 +170,7 @@ export class OrcaPilotDriver implements PilotDriver {
     let cursor: string | undefined;
     let sourceIdentity: string | undefined;
     for (let page = 0; page < 20; page++) {
+      if (this.now() >= deadline) throw new Error("NATIVE_RESULT_DEADLINE");
       const r = await this.command(
         [
           "orchestration",
@@ -180,7 +185,7 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        5000,
+        Math.max(1, Math.min(5000, deadline - this.now())),
       );
       if (
         r.dispatchId !== a.binding.dispatchId ||
@@ -225,7 +230,7 @@ export class OrcaPilotDriver implements PilotDriver {
       )
         return {
           ...v,
-          settlement: "settled",
+          settlement: "unknown",
           source: "Orca bound transcript",
           sourceIdentity: sourceIdentity!,
           provider: a.selection.route,
@@ -233,7 +238,7 @@ export class OrcaPilotDriver implements PilotDriver {
     }
     throw new Error("NATIVE_RESULT_MALFORMED_OR_MISMATCHED");
   }
-  async cancel(a: Attempt): Promise<"settled" | "unknown"> {
+  async cancel(a: Attempt, deadline: number): Promise<"settled" | "unknown"> {
     try {
       const r = await this.command(
         [
@@ -248,7 +253,8 @@ export class OrcaPilotDriver implements PilotDriver {
       );
       if (r.status === "stop_unknown" || r.state === "stop_unknown")
         return "unknown";
-      const show = await this.command(
+      for (let delay = 250; this.now() < deadline; delay = Math.min(1000, delay * 2)) {
+        const show = await this.command(
         [
           "orchestration",
           "worker-show",
@@ -257,13 +263,17 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        5000,
+        Math.max(1, Math.min(5000, deadline - this.now())),
       );
-      return show.dispatch?.id === a.binding.dispatchId &&
-        show.observation?.exactWorker === true &&
-        show.observation?.status === "exited"
-        ? "settled"
-        : "unknown";
+        if (show.dispatch?.id !== a.binding.dispatchId ||
+            show.dispatch?.runId !== a.binding.runId ||
+            show.dispatch?.taskId !== a.binding.taskId ||
+            show.observation?.exactWorker !== true ||
+            show.observation?.status === "unverifiable") return "unknown";
+        if (show.observation?.status === "exited") return "settled";
+        await new Promise(resolve => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - this.now()))));
+      }
+      return "unknown";
     } catch {
       return "unknown";
     }

@@ -5,7 +5,8 @@ import {
   selectionArgs,
   loadPilotConfig,
 } from "../../src/pilot/config.js";
-import { parseCouncilConfig } from "../../src/config/load.js";
+import { loadCouncilConfig, parseCouncilConfig } from "../../src/config/load.js";
+import { hashArtifact } from "../../src/domain/hash.js";
 import { incidentRoster } from "./fixtures.js";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,17 @@ it("preserves exact selection encoding across freeze/reload and rejects native-o
   expect(
     parseCouncilConfig(readFileSync("council.yaml")).reviewers.claude.route,
   ).toBe("antigravity");
+});
+
+it("preserves the exact legacy frozen hash produced by pristine public baseline 22782d2", async () => {
+  // Independently executed archive of 22782d25097dec67daa38203362b9ad4ba78e680;
+  // default council.yaml, original loader and hash implementation, no pilot.
+  const legacy = await loadCouncilConfig("council.yaml");
+  expect(legacy.configHash).toBe("b82df4728d319a45dfc2be8278be2ea13fab029ec925522c821d10a8daa2c575");
+  expect(legacy.rawSha256).toBe("4cc8fde4e6e55f68b8fd2fe1f550662ed685a1355d53fab01d2c762a3109ce15");
+  const saved = parseCouncilConfig(Buffer.from(JSON.stringify(legacy.resolved)));
+  expect(hashArtifact("council-config", saved as any)).toBe(legacy.configHash);
+  expect(Object.values(saved.reviewers).every(s => !Object.hasOwn(s, "effortEncoding"))).toBe(true);
 });
 it("rejects mismatched encoded effort and unknown native config fields", () => {
   const c = structuredClone(incidentRoster);

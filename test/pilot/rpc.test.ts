@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { LocalReadRpc } from "../../src/pilot/rpc.js";
+import { nativeHostFixture } from "./native-host-fixture.js";
+import { writeFileSync } from "node:fs";
 it("uses an official-client read boundary and rejects another runtime without handling authentication", async () => {
   let foreign = false;
   const seen: string[] = [];
@@ -31,4 +33,20 @@ it("uses an official-client read boundary and rejects another runtime without ha
     "agentSession.modelCatalog",
     "agentSession.modelCatalog",
   ]);
+});
+
+it("refuses a different installed runtime version before importing its client", () => {
+  const host = nativeHostFixture("1.4.245");
+  try {
+    writeFileSync(host.rpc, "throw Error('must not load unsupported export');");
+    expect(() => new LocalReadRpc("synthetic-runtime", host.orca)).toThrow("UNSUPPORTED_ORCA_API_VERSION");
+  } finally { host.close(); }
+});
+
+it("fails closed when the inspected installation has no RuntimeClient export", () => {
+  const host = nativeHostFixture();
+  try {
+    writeFileSync(host.rpc, "module.exports = {};");
+    expect(() => new LocalReadRpc("synthetic-runtime", host.orca)).toThrow("ORCA_EXPORTED_CLIENT_UNAVAILABLE");
+  } finally { host.close(); }
 });

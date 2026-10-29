@@ -1,4 +1,5 @@
 import type { ModelSelection, PilotConfig, Role } from "./config.js";
+import type { ScopedLaunchPlan } from "./scoped-launch.js";
 export type Phase =
   | "normal-probe"
   | "cancel-probe"
@@ -28,6 +29,13 @@ export interface RouteEvidence {
   allowance: Observation;
   billing: Observation;
   optionalTelemetry: Observation;
+  scopedLaunchPlan?: ScopedLaunchPlan | undefined;
+  policyAdmission?: {
+    state: "admitted" | "conditional";
+    routeCell: string;
+    qualifier: string;
+    firstUseOnly: boolean;
+  } | undefined;
 }
 export interface NativeEvidence {
   host: string;
@@ -97,6 +105,7 @@ export interface PilotRequest {
   maxTopicCalls: number;
   deadline: number;
   workerTimeoutMs: number;
+  proofTtlMs?: number | undefined;
   proofs: QualificationProof[];
 }
 export interface HostInspector {
@@ -105,7 +114,7 @@ export interface HostInspector {
   ): Promise<{ evidence: NativeEvidence; blockers: Blocker[] }>;
 }
 export interface PilotDriver extends HostInspector {
-  begin(request: PilotRequest): Promise<string>;
+  begin(request: PilotRequest, mutationRequestId?: string): Promise<string>;
   launch(
     runId: string,
     request: PilotRequest,
@@ -115,6 +124,6 @@ export interface PilotDriver extends HostInspector {
     attemptKey: string,
   ): Promise<Attempt>;
   observe(attempt: Attempt, deadline: number): Promise<Result>;
-  cancel(attempt: Attempt): Promise<"settled" | "unknown">;
+  cancel(attempt: Attempt, deadline: number): Promise<"settled" | "unknown">;
   release(attempt: Attempt): Promise<boolean>;
 }

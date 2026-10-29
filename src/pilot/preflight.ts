@@ -66,7 +66,8 @@ export function classify(request: PilotRequest, e: NativeEvidence): Blocker[] {
       const o = r[control];
       const allowed =
         o.state === "verified" ||
-        (control === "allowance" && o.state === "unknown");
+        (control === "allowance" && o.state === "unknown") ||
+        (control === "billing" && r.selection.route !== "cursor" && o.state === "unknown");
       if (!allowed)
         add(
           r.role,

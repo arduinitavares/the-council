@@ -2,13 +2,13 @@
 
 Selected baseline: `22782d25097dec67daa38203362b9ad4ba78e680`, branch `dev/issue-1-first-use`. The task-owned worktree began with only the coordinator's untracked spec/plan files. No other checkout's implementation or private helper files were copied.
 
-## Baseline RED
+## Initial implementation baseline RED
 
 Before any implementation edit, `npm test -- --maxWorkers 2 test/pilot/entry.test.ts` failed two behavioral assertions: shipped `native --help` and E2 `native --check-config` both returned `{"error":"USAGE","detail":"USAGE"}`. Fixture provenance is the public issue E2 roster, copied verbatim. Existing controller modules were unchanged for this run.
 
 A second semantic probe extracted the exact selected commit with `git archive`, linked only the already-installed project dependencies, compiled that pristine source snapshot, then ran `node test/pilot/baseline-probe.mjs /temporary/baseline`. It failed both independent assertions: the baseline rejected the exact E2 roster with CONFIG_INVALID, and native qualification returned UNQUALIFIED_ROUTE. This second replay was performed after implementation began, against pristine selected-baseline bytes; it is supplementary baseline evidence, not a claim that all these assertions were run before implementation.
 
-## Submitted offline evidence
+## Initial submission offline evidence, 0f67032
 
 `npm test -- --maxWorkers 2 test/pilot test/config` passes the submitted configuration/compatibility, shipped-entry/packaging, native command-adapter progression, bootstrap failure matrix, proof reuse/foreign/expired/version/control drift, disagreement, malformed bound result, unknown lifecycle, restart fencing, and official-client runtime binding checks. Latest focused checks pass39 tests /11 files; typecheck and build pass. The broad rerun passed629 tests /52 files in315.07 seconds; it started before the final small catalog-denial correction, which is independently covered by the exact final focused run. An isolated index snapshot passed fresh offline dependency installation (`npm ci --offline --ignore-scripts`), build, the shipped native entry and all39 focused tests. Install scripts were disabled for this pilot packaging smoke; this does not qualify a fresh native SQLite installation for the retained controller.
 
@@ -16,7 +16,7 @@ All positive workflow fixtures are synthetic. Runtime API settings/model-catalog
 
 The pilot has three equal voters, a separate nonvoting judge, eight maximum qualification calls and exactly ten topic calls. Cursor `grok-4.7-xhigh` retains logical xhigh in the exact model identifier and receives no native effort override. Unconditional unanimity is required; disagreement remains unresolved.
 
-## Real read-only observations and live gate
+## Initial read-only observations and live gate, 0f67032
 
 Inspected host: local macOS, already-running Orca 1.4.244; AGY 1.4.10; Codex 0.164.0; Cursor 2026.10.22-27dcf5f. Runtime/workspace metadata, settings.getAgentLaunch, and agentSession.modelCatalog were read without inference. The production API wrapper uses the official exported RuntimeClient from the canonical selected Orca installation, with version and runtime-ID checks; no pilot code reads or stores transport authentication. The exported client was positively exercised by a read-only settings request after replacing the prototype transport.
 
@@ -30,6 +30,22 @@ Required missing facts remain:
 
 No provider inference was launched by the implementer. The coordinator owns the separate-project run through the shipped entry. A9 is pending, and issue #1 remains open. Fresh independent review uses `claude-opus-5-5-medium` at `medium`; this implementer's self-review is not that review.
 
-## Delivery limits
+## Initial delivery limits, 0f67032
 
 This is a reviewable partial implementation. The actual native inspector currently blocks before all dependent inference because scoped prelaunch controls are unresolved. A3–A7 positive progression is demonstrated only with synthetic verified-control fixtures, not a current qualified production route. The CLI automatically loads/writes its own strict qualification cache with scope matching, native archive revalidation and a serialized writer lock; an existing run ID still fences duplicate inference. It does not accept caller-authored proof files. Package allowlist, symlink/foreign-cwd invocation and an isolated fresh offline source/dependency installation are tested; standard native-addon setup and live A9/A10 acceptance remain coordinator gates. Do not describe this as an operationally completed repair.
+
+## Fix round 1, 2026-10-29
+
+Fix baseline is `0f67032713cd249d357fb80c90a80166128f9e64`. The untouched commit was extracted with `git archive`, built with the existing local dependencies, and replayed through the same shipped `native --input` launcher and deterministic external Orca/provider fixtures as this branch. Both entry regressions failed on that baseline: the real unwrapped `agent-context` registry left evidence null, and a busy cache consumed the run identity and returned exit 2. The repaired entry validates the registry document, reaches source-specific inspection, saves the zero-call outcome, releases its cache lock and fences a duplicate run. Cache contention now exits 3 before journal reservation. This pair proves the shipped input composition, not a live positive Council run. The older `baseline-probe.mjs` remains a supplementary diagnostic that also fails on submitted bytes; it is not a matched RED/GREEN pair.
+
+New test-first lifecycle regressions reproduced early poll truncation, one-shot asynchronous cancellation, premature settled labels and run-deadline proof expiry on unchanged production code. They now cover completion after 100 polls, single-stop positive asynchronous settlement, lost contact, unknown release, independent one-hour/24-hour proof TTL and later-run reuse. Real policy table tests retain conditional Cursor admission and reject wrong effort or prose-only model mentions. Tests also preserve the legacy frozen config hash independently produced by pristine `22782d2`: `b82df4728d319a45dfc2be8278be2ea13fab029ec925522c821d10a8daa2c575`.
+
+The source investigator established registered `accounts.list` and `agentSession.createSupport`, plus the more expressive `agent.launch` terminal route. The inspector now uses those read APIs, preserves all relevant quota windows/reset times and explicit unknowns, rejects stale/absent/authentication/denied/exhausted observations, and projects out account identities and credential provenance. Codex/AGY existing access is preserved without imposing a universal debit lock. Cursor retains its separate included-Premium-only requirement. Supported scoped launch recipes and their exact unresolved control/lifecycle requirements are recorded under each route; they are not executed or presented as qualification.
+
+The coordinator's explicit I4 ruling permits only the inspected Orca 1.4.244 exported RuntimeClient for strict registered API reads. Export evidence is `cli/runtime-client.js:3-5`; constructor evidence is `cli/runtime/client.js:37-46`, with arguments `userDataPath`, `requestTimeoutMs`, `remotePairingCode`, `environmentSelector`, `cliExecutable`, `originalArgs`. Official call/authentication/runtime fencing stays in `cli/runtime/client.js:50-129`. The wrapper verifies installed version before import and runtime ID on every response, and fails closed on an unavailable export. Source hashes are `ef5b584ad2215dc22fd544b31141eceb35d8422ef083aa2b19817beb9b244124` for the export and `61130e9c876316906fc8ded2dda730945be2817d866d06bd8edaec2fe33b44fd` for the client. This is version-bound source evidence, not a stable SDK promise or private-token transport.
+
+The coordinator separately ruled that scoped creation/adoption remains disabled in this round. Its external custody, positive provider-tree cleanup and no-tool completion relay remain local implementation/qualification work. Current-task Cursor trust is absent and included-only spending enforcement evidence is unavailable under existing authority; no trust, billing, permission or settings changes were made. Zero provider inference was launched by this fixer. These limitations remain visible to the fresh independent reviewer and do not close A9/A10 or issue #1.
+
+Final fix-round verification: `npm test -- --maxWorkers 2 test/pilot test/config` passed 55 tests in 13 files. `npm test -- --maxWorkers 2` passed all 645 tests in 54 files, exit 0, in 312.74 seconds. Source/test bytes were frozen at 2026-10-29T22:10:09Z; all 115 recorded files matched their frozen SHA-256 values after the suite. Final typecheck and build passed. No functional or test edits occurred during or after that broad run; only validation/report text was completed afterward.
+
+One additional installed-source defect was fixed test-first: native `--retry-request` accepts a UUID, while the initial adapter passed a 64-character attempt hash. The driver and write-ahead journal now retain a separate stable UUID mutation ID without changing the bound packet attempt key. Run creation also reserves its UUID before submission, and ambiguous Run/worker mutations receive explicit journal events without automatic retry.

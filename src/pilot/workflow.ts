@@ -18,6 +18,8 @@ export interface PilotOutcome {
   status:
     | "consensus"
     | "disagreement"
+    | "judge_unresolved"
+    | "invalid_request"
     | "prerequisites_not_verified"
     | "failed";
   calls: { probes: number; topic: number };
@@ -47,6 +49,7 @@ export async function runPilot(
   const released = new Set<string>();
   const cancellationAttempted = new Set<string>();
   let pendingKey: string | null = null;
+  const proofTtlMs = request.proofTtlMs ?? 3600000;
   try {
     pilotConfigSchema.parse(request.config);
     if (
@@ -63,6 +66,7 @@ export async function runPilot(
       request.workerTimeoutMs > 120000 ||
       request.deadline <= now() ||
       request.deadline - now() > 1800000 ||
+      !Number.isSafeInteger(proofTtlMs) || proofTtlMs < 1 || proofTtlMs > 86400000 ||
       !request.candidate.trim() ||
       !request.suppliedText.trim()
     )
@@ -130,7 +134,7 @@ export async function runPilot(
       if (!a.launchVerified) throw Error("NATIVE_EFFECTIVE_SELECTION_MISMATCH");
       if (phase === "cancel-probe") {
         cancellationAttempted.add(a.binding.dispatchId);
-        if ((await driver.cancel(a)) !== "settled")
+        if ((await driver.cancel(a, request.deadline)) !== "settled")
           throw Error("CANCELLATION_SETTLEMENT_UNKNOWN");
         settled.add(a.binding.dispatchId);
         released.add(a.binding.dispatchId);
@@ -185,6 +189,8 @@ export async function runPilot(
         (typeof p?.approve !== "boolean" || typeof p?.reason !== "string")
       )
         throw Error("INVALID_BALLOT_RESULT");
+      // A valid result proves completion of the task, not resource release.
+      result.settlement = "unknown";
       out.results.push(result);
       settled.add(a.binding.dispatchId);
       released.add(a.binding.dispatchId);
@@ -192,6 +198,7 @@ export async function runPilot(
         out.unresolved.push(a.binding.dispatchId);
         throw Error("RELEASE_UNKNOWN");
       }
+      result.settlement = "settled";
       return result;
     };
     for (const r of needed) {
@@ -218,7 +225,7 @@ export async function runPilot(
         key: proofKey(inspected.evidence, r),
         scope: inspected.evidence,
         issuedAt: now(),
-        expiresAt: Math.min(request.deadline, now() + 3600000),
+        expiresAt: now() + proofTtlMs,
         normal: {
           dispatchId: owned[start]!.binding.dispatchId,
           outcome: "completed",
@@ -257,17 +264,21 @@ export async function runPilot(
     for (const role of voters)
       await execute(role, "ballot", canonicalJson({ packet, reviews, judge }));
     const jp = judge.payload as any;
-    out.status =
-      out.results
+    if (!jp.evidenceSupported || jp.unresolved.length > 0) {
+      out.status = "judge_unresolved";
+    } else {
+      out.status = out.results
         .filter((r) => r.phase === "ballot")
-        .every((r) => (r.payload as any).approve === true) &&
-      jp.evidenceSupported &&
-      jp.unresolved.length === 0
-        ? "consensus"
-        : "disagreement";
+        .every((r) => (r.payload as any).approve === true)
+        ? "consensus" : "disagreement";
+    }
   } catch (error) {
     out.error = error instanceof Error ? error.message : "NATIVE_FAILURE";
-    if (
+    if (out.error.startsWith("NATIVE_RUN_CREATION_OUTCOME_UNKNOWN:")) out.unresolved.push(out.error);
+    if (out.error === "INVALID_FINITE_BOUNDS_OR_INPUT" || out.error === "INSUFFICIENT_CALL_BUDGET" || error instanceof z.ZodError) {
+      out.status = "invalid_request";
+      out.blockers.push({ role: null, control: "request", reason: out.error, source: "native request validation", observed: out.error, nextAction: "Correct the input bounds or configuration before starting a new run." });
+    } else if (
       out.evidence === null &&
       out.calls.probes === 0 &&
       out.calls.topic === 0
@@ -292,7 +303,7 @@ export async function runPilot(
           continue;
         }
         cancellationAttempted.add(a.binding.dispatchId);
-        if ((await driver.cancel(a)) !== "settled") {
+        if ((await driver.cancel(a, request.deadline)) !== "settled") {
           out.unresolved.push(a.binding.dispatchId);
           continue;
         }

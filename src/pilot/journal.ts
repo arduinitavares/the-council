@@ -10,6 +10,8 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mutationRequestId } from "./mutation-id.js";
 import { canonicalJson } from "../domain/hash.js";
 import type { Attempt, PilotDriver, PilotRequest, Phase } from "./types.js";
 import type { Role } from "./config.js";
@@ -64,8 +66,14 @@ export class PilotJournal {
     return {
       inspect: (r) => driver.inspect(r),
       begin: async (r) => {
-        this.append({ event: "run-reserved" });
-        const id = await driver.begin(r);
+        const mutationRequestId=randomUUID();
+        this.append({ event: "run-reserved", mutationRequestId });
+        let id:string;
+        try { id = await driver.begin(r,mutationRequestId); }
+        catch(error) {
+          this.append({event:"run-creation-unknown",mutationRequestId});
+          throw Error(`NATIVE_RUN_CREATION_OUTCOME_UNKNOWN:${mutationRequestId}`,{cause:error});
+        }
         this.append({ event: "native-run-bound", runId: id });
         return id;
       },
@@ -83,9 +91,14 @@ export class PilotJournal {
           role,
           phase,
           key,
-          mutationRequestId: key,
+          mutationRequestId: mutationRequestId(key),
         });
-        const a = await driver.launch(runId, r, role, phase, packet, key);
+        let a:Attempt;
+        try { a = await driver.launch(runId, r, role, phase, packet, key); }
+        catch(error) {
+          this.append({event:"launch-unknown",runId,role,phase,key,mutationRequestId:mutationRequestId(key)});
+          throw error;
+        }
         owned.add(a.binding.dispatchId);
         this.append({ event: "attempt-bound", attempt: a });
         return a;
@@ -108,10 +121,10 @@ export class PilotJournal {
           throw error;
         }
       },
-      cancel: async (a) => {
+      cancel: async (a, deadline) => {
         check(a);
         this.append({ event: "cancel-reserved", binding: a.binding });
-        const result = await driver.cancel(a);
+        const result = await driver.cancel(a, deadline);
         this.append({ event: "cancel-observed", binding: a.binding, result });
         return result;
       },

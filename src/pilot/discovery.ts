@@ -13,6 +13,8 @@ import type {
   RouteEvidence,
 } from "./types.js";
 import type { Role } from "./config.js";
+import { accountAllowance, readFailure } from "./allowance.js";
+import { scopedLaunchPlan } from "./scoped-launch.js";
 const digest = (x: string) => createHash("sha256").update(x).digest("hex");
 const observation = (
   state: Observation["state"],
@@ -76,6 +78,13 @@ export class NativeHostInspector implements HostInspector {
     if (!policy.trim()) throw Error("EXECUTION_HOST_POLICY_EMPTY");
     const api = this.rpc(runtimeId);
     const settings = (await api.call("settings.getAgentLaunch", {})).settings;
+    let rateLimits: any;
+    let accountFailure: Observation | undefined;
+    try {
+      rateLimits = (await api.call("accounts.list", { refreshUsage: true })).rateLimits;
+    } catch (error) {
+      accountFailure = readFailure("Orca accounts.list(refreshUsage=true)", error);
+    }
     const versions: Record<string, string> = { orca: version };
     for (const route of ["codex", "antigravity", "cursor"] as const) {
       try {
@@ -135,6 +144,10 @@ export class NativeHostInspector implements HostInspector {
       ...Object.entries(request.config.reviewers),
       ["judge", request.config.judge],
     ] as const) {
+      let support: any;
+      try { support = await api.call("agentSession.createSupport", {agent:selection.route,worktree:`path:${workspace}`}); }
+      catch(error) { support = {observation:readFailure("Orca agentSession.createSupport",error)}; }
+      const plan = scopedLaunchPlan(workspace, selection, support);
       let catalog: any;
       let catalogFailure: Observation["state"] | null = null;
       try {
@@ -175,9 +188,7 @@ export class NativeHostInspector implements HostInspector {
         model = { id: selection.model, efforts: [] };
       const effort =
         model?.efforts?.some((e: any) => e.value === selection.effort) ||
-        selection.effortEncoding === "model" ||
-        (selection.route === "antigravity" &&
-          selection.model.endsWith(`-${selection.effort}`));
+        selection.effortEncoding === "model";
       const disabled = settings?.disabledTuiAgents?.includes(selection.route);
       // Launch defaults are observations, not proof of roots/tools/helper containment.
       const mode =
@@ -218,24 +229,21 @@ export class NativeHostInspector implements HostInspector {
                   : "exact model/effort unavailable",
         ),
         controls: observation(
-          "missing",
-          source,
-          `${permission}; required read-only roots, sandbox, hooks/tools, helper control and process-tree settlement are not exposed by this prelaunch API. worker-start cannot carry a per-launch mode in this version.`,
+          ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport.state : "missing",
+          "Orca settings, registered scoped launch contract and createSupport",
+          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. External terminal custody needs a task-owned completion relay and stop/close reconciliation before admission; it is a local implementation/qualification gap.`,
         ),
+        scopedLaunchPlan: plan,
         allowance:
           selection.route === "antigravity"
             ? agyAllowance
-            : observation(
-                "missing",
-                "Orca settings/catalog APIs",
-                "No required provider usage observation was returned. Absence is distinct from an explicitly unknown balance.",
-              ),
+            : accountFailure ?? accountAllowance(selection.route, rateLimits?.[selection.route], Date.now()),
         billing: observation(
-          "missing",
-          source,
+          selection.route === "cursor" ? "missing" : "unknown",
+          selection.route === "cursor" ? source : `execution-host policy sha256=${digest(policy)} and existing authorized provider access`,
           selection.route === "cursor"
             ? "Included Premium weekly pool binding is not exposed; credits/overflow are not authorized."
-            : "Existing billing-source constraint is not exposed by launch settings.",
+            : "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required.",
         ),
         optionalTelemetry: observation(
           "unknown",
@@ -253,15 +261,26 @@ export class NativeHostInspector implements HostInspector {
       const admissionRow = policy.split("\n").find((line) => {
         const cells = line.split("|").map((cell) => cell.trim());
         return (
-          cells[1]?.startsWith(policyRoute) &&
+          cells[1]?.split(",")[0]?.trim() === policyRoute &&
           cells[2]?.includes("`" + selection.model + "`")
         );
       });
+      const cells = admissionRow?.split("|").map(cell => cell.trim());
       const admitted =
-        admissionRow &&
-        (admissionRow.includes("`" + selection.effort + "`") ||
-          (admissionRow.includes("Matching") &&
-            selection.model.endsWith("-" + selection.effort)));
+        cells?.[3]?.includes("`" + selection.effort + "`") &&
+        (!cells[3].includes("Matching") || selection.model.endsWith("-" + selection.effort));
+      if (admitted) {
+        const routeCell = cells![1]!;
+        const qualifier = routeCell.split(",").slice(1).join(",").trim();
+        const conditional = /pending|conditional/i.test(qualifier);
+        routes.at(-1)!.policyAdmission = {
+          state: conditional ? "conditional" : "admitted", routeCell, qualifier,
+          firstUseOnly: conditional,
+        };
+        // Conditional admission permits this explicitly bounded first-use
+        // qualification after bootstrap controls pass. It does not certify
+        // the coordinator's ordinary host/model/action route.
+      }
       if (!admitted)
         blockers.push({
           role: role as Role,
@@ -291,6 +310,7 @@ export class NativeHostInspector implements HostInspector {
             agentDefaultArgs: settings?.agentDefaultArgs ?? null,
           },
           workspaceId: w.id,
+          scopedPlans: routes.map(r => r.scopedLaunchPlan),
         }),
       ),
       routes,

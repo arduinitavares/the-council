@@ -14,7 +14,8 @@
     "docs/runbook.md",
     "docs/qualification/local-macos.md",
     "docs/superpowers/diagrams/",
-    "docs/qualification/issue-1-validation.md"
+    "docs/qualification/issue-1-validation.md",
+    "docs/qualification/issue-1-second-project-prerequisites.json"
   ],
   "scripts": {
     "test": "vitest run",

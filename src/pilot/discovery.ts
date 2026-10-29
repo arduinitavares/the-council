@@ -186,9 +186,13 @@ export class NativeHostInspector implements HostInspector {
         fallback.split(/\s+/).includes(selection.model)
       )
         model = { id: selection.model, efforts: [] };
+      let effortContract: Awaited<ReturnType<NonNullable<ReadRpc["effortSupport"]>>> | undefined;
+      if (model && selection.route === "antigravity" && !catalogFailure && api.effortSupport) {
+        try { effortContract = await api.effortSupport(selection.route); } catch {}
+      }
       const effort =
         model?.efforts?.some((e: any) => e.value === selection.effort) ||
-        selection.effortEncoding === "model";
+        selection.effortEncoding === "model" || effortContract?.efforts.includes(selection.effort);
       const disabled = settings?.disabledTuiAgents?.includes(selection.route);
       // Launch defaults are observations, not proof of roots/tools/helper containment.
       const mode =
@@ -214,10 +218,10 @@ export class NativeHostInspector implements HostInspector {
                 ? "missing"
                 : model && effort
                   ? "verified"
-                  : "unavailable",
+                  : model ? "missing" : "unavailable",
           model && !catalog.models
             ? "documented provider models command"
-            : "Orca agentSession.modelCatalog",
+            : `Orca agentSession.modelCatalog${effortContract?.efforts.includes(selection.effort) ? "; " + effortContract.source : ""}`,
           disabled
             ? "route disabled"
             : catalogFailure
@@ -225,13 +229,13 @@ export class NativeHostInspector implements HostInspector {
               : !catalog.models && !model
                 ? `catalog ${catalog.origin ?? "unexposed"}`
                 : model && effort
-                  ? "exact selection exposed"
-                  : "exact model/effort unavailable",
+                  ? `exact selection exposed${effortContract?.efforts.includes(selection.effort) ? "; " + effortContract.detail : ""}`
+                  : model ? "exact model present; effort mapping unverified" : "exact model unavailable",
         ),
         controls: observation(
           ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport.state : "missing",
           "Orca settings, registered scoped launch contract and createSupport",
-          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. External terminal custody needs a task-owned completion relay and stop/close reconciliation before admission; it is a local implementation/qualification gap.`,
+          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.`,
         ),
         scopedLaunchPlan: plan,
         allowance:

@@ -69,3 +69,34 @@ it("waits only to the absolute cancellation deadline for an owned live process",
   expect(Date.now()).toBe(epoch + 2500);
   expect(h.counts().stops).toBe(1);
 });
+
+it("settles an owned process when cancellation begins after the inference deadline", async () => {
+  const h = fixture(2);
+  vi.setSystemTime(epoch + 120001);
+  const result = h.driver.cancel(attempt, epoch + 120000);
+  await vi.runAllTimersAsync();
+  expect(await result).toBe("settled");
+  expect(h.counts()).toEqual({ shows: 3, stops: 1 });
+  expect(Date.now()).toBeLessThanOrEqual(epoch + 150001);
+});
+
+it("does not reissue an already attempted stop after contact loss", async () => {
+  const h = fixture(3, true);
+  expect(await h.driver.cancel(attempt, epoch + 10000)).toBe("unknown");
+  expect(await h.driver.cancel(attempt, epoch + 10000)).toBe("unknown");
+  expect(h.counts().stops).toBe(1);
+});
+
+it("bounds an expired live cleanup to30seconds and a future cancellation to120seconds", async () => {
+  const expired=fixture(Infinity);
+  vi.setSystemTime(epoch+1);
+  const first=expired.driver.cancel(attempt,epoch);
+  await vi.runAllTimersAsync();
+  expect(await first).toBe("unknown");
+  expect(Date.now()).toBe(epoch+30001);
+  const future=fixture(Infinity);
+  const second=future.driver.cancel(attempt,epoch+1800000);
+  await vi.runAllTimersAsync();
+  expect(await second).toBe("unknown");
+  expect(Date.now()).toBe(epoch+120000);
+});

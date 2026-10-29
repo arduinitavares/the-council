@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { runPilot } from "../../src/pilot/workflow.js";
 import { OrcaPilotDriver } from "../../src/pilot/orca-driver.js";
 import { incidentRoster } from "./fixtures.js";
@@ -64,6 +64,47 @@ const request: PilotRequest = {
   workerTimeoutMs: 1000,
   proofs: [],
 };
+
+it("uses cleanup grace after workflow expiry without launching another inference", async () => {
+  const h = harness();
+  let clock = now;
+  vi.spyOn(h.driver, "observe").mockImplementation(async () => {
+    clock = request.deadline;
+    throw Error("NATIVE_RESULT_DEADLINE");
+  });
+  const cancel = vi.spyOn(h.driver, "cancel").mockImplementation(async (_a, deadline) => {
+    expect(deadline).toBe(clock + 30000);
+    return "settled";
+  });
+  const result = await runPilot(request, h.driver, () => clock);
+  expect(result.status).toBe("failed");
+  expect(result.calls).toEqual({ probes: 1, topic: 0 });
+  expect(result.unresolved).toEqual([]);
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(h.calls.filter(c => c.argv[1] === "worker-release")).toHaveLength(1);
+});
+
+it("caps cancel-probe settlement to the per-attempt inference bound", async () => {
+  const h = harness();
+  const cancel = vi.spyOn(h.driver, "cancel").mockImplementation(async (_a, deadline) => {
+    expect(deadline).toBe(now + request.workerTimeoutMs);
+    return "settled";
+  });
+  const result = await runPilot(request, h.driver, () => now);
+  expect(result.status).toBe("consensus");
+  expect(cancel).toHaveBeenCalledTimes(4);
+});
+
+it("never observes or qualifies a launch which exhausted the inference budget",async()=>{
+  const h=harness();let clock=now;
+  const launch=h.driver.launch.bind(h.driver);
+  vi.spyOn(h.driver,"launch").mockImplementation(async(...args)=>{const a=await launch(...args);clock+=request.workerTimeoutMs;return a;});
+  const observe=vi.spyOn(h.driver,"observe");
+  const result=await runPilot(request,h.driver,()=>clock);
+  expect(result.calls).toEqual({probes:1,topic:0});
+  expect(result.proofs).toEqual([]);
+  expect(observe).not.toHaveBeenCalled();
+});
 function harness(
   options: {
     fail?: string;

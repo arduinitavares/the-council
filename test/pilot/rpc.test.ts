@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import { LocalReadRpc } from "../../src/pilot/rpc.js";
 import { nativeHostFixture } from "./native-host-fixture.js";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, renameSync, symlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 it("uses an official-client read boundary and rejects another runtime without handling authentication", async () => {
   let foreign = false;
   const seen: string[] = [];
@@ -49,4 +50,35 @@ it("fails closed when the inspected installation has no RuntimeClient export", (
     writeFileSync(host.rpc, "module.exports = {};");
     expect(() => new LocalReadRpc("synthetic-runtime", host.orca)).toThrow("ORCA_EXPORTED_CLIENT_UNAVAILABLE");
   } finally { host.close(); }
+});
+
+it("reads an explicit AGY effort mapping independently of empty model-catalog efforts", async () => {
+  const host = nativeHostFixture();
+  try {
+    const source = resolve(dirname(host.rpc), "../shared/agent-session-option-catalog-antigravity.js");
+    mkdirSync(dirname(source), {recursive:true});
+    // Synthetic source shape from Orca 1.4.244's installed option catalog.
+    writeFileSync(source, `const ANTIGRAVITY_EFFORT = {
+      kind: {type:'select', choices:[{value:'low'},{value:'medium'},{value:'high'}]},
+      apply: { launchArgs: (value) => ['--effort', String(value)] }
+    };
+    exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = {
+      supportsWorkerLaunchPreferences: true, unknownModelOptions: [ANTIGRAVITY_EFFORT]
+    };`);
+    const rpc = new LocalReadRpc("synthetic-runtime", host.orca);
+    expect(typeof (rpc as any).effortSupport).toBe("function");
+    const contract = await (rpc as any).effortSupport("antigravity");
+    expect(contract).toMatchObject({efforts:["low","medium","high"]});
+    expect(contract.source).toContain("sha256=");
+    writeFileSync(source, "// no explicit mapping");
+    expect((await (rpc as any).effortSupport("antigravity")).efforts).toEqual([]);
+  } finally { host.close(); }
+});
+
+it("rejects a symlinked runtime-client export before importing it",()=>{
+  const host=nativeHostFixture();
+  try{
+    const linked=host.rpc+".original";renameSync(host.rpc,linked);symlinkSync(linked,host.rpc);
+    expect(()=>new LocalReadRpc("synthetic-runtime",host.orca)).toThrow("ORCA_EXPORTED_CLIENT_PATH_UNVERIFIED");
+  }finally{host.close();}
 });

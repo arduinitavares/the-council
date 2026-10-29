@@ -17,6 +17,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     let catalogDenied = false;
     let accountVariant = "fresh";
     let supportDenied = false;
+    let effortMapping = true;
     const inspector = new NativeHostInspector(
       async (argv) =>
         argv[0] === "agent-context"
@@ -46,6 +47,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
               }
             : { worktree: { id: "repo::B", path: workspace, hostId: "local" } },
       () => ({
+        effortSupport: async () => ({efforts: effortMapping ? ["high"] : [],source:"synthetic explicit AGY option mapping",detail:"--effort value"}),
         call: async (method, params) => {
           if (method === "accounts.list") {
             expect(params).toEqual({ refreshUsage: true });
@@ -68,7 +70,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
                   agentDefaultArgs: {},
                 },
               }
-            : { origin: "unknown" };
+            : params.agent === "antigravity" ? {origin:"live-session",models:[{id:"gemini-4-argon-high",efforts:[]}]} : { origin: "unknown" };
         },
       }),
       async (provider, op) => {
@@ -104,6 +106,11 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     expect(r.evidence.routes.find((r) => r.role === "xai")?.catalog.state).toBe(
       "verified",
     );
+    expect(r.evidence.routes.find(r => r.role === "gemini")?.catalog.state).toBe("verified");
+    effortMapping = false;
+    const noEffortMapping = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
+    expect(noEffortMapping.evidence.routes.find(r => r.role === "gemini")?.catalog).toMatchObject({state:"missing",detail:expect.stringContaining("model present; effort")});
+    effortMapping = true;
     expect(
       r.evidence.routes.find((r) => r.role === "gemini")?.allowance.state,
     ).toBe("verified");
@@ -124,6 +131,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
       structuredSupport: {state:"unsupported"},
     });
     expect(plan?.request.sessionOptions).not.toHaveProperty("effort");
+    expect(typeof plan?.request.agentArgs).toBe("string");
     expect(plan?.pendingControls).toContain("external-terminal-settlement-and-completion-relay");
     expect(calls).toContain("cursor:models");
     expect(calls).toContain("antigravity:usage");
@@ -159,4 +167,11 @@ it("uses supported provider catalog/usage sources while preserving actual missin
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
+});
+
+it("distinguishes absent usage windows from explicit null windows", async () => {
+  const {accountAllowance} = await import("../../src/pilot/allowance.js");
+  const value = {provider:"codex",status:"ok",updatedAt:Date.now()};
+  expect(accountAllowance("codex",value,Date.now()).state).toBe("missing");
+  expect(accountAllowance("codex",{...value,session:null,weekly:null},Date.now()).state).toBe("unknown");
 });

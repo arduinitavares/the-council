@@ -3,6 +3,8 @@ import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { pilotConfigSchema } from "./config.js";
 import type { Role } from "./config.js";
 import { classify, proofKey } from "./preflight.js";
+import { CLEANUP_GRACE_MS } from "./orca-driver.js";
+import {pilotPayloadSchemas} from "./payload.js";
 import type {
   Attempt,
   Blocker,
@@ -121,6 +123,8 @@ export async function runPilot(
         index: out.calls[counter],
       });
       out.calls[counter]++;
+      // Launch/readiness time consumes this same inference budget.
+      const inferenceDeadline = Math.min(request.deadline, now() + request.workerTimeoutMs);
       const a = await driver.launch(
         run,
         request,
@@ -131,10 +135,11 @@ export async function runPilot(
       );
       owned.push(a);
       pendingKey = null;
+      if(now()>=inferenceDeadline)throw Error("NATIVE_INFERENCE_DEADLINE");
       if (!a.launchVerified) throw Error("NATIVE_EFFECTIVE_SELECTION_MISMATCH");
       if (phase === "cancel-probe") {
         cancellationAttempted.add(a.binding.dispatchId);
-        if ((await driver.cancel(a, request.deadline)) !== "settled")
+        if ((await driver.cancel(a, inferenceDeadline)) !== "settled")
           throw Error("CANCELLATION_SETTLEMENT_UNKNOWN");
         settled.add(a.binding.dispatchId);
         released.add(a.binding.dispatchId);
@@ -146,26 +151,9 @@ export async function runPilot(
       }
       const result = await driver.observe(
         a,
-        Math.min(request.deadline, now() + request.workerTimeoutMs),
+        inferenceDeadline,
       );
-      const payloadSchemas = {
-        "normal-probe": z.strictObject({ ready: z.literal(true) }),
-        readiness: z.strictObject({ ready: z.literal(true) }),
-        review: z.strictObject({
-          assessment: z.string().min(1),
-          objections: z.array(z.string()),
-        }),
-        judge: z.strictObject({
-          evidenceSupported: z.boolean(),
-          unresolved: z.array(z.string()),
-        }),
-        ballot: z.strictObject({
-          approve: z.boolean(),
-          reason: z.string().min(1),
-        }),
-        "cancel-probe": z.never(),
-      };
-      if (!payloadSchemas[phase].safeParse(result.payload).success)
+      if (!pilotPayloadSchemas[phase].safeParse(result.payload).success)
         throw Error("INVALID_" + phase.toUpperCase() + "_RESULT");
       const p = result.payload as any;
       if (
@@ -296,6 +284,8 @@ export async function runPilot(
     }
     if (pendingKey) out.unresolved.push(`launch outcome unknown:${pendingKey}`);
   } finally {
+    // One shared, finite grace for cleanup only; no execute()/launch occurs here.
+    const cleanupDeadline = now() + CLEANUP_GRACE_MS;
     for (const a of owned) {
       if (!settled.has(a.binding.dispatchId)) {
         if (cancellationAttempted.has(a.binding.dispatchId)) {
@@ -303,7 +293,7 @@ export async function runPilot(
           continue;
         }
         cancellationAttempted.add(a.binding.dispatchId);
-        if ((await driver.cancel(a, request.deadline)) !== "settled") {
+        if ((await driver.cancel(a, cleanupDeadline)) !== "settled") {
           out.unresolved.push(a.binding.dispatchId);
           continue;
         }

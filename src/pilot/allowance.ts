@@ -19,6 +19,8 @@ export function accountAllowance(provider: "codex" | "cursor", value: any, now: 
   if (value.error || value.status !== "ok") return readFailure(source, value.error ?? value.status);
   if (!Number.isFinite(value.updatedAt) || value.updatedAt > now + 60000 || now - value.updatedAt > 300000)
     return { state: "missing", source, detail: canonicalJson({ reason: "STALE_OR_UNDATED_ALLOWANCE", updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : null, observedAt: now }) };
+  if (!["session","weekly","monthly","buckets"].some(key => Object.hasOwn(value,key) && value[key] !== undefined))
+    return {state:"missing",source,detail:"No usage windows exposed; absence is not an explicit unknown observation"};
   const project = (window: any) => window == null ? null : {
     usedPercent: typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100 ? window.usedPercent : null,
     windowMinutes: Number.isFinite(window.windowMinutes) ? window.windowMinutes : null,

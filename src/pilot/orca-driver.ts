@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { selectionArgs } from "./config.js";
 import { mutationRequestId } from "./mutation-id.js";
+export {runGuardedHostCommand,HostCompletionRelay} from "./host-relay.js";
+export {ScopedTerminalCustody} from "./scoped-custody.js";
 import type { Role } from "./config.js";
 import type {
   Attempt,
@@ -18,9 +20,12 @@ export type Command = (
   cwd: string,
   timeoutMs: number,
 ) => Promise<any>;
+/** No new inference is permitted during this bounded post-deadline window. */
+export const CLEANUP_GRACE_MS = 30000;
 /** Only this adapter owns Orca mutations. Receipts are native command results, never caller-authored files. */
 export class OrcaPilotDriver implements PilotDriver {
   private workspace = "";
+  private readonly cancellationRequested = new Set<string>();
   constructor(
     private readonly command: Command,
     private readonly inspector: HostInspector,
@@ -239,6 +244,11 @@ export class OrcaPilotDriver implements PilotDriver {
     throw new Error("NATIVE_RESULT_MALFORMED_OR_MISMATCHED");
   }
   async cancel(a: Attempt, deadline: number): Promise<"settled" | "unknown"> {
+    // A lost stop receipt is ambiguous, never permission to repeat a mutation.
+    if (this.cancellationRequested.has(a.binding.dispatchId)) return "unknown";
+    this.cancellationRequested.add(a.binding.dispatchId);
+    const settlementDeadline = deadline > this.now()
+      ? Math.min(deadline,this.now()+120000) : this.now() + CLEANUP_GRACE_MS;
     try {
       const r = await this.command(
         [
@@ -249,11 +259,11 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        5000,
+        Math.max(1, Math.min(5000, settlementDeadline - this.now())),
       );
       if (r.status === "stop_unknown" || r.state === "stop_unknown")
         return "unknown";
-      for (let delay = 250; this.now() < deadline; delay = Math.min(1000, delay * 2)) {
+      for (let delay = 250; this.now() < settlementDeadline; delay = Math.min(1000, delay * 2)) {
         const show = await this.command(
         [
           "orchestration",
@@ -263,7 +273,7 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        Math.max(1, Math.min(5000, deadline - this.now())),
+        Math.max(1, Math.min(5000, settlementDeadline - this.now())),
       );
         if (show.dispatch?.id !== a.binding.dispatchId ||
             show.dispatch?.runId !== a.binding.runId ||
@@ -271,7 +281,7 @@ export class OrcaPilotDriver implements PilotDriver {
             show.observation?.exactWorker !== true ||
             show.observation?.status === "unverifiable") return "unknown";
         if (show.observation?.status === "exited") return "settled";
-        await new Promise(resolve => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - this.now()))));
+        await new Promise(resolve => setTimeout(resolve, Math.min(delay, Math.max(0, settlementDeadline - this.now()))));
       }
       return "unknown";
     } catch {

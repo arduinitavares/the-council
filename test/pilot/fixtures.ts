@@ -1,0 +1,19 @@
+import type { PilotConfig } from "../../src/pilot/config.js";
+export const incidentRoster: PilotConfig = {
+  version: 1,
+  reviewers: {
+    openai: { route: "codex", model: "gpt-6.1-sol", effort: "max" },
+    gemini: {
+      route: "antigravity",
+      model: "gemini-4-argon-high",
+      effort: "high",
+    },
+    xai: {
+      route: "cursor",
+      model: "grok-4.7-xhigh",
+      effort: "xhigh",
+      effortEncoding: "model",
+    },
+  },
+  judge: { route: "codex", model: "gpt-6-astra", effort: "max" },
+};

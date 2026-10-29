@@ -13,5 +13,5 @@ export const configSchema = councilConfigSchema.superRefine((config, ctx) => {
   }
 });
 export class ConfigError extends Error {
-  constructor(readonly code: 'CONFIG_INVALID' | 'CONFIG_NOT_FOUND' | 'CONFIG_VERSION_UNSUPPORTED') { super(code); }
+  constructor(readonly code: 'CONFIG_INVALID' | 'CONFIG_NOT_FOUND' | 'CONFIG_VERSION_UNSUPPORTED' | 'CONFIG_NATIVE_ONLY_USE_NATIVE_COMMAND') { super(code); }
 }

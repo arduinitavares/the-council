@@ -9,6 +9,10 @@ Coordinate three equal reviewers and a separate fresh evidence judge for one exp
 
 Read [communication.md](references/communication.md) before presenting questions or processing answers. Read the repository's [runbook](../../docs/runbook.md) for commands, input fields, qualification limits, recovery, and installation gates.
 
+## Native first use
+
+For the exact OpenAI/Gemini/xAI incident roster, read [first-use.md](references/first-use.md) and invoke the explicit `native` entry. It resolves the requesting project independently of this installation. Native controls and billing prerequisites must be established before inference; the current supported host still has named gaps and is not operationally qualified. Retained controller commands below preserve their saved configuration format.
+
 ## Prepare the decision
 
 Require a topic and scoped handoff. Use the installed [handoff skill](/Users/aaat/.agents/skills/handoff/SKILL.md), preserving its OS-temporary location and sensitive exclusions. The CLI takes a structured `handoff` object and writes its own temporary handoff; use the authoritative `runInputSchema` and `handoffInputSchema` in the repository. Reference existing artifacts rather than copying unrelated conversation.

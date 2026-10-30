@@ -73,7 +73,7 @@ export async function verifyContextProof(proof: QualificationProof, command: Com
       const assignmentFile = join(context.directory, "assignment.json");
       if (sha256(readFileSync(assignmentFile)) !== context.assignmentHash) return false;
       const a = assignmentSchema.parse(readStrictFile(assignmentFile));
-      if (a.producerHash !== producerCodeHash()) return false;
+      if (a.producerHash !== producerCodeHash() || (proof.scope.producerCodeHash !== undefined && a.producerHash !== proof.scope.producerCodeHash)) return false;
       if (a.phase !== phase || a.binding.dispatchId !== outcome.dispatchId || a.runtimeId !== proof.scope.runtimeId || a.workspaceId !== proof.scope.workspaceId ||
           a.workspace !== proof.scope.workspace || a.controlsHash !== proof.scope.controlsHash || a.policyHash !== proof.scope.policyHash || canonicalJson(a.identity) !== canonicalJson(context.identity)) return false;
       const expected = canonicalJson({ instruction: phase === "normal-probe" ? "Reply with readiness only." : "Wait for cancellation.", qualificationFingerprint: proof.key });
@@ -90,11 +90,18 @@ export async function verifyContextProof(proof: QualificationProof, command: Com
       if (sha256(readFileSync(cleanupFile)) !== context.cleanupHash) return false;
       const cleanup = readStrictFile(cleanupFile);
       if (cleanup.wrapperExit !== true || canonicalJson(cleanup.binding) !== canonicalJson(a.binding) || canonicalJson(cleanup.identity) !== canonicalJson(a.identity) ||
-          cleanup.close?.handle !== a.identity.handle || cleanup.close?.ptyKilled !== true || cleanup.processState?.hasChildProcesses !== false || cleanup.processState?.childProcessEvidence !== "no-children") return false;
-      try { process.kill(verified.report.wrapperPid, 0); return false; } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ESRCH") return false; }
+          cleanup.close?.handle !== a.identity.handle || cleanup.close?.ptyKilled !== true ||
+          !validCleanupSettlement(cleanup, a.identity)) return false;
     }
     return true;
   } catch { return false; }
+}
+function validCleanupSettlement(cleanup: any, identity: WrapperAssignment["identity"]): boolean {
+  if (cleanup.processState?.hasChildProcesses === false && cleanup.processState?.childProcessEvidence === "no-children" && cleanup.processState?.verdict === "exited") return true;
+  const shown = cleanup.nativeTerminal;
+  return cleanup.inspectFailure === "terminal_gone" && shown?.connected === false &&
+    Object.entries(identity).every(([key, value]) => key === "paneKey"
+      ? (shown.paneKey ?? `${shown.tabId}:${shown.leafId}`) === value : shown[key] === value);
 }
 /** Connected native Task/Dispatch lane. Process custody is explicitly external;
  * no WorkerResource, transcript archive or release receipt is invented. */
@@ -156,16 +163,19 @@ export class ContextWrapperTransport implements ContextWrapperPort {
         const prepared = readStrictFile(join(directory, "prepared.json"));
         attempt.initializations = prepared.initializations;
         if (prepared.assignmentHash !== assignmentHash || prepared.ready !== true) { attempt.controlError = prepared.error ?? "WRAPPER_EFFECTIVE_CONTROLS_UNVERIFIED"; return attempt; }
-        writeExclusive(join(directory, "input.json"), { assignmentHash, requestId: mutationRequestId(`input:${key}`) });
+        attempt.inferenceStarted = null;
+        attempt.controlError = "WRAPPER_INPUT_ACK_UNKNOWN";
+        try { writeExclusive(join(directory, "input.json"), { assignmentHash, requestId: mutationRequestId(`input:${key}`) }); }
+        catch { attempt.controlError = "WRAPPER_INPUT_MUTATION_UNKNOWN"; return attempt; }
         while (this.now() < deadline) {
           if (existsSync(join(directory, "inference-started.json"))) {
             const started = readStrictFile(join(directory, "inference-started.json"));
             if (started.assignmentHash !== assignmentHash || started.calls !== 1) throw Error("WRAPPER_INPUT_ACK_UNBOUND");
-            attempt.inferenceStarted = true; attempt.launchVerified = true; return attempt;
+            attempt.inferenceStarted = true; attempt.launchVerified = true; delete attempt.controlError; return attempt;
           }
           if (existsSync(join(directory, "result.json"))) {
             const observed = readStrictFile(join(directory, "result.json"));
-            attempt.inferenceStarted = observed.calls === 0 ? false : observed.calls === 1 ? true : undefined;
+            attempt.inferenceStarted = observed.calls === 0 ? false : observed.calls === 1 ? true : null;
             attempt.controlError = "WRAPPER_INPUT_DELIVERY_UNVERIFIED"; return attempt;
           }
           await pause(20);
@@ -213,7 +223,7 @@ export class ContextWrapperTransport implements ContextWrapperPort {
         const cancel = verified.report.cancellation;
         return verified.report.status === "cancelled" && cancel?.requestId === requestId && cancel?.acknowledged === true && canonicalJson(cancel.binding) === canonicalJson(a.binding)
           ? { state: "settled", stop: { dispatchId: a.binding.dispatchId, requestId, state: "stopped", kind: "wrapper-control" } }
-          : { state: "settled_unacknowledged" };
+          : { state: "settled_unacknowledged", ...(verified.report.error ? { error: verified.report.error as string } : {}) };
       } catch { /* Observe the same owned attempt; never resend a provider stop. */ }
       await pause(20);
     }
@@ -234,19 +244,27 @@ export class ContextWrapperTransport implements ContextWrapperPort {
         const shown = (await rpc.callScoped("terminal.show", { terminal: assignment.identity.handle })).terminal;
         if (!Object.entries(assignment.identity).filter(([key]) => key !== "paneKey").every(([key, value]) => shown?.[key] === value)) return false;
         const parameters = { terminal: assignment.identity.handle, expectedIncarnationId: assignment.identity.incarnationId };
-        const processState = (await rpc.callScoped("terminal.inspectProcess", { ...parameters, scanChildProcesses: true })).process;
-        if (processState?.hasChildProcesses !== false || processState.childProcessEvidence !== "no-children" || processState.verdict === "unverifiable") return false;
+        let processState: any = null;
+        let inspectFailure: string | null = null;
+        try { processState = (await rpc.callScoped("terminal.inspectProcess", { ...parameters, scanChildProcesses: true })).process; }
+        catch (cause) {
+          const code = (cause as any)?.code ?? (cause as any)?.response?.error?.code;
+          if (shown?.connected !== false || code !== "terminal_gone") return false;
+          inspectFailure = code;
+        }
+        const settlement = { processState, inspectFailure, nativeTerminal: shown };
+        if (!validCleanupSettlement(settlement, assignment.identity)) return false;
         owned.closeAttempted = true;
         this.record({ event: "wrapper-terminal-close-reserved", identity: assignment.identity });
         const closed = await rpc.callScoped("terminal.close", parameters);
         if (closed.close?.handle !== assignment.identity.handle || closed.close.ptyKilled !== true || closed.close.ptyStopVerdict !== undefined) return false;
-        const cleanup = { binding: a.binding, identity: assignment.identity, wrapperPid: verified.report.wrapperPid, wrapperExit: true, processState, close: closed.close };
+        const cleanup = { binding: a.binding, identity: assignment.identity, wrapperPid: verified.report.wrapperPid, wrapperExit: true, ...settlement, close: closed.close };
         writeExclusive(join(assignment.directory, "cleanup.json"), cleanup);
         owned.proof = { custody: "context-only-external", directory: assignment.directory, assignmentHash: owned.assignmentHash,
           resultHash: verified.resultHash, completionMessageId: verified.completionMessageId, identity: assignment.identity,
           wrapperExit: true, terminalClosed: true, cleanupHash: sha256(readFileSync(join(assignment.directory, "cleanup.json"))) };
         return true;
-      } catch { return false; }
+      } catch { if (owned.closeAttempted) return false; await pause(20); }
     }
     return false;
   }

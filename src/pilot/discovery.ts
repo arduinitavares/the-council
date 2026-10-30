@@ -15,6 +15,7 @@ import type {
   RouteEvidence,
 } from "./types.js";
 import type { Role } from "./config.js";
+import { producerCodeHash } from "./wrapper-contract.js";
 import { accountAllowance, readFailure } from "./allowance.js";
 import { scopedLaunchPlan } from "./scoped-launch.js";
 import { inspectProviderControls, type ProviderControlSource } from "./provider-controls.js";
@@ -225,7 +226,7 @@ export class NativeHostInspector implements HostInspector {
       const billing = observation(selection.route === "cursor" ? "missing" : "unknown",
         selection.route === "cursor" ? "No supported Cursor included-only debit source integrated" : `execution-host policy sha256=${digest(policyBytes)} and existing authorized provider access`,
         selection.route === "cursor" ? "Included-only enforcement must come from the existing supported account constraint; plan, quota and extraUsage=false alone are insufficient." : "Existing provider access is preserved; no new spending authority.");
-      const controls = await this.controlSource(selection, versions[selection.route] ?? "unexposed", workspace, billing);
+      const controls = await this.controlSource(selection, versions[selection.route] ?? "unexposed", workspace, billing, this.command);
       routes.push({
         role: role as Role,
         selection,
@@ -325,6 +326,7 @@ export class NativeHostInspector implements HostInspector {
       workspaceId: w.id,
       action: "supplied-packet-read-only",
       policyHash: digest(policyBytes),
+      producerCodeHash: producerCodeHash(),
       controlsHash: digest(
         canonicalJson({
           settings: {

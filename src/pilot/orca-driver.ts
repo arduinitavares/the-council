@@ -311,7 +311,7 @@ export class OrcaPilotDriver implements PilotDriver {
         if (show.observation?.status === "exited") {
           const stop = this.cancellationRequested.get(a.binding.dispatchId)?.stop;
           const interrupted = ["failed", "cancelled", "stopped"].includes(show.dispatch.status) &&
-            String(show.dispatch.terminationReason ?? "").includes("stop");
+            show.dispatch.terminationReason === "worker_stop";
           return stop && interrupted ? { state: "settled", stop } : { state: "settled_unacknowledged" };
         }
         await new Promise(resolve => setTimeout(resolve, Math.min(delay, Math.max(0, settlementDeadline - this.now()))));

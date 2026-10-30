@@ -52,6 +52,7 @@ export interface NativeEvidence {
   action: "supplied-packet-read-only";
   policyHash: string;
   controlsHash: string;
+  producerCodeHash?: string | undefined;
   routes: RouteEvidence[];
 }
 export interface Blocker {
@@ -81,7 +82,7 @@ export interface StopAcknowledgement {
 }
 export type CancellationResult =
   | { state: "settled"; stop: StopAcknowledgement }
-  | { state: "settled_unacknowledged" }
+  | { state: "settled_unacknowledged"; error?: string | undefined }
   | { state: "unknown" };
 export interface Binding {
   runId: string;
@@ -98,7 +99,7 @@ export interface Attempt {
   packetHash: string;
   launchVerified: boolean;
   context?: { directory: string; assignmentHash: string } | undefined;
-  inferenceStarted?: boolean | undefined;
+  inferenceStarted?: boolean | null | undefined;
   initializations?: number | undefined;
   controlError?: string | undefined;
 }

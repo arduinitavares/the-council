@@ -7,6 +7,8 @@ import { z } from "zod";
 import { OrcaClient } from "../orca/client.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { freezeConfig, loadPilotConfig } from "./config.js";
+import { prepareProviderAudit, adoptProviderAudit } from "./provider-controls.js";
+import { readProvider } from "./provider-read.js";
 import { NativeHostInspector } from "./discovery.js";
 import { LocalReadRpc, LocalScopedRpc } from "./rpc.js";
 import { createNativePilotDriver } from "./composition.js";
@@ -26,11 +28,33 @@ const inputSchema = z.strictObject({
   workerTimeoutMs: z.number().int().positive().max(120000),
   proofTtlMs: z.number().int().positive().max(86400000).optional(),
 });
+async function auditCommand(args: string[]): Promise<void> {
+  const action=args.shift();const options=new Map<string,string>();
+  const allowed=new Set(["--workspace","--config","--role","--orca","--hash","--run","--task"]);
+  for(let i=0;i<args.length;i+=2){const key=args[i]!;if(!allowed.has(key)||options.has(key)||!args[i+1]||args[i+1]!.startsWith("--"))throw Error("INVALID_AUDIT_ARGUMENTS");options.set(key,args[i+1]!);}
+  const need=(key:string)=>{const value=options.get(key);if(!value)throw Error("MISSING_"+key);return value;};
+  const workspace=realpathSync(resolve(need("--workspace")));
+  if(action==="prepare"){
+    const packageRoot=resolve(dirname(realpathSync(fileURLToPath(import.meta.url))),"../..");
+    const config=loadPilotConfig(options.has("--config")?resolve(workspace,options.get("--config")!):resolve(packageRoot,"skills/the-council/references/first-use-roster.yaml"));
+    const role=need("--role");if(!["openai","gemini","xai","judge"].includes(role))throw Error("INVALID_AUDIT_ROLE");
+    const selection=role==="judge"?config.judge:config.reviewers[role as keyof typeof config.reviewers];
+    const version=(await readProvider(selection.route,"version",workspace)).trim();
+    console.log(JSON.stringify({status:"audit_prepared",...await prepareProviderAudit(selection,version,workspace)}));return;
+  }
+  if(action==="adopt"){
+    const orca=options.get("--orca")??"/usr/local/bin/orca";if(!isAbsolute(orca))throw Error("ABSOLUTE_ORCA_EXECUTABLE_REQUIRED");
+    const client=await OrcaClient.connect({executable:orca,cwd:workspace});
+    console.log(JSON.stringify({status:"audit_disposition_acquired",...await adoptProviderAudit(workspace,need("--hash"),need("--run"),need("--task"),commandFromClient(client))}));return;
+  }
+  throw Error("INVALID_AUDIT_ACTION");
+}
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if(args[0]==="audit"){await auditCommand(args.slice(1));return;}
   if (args.length === 1 && args[0] === "--help") {
     console.log(
-      "Council native pilot: --workspace /requesting/project --input /request.json --policy /execution-host/model-policy.md [--config /roster.yaml] [--orca /absolute/orca] [--check-config]",
+      "Council native pilot: --workspace /requesting/project --input /request.json --policy /execution-host/model-policy.md [--config /roster.yaml] [--orca /absolute/orca] [--check-config]; audit prepare --workspace /project --role openai|gemini|xai|judge [--config /roster]; audit adopt --workspace /project --hash SNAPSHOT_SHA256 --run NATIVE_RUN --task NATIVE_TASK [--orca /absolute/orca]",
     );
     return;
   }

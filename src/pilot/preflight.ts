@@ -18,6 +18,7 @@ export function proofKey(e: NativeEvidence, r: RouteEvidence): string {
     action: e.action,
     policyHash: e.policyHash,
     controlsHash: e.controlsHash,
+    ...(e.producerCodeHash ? { producerCodeHash: e.producerCodeHash } : {}),
     selection: canonicalJson(r.selection),
     version: r.version,
   });

@@ -10,8 +10,9 @@ import { decodeStrictJson } from "../workers/strict-json.js";
 export const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 export function producerCodeHash(): string {
   const directory = dirname(fileURLToPath(import.meta.url));
-  const files = readdirSync(directory).filter(name => name.endsWith(".js")).sort().map(name => join(directory, name));
-  for (const suffix of ["../orca/client.js", "../domain/hash.js", "../workers/strict-json.js"]) files.push(join(directory, suffix));
+  const extension = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+  const files = readdirSync(directory).filter(name => name.endsWith(extension)).sort().map(name => join(directory, name));
+  for (const suffix of ["../orca/client", "../domain/hash", "../workers/strict-json"]) files.push(join(directory, suffix+extension));
   return sha256(canonicalJson(files.map(file => ({ name: file.slice(directory.length+1), sha256: sha256(readFileSync(file)) }))));
 }
 export const observationSchema = z.strictObject({ state: z.enum(["verified", "unknown", "missing", "denied", "authentication_failed", "exhausted", "unavailable", "unsupported"]), source: z.string().min(1), detail: z.string() });
@@ -21,9 +22,11 @@ export const recipeSchema = z.strictObject({
   protocol: z.enum(["agy-stream", "codex-app-server", "cursor-stream"]),
   executable: z.string(), argv: z.array(z.string()), cwd: z.string(), version: z.string(),
   selection: selectionSchema, expectedPermission: z.string(),
-  sources: z.array(z.strictObject({ path: z.string(), sha256: z.string() })),
+  sources: z.array(z.strictObject({ path: z.string(), sha256: z.string().nullable(), kind: z.enum(["file","metadata","absent"]).optional() })),
+  instructionSources: z.array(z.strictObject({path:z.string(),sha256:z.string()})).optional(),
   facts: z.array(controlFactSchema),
   agent: z.string().optional(),
+  agentDefinition: z.strictObject({path:z.string(),sha256:z.string()}).optional(),
   materializations: z.array(z.strictObject({ path: z.string(), content: z.string(), sha256: z.string() })).optional(),
   codexPolicy: z.strictObject({ name: z.string(), filesystem: z.record(z.string(), z.enum(["read", "deny"])), featureKeys: z.array(z.string()) }).optional(),
 });

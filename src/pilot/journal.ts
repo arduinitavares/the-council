@@ -126,7 +126,7 @@ export class PilotJournal {
       },
       cancel: async (a, deadline, mode) => {
         check(a);
-        this.append({ event: "cancel-reserved", binding: a.binding, mutationRequestId: mutationRequestId(`stop:${canonicalJson(a.binding)}`) });
+        this.append({ event: "cancel-reserved", binding: a.binding, mutationRequestId: mutationRequestId(`${a.context ? "wrapper-stop" : "stop"}:${canonicalJson(a.binding)}`) });
         const result = await driver.cancel(a, deadline, mode);
         this.append({ event: "cancel-observed", binding: a.binding, result });
         return result;

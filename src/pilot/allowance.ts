@@ -15,7 +15,7 @@ export function readFailure(source: string, error: unknown): Observation {
   // Only known protocol codes survive. Messages and arbitrary provider strings
   // may contain account identifiers, so they are used for classification only.
   const safeCode = typeof rawCode === "number" && Number.isSafeInteger(rawCode) ? rawCode
-    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|unauthorized|unsupported|quota_exceeded|stable_pane_required|run_required|terminal_handle_stale|operation_unknown|incompatible_runtime)$/i.test(rawCode) ? rawCode : null;
+    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|forbidden|method_not_found|unauthorized|unsupported|quota_exceeded|stable_pane_required|run_required|terminal_handle_stale|operation_unknown|incompatible_runtime)$/i.test(rawCode) ? rawCode : null;
   return { state, source, detail: canonicalJson({ reason: "NATIVE_SOURCE_READ_FAILED", diagnostic: { class: diagnosticClass, code: safeCode } }) };
 }
 

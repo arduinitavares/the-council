@@ -148,7 +148,7 @@ export async function runPilot(
       if (a.inferenceStarted === false) out.calls[counter]--;
       pendingKey = null;
       pendingCounter = null;
-      if(now()>=inferenceDeadline)throw Error("NATIVE_INFERENCE_DEADLINE");
+      if(now()>=inferenceDeadline)throw Error(a.controlError ?? "NATIVE_INFERENCE_DEADLINE");
       if (!a.launchVerified) throw Error(a.controlError ?? "NATIVE_EFFECTIVE_SELECTION_MISMATCH");
       if (phase === "cancel-probe") {
         const cancellation = await driver.cancel(a, inferenceDeadline);
@@ -160,7 +160,7 @@ export async function runPilot(
           throw Error("RELEASE_UNKNOWN");
         }
         released.add(a.binding.dispatchId);
-        if (cancellation.state !== "settled") throw Error("CANCELLATION_UNACKNOWLEDGED");
+        if (cancellation.state !== "settled") throw Error(cancellation.error ?? "CANCELLATION_UNACKNOWLEDGED");
         acknowledgedStops.set(a.binding.dispatchId, cancellation.stop);
         return null;
       }

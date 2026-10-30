@@ -74,3 +74,25 @@ Each route separately records bootstrap and effective control facts, their sourc
 The older `scopedLaunchPlan` and development-only host relay remain comparative evidence, not the shipped producer or admission authority. The new wrapper uses supported terminal creation and context-only native dispatch, retaining external custody explicitly. Offline tests run real deterministic Node stand-ins through the built composition and stateful native boundaries, including normal/cancel probes, ten topic stages, proof reuse, malformed controls, source/result tampering and final-before-cancel ordering. They confer no live provider or native-route qualification.
 
 C1 remains open operationally. The producer is connected, while current host startup/platform exceptions, inherited-source/Deny audits, AGY hook effects and empty-input timing, Cursor helper/startup/config merge enforcement and included-only account evidence still need their specific source/qualification disposition. Enabled normal Orca/ai-memory hooks do not automatically require renewed approval; audit their effects within existing authority. Missing or unsupported facts stop the affected initialization/input without fabrication. Fresh native product qualification, A9 live acceptance and independent cross-family review remain coordinator-owned; green stand-ins do not close the issue.
+
+## Source audit before first use
+
+The package can prepare a current, private source snapshot without starting a provider session:
+
+```sh
+node /installed/the-council/dist/pilot/cli.js audit prepare --workspace /requesting/project --role openai
+```
+
+Use `gemini`, `xai` or `judge` for the other roster selections, with `--config` when needed. Preparation records the exact provider contract, canonical execution-host policy, ordered configuration/instruction/hook inputs, digests, declared effects, proposed task-owned controls and named unavailable dependencies under `.council/control-audits/snapshots/`. It grants no effects and does not create qualification proofs. Keep source paths and native authority records private.
+
+A coordinator can disposition an exact snapshot using a genuine native Run and a Task whose spec is `Council control audit sha256=<snapshot-hash>`. The current native Dispatch must assign that Task to the same genuine Run coordinator in the requesting workspace. Its authenticated successful `worker_report` body must be strict JSON containing `kind: "council-control-audit"`, the exact `snapshotHash`, and only the reviewed `approvedEffects` from that snapshot. This records existing authority or an explicitly authorized decision; it does not expand authority. Preserve pending items when authority or source evidence is absent.
+
+```sh
+node /installed/the-council/dist/pilot/cli.js audit adopt --workspace /requesting/project --hash <snapshot-hash> --run <native-run> --task <native-task>
+```
+
+Adoption independently reads native coordinator/workspace/pane/incarnation and Task creator/result provenance, then stores a reference to those native records. Inspection revalidates the native reference and current sources; changed policy, instructions, configuration, hooks, selected controls or producer bytes invalidate their respective evidence. Missing dynamic executable/endpoint closure and unexposed remote capability facts stay named and cannot be approved into existence. Normal governing instructions, existing Orca status hooks and sanitized ai-memory capture use existing authority after inspection and pinning; their presence alone does not call for renewed permission.
+
+The effective checks still precede input. AGY uses the pinned selected agent definition/argv plus exact model/cwd/permission and empty `init.tools`; its ordinary four-field init does not expose an agent name, and an exposed conflicting name fails. An AGY active turn requires the original `user_input` event with `state: "DONE"`, `step_index: 0` and conversation identity. Codex compares approved instruction source paths/digests as well as effective profile/config/requirements. Cursor separates configured read-boundary inputs from effective containment, preserves inherited Deny in generated candidates, and refuses to treat packet-local hooks as loaded when a different Git root supplies hooks. Current Cursor included-only account enforcement remains a separate genuine gate.
+
+Cancellation errors and unclassified stderr always fail qualification, including after an acknowledgement. Once input can have been delivered, a lost acknowledgement is unknown (`inferenceStarted: null`) and retains its call reservation. The owned attempt is observed and settled without another input. Historical proof reuse checks sealed native result/cleanup provenance rather than current liveness of old PIDs. Exact disconnected-terminal `terminal_gone` cleanup requires authenticated process settlement, independently absent original wrapper PID and a positive expected-incarnation close; generic contact loss, denial, foreign identity or uncertain close never qualifies.

@@ -48,6 +48,7 @@ const scope = z.strictObject({
   action: z.literal("supplied-packet-read-only"),
   policyHash: z.string(),
   controlsHash: z.string(),
+  producerCodeHash: z.string().optional(),
   routes: z.array(
     z.strictObject({
       role: z.enum(["openai", "gemini", "xai", "judge"]),

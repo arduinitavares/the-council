@@ -105,8 +105,7 @@ export class OrcaClient {
           throw new Error("ORCA_GUIDE_UNAVAILABLE");
         return new TextDecoder("utf-8", { fatal: true }).decode(result.stdout);
       };
-    const version = (await run(["--version"])).trim();
-    if (!version) throw new Error("ORCA_VERSION_UNKNOWN");
+    const version = (await run(["--version"])).trim() || "unexposed";
     const cli = decodeStrictJson(
       await run(["skills", "get", "orca-cli", "--json"]),
     );

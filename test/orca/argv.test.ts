@@ -9,6 +9,35 @@ async function client() {
   expect(m, "Task5 client must exist").not.toBeNull();
   return m!;
 }
+it.each([
+  ["", "unexposed"],
+  [" \t\n", "unexposed"],
+  [" 99.0.0 \n", "99.0.0"],
+  ["orca development build arbitrary-metadata", "orca development build arbitrary-metadata"],
+])("loads both guides with version output %j recorded as %j", async (output, version) => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "council-cli-"))),
+    script = fileURLToPath(
+      new URL("./fixtures/fake-orca.mjs", import.meta.url),
+    );
+  const c = await (await client()).OrcaClient.connect({
+    executable: process.execPath,
+    prefix: [script, "--fixture-version", output],
+    cwd,
+  });
+  expect(c.guide).toEqual({
+    version,
+    cli: {
+      name: "orca-cli",
+      version: "fixture-1",
+      markdown: "Fixture command guide; synthetic only.",
+    },
+    orchestration: {
+      name: "orchestration",
+      version: "fixture-1",
+      markdown: "Fixture command guide; synthetic only.",
+    },
+  });
+});
 it("runs exact argv without a shell, allowlists env and loads the same executable guides", async () => {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), "council-cli-"))),
     script = fileURLToPath(

@@ -16,14 +16,13 @@
   },
   "requestingProject": {
     "separateRegisteredProject": true,
-    "projectId": "repo:67cc362e-f4bd-4937-8fca-fce18fade1e6",
-    "workspaceIdentity": "wt2:local:007d5e35-73cc-4e9d-aeac-001e739f8f2e",
     "workspacePathSha256": "f15f48b8c720ac23442d8cd2ff180b2d60369b275ba98a23f48e0d640099ea35",
     "packagePathSha256": "e97af65787642c574802b6e38c0eee7edaa757605ffbe2fc998926026e4103b6",
-    "workingDirectoryIsNeitherPackageNorRequestingProject": true
+    "workingDirectoryIsNeitherPackageNorRequestingProject": true,
+    "projectIdSha256": "6d9575a285cc01bda6d069996dd747cf345561aa80fdff80e9252269754f6639",
+    "workspaceIdentitySha256": "cecc7e3baf3f1983036880935736e4b58e0a1541c36efbd61e48ef20a57b6763"
   },
   "host": "local",
-  "runtimeId": "4e758215-191f-4ee5-900c-5887deb4a86d",
   "orcaVersion": "1.4.244",
   "versions": {
     "orca": "1.4.244",
@@ -124,7 +123,7 @@
       "allowance": {
         "state": "verified",
         "source": "Orca 1.4.244 accounts.list(refreshUsage=true) rateLimits.codex",
-        "detail": "{\"buckets\":[],\"extraUsage\":{\"enabled\":true,\"unlimited\":false},\"observedAt\":1793312445751,\"planType\":\"unexposed\",\"provider\":\"codex\",\"updatedAt\":1793312433580,\"usageSource\":\"unexposed\",\"windows\":{\"monthly\":null,\"session\":null,\"weekly\":{\"resetsAt\":1793775069000,\"usedPercent\":61,\"windowMinutes\":10080}}}"
+        "detail": "The required provider source exposed positive remaining capacity in its reported windows. Exact private usage values remain in the local raw receipt."
       },
       "billing": {
         "state": "unknown",
@@ -153,7 +152,7 @@
       "allowance": {
         "state": "verified",
         "source": "AGY documented /usage command",
-        "detail": "{\"groups\":[{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 1 day.\",\"id\":\"gemini-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.8273330330848694,\"reset_time\":\"2026-10-30T22:35:39Z\",\"window\":\"weekly\"},{\"id\":\"gemini-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":1,\"reset_time\":\"2026-10-30T03:20:45Z\",\"window\":\"5h\"}],\"name\":\"Gemini Models\"},{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 6 days, 18 hours.\",\"id\":\"3p-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.937619686126709,\"reset_time\":\"2026-11-05T17:07:14Z\",\"window\":\"weekly\"},{\"description\":\"You have used some of your 5-hour limit, it will fully refresh in 3 hours, 27 minutes.\",\"id\":\"3p-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":0.8752392530441284,\"reset_time\":\"2026-10-30T01:48:08Z\",\"window\":\"5h\"}],\"name\":\"Claude and GPT models\"}]}"
+        "detail": "The required provider source exposed positive remaining capacity in its reported windows. Exact private usage values remain in the local raw receipt."
       },
       "billing": {
         "state": "unknown",
@@ -183,7 +182,7 @@
       "allowance": {
         "state": "verified",
         "source": "Orca 1.4.244 accounts.list(refreshUsage=true) rateLimits.cursor",
-        "detail": "{\"buckets\":[{\"name\":\"Cursor Models\",\"resetsAt\":1793479534237,\"usedPercent\":21.581798483206935,\"windowMinutes\":10080},{\"name\":\"Other Models\",\"resetsAt\":1793479534237,\"usedPercent\":0,\"windowMinutes\":10080}],\"extraUsage\":{\"enabled\":null,\"unlimited\":null},\"observedAt\":1793312445757,\"planType\":\"premium\",\"provider\":\"cursor\",\"updatedAt\":1793312433569,\"usageSource\":\"cli\",\"windows\":{\"monthly\":{\"resetsAt\":1793479534237,\"usedPercent\":21.581798483206935,\"windowMinutes\":10080},\"session\":null,\"weekly\":null}}"
+        "detail": "The required provider source exposed positive remaining capacity in its reported windows. Exact private usage values remain in the local raw receipt."
       },
       "billing": {
         "state": "missing",
@@ -212,7 +211,7 @@
       "allowance": {
         "state": "verified",
         "source": "Orca 1.4.244 accounts.list(refreshUsage=true) rateLimits.codex",
-        "detail": "{\"buckets\":[],\"extraUsage\":{\"enabled\":true,\"unlimited\":false},\"observedAt\":1793312445761,\"planType\":\"unexposed\",\"provider\":\"codex\",\"updatedAt\":1793312433580,\"usageSource\":\"unexposed\",\"windows\":{\"monthly\":null,\"session\":null,\"weekly\":{\"resetsAt\":1793775069000,\"usedPercent\":61,\"windowMinutes\":10080}}}"
+        "detail": "The required provider source exposed positive remaining capacity in its reported windows. Exact private usage values remain in the local raw receipt."
       },
       "billing": {
         "state": "unknown",
@@ -248,7 +247,6 @@
       },
       "sameRegisteredRequestingProject": true,
       "packagePathSha256": "bb8a31a22f0bc460fe63be5975989f59cf48969ea4fc2a0c5a345a65027c16e0",
-      "runtimeId": "4e758215-191f-4ee5-900c-5887deb4a86d",
       "orcaVersion": "1.4.244",
       "versions": {
         "orca": "1.4.244",
@@ -391,7 +389,7 @@
           "allowance": {
             "state": "verified",
             "source": "AGY documented /usage command",
-            "detail": "{\"groups\":[{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 20 hours, 21 minutes.\",\"id\":\"gemini-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.8273330330848694,\"reset_time\":\"2026-10-30T22:35:39Z\",\"window\":\"weekly\"},{\"id\":\"gemini-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":1,\"reset_time\":\"2026-10-30T07:13:42Z\",\"window\":\"5h\"}],\"name\":\"Gemini Models\"},{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 6 days, 14 hours.\",\"id\":\"3p-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.9046870470046997,\"reset_time\":\"2026-11-05T17:07:14Z\",\"window\":\"weekly\"},{\"description\":\"You have used some of your 5-hour limit, it will fully refresh in 4 hours, 34 minutes.\",\"id\":\"3p-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":0.9799200296401978,\"reset_time\":\"2026-10-30T06:48:08Z\",\"window\":\"5h\"}],\"name\":\"Claude and GPT models\"}]}"
+            "detail": "The required provider source exposed positive remaining capacity in its reported windows. Exact private usage values remain in the local raw receipt."
           },
           "billing": {
             "state": "unknown",
@@ -459,7 +457,10 @@
       ],
       "stderrBytes": 0,
       "rawStdoutSha256": "b172c7fa0db546711c75a658e1599eadf193cca5558047ecf64b22f06d526bdd",
-      "qualification": "not a live qualification or Council acceptance; zero probes deliberately permitted; no provider attempt"
+      "qualification": "not a live qualification or Council acceptance; zero probes deliberately permitted; no provider attempt",
+      "runtimeIdSha256": "934964979163ac838d8f0245f1b4c5f6a6c04a1ec259277e0f156c7594dbe7ad"
     }
-  ]
+  ],
+  "runtimeIdSha256": "934964979163ac838d8f0245f1b4c5f6a6c04a1ec259277e0f156c7594dbe7ad",
+  "privacyProjection": "Native runtime/project/workspace identifiers are SHA-256 projections. Personal paths and exact account usage values are omitted; unchanged local raw receipts retain full binding evidence."
 }

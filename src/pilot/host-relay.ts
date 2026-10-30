@@ -1,3 +1,6 @@
+// Development-only source, deliberately excluded from adapter exports/build/package.
+// Genuine native wrapper caller authority is unqualified; do not integrate or
+// invoke the mutation-capable relay until that separate qualification succeeds.
 import {spawn} from "node:child_process";
 import {realpathSync} from "node:fs";
 import {isAbsolute} from "node:path";
@@ -44,6 +47,14 @@ export async function runGuardedHostCommand(input:{
   let size=0,stopRequests=0;
   const stdout:Buffer[]=[],stderr:Buffer[]=[];
   let escalation:ReturnType<typeof setTimeout>|undefined;
+  const timers=new Set<ReturnType<typeof setTimeout>>();
+  const schedule=(callback:()=>void,ms:number)=>{
+    const timer=setTimeout(()=>{timers.delete(timer);callback();},ms);
+    timers.add(timer);return timer;
+  };
+  const cancelTimer=(timer:ReturnType<typeof setTimeout>|undefined)=>{
+    if(timer){clearTimeout(timer);timers.delete(timer);}
+  };
   const groupState=():"live"|"exited"|"unknown"=>{
     if(!child.pid)return "unknown";
     try{process.kill(-child.pid,0);return "live";}catch(error){return (error as NodeJS.ErrnoException).code==="ESRCH"?"exited":"unknown";}
@@ -55,7 +66,7 @@ export async function runGuardedHostCommand(input:{
     if(stopRequests)return;
     stopRequests++;
     signalGroup("SIGTERM");
-    escalation=setTimeout(()=>signalGroup("SIGKILL"),1000);
+    escalation=schedule(()=>signalGroup("SIGKILL"),1000);
   };
   const collect=(chunks:Buffer[],chunk:Buffer)=>{
     const room=Math.max(0,max-size);size+=chunk.length;
@@ -65,20 +76,20 @@ export async function runGuardedHostCommand(input:{
   child.stdout.on("data",chunk=>collect(stdout,chunk));
   child.stderr.on("data",chunk=>collect(stderr,chunk));
   child.on("error",()=>{});
-  child.stdin.on("error",()=>{});
-  child.stdin.end(input.input,"utf8",()=>{inputDelivered=true;});
+  child.stdin.on("error",()=>{inputDelivered=false;});
+  child.stdin.end(input.input,"utf8",(error?:Error|null)=>{inputDelivered=!error&&child.stdin.writableFinished;});
   const completion=new Promise<void>(resolve=>child.once("close",(code,why)=>{closed=true;exitCode=code;signal=why;resolve();}));
-  const deadlineTimer=setTimeout(()=>{timedOut=true;stop();},Math.max(0,input.deadline-Date.now()));
+  const deadlineTimer=schedule(()=>{timedOut=true;stop();},Math.max(0,input.deadline-Date.now()));
   let observationTimer:ReturnType<typeof setTimeout>|undefined;
   // This grace observes/terminates only the original process group, never starts inference.
   const cleanupDeadline=input.deadline+2500;
-  await Promise.race([completion,new Promise<void>(resolve=>{observationTimer=setTimeout(resolve,Math.max(0,cleanupDeadline-Date.now()));})]);
-  if(observationTimer)clearTimeout(observationTimer);
-  while(groupState()==="live"&&Date.now()<cleanupDeadline)await new Promise(resolve=>setTimeout(resolve,10));
+  await Promise.race([completion,new Promise<void>(resolve=>{observationTimer=schedule(resolve,Math.max(0,cleanupDeadline-Date.now()));})]);
+  cancelTimer(observationTimer);
+  while(groupState()==="live"&&Date.now()<cleanupDeadline)await new Promise<void>(resolve=>schedule(resolve,10));
   const groupSettled=groupState()==="exited";
-  clearTimeout(deadlineTimer);
-  if(escalation)clearTimeout(escalation);
-  const receipt:HostProcessReceipt={pid:child.pid??null,exitCode,signal,closed,timedOut,overflow,inputDelivered,groupSettled,timersSettled:true,stopRequests,stdout:Buffer.concat(stdout),stderr:Buffer.concat(stderr),cwd:input.cwd};
+  cancelTimer(deadlineTimer);
+  cancelTimer(escalation);
+  const receipt:HostProcessReceipt={pid:child.pid??null,exitCode,signal,closed,timedOut,overflow,inputDelivered,groupSettled,timersSettled:timers.size===0,stopRequests,stdout:Buffer.concat(stdout),stderr:Buffer.concat(stderr),cwd:input.cwd};
   // Return unresolved facts without leaving this wrapper's streams/timers pending.
   if(!closed){child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();child.unref();}
   ownedReceipts.set(receipt,{...receipt,stdout:Uint8Array.from(receipt.stdout),stderr:Uint8Array.from(receipt.stderr)});

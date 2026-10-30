@@ -18,6 +18,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     let accountVariant = "fresh";
     let supportDenied = false;
     let effortMapping = true;
+    let nativeOmission = false;
     const inspector = new NativeHostInspector(
       async (argv) =>
         argv[0] === "agent-context"
@@ -70,7 +71,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
                   agentDefaultArgs: {},
                 },
               }
-            : params.agent === "antigravity" ? {origin:"live-session",models:[{id:"gemini-4-argon-high",efforts:[]}]} : { origin: "unknown" };
+            : params.agent === "antigravity" ? {origin:"live-session",models:[{id:"gemini-4-argon-high",efforts:[]}]} : nativeOmission ? { models: [], origin: "live-session" } : { origin: "unknown" };
         },
       }),
       async (provider, op) => {
@@ -121,6 +122,11 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     expect(JSON.stringify(r.evidence)).not.toContain("must-not-persist");
     expect(r.evidence.routes.find(r => r.role === "openai")?.billing.state).toBe("unknown");
     expect(r.evidence.routes.find(r => r.role === "xai")?.billing.state).toBe("missing");
+    expect(r.evidence.routes.find(r => r.role === "xai")?.billing.source).toBe("No supported Cursor included-only debit source integrated");
+    nativeOmission = true;
+    const fallback = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
+    expect(fallback.evidence.routes.find(r => r.role === "xai")?.catalog.source).toContain("documented provider models command");
+    nativeOmission = false;
     expect(calls).toContain("accounts.list");
     const plan = r.evidence.routes.find(r => r.role === "xai")?.scopedLaunchPlan;
     expect(plan).toMatchObject({

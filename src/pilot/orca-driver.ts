@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { selectionArgs } from "./config.js";
 import { mutationRequestId } from "./mutation-id.js";
-export {runGuardedHostCommand,HostCompletionRelay} from "./host-relay.js";
 export {ScopedTerminalCustody} from "./scoped-custody.js";
 import type { Role } from "./config.js";
 import type {
@@ -243,14 +242,16 @@ export class OrcaPilotDriver implements PilotDriver {
     }
     throw new Error("NATIVE_RESULT_MALFORMED_OR_MISMATCHED");
   }
-  async cancel(a: Attempt, deadline: number): Promise<"settled" | "unknown"> {
-    // A lost stop receipt is ambiguous, never permission to repeat a mutation.
-    if (this.cancellationRequested.has(a.binding.dispatchId)) return "unknown";
-    this.cancellationRequested.add(a.binding.dispatchId);
-    const settlementDeadline = deadline > this.now()
-      ? Math.min(deadline,this.now()+120000) : this.now() + CLEANUP_GRACE_MS;
-    try {
-      const r = await this.command(
+  async cancel(a: Attempt, deadline: number, mode?: "absolute-cleanup"): Promise<"settled" | "unknown"> {
+    const started = this.now();
+    const settlementDeadline = mode === "absolute-cleanup" ? Math.min(deadline, started + 120000)
+      : Math.max(Math.min(deadline, started + 120000), started + CLEANUP_GRACE_MS);
+    if (settlementDeadline <= started) return "unknown";
+    // A lost stop receipt is ambiguous. Continue read-only observation of the
+    // original identity; never submit a second stop, even on a later cleanup pass.
+    if (!this.cancellationRequested.has(a.binding.dispatchId)) {
+      this.cancellationRequested.add(a.binding.dispatchId);
+      try { await this.command(
         [
           "orchestration",
           "worker-stop",
@@ -260,9 +261,9 @@ export class OrcaPilotDriver implements PilotDriver {
         ],
         this.workspace,
         Math.max(1, Math.min(5000, settlementDeadline - this.now())),
-      );
-      if (r.status === "stop_unknown" || r.state === "stop_unknown")
-        return "unknown";
+      ); } catch { /* Delivery is unknown; only positive exact-worker exit settles. */ }
+    }
+    try {
       for (let delay = 250; this.now() < settlementDeadline; delay = Math.min(1000, delay * 2)) {
         const show = await this.command(
         [
@@ -288,7 +289,8 @@ export class OrcaPilotDriver implements PilotDriver {
       return "unknown";
     }
   }
-  async release(a: Attempt): Promise<boolean> {
+  async release(a: Attempt, deadline?: number): Promise<boolean> {
+    if (deadline !== undefined && deadline <= this.now()) return false;
     try {
       const r = await this.command(
         [
@@ -299,7 +301,7 @@ export class OrcaPilotDriver implements PilotDriver {
           "--json",
         ],
         this.workspace,
-        5000,
+        deadline === undefined ? 5000 : Math.max(1, Math.min(5000, deadline - this.now())),
       );
       return ["released", "already_released"].includes(
         r.state ??

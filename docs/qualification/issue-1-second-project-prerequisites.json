@@ -462,5 +462,5 @@
     }
   ],
   "runtimeIdSha256": "934964979163ac838d8f0245f1b4c5f6a6c04a1ec259277e0f156c7594dbe7ad",
-  "privacyProjection": "Native runtime/project/workspace identifiers are SHA-256 projections. Personal paths and exact account usage values are omitted; unchanged local raw receipts retain full binding evidence."
+  "privacyProjection": "Native runtime/project/workspace identifiers are SHA-256 projections. Personal paths and exact account usage values are omitted; unchanged local raw receipts retain full binding evidence. Deterministic path and identifier hashes are pseudonyms, not anonymous data."
 }

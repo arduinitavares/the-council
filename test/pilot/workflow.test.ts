@@ -5,6 +5,10 @@ import { incidentRoster } from "./fixtures.js";
 import type { NativeEvidence, PilotRequest } from "../../src/pilot/types.js";
 import { canonicalJson, hashArtifact } from "../../src/domain/hash.js";
 import { proofKey } from "../../src/pilot/preflight.js";
+import { QualificationCache } from "../../src/pilot/qualification-cache.js";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const now = 1_800_000_000_000;
 const evidence: NativeEvidence = {
@@ -83,6 +87,37 @@ it("uses cleanup grace after workflow expiry without launching another inference
   expect(cancel).toHaveBeenCalledTimes(1);
   expect(h.calls.filter(c => c.argv[1] === "worker-release")).toHaveLength(1);
 });
+it("composes expired workflow cleanup with the real driver and positive release", async () => {
+  let clock = now;
+  const h = harness({ clock: () => clock });
+  vi.spyOn(h.driver, "observe").mockImplementation(async () => {
+    clock = request.deadline;
+    throw Error("NATIVE_RESULT_DEADLINE");
+  });
+  const result = await runPilot(request, h.driver, () => clock);
+  expect(result.calls).toEqual({ probes: 1, topic: 0 });
+  expect(result.unresolved).toEqual([]);
+  expect(h.calls.filter(c => c.argv[1] === "worker-stop")).toHaveLength(1);
+  expect(h.calls.filter(c => c.argv[1] === "worker-release")).toHaveLength(1);
+});
+
+it("composes near-expiry cancel probes with the real driver without duplicate inference or stops", async () => {
+  let clock = now;
+  const h = harness({ clock: () => clock });
+  const launch = h.driver.launch.bind(h.driver);
+  vi.spyOn(h.driver, "launch").mockImplementation(async (...args) => {
+    const attempt = await launch(...args);
+    if (attempt.phase === "cancel-probe") clock += request.workerTimeoutMs - 10;
+    return attempt;
+  });
+  const result = await runPilot(request, h.driver, () => clock);
+  expect(result.status).toBe("consensus");
+  expect(result.calls).toEqual({ probes: 8, topic: 10 });
+  const stops = h.calls.filter(c => c.argv[1] === "worker-stop");
+  expect(stops).toHaveLength(4);
+  expect(stops.every(c => c.timeout === 5000)).toBe(true);
+  expect(new Set(stops.map(c => c.argv[c.argv.indexOf("--dispatch") + 1])).size).toBe(4);
+});
 
 it("caps cancel-probe settlement to the per-attempt inference bound", async () => {
   const h = harness();
@@ -105,6 +140,32 @@ it("never observes or qualifies a launch which exhausted the inference budget",a
   expect(result.proofs).toEqual([]);
   expect(observe).not.toHaveBeenCalled();
 });
+it("retains mixed reused proofs and the first new proof when the next route fails", async () => {
+  // Conditional runPilot + real cache composition; production admission remains blocked.
+  const first = await runPilot(request, harness().driver, () => now);
+  const cached = first.proofs.slice(2);
+  const h = harness();
+  const observe = h.driver.observe.bind(h.driver);
+  vi.spyOn(h.driver, "observe").mockImplementation(async (a, deadline) => {
+    if (a.role === "gemini" && a.phase === "normal-probe") throw Error("synthetic partial failure");
+    return observe(a, deadline);
+  });
+  const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-partial-")));
+  try {
+    const cache = new QualificationCache(w);
+    cache.write(cached, now);
+    const reused = await cache.matching(evidence, now, async () => true);
+    const result = await runPilot({ ...request, proofs: reused }, h.driver, () => now);
+    expect(result.status).toBe("failed");
+    expect(result.calls).toEqual({ probes: 3, topic: 0 });
+    expect(result.proofs).toHaveLength(3);
+    cache.write(result.proofs, now);
+    expect(cache.read().map(p => p.key)).toEqual(expect.arrayContaining(cached.map(p => p.key)));
+    expect(cache.read()).toHaveLength(3);
+    cache.close();
+  } finally { rmSync(w, { recursive: true, force: true }); }
+});
+
 function harness(
   options: {
     fail?: string;
@@ -114,14 +175,15 @@ function harness(
     cancelUnknown?: boolean;
     releaseUnknown?: boolean;
     judgeUnresolved?: boolean;
+    clock?: () => number;
     evidence?: NativeEvidence;
   } = {},
 ) {
-  const calls: { argv: readonly string[]; packet?: any }[] = [];
+  const calls: { argv: readonly string[]; packet?: any; timeout?: number }[] = [];
   const attempts = new Map<string, any>();
   let count = 0;
-  const command = async (argv: readonly string[]) => {
-    calls.push({ argv });
+  const command = async (argv: readonly string[], _cwd?: string, timeout?: number) => {
+    calls.push({ argv, ...(timeout === undefined ? {} : { timeout }) });
     const verb = argv[1];
     if (verb === "run-create") return { run: { id: "run-native" } };
     if (verb === "worker-start") {
@@ -164,7 +226,7 @@ function harness(
           status: options.unknown ? "dispatched" : "succeeded",
         },
         observation: {
-          status: options.unknown ? "unverifiable" : "exited",
+          status: options.unknown || (options.cancelUnknown && a.packet.phase === "cancel-probe") ? "unverifiable" : "exited",
           exactWorker: true,
         },
         terminalResource: { releaseState: "released" },
@@ -226,7 +288,7 @@ function harness(
         blockers: [],
       }),
     },
-    () => now,
+    options.clock ?? (() => now),
   );
   return { driver, calls };
 }

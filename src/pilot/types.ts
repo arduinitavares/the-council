@@ -124,6 +124,6 @@ export interface PilotDriver extends HostInspector {
     attemptKey: string,
   ): Promise<Attempt>;
   observe(attempt: Attempt, deadline: number): Promise<Result>;
-  cancel(attempt: Attempt, deadline: number): Promise<"settled" | "unknown">;
-  release(attempt: Attempt): Promise<boolean>;
+  cancel(attempt: Attempt, deadline: number, mode?: "absolute-cleanup"): Promise<"settled" | "unknown">;
+  release(attempt: Attempt, deadline?: number): Promise<boolean>;
 }

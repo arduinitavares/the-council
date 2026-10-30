@@ -1,5 +1,6 @@
 import {expect,it} from "vitest";
 import * as adapter from "../../src/pilot/orca-driver.js";
+import * as developmentRelay from "../../src/pilot/host-relay.js";
 import {mkdtempSync,realpathSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -8,10 +9,21 @@ import type {Attempt} from "../../src/pilot/types.js";
 const attempt:Attempt={binding:{runId:"run",taskId:"task",dispatchId:"dispatch",handle:"owned",attemptKey:"key"},
   role:"gemini",phase:"readiness",selection:{route:"antigravity",model:"gemini-4-argon-high",effort:"high"},packetHash:"packet",launchVerified:true};
 function api():any {
-  expect(typeof (adapter as any).runGuardedHostCommand).toBe("function");
-  expect(typeof (adapter as any).HostCompletionRelay).toBe("function");
-  return adapter;
+  return developmentRelay;
 }
+it("keeps the unqualified mutation-capable relay out of the shipped adapter", () => {
+  expect(adapter).not.toHaveProperty("HostCompletionRelay");
+  expect(adapter).not.toHaveProperty("runGuardedHostCommand");
+});
+
+it("does not claim input delivery after a real child closes stdin early", async () => {
+  const cwd=realpathSync(mkdtempSync(join(tmpdir(),"council-relay-stdin-")));
+  try {
+    const receipt=await developmentRelay.runGuardedHostCommand({executable:process.execPath,args:["-e","process.stdin.destroy();setTimeout(()=>process.exit(0),40)"],cwd,input:"x".repeat(4*1024*1024),deadline:Date.now()+2000});
+    expect(receipt.inputDelivered).toBe(false);
+    expect(receipt.timersSettled).toBe(true);
+  } finally {rmSync(cwd,{recursive:true,force:true});}
+});
 function finalProgram(a=attempt,payload:unknown={ready:true},tools:unknown[]=[]) {
   return `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{
     console.log(JSON.stringify({event:'init',init:{model:${JSON.stringify(a.selection.model)},cwd:process.cwd(),tools:${JSON.stringify(tools)},permission_mode:'request-review'}}));

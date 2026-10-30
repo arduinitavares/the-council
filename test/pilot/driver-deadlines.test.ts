@@ -52,6 +52,36 @@ it("sends cancellation once and waits for positive asynchronous exit", async () 
   expect(await result).toBe("settled");
   expect(h.counts()).toEqual({ shows: 4, stops: 1 });
 });
+it("gives a near-expiry stop a sane command window and observes exit after an ambiguous delivery", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(epoch);
+  let stops = 0, shows = 0;
+  const driver = new OrcaPilotDriver(async (argv, _cwd, timeout) => {
+    if (argv[1] === "worker-stop") {
+      stops++;
+      expect(timeout).toBe(5000);
+      throw Object.assign(new Error("ambiguous delivery"), { code: "ETIMEDOUT" });
+    }
+    if (argv[1] === "worker-show") {
+      shows++;
+      return { dispatch: { id: "dispatch", runId: "run", taskId: "task" }, observation: { exactWorker: true, status: shows > 1 ? "exited" : "live" } };
+    }
+    throw Error("unexpected mutation");
+  }, { inspect: async () => { throw Error("unused"); } });
+  const result = driver.cancel(attempt, epoch + 10);
+  await vi.runAllTimersAsync();
+  expect(await result).toBe("settled");
+  expect({ stops, shows }).toEqual({ stops: 1, shows: 2 });
+  expect(Date.now()).toBeGreaterThan(epoch + 10);
+});
+
+it("never renews a caller's expired absolute cleanup window", async () => {
+  const h = fixture(Infinity);
+  const result = h.driver.cancel(attempt, epoch - 1, "absolute-cleanup");
+  await vi.runAllTimersAsync();
+  expect(await result).toBe("unknown");
+  expect(h.counts()).toEqual({ stops: 0, shows: 0 });
+  expect(Date.now()).toBe(epoch);
+});
 
 it("keeps lost cancellation contact unknown without a repeated stop", async () => {
   const h = fixture(3, true);
@@ -63,7 +93,7 @@ it("keeps lost cancellation contact unknown without a repeated stop", async () =
 
 it("waits only to the absolute cancellation deadline for an owned live process", async () => {
   const h = fixture(Infinity);
-  const result = h.driver.cancel(attempt, epoch + 2500);
+  const result = h.driver.cancel(attempt, epoch + 2500, "absolute-cleanup");
   await vi.runAllTimersAsync();
   expect(await result).toBe("unknown");
   expect(Date.now()).toBe(epoch + 2500);

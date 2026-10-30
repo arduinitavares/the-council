@@ -77,3 +77,19 @@ Another fresh clone of `e8debfef75cfc80a24cfe63e864d2914e4e84ef1`, ordinary offl
 The coordinator independently matched all231 frozen source/test/dist hashes after the663-test full run. Positive native execution, qualification and whole-issue acceptance remain pending.
 
 Public receipt privacy projection: native runtime/project/workspace identities are hashed, and exact account usage values remain in the unchanged local raw records. Source revisions, observation states, control/source hashes, bounds, zero-call outcomes and historical/current separation are preserved.
+
+## Consolidated whole-change repairs
+
+The public receipt was independently checked for raw native IDs, personal paths, account settings and usage values. Those fields are absent; historical revision and raw-output hashes are unchanged. Deterministic path/identifier hashes are pseudonyms, not anonymous data.
+
+Cursor billing now explicitly names the absent integrated source, rather than attributing the blocker to `settings.getAgentLaunch`. Neither an included plan nor `extraUsage=false` proves included-only debit. Historical receipts remain historical observations; their old attribution is not evidence that launch settings exposed billing enforcement.
+
+Qualification-cache writes merge unexpired proofs under the existing exclusive lock and atomic replacement. Conditional `runPilot` plus real-cache tests cover mixed reuse, a new successful route followed by another route's failure, and a separate policy. This is the exact tested composition; the actual shipped inspector remains blocked by C1.
+
+Near-deadline cancellation has a bounded stop window and no-new-inference observation grace. Ambiguous delivery permits only observation of the original identity, never another stop. Workflow cleanup shares an absolute30-second deadline, including release; expired cleanup cannot renew it. Driver and real workflow/driver composition tests cover this behavior.
+
+Account-read errors retain a sanitized class and allowlisted code, including the installed official client's `runtime_timeout`; no raw account message is recorded. The inspected1.4.244 client supports `call(method, params, {timeoutMs})` (`cli/runtime/client.js:50-51,132-150`); its transport produces `runtime_timeout` (`cli/runtime/transport.js:27-35`). Only `accounts.list(refreshUsage=true)` receives a30-second read timeout. No fresh account snapshot or provider session was requested to explain the older missing observation, whose cause remains unknown.
+
+The unqualified host relay/process guard is now development-only: it is absent from adapter exports, build output and package artifacts, including stale prior output. Source and credential-free tests remain recoverable. Input delivery checks callback error and finished state; timers are tracked through completion/cancellation. Genuine native wrapper identity and full lifecycle are still unqualified, so no shipped relay can send lifecycle completion on that basis. Node22's [stream contract](https://github.com/nodejs/node/blob/v22.20.0/doc/api/stream.md) and [timer contract](https://github.com/nodejs/node/blob/v22.20.0/doc/api/timers.md) informed those development-source repairs.
+
+**C1 remains Critical and operational acceptance remains blocked.** No control was hardcoded verified, no synthetic positive became admission, and no provider inference/session creation or settings/trust/billing change occurred. A9/A10, fresh independent review and issue closure remain with the coordinator. The internal round3 report records every whole-change and fix2 minor disposition and exact local verification evidence.

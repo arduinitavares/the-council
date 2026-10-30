@@ -15,7 +15,7 @@ export interface ReadRpc {
   effortSupport?(agent: string): Promise<{efforts:string[];source:string;detail:string}>;
 }
 export interface OfficialClient {
-  call(method: string, params: Record<string, unknown>): Promise<any>;
+  call(method: string, params: Record<string, unknown>, options?: { timeoutMs: number }): Promise<any>;
 }
 export type ScopedMethod="agent.launch"|"terminal.show"|"terminal.inspectProcess"|"terminal.close";
 export interface ScopedRpc {callScoped(method:ScopedMethod,params:Record<string,unknown>):Promise<any>;}
@@ -96,7 +96,10 @@ export class LocalReadRpc implements ReadRpc {
     return this.callNative(method,params);
   }
   protected async callNative(method:string,params:Record<string,unknown>):Promise<any>{
-    const envelope = await this.client.call(method, params);
+    // The inspected official call(method, params, options) supports a per-read
+    // timeout. Usage refresh may perform network reads; other reads retain 5s.
+    const envelope = await this.client.call(method, params,
+      method === "accounts.list" && params.refreshUsage === true ? { timeoutMs: 30000 } : undefined);
     if (envelope._meta?.runtimeId !== this.runtimeId)
       throw Error("RPC_READ_BINDING_MISMATCH");
     if (envelope.ok !== true)

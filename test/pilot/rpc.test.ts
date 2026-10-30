@@ -3,6 +3,18 @@ import { LocalReadRpc } from "../../src/pilot/rpc.js";
 import { nativeHostFixture } from "./native-host-fixture.js";
 import { writeFileSync, mkdirSync, renameSync, symlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+it("uses a bounded longer timeout only for the supported accounts refresh read", async () => {
+  const seen: unknown[] = [];
+  const rpc = new LocalReadRpc("runtime", "/test/orca", {
+    call: async (_method, _params, options) => {
+      seen.push(options);
+      return { ok: true, result: {}, _meta: { runtimeId: "runtime" } };
+    },
+  });
+  await rpc.call("accounts.list", { refreshUsage: true });
+  await rpc.call("settings.getAgentLaunch", {});
+  expect(seen).toEqual([{ timeoutMs: 30000 }, undefined]);
+});
 it("uses an official-client read boundary and rejects another runtime without handling authentication", async () => {
   let foreign = false;
   const seen: string[] = [];

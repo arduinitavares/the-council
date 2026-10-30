@@ -174,6 +174,7 @@ export class NativeHostInspector implements HostInspector {
         catalog = {};
       }
       let model = catalog.models?.find((m: any) => m.id === selection.model);
+      let providerFallback = false;
       const fallback =
         selection.route === "cursor"
           ? cursorModels
@@ -184,8 +185,10 @@ export class NativeHostInspector implements HostInspector {
         !catalogFailure &&
         !model &&
         fallback.split(/\s+/).includes(selection.model)
-      )
+      ) {
         model = { id: selection.model, efforts: [] };
+        providerFallback = true;
+      }
       let effortContract: Awaited<ReturnType<NonNullable<ReadRpc["effortSupport"]>>> | undefined;
       if (model && selection.route === "antigravity" && !catalogFailure && api.effortSupport) {
         try { effortContract = await api.effortSupport(selection.route); } catch {}
@@ -219,8 +222,8 @@ export class NativeHostInspector implements HostInspector {
                 : model && effort
                   ? "verified"
                   : model ? "missing" : "unavailable",
-          model && !catalog.models
-            ? "documented provider models command"
+          providerFallback
+            ? "documented provider models command; native agentSession.modelCatalog did not expose the selection"
             : `Orca agentSession.modelCatalog${effortContract?.efforts.includes(selection.effort) ? "; " + effortContract.source : ""}`,
           disabled
             ? "route disabled"
@@ -235,7 +238,7 @@ export class NativeHostInspector implements HostInspector {
         controls: observation(
           ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport.state : "missing",
           "Orca settings, registered scoped launch contract and createSupport",
-          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.`,
+          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. Host completion/process-group source is development-only and excluded from distribution. External-custody API components remain conditional; wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.`,
         ),
         scopedLaunchPlan: plan,
         allowance:
@@ -244,9 +247,9 @@ export class NativeHostInspector implements HostInspector {
             : accountFailure ?? accountAllowance(selection.route, rateLimits?.[selection.route], Date.now()),
         billing: observation(
           selection.route === "cursor" ? "missing" : "unknown",
-          selection.route === "cursor" ? source : `execution-host policy sha256=${digest(policy)} and existing authorized provider access`,
+          selection.route === "cursor" ? "No supported Cursor included-only debit source integrated" : `execution-host policy sha256=${digest(policy)} and existing authorized provider access`,
           selection.route === "cursor"
-            ? "Included Premium weekly pool binding is not exposed; credits/overflow are not authorized."
+            ? "Included Premium weekly debit binding remains unverified. accounts.list extraUsage=false alone would not prove the permitted debit source; no supported binding source is integrated. Credits/overflow are not authorized."
             : "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required.",
         ),
         optionalTelemetry: observation(

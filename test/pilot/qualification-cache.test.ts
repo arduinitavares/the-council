@@ -58,7 +58,7 @@ it("loads its persisted exact-scope proof only after native evidence is rechecke
   const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-")));
   try {
     const cache = new QualificationCache(w);
-    cache.write([p]);
+    cache.write([p], 1000);
     expect(() => new QualificationCache(w)).toThrow(
       "QUALIFICATION_CACHE_BUSY_RECONCILE",
     );
@@ -86,6 +86,22 @@ it("loads its persisted exact-scope proof only after native evidence is rechecke
   } finally {
     rmSync(w, { recursive: true, force: true });
   }
+});
+it("merges another policy's proofs without losing unexpired receipts", () => {
+  const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-merge-")));
+  try {
+    const cache = new QualificationCache(w);
+    cache.write([p], 1000);
+    const otherScope = { ...e, policyHash: "other-policy" };
+    const otherKey = proofKey(otherScope, otherScope.routes[0]!);
+    const other = { ...p, id: otherKey, key: otherKey, scope: otherScope };
+    cache.write([other], 2000);
+    expect(cache.read()).toEqual(expect.arrayContaining([p, other]));
+    expect(cache.read()).toHaveLength(2);
+    cache.write([], 5000);
+    expect(cache.read()).toEqual([]);
+    cache.close();
+  } finally { rmSync(w, { recursive: true, force: true }); }
 });
 it("reports corrupt cache explicitly rather than treating it as no proof", () => {
   const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-")));

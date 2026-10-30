@@ -49,7 +49,6 @@ export async function runPilot(
   const owned: Attempt[] = [];
   const settled = new Set<string>();
   const released = new Set<string>();
-  const cancellationAttempted = new Set<string>();
   let pendingKey: string | null = null;
   const proofTtlMs = request.proofTtlMs ?? 3600000;
   try {
@@ -83,9 +82,8 @@ export async function runPilot(
       out.status = "prerequisites_not_verified";
       return out;
     }
-    const needed = inspected.evidence.routes.filter(
-      (r) =>
-        !request.proofs.some(
+    const reusable = inspected.evidence.routes.flatMap(
+      (r) => request.proofs.filter(
           (p) =>
             p.key === proofKey(inspected.evidence, r) &&
             p.expiresAt > now() &&
@@ -97,8 +95,11 @@ export async function runPilot(
             p.cancellation.settled &&
             p.issuedAt <= now() &&
             p.expiresAt - p.issuedAt <= 86400000,
-        ),
+        ).slice(0, 1),
     );
+    // Preserve already revalidated reuse even if a subsequent fresh probe fails.
+    out.proofs.push(...reusable);
+    const needed = inspected.evidence.routes.filter(r => !reusable.some(p => p.key === proofKey(inspected.evidence, r)));
     if (request.maxProbeCalls < 2 * needed.length || request.maxTopicCalls < 10)
       throw Error("INSUFFICIENT_CALL_BUDGET");
     const run = await driver.begin(request);
@@ -138,7 +139,6 @@ export async function runPilot(
       if(now()>=inferenceDeadline)throw Error("NATIVE_INFERENCE_DEADLINE");
       if (!a.launchVerified) throw Error("NATIVE_EFFECTIVE_SELECTION_MISMATCH");
       if (phase === "cancel-probe") {
-        cancellationAttempted.add(a.binding.dispatchId);
         if ((await driver.cancel(a, inferenceDeadline)) !== "settled")
           throw Error("CANCELLATION_SETTLEMENT_UNKNOWN");
         settled.add(a.binding.dispatchId);
@@ -227,14 +227,6 @@ export async function runPilot(
         settled: true,
       });
     }
-    for (const p of request.proofs)
-      if (
-        inspected.evidence.routes.some(
-          (r) => p.key === proofKey(inspected.evidence, r),
-        ) &&
-        p.expiresAt > now()
-      )
-        out.proofs.push(p);
     const packet = canonicalJson({
       candidate: request.candidate,
       suppliedText: request.suppliedText,
@@ -288,12 +280,7 @@ export async function runPilot(
     const cleanupDeadline = now() + CLEANUP_GRACE_MS;
     for (const a of owned) {
       if (!settled.has(a.binding.dispatchId)) {
-        if (cancellationAttempted.has(a.binding.dispatchId)) {
-          out.unresolved.push(a.binding.dispatchId);
-          continue;
-        }
-        cancellationAttempted.add(a.binding.dispatchId);
-        if ((await driver.cancel(a, cleanupDeadline)) !== "settled") {
+        if ((await driver.cancel(a, cleanupDeadline, "absolute-cleanup")) !== "settled") {
           out.unresolved.push(a.binding.dispatchId);
           continue;
         }
@@ -301,7 +288,7 @@ export async function runPilot(
       }
       if (
         !released.has(a.binding.dispatchId) &&
-        !(await driver.release(a)) &&
+        !(await driver.release(a, cleanupDeadline)) &&
         !out.unresolved.includes(a.binding.dispatchId)
       )
         out.unresolved.push(a.binding.dispatchId);

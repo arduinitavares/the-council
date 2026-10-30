@@ -21,6 +21,7 @@ import { selectionSchema } from "./config.js";
 import { scopedLaunchPlanSchema } from "./scoped-launch.js";
 import { proofKey } from "./preflight.js";
 import type { NativeEvidence, QualificationProof } from "./types.js";
+import { decodeStrictJson } from "../workers/strict-json.js";
 const observation = z.strictObject({
   state: z.enum([
     "verified",
@@ -138,7 +139,7 @@ export class QualificationCache {
     try {
       const bytes = readFileSync(this.file);
       if (bytes.length > 1024 * 1024) throw Error("size");
-      return cacheSchema.parse(JSON.parse(bytes.toString("utf8"))).proofs;
+      return cacheSchema.parse(decodeStrictJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes))).proofs;
     } catch {
       throw Error("QUALIFICATION_CACHE_CORRUPT");
     }
@@ -159,8 +160,20 @@ export class QualificationCache {
         throw Error("QUALIFICATION_CACHE_NATIVE_EVIDENCE_UNVERIFIED");
     return matches;
   }
-  write(proofs: readonly QualificationProof[]): void {
-    const parsed = cacheSchema.parse({ version: 1, proofs });
+  write(proofs: readonly QualificationProof[], now = Date.now()): void {
+    if (readFileSync(this.lock, "utf8") !== this.token)
+      throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+    if (!Number.isSafeInteger(now)) throw Error("QUALIFICATION_CACHE_CLOCK_INVALID");
+    const incoming = cacheSchema.parse({ version: 1, proofs }).proofs;
+    // The exclusive writer lock covers read/merge/atomic replace. Keep proofs
+    // from other policies/configurations and prefer the freshest identical key.
+    const merged = new Map<string, QualificationProof>();
+    for (const proof of [...this.read(), ...incoming]) {
+      if (proof.expiresAt <= now) continue;
+      const previous = merged.get(proof.key);
+      if (!previous || proof.issuedAt >= previous.issuedAt) merged.set(proof.key, proof);
+    }
+    const parsed = cacheSchema.parse({ version: 1, proofs: [...merged.values()] });
     const temporary = join(this.directory, `receipts-${this.token}.tmp`);
     const fd = openSync(
       temporary,

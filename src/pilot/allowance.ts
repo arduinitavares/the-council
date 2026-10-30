@@ -2,12 +2,21 @@ import { canonicalJson } from "../domain/hash.js";
 import type { Observation } from "./types.js";
 
 export function readFailure(source: string, error: unknown): Observation {
-  const code = String((error as any)?.code ?? error).toLowerCase();
+  const rawCode = (error as any)?.code ?? (error as any)?.response?.error?.code;
+  const code = String(rawCode ?? error).toLowerCase();
   const state = /authentication|unauthorized|not.authenticated|\b401\b/.test(code)
     ? "authentication_failed" : /denied|forbidden|\b403\b/.test(code) ? "denied"
     : /exhausted|quota.exceeded/.test(code) ? "exhausted"
     : /unsupported/.test(code) ? "unsupported" : "missing";
-  return { state, source, detail: `Native source returned ${state}; raw account identities and diagnostics are not persisted.` };
+  const diagnosticClass = /timeout|timed.out|etimedout/.test(code) ? "timeout"
+    : /econnreset|econnrefused|epipe|enotfound|transport|connection/.test(code) ? "transport"
+    : state === "authentication_failed" ? "authentication" : state === "denied" ? "denial"
+    : rawCode !== undefined ? "rpc" : "unclassified";
+  // Only known protocol codes survive. Messages and arbitrary provider strings
+  // may contain account identifiers, so they are used for classification only.
+  const safeCode = typeof rawCode === "number" && Number.isSafeInteger(rawCode) ? rawCode
+    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|unauthorized|unsupported|quota_exceeded)$/i.test(rawCode) ? rawCode : null;
+  return { state, source, detail: canonicalJson({ reason: "NATIVE_SOURCE_READ_FAILED", diagnostic: { class: diagnosticClass, code: safeCode } }) };
 }
 
 /** Project only quota fields from the registered account snapshot. Never store

@@ -121,17 +121,17 @@ export class PilotJournal {
           throw error;
         }
       },
-      cancel: async (a, deadline) => {
+      cancel: async (a, deadline, mode) => {
         check(a);
         this.append({ event: "cancel-reserved", binding: a.binding });
-        const result = await driver.cancel(a, deadline);
+        const result = await driver.cancel(a, deadline, mode);
         this.append({ event: "cancel-observed", binding: a.binding, result });
         return result;
       },
-      release: async (a) => {
+      release: async (a, deadline) => {
         check(a);
         this.append({ event: "release-reserved", binding: a.binding });
-        const released = await driver.release(a);
+        const released = await driver.release(a, deadline);
         this.append({
           event: "release-observed",
           binding: a.binding,

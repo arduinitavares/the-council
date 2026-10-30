@@ -11,6 +11,7 @@ import { acquiredAuditDisposition, adoptAuditSnapshot, currentSourceDigest, save
 import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
+import { inventoryCodexPlugins } from "./codex-startup.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -163,14 +164,18 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     }
     for(const file of ["/etc/codex/requirements.toml",join(codexHome,"requirements.toml")])track(file);
     const override=join(codexHome,"AGENTS.override.md");const instructions=[existsSync(override)?override:join(codexHome,"AGENTS.md")];
-    for(const file of instructions)track(file);
+    track(override);for(const file of instructions)track(file);
     for(const config of configurations){
       for(const key of ["model_instructions_file","compact_prompt_file"])if(typeof config[key]==="string")track(resolve(codexHome,config[key]));
-      if(config.notify?.length)effects.push(`legacy-notify:${sha256(canonicalJson(config.notify))}`);
-      hookEffects(config.hooks);
     }
+    // Ordinary hook/notifier execution occurs at thread/session construction.
+    // This owned kernel suppresses it, conditional on raw+managed admission
+    // BEFORE thread/start. Fingerprint inputs, never claim executable closure
+    // for disabled handlers or read private hook implementation dependencies.
+    for(const file of [join(codexHome,"hooks.json"),"/etc/codex/hooks.json",...projectLayers.map(file=>join(dirname(file),"hooks.json"))])track(file);
     inventory(join(codexHome,"rules"),[]);inventory("/etc/codex/rules",[]);
-    for(const root of [join(codexHome,"plugins"),join(workspace,".codex/plugins")])inventory(root,["hooks/hooks.json","hooks.json",".codex-plugin/plugin.json"]);
+    inventoryCodexPlugins([join(codexHome,"plugins"),join(workspace,".codex/plugins")],track,unavailable,effects);
+    add("ordinary-hooks-and-notify-suppression", "verified", "Codex rust-v0.164.0 hook registry and engine", "Owned notify=[] and hooks=false suppress ordinary handlers; builtin/plugin platform effects remain audited", "Mandatory raw layer and managed-requirement checks before thread/start; flags alone do not verify startup/platform effects");
     // This is a concrete exception in the pinned platform contract, never an
     // unknown capability turned into a verified tool boundary by approval.
     effects.push("codex-platform-runtime-reads-and-state");

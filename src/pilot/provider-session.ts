@@ -110,10 +110,10 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
       if (event.id === 1) { nextConfig = true; }
       else if (event.id === 2) {
         const config = event.result?.config;
-        if (!recipe.codexPolicy || !verifyCodexConfig(config, recipe.codexPolicy, a.selection.model, a.selection.effort)) throw Error("CODEX_EFFECTIVE_CONFIG_UNVERIFIED");
-        configAccepted = true; init = { model: config.model, cwd: recipe.cwd, configDigest: sha256(canonicalJson(config)) };
+        if (!recipe.codexPolicy || !verifyCodexConfig(event.result, recipe.codexPolicy, a.selection.model, a.selection.effort)) throw Error("CODEX_EFFECTIVE_CONFIG_UNVERIFIED");
+        configAccepted = true; init = { model: config.model, cwd: recipe.cwd, configDigest: sha256(canonicalJson(event.result)) };
       } else if (event.id === 5) {
-        if (!recipe.codexPolicy || !verifyCodexRequirements(event.result?.requirements, recipe.codexPolicy.name)) throw Error("CODEX_REQUIREMENTS_DENIED");
+        if (!recipe.codexPolicy || !verifyCodexRequirements(event.result?.requirements, recipe.codexPolicy.name, a.selection.model, a.selection.effort)) throw Error("CODEX_REQUIREMENTS_DENIED");
         requirementsAccepted = true;
       } else if (event.id === 6) {
         if (!recipe.codexPolicy || !event.result?.data?.some((p: any) => p.id === recipe.codexPolicy!.name && p.allowed === true)) throw Error("CODEX_PROFILE_NOT_ALLOWED");

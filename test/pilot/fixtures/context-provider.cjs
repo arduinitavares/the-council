@@ -39,11 +39,36 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   } else if(protocol==='cursor-stream') cursorInput.push(line);
   else {
     const message=JSON.parse(line);
+    if(process.argv[5]&&message.method)require('node:fs').appendFileSync(process.argv[5],message.method+'\n');
     if(message.id===1)emit({id:1,result:{userAgent:'synthetic'}});
-    if(message.id===2)emit({id:2,result:{config:{model,model_reasoning_effort:'max',approval_policy:'never',default_permissions:'council_packet',notify:[],web_search:'disabled',features:Object.fromEntries('hooks apps plugins multi_agent multi_agent_v2 shell_tool view_image request_permissions_tool image_generation code_mode code_mode_only code_mode_host browser_use computer_use memories external_agent_memory_import standalone_web_search shell_snapshot shell_snapshot_v2 recommended_plugins remote_plugin skill_search'.split(' ').map(key=>[key,false])),agents:{enabled:false},mcp_servers:{},plugins:{},permissions:{council_packet:{filesystem:{[process.cwd()]:'read'},network:{enabled:false}}}}}});
-    if(message.id===5)emit({id:5,result:{requirements:behavior==='requirements-denied'?{allowedApprovalPolicies:['on-request']}:null}});
+    if(message.id===2){
+      // cli/src/main.rs AppServer forwards root_config_overrides only;
+      // interactive --model / --ask-for-approval selectors do not configure it.
+      const startup=process.argv.slice(6);let raw={model:'fixture-global-default',model_reasoning_effort:'low',approval_policy:'on-request'};
+      const merge=(a,b)=>{for(const [key,value]of Object.entries(b))a[key]=value&&typeof value==='object'&&!Array.isArray(value)?merge(a[key]||{},value):value;return a;};
+      for(let i=0;i<startup.length;i++) {
+        if(startup[i]==='-c')merge(raw,require('smol-toml').parse(startup[++i]));
+        else if(startup[i]==='--disable')merge(raw,{features:{[startup[++i]]:false}});
+      }
+      const config=Object.fromEntries(['model','model_reasoning_effort','approval_policy','web_search','apps'].map(key=>[key,raw[key]??null]));
+      const layers=[{name:{type:'sessionFlags'},version:'fixture-session',config:raw}];
+      if(behavior==='higher-hook')layers.unshift({name:{type:'legacyManagedConfigTomlFromMdm'},version:'fixture-managed',config:{features:{hooks:true}}});
+      if(behavior==='typed-model')config.model='foreign';
+      if(behavior==='typed-effort')config.model_reasoning_effort='low';
+      emit({id:2,result:{config,origins:{},...(behavior==='missing-layers'?{}:{layers})}});
+    }
+    if(message.id===5)emit({id:5,result:{requirements:behavior==='requirements-denied'?{allowedApprovalPolicies:['on-request']}:behavior==='managed-hooks'?{featureRequirements:{hooks:true}}:behavior==='managed-permissions'?{defaultPermissions:'foreign'}:null}});
     if(message.id===6)emit({id:6,result:{data:[{id:'council_packet',allowed:true}],nextCursor:null}});
-    if(message.id===3){if(message.params.sandbox||message.params.permissions!=='council_packet')process.exit(8);emit({id:3,result:{thread:{id:'synthetic-session'},model,reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources:[]}});}
+    if(message.id===3){
+      const instruction=require('node:path').join(process.cwd(),'AGENTS.md');
+      let instructionSources=[];
+      if(['normal-instructions','duplicate-instructions','object-instructions','drift-instructions'].includes(behavior))instructionSources=[instruction];
+      if(behavior==='wrong-instructions')instructionSources=['/foreign/AGENTS.md'];
+      if(behavior==='duplicate-instructions')instructionSources.push(instruction);
+      if(behavior==='object-instructions')instructionSources=[{path:instruction,sha256:'provider-cannot-attest-this'}];
+      if(behavior==='missing-instructions')instructionSources=undefined;
+      if(behavior==='drift-instructions')require('node:fs').writeFileSync(instruction,'changed after prelaunch fingerprint');
+      if(message.params.sandbox||message.params.permissions!=='council_packet')process.exit(8);emit({id:3,result:{thread:{id:'synthetic-session',cliVersion:'0.164.0',createdAt:0,updatedAt:0,cwd:process.cwd(),ephemeral:true,modelProvider:'openai',preview:'',projectId:null,sessionId:'synthetic-session',source:'appServer',status:{type:'idle'},turns:[]},model,modelProvider:'openai',sandbox:{type:'readOnly',networkAccess:false},approvalsReviewer:'user',reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources}});}
     if(message.id===4){if(behavior!=='no-turn-ack')emit({id:4,result:{turn:{id:'synthetic-turn',status:'inProgress'}}});respond(message.params.input[0].text);}
   }
 }).on('close',()=>{if(protocol==='cursor-stream')respond(cursorInput.join('\n'));if(!hold&&behavior!=='final-then-hang'&&behavior!=='hang')setImmediate(()=>process.exit(0));});

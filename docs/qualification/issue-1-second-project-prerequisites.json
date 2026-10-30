@@ -234,5 +234,232 @@
     "issueClosed": false,
     "remainingLocalWork": "effective scoped controls and external terminal completion/cleanup relay integration and qualification",
     "remainingHostAccountPrerequisites": "current requesting-project trust and supported Cursor included-Premium-only spending evidence"
-  }
+  },
+  "followUpChecks": [
+    {
+      "sourceRevision": "e8debfef75cfc80a24cfe63e864d2914e4e84ef1",
+      "recordedAt": "2026-10-30T02:13:42.772000+00:00",
+      "distribution": "another fresh clone; npm ci --offline with install scripts enabled; npm run build; no borrowed dependencies",
+      "tests": {
+        "command": "npm test -- --maxWorkers 2 test/pilot test/config test/store/artifacts.test.ts",
+        "tests": 76,
+        "files": 16,
+        "passed": true
+      },
+      "sameRegisteredRequestingProject": true,
+      "packagePathSha256": "bb8a31a22f0bc460fe63be5975989f59cf48969ea4fc2a0c5a345a65027c16e0",
+      "runtimeId": "4e758215-191f-4ee5-900c-5887deb4a86d",
+      "orcaVersion": "1.4.244",
+      "versions": {
+        "orca": "1.4.244",
+        "codex": "codex-cli 0.164.0",
+        "antigravity": "1.4.10",
+        "cursor": "2026.10.22-27dcf5f"
+      },
+      "policySha256": "6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0",
+      "controlsHash": "21aad4617a76d4eccaff2005e40208c21a6f6d69f7a7cbf5db23636f140e90c6",
+      "limits": {
+        "maxProbeCalls": 0,
+        "maxTopicCalls": 10,
+        "workerTimeoutMs": 120000,
+        "proofTtlMs": 3600000,
+        "deadline": 1793327008840
+      },
+      "outcome": {
+        "status": "prerequisites_not_verified",
+        "exitCode": 3,
+        "calls": {
+          "probes": 0,
+          "topic": 0
+        },
+        "unresolved": [],
+        "blockers": [
+          {
+            "role": "openai",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "observed": "permission=full-access; launch argument digest=9ee57cd83e6adfcf8872b0707da2306b6cbce3f3fa4ed37a5cd3bc99b9024da9; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "openai",
+            "control": "allowance",
+            "reason": "ALLOWANCE_MISSING",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "observed": "Native source returned missing; raw account identities and diagnostics are not persisted.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "gemini",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "observed": "permission=full-access; launch argument digest=4d6cd63389632f38e8e8df6635e1ce0644e2f0f5d4187faa15f358674d93f735; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay, custom-agent-helper-exclusion-and-workspace-trust. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "xai",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "observed": "permission=full-access; launch argument digest=e7fdaf6059cc217bc56c21339a92633fed7f65674d92baa2bc8462931d84a45e; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay, workspace-trust, helper-exclusion, included-premium-only-spending-source. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "xai",
+            "control": "allowance",
+            "reason": "ALLOWANCE_MISSING",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "observed": "Native source returned missing; raw account identities and diagnostics are not persisted.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "xai",
+            "control": "billing",
+            "reason": "BILLING_MISSING",
+            "source": "Orca 1.4.244 settings.getAgentLaunch",
+            "observed": "Included Premium weekly pool binding is not exposed; credits/overflow are not authorized.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "judge",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "observed": "permission=full-access; launch argument digest=9ee57cd83e6adfcf8872b0707da2306b6cbce3f3fa4ed37a5cd3bc99b9024da9; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          },
+          {
+            "role": "judge",
+            "control": "allowance",
+            "reason": "ALLOWANCE_MISSING",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "observed": "Native source returned missing; raw account identities and diagnostics are not persisted.",
+            "nextAction": "Inspect the named native source and establish this prerequisite within existing authority; do not substitute routes or change settings."
+          }
+        ],
+        "proofCount": 0,
+        "resultCount": 0
+      },
+      "routes": [
+        {
+          "role": "openai",
+          "selection": {
+            "route": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "max"
+          },
+          "catalog": {
+            "state": "verified",
+            "source": "Orca agentSession.modelCatalog",
+            "detail": "exact selection exposed"
+          },
+          "controls": {
+            "state": "missing",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "detail": "permission=full-access; launch argument digest=9ee57cd83e6adfcf8872b0707da2306b6cbce3f3fa4ed37a5cd3bc99b9024da9; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence."
+          },
+          "allowance": {
+            "state": "missing",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "detail": "Native source returned missing; raw account identities and diagnostics are not persisted."
+          },
+          "billing": {
+            "state": "unknown",
+            "source": "execution-host policy sha256=6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0 and existing authorized provider access",
+            "detail": "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required."
+          }
+        },
+        {
+          "role": "gemini",
+          "selection": {
+            "route": "antigravity",
+            "model": "gemini-4-argon-high",
+            "effort": "high"
+          },
+          "catalog": {
+            "state": "verified",
+            "source": "Orca agentSession.modelCatalog; Orca 1.4.244 shared/agent-session-option-catalog-antigravity.js sha256=5f8b44d24820feff86c8ab124546c4029088d11670b689c23a398a9523447e84",
+            "detail": "exact selection exposed; Explicit unknownModelOptions effort choices map to --effort value; independent of the model ID suffix"
+          },
+          "controls": {
+            "state": "missing",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "detail": "permission=full-access; launch argument digest=4d6cd63389632f38e8e8df6635e1ce0644e2f0f5d4187faa15f358674d93f735; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay, custom-agent-helper-exclusion-and-workspace-trust. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence."
+          },
+          "allowance": {
+            "state": "verified",
+            "source": "AGY documented /usage command",
+            "detail": "{\"groups\":[{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 20 hours, 21 minutes.\",\"id\":\"gemini-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.8273330330848694,\"reset_time\":\"2026-10-30T22:35:39Z\",\"window\":\"weekly\"},{\"id\":\"gemini-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":1,\"reset_time\":\"2026-10-30T07:13:42Z\",\"window\":\"5h\"}],\"name\":\"Gemini Models\"},{\"buckets\":[{\"description\":\"You have used some of your weekly limit, it will fully refresh in 6 days, 14 hours.\",\"id\":\"3p-weekly\",\"name\":\"Weekly Limit Remaining\",\"remaining_fraction\":0.9046870470046997,\"reset_time\":\"2026-11-05T17:07:14Z\",\"window\":\"weekly\"},{\"description\":\"You have used some of your 5-hour limit, it will fully refresh in 4 hours, 34 minutes.\",\"id\":\"3p-5h\",\"name\":\"Five Hour Limit Remaining\",\"remaining_fraction\":0.9799200296401978,\"reset_time\":\"2026-10-30T06:48:08Z\",\"window\":\"5h\"}],\"name\":\"Claude and GPT models\"}]}"
+          },
+          "billing": {
+            "state": "unknown",
+            "source": "execution-host policy sha256=6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0 and existing authorized provider access",
+            "detail": "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required."
+          }
+        },
+        {
+          "role": "xai",
+          "selection": {
+            "route": "cursor",
+            "model": "grok-4.7-xhigh",
+            "effort": "xhigh",
+            "effortEncoding": "model"
+          },
+          "catalog": {
+            "state": "verified",
+            "source": "documented provider models command",
+            "detail": "exact selection exposed"
+          },
+          "controls": {
+            "state": "missing",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "detail": "permission=full-access; launch argument digest=e7fdaf6059cc217bc56c21339a92633fed7f65674d92baa2bc8462931d84a45e; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay, workspace-trust, helper-exclusion, included-premium-only-spending-source. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence."
+          },
+          "allowance": {
+            "state": "missing",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "detail": "Native source returned missing; raw account identities and diagnostics are not persisted."
+          },
+          "billing": {
+            "state": "missing",
+            "source": "Orca 1.4.244 settings.getAgentLaunch",
+            "detail": "Included Premium weekly pool binding is not exposed; credits/overflow are not authorized."
+          }
+        },
+        {
+          "role": "judge",
+          "selection": {
+            "route": "codex",
+            "model": "gpt-6-astra",
+            "effort": "max"
+          },
+          "catalog": {
+            "state": "verified",
+            "source": "Orca agentSession.modelCatalog",
+            "detail": "exact selection exposed"
+          },
+          "controls": {
+            "state": "missing",
+            "source": "Orca settings, registered scoped launch contract and createSupport",
+            "detail": "permission=full-access; launch argument digest=9ee57cd83e6adfcf8872b0707da2306b6cbce3f3fa4ed37a5cd3bc99b9024da9; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: effective-settings-and-inherited-tools-hooks, packet-read-roots-and-protected-targets, external-terminal-settlement-and-completion-relay. Host completion/process-group and external-custody API components are shipped, but wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence."
+          },
+          "allowance": {
+            "state": "missing",
+            "source": "Orca accounts.list(refreshUsage=true)",
+            "detail": "Native source returned missing; raw account identities and diagnostics are not persisted."
+          },
+          "billing": {
+            "state": "unknown",
+            "source": "execution-host policy sha256=6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0 and existing authorized provider access",
+            "detail": "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required."
+          }
+        }
+      ],
+      "stderrBytes": 0,
+      "rawStdoutSha256": "b172c7fa0db546711c75a658e1599eadf193cca5558047ecf64b22f06d526bdd",
+      "qualification": "not a live qualification or Council acceptance; zero probes deliberately permitted; no provider attempt"
+    }
+  ]
 }

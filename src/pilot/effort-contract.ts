@@ -1,129 +1,190 @@
-/** Bounded static contract recognition. These are source templates, never executed.
- * Match the complete token stream, rather than fragments that could be comments,
- * unrelated declarations, shadowed bindings or later property overrides. Unknown
- * syntax/contract shapes fail closed and require a new audited template.
- */
-const currentCatalog = `"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = void 0;
-const agent_choice_cli_apply_1 = require("./agent-choice-cli-apply");
-const ANTIGRAVITY_EFFORT = {
-    id: 'effort',
-    label: 'Reasoning effort',
-    category: 'thought_level',
-    kind: {
-        type: 'select',
-        choices: [
-            { value: 'low', label: 'Low' },
-            { value: 'medium', label: 'Medium' },
-            { value: 'high', label: 'High' }
-        ],
-        defaultValue: 'high'
-    },
-    apply: {
-        ...(0, agent_choice_cli_apply_1.agentChoiceCliApply)('antigravity', [
-            {
-                kind: 'value',
-                names: ['--effort'],
-                lift: 'separate-and-long-equals'
-            }
-        ], '--effort'),
-        midSession: { kind: 'command', build: (value) => \`/effort \${String(value)}\` }
-    }
-};
-exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = {
-    supportsWorkerLaunchPreferences: true,
-    // Model availability is account-scoped; worker-start accepts the slug reported by \`agy models\`.
-    models: [],
-    modelApply: {
-        ...(0, agent_choice_cli_apply_1.agentChoiceCliApply)('antigravity', [
-            {
-                kind: 'value',
-                names: ['--model'],
-                lift: 'separate-and-long-equals'
-            }
-        ], '--model'),
-        midSession: { kind: 'agent-picker', command: '/model' }
-    },
-    unknownModelOptions: [ANTIGRAVITY_EFFORT]
-};
-`;
-const currentHelper = `"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.agentChoiceConfigValue = agentChoiceConfigValue;
-exports.agentChoiceCliApply = agentChoiceCliApply;
-const agent_session_option_agent_args_1 = require("./agent-session-option-agent-args");
-function agentChoiceConfigValue(value, key) {
-    const separator = value.indexOf('=');
-    return separator !== -1 && value.slice(0, separator).trim() === key
-        ? value.slice(separator + 1)
-        : undefined;
-}
-/** The declared grammar owns both forward spelling and conflicting argument removal. */
-function agentChoiceCliApply(agent, forms, emitted) {
-    const encoder = forms.find((form) => form.names.includes(emitted)) ?? forms[0];
-    return {
-        cli: forms,
-        launchArgs: (value) => encoder.kind === 'config'
-            ? [emitted, \`\${encoder.key}=\${String(value)}\`]
-            : [emitted, String(value)],
-        removeAgentArgs: (tokens) => forms.reduce((kept, form) => (0, agent_session_option_agent_args_1.removeAgentArgOption)(agent, kept, form.names, form.kind === 'config'
-            ? (value) => agentChoiceConfigValue(value ?? '', form.key) !== undefined
-            : undefined), [...tokens])
-    };
-}
-`;
-const legacyCatalog = `const ANTIGRAVITY_EFFORT = {
-  kind: {type:'select', choices:[{value:'low'},{value:'medium'},{value:'high'}]},
-  apply: { launchArgs: (value) => ['--effort', String(value)] }
-};
-exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = {
-  supportsWorkerLaunchPreferences: true, unknownModelOptions: [ANTIGRAVITY_EFFORT]
-};`;
+import { parse, type AnyNode, type ObjectExpression, type FunctionDeclaration } from "acorn";
 
-/** A deliberately small lexer for the audited source grammar. Reject escapes and
- * unsupported syntax rather than attempting to interpret arbitrary JavaScript.
- * Keep token boundaries and string types; discard only whitespace and comments.
- */
-function tokens(source: string): string[] | undefined {
-  const result: string[] = [];
-  let offset = 0;
-  let lineBreak = false;
-  while (offset < source.length) {
-    const rest = source.slice(offset);
-    const trivia = /^(?:\s+|\/\/[^\r\n\u2028\u2029]*(?:[\r\n\u2028\u2029]|$)|\/\*[\s\S]*?\*\/)/.exec(rest)?.[0];
-    if (trivia) {
-      lineBreak ||= /[\r\n\u2028\u2029]/.test(trivia);
-      offset += trivia.length;
-      continue;
-    }
-    // Newlines after return change JavaScript semantics (automatic semicolons).
-    if (lineBreak && result.at(-1) === "return") return undefined;
-    const quoted = /^(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|`[^`\\]*`)/.exec(rest)?.[0];
-    if (quoted) {
-      result.push(quoted[0] === '`' ? quoted : JSON.stringify(quoted.slice(1, -1)));
-      lineBreak = false;
-      offset += quoted.length;
-      continue;
-    }
-    const token = /^(?:[A-Za-z_$][A-Za-z0-9_$]*|[0-9]+|\.\.\.|=>|===|!==|\?\?|&&|\|\||[{}()[\].,:;?=+!<>-])/.exec(rest)?.[0];
-    if (!token) return undefined;
-    if (lineBreak && token === "=>") return undefined;
-    lineBreak = false;
-    result.push(token);
-    offset += token.length;
+type Syntax = AnyNode | null | undefined;
+const catalogExport = "exports.ANTIGRAVITY_SESSION_OPTION_CATALOG";
+const helperBinding = "agent_choice_cli_apply_1";
+const helperCallee = `(0, ${helperBinding}.agentChoiceCliApply)`;
+
+function program(source: string) {
+  return parse(source, { ecmaVersion: "latest", sourceType: "script" });
+}
+// Compare only small relevant AST expressions. Positions, spelling of quotes and
+// comments are immaterial; computed properties, operators and bindings are not.
+function same(node: Syntax, expression: string): boolean {
+  const expected = program(`(${expression});`).body[0];
+  const shape = (value: unknown) => JSON.stringify(value, (key, child) =>
+    ["start", "end", "raw"].includes(key) ? undefined : child);
+  return expected?.type === "ExpressionStatement" && shape(node) === shape(expected.expression);
+}
+function identifier(node: Syntax, name: string): boolean {
+  return node?.type === "Identifier" && node.name === name;
+}
+function literal(node: Syntax, value: unknown): boolean {
+  return node?.type === "Literal" && node.value === value;
+}
+function properties(node: Syntax): Map<string, AnyNode> | undefined {
+  if (node?.type !== "ObjectExpression") return undefined;
+  const result = new Map<string, AnyNode>();
+  for (const property of node.properties) {
+    if (property.type !== "Property" || property.computed || property.method || property.kind !== "init") return undefined;
+    const key = property.key.type === "Identifier" ? property.key.name :
+      property.key.type === "Literal" && typeof property.key.value === "string" ? property.key.value : undefined;
+    if (key === undefined || result.has(key) || key === "__proto__") return undefined;
+    result.set(key, property.value);
   }
   return result;
 }
-function matches(actual: string[] | undefined, expected: string): boolean {
-  const wanted = tokens(expected);
-  return !!actual && !!wanted && actual.length === wanted.length &&
-    actual.every((token, index) => token === wanted[index]);
+function helperCall(node: Syntax): boolean {
+  if (node?.type !== "CallExpression" || node.optional ||
+      !(same(node.callee, helperCallee) || same(node.callee, `${helperBinding}.agentChoiceCliApply`)) ||
+      node.arguments.length !== 3 || !literal(node.arguments[0], "antigravity")) return false;
+  const forms = node.arguments[1];
+  const emitted = node.arguments[2];
+  if (forms?.type !== "ArrayExpression" || forms.elements.length !== 1 ||
+      emitted?.type !== "Literal" || typeof emitted.value !== "string") return false;
+  const form = properties(forms.elements[0]);
+  return !!form && form.size === 3 && literal(form.get("kind"), "value") &&
+    same(form.get("names"), JSON.stringify([emitted.value])) &&
+    literal(form.get("lift"), "separate-and-long-equals");
 }
-export function explicitEffortContract(catalog: string, helper?: string): { efforts: string[]; helper: boolean } | undefined {
-  const actual = tokens(catalog);
-  if (matches(actual, legacyCatalog)) return {efforts: ['low', 'medium', 'high'], helper: false};
-  if (matches(actual, currentCatalog) && helper !== undefined && matches(tokens(helper), currentHelper))
-    return {efforts: ['low', 'medium', 'high'], helper: true};
-  return undefined;
+// Ignore unrelated metadata/function bodies, but never ignore code that executes
+// while constructing a catalog: only literal data and the verified helper call.
+function staticValue(node: Syntax, allowHelper = false): boolean {
+  if (!node) return false;
+  if (["Literal", "ArrowFunctionExpression", "FunctionExpression"].includes(node.type)) return true;
+  if (node.type === "ArrayExpression") return node.elements.every(element => staticValue(element, allowHelper));
+  if (node.type === "CallExpression") return allowHelper && helperCall(node);
+  if (node.type !== "ObjectExpression") return false;
+  const ordinary: ObjectExpression = { ...node, properties: node.properties.filter(property => property.type !== "SpreadElement") };
+  const values = properties(ordinary);
+  return !!values && [...values.values()].every(value => staticValue(value, allowHelper)) &&
+    node.properties.every(property => property.type !== "SpreadElement" || (allowHelper && helperCall(property.argument)));
+}
+function boilerplate(node: AnyNode): boolean {
+  return node.type === "ExpressionStatement" &&
+    (literal(node.expression, "use strict") || same(node.expression, 'Object.defineProperty(exports, "__esModule", {value:true})'));
+}
+function assignment(node: AnyNode, target: string): Syntax {
+  return node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression" &&
+    node.expression.operator === "=" && same(node.expression.left, target) ? node.expression.right : undefined;
+}
+
+function verifiedHelper(source: string): boolean {
+  let implementation: FunctionDeclaration | undefined;
+  let exported = false;
+  const declarations = new Set<string>();
+  for (const statement of program(source).body) {
+    if (boilerplate(statement)) continue;
+    if (statement.type === "FunctionDeclaration" && statement.id &&
+        ["agentChoiceCliApply", "agentChoiceConfigValue"].includes(statement.id.name)) {
+      if (declarations.has(statement.id.name)) return false;
+      declarations.add(statement.id.name);
+      if (statement.id.name === "agentChoiceCliApply") implementation = statement;
+      continue;
+    }
+    if (statement.type === "VariableDeclaration" && statement.kind === "const" && statement.declarations.length === 1) {
+      const entry = statement.declarations[0]!;
+      if (!identifier(entry.id, "agent_session_option_agent_args_1") ||
+          !same(entry.init, 'require("./agent-session-option-agent-args")') || declarations.has("args")) return false;
+      declarations.add("args");
+      continue;
+    }
+    const choiceExport = assignment(statement, "exports.agentChoiceCliApply");
+    if (choiceExport && identifier(choiceExport, "agentChoiceCliApply") && !exported) { exported = true; continue; }
+    if (identifier(assignment(statement, "exports.agentChoiceConfigValue"), "agentChoiceConfigValue") && !declarations.has("configExport")) {
+      declarations.add("configExport"); continue;
+    }
+    return false;
+  }
+  if (!implementation || !exported ||
+      (declarations.has("configExport") && !declarations.has("agentChoiceConfigValue")) ||
+      implementation.async || implementation.generator ||
+      implementation.params.length !== 3 || !implementation.params.every((param, index) =>
+        identifier(param, ["agent", "forms", "emitted"][index]!))) return false;
+  const statements = implementation.body.body;
+  if (statements.length !== 2) return false;
+  const encoder = statements[0];
+  if (encoder?.type !== "VariableDeclaration" || encoder.kind !== "const" || encoder.declarations.length !== 1 ||
+      !identifier(encoder.declarations[0]?.id, "encoder") ||
+      !same(encoder.declarations[0]?.init, "forms.find((form) => form.names.includes(emitted)) ?? forms[0]")) return false;
+  const returned = statements[1];
+  const fields = returned?.type === "ReturnStatement" ? properties(returned.argument) : undefined;
+  const launch = fields?.get("launchArgs");
+  if (launch?.type !== "ArrowFunctionExpression" || launch.async || launch.params.length !== 1 ||
+      !identifier(launch.params[0], "value")) return false;
+  // The validated value-form encoder selects the non-config branch. Changes to
+  // the unused config branch cannot affect this effort mapping.
+  const body = launch.body;
+  const valueMapping = body.type === "ConditionalExpression" && same(body.test, "encoder.kind === 'config'")
+    ? body.alternate : body;
+  return !!fields && identifier(fields.get("cli"), "forms") &&
+    same(valueMapping, "[emitted, String(value)]") &&
+    [...fields].every(([key, value]) => ["cli", "launchArgs"].includes(key) ||
+      (key === "removeAgentArgs" && ["ArrowFunctionExpression", "FunctionExpression"].includes(value.type)));
+}
+
+/** Read static declarations only. No app modules or discovered code are executed.
+ * Validate the binding/export envelope so relevant values cannot be overwritten
+ * or hidden in unrelated declarations; inspect only the mapping AST inside it.
+ */
+export function explicitEffortContract(source: string, helper?: string): { efforts: string[]; helper: boolean } | undefined {
+  try {
+    let effort: AnyNode | undefined;
+    let catalog: AnyNode | undefined;
+    let imported = false;
+    let importedBeforeEffort = false;
+    let initialized = false;
+    for (const statement of program(source).body) {
+      if (catalog) return undefined; // Reject later mutation or replacement.
+      if (boilerplate(statement)) continue;
+      if (statement.type === "VariableDeclaration" && statement.kind === "const" && statement.declarations.length === 1) {
+        const entry = statement.declarations[0]!;
+        if (identifier(entry.id, "ANTIGRAVITY_EFFORT") && entry.init && !effort) {
+          effort = entry.init; importedBeforeEffort = imported; continue;
+        }
+        if (identifier(entry.id, helperBinding) && !imported && same(entry.init, 'require("./agent-choice-cli-apply")')) {
+          imported = true; continue;
+        }
+        return undefined;
+      }
+      const value = assignment(statement, catalogExport);
+      if (value && same(value, "void 0") && !initialized && !effort) { initialized = true; continue; }
+      if (value?.type === "ObjectExpression" && effort) { catalog = value; continue; }
+      return undefined;
+    }
+    const options = properties(catalog);
+    const fields = properties(effort);
+    if (!options || !fields || !literal(options.get("supportsWorkerLaunchPreferences"), true) ||
+        !same(options.get("unknownModelOptions"), "[ANTIGRAVITY_EFFORT]")) return undefined;
+    if (fields.has("id") && !literal(fields.get("id"), "effort")) return undefined;
+    const kind = properties(fields.get("kind"));
+    const choices = kind?.get("choices");
+    if (!kind || !literal(kind.get("type"), "select") || choices?.type !== "ArrayExpression") return undefined;
+    const efforts: string[] = [];
+    for (const choice of choices.elements) {
+      const value = properties(choice)?.get("value");
+      if (value?.type !== "Literal" || typeof value.value !== "string" ||
+          !["low", "medium", "high"].includes(value.value) || efforts.includes(value.value)) return undefined;
+      efforts.push(value.value);
+    }
+    if (efforts.length !== 3) return undefined;
+    const apply = fields.get("apply");
+    if (apply?.type !== "ObjectExpression") return undefined;
+    const spreads = apply.properties.filter(property => property.type === "SpreadElement");
+    const direct = properties({...apply, properties: apply.properties.filter(property => property.type !== "SpreadElement")});
+    if (!direct) return undefined;
+    const usesHelper = spreads.length === 1;
+    if (usesHelper) {
+      const call = spreads[0]!.argument;
+      if (!importedBeforeEffort || helper === undefined || !verifiedHelper(helper) || !helperCall(call) ||
+          call.type !== "CallExpression" || !literal(call.arguments[0], "antigravity") || !literal(call.arguments[2], "--effort") ||
+          direct.has("launchArgs") || direct.has("cli")) return undefined;
+    } else if (spreads.length || !same(direct.get("launchArgs"), "(value) => ['--effort', String(value)]")) return undefined;
+    if (![...direct].every(([key, value]) => key === "launchArgs" || staticValue(value))) return undefined;
+    if (![...fields].every(([key, value]) => key === "apply" || staticValue(value, importedBeforeEffort)) ||
+        ![...options].every(([key, value]) => key === "unknownModelOptions" || staticValue(value, imported))) return undefined;
+    // Other helper invocations (e.g. modelApply) also need the same verified binding.
+    if (imported && (helper === undefined || !verifiedHelper(helper))) return undefined;
+    return {efforts, helper: usesHelper || imported};
+  } catch { return undefined; }
 }

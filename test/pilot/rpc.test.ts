@@ -227,6 +227,14 @@ it.each([
   ["helper automatic semicolon", helperCatalog, choiceHelper.replace("return {", "return\n{")],
   ["helper comment automatic semicolon", helperCatalog, choiceHelper.replace("return {", "return /*\n*/ {")],
   ["helper invalid arrow newline", helperCatalog, choiceHelper.replace("(value) =>", "(value)\n=>")],
+  ["catalog property override", helperCatalog.replace("supportsWorkerLaunchPreferences: true,", "supportsWorkerLaunchPreferences: true, supportsWorkerLaunchPreferences: false,"), choiceHelper],
+  ["dynamic catalog metadata", helperCatalog.replace("models: []", "models: mutateCatalog()"), choiceHelper],
+  ["helper later replacement", helperCatalog, choiceHelper + "exports.agentChoiceCliApply = () => ({});"],
+  ["helper binding mutation", helperCatalog, choiceHelper + "agentChoiceCliApply = () => ({});"],
+  ["helper extra execution", helperCatalog, choiceHelper.replace("const encoder = forms.find", "mutateEncoder(); const encoder = forms.find")],
+  ["helper duplicate mapping", helperCatalog, choiceHelper.replace("cli: forms,", "launchArgs: () => [], cli: forms,")],
+  ["spread CLI override", helperCatalog.replace("midSession: { kind: 'command'", "cli: [], midSession: { kind: 'command'"), choiceHelper],
+  ["extra effort spread", helperCatalog.replace("midSession: { kind: 'command'", "...otherApply, midSession: { kind: 'command'"), choiceHelper],
   ["oversized helper", helperCatalog, choiceHelper + " ".repeat(65536)],
   ["oversized catalog", helperCatalog + " ".repeat(65536), choiceHelper],
 ])("keeps %s unavailable", async (_name, catalog, helper) => {
@@ -262,5 +270,25 @@ it.each(["agent-session-option-catalog-antigravity.js", "agent-choice-cli-apply.
     const source = resolve(shared, filename);
     renameSync(source, source + ".original"); symlinkSync(source + ".original", source);
     expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual([]);
+  } finally { host.close(); }
+});
+
+it("recognizes required effort structure across unrelated catalog and helper changes", async () => {
+  const host = nativeHostFixture();
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    const catalog = helperCatalog.replace("label: 'Reasoning effort'", "label: 'Effort'")
+      .replace("defaultValue: 'high'", "defaultValue: 'medium'")
+      .replace("command: '/model'", "command: '/pick-model'")
+      .replace("label: 'High'", "label: 'Deep'")
+      .replace("kind: 'value',\n                names: ['--effort'],\n                lift: 'separate-and-long-equals'", "lift: 'separate-and-long-equals', names: ['--effort'], kind: 'value'");
+    const helper = choiceHelper.replace("const separator = value.indexOf('=');", "const separator = value.lastIndexOf('=');")
+      .replace("removeAgentArgs: (tokens) => forms.reduce", "removeAgentArgs: (args) => forms.reduce")
+      .replace("[...tokens]", "[...args]")
+      .replace('`${encoder.key}=${String(value)}`', "'unused-config-value'");
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), catalog);
+    writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), helper);
+    expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual(["low", "medium", "high"]);
   } finally { host.close(); }
 });

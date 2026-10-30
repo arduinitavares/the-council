@@ -202,6 +202,29 @@ it("recognizes the explicit helper-backed prelaunch AGY effort contract", async 
   } finally { host.close(); }
 });
 
+it.each(["legacy", "helper"].flatMap(mapping => [
+  ["high"], ["low"], ["medium"], ["low", "medium"], ["low", "high"], ["medium", "high"],
+].map(efforts => ({mapping, efforts}))))("accepts $efforts as an explicit recognized subset via $mapping", async ({mapping, efforts}) => {
+  const host = nativeHostFixture();
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    const choices = efforts.map(value => `{value:'${value}'}`).join(",");
+    const catalog = mapping === "helper"
+      ? helperCatalog.replace(/choices: \[[\s\S]*?\]/, `choices: [${choices}]`)
+      : `const ANTIGRAVITY_EFFORT = {
+          kind: {type:'select', choices:[${choices}]},
+          apply: {launchArgs: (value) => ['--effort', String(value)]}
+        };
+        exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = {
+          supportsWorkerLaunchPreferences:true, unknownModelOptions:[ANTIGRAVITY_EFFORT]
+        };`;
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), catalog);
+    if (mapping === "helper") writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), choiceHelper);
+    expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual(efforts);
+  } finally { host.close(); }
+});
+
 it.each([
   ["missing helper", helperCatalog, undefined],
   ["empty helper", helperCatalog, ""],
@@ -210,7 +233,7 @@ it.each([
   ["unreferenced effort", helperCatalog.replace("unknownModelOptions: [ANTIGRAVITY_EFFORT]", "unknownModelOptions: []"), choiceHelper],
   ["worker launch disabled", helperCatalog.replace("supportsWorkerLaunchPreferences: true", "supportsWorkerLaunchPreferences: false"), choiceHelper],
   ["unsupported choice", helperCatalog.replace("value: 'high'", "value: 'ultra'"), choiceHelper],
-  ["missing choice", helperCatalog.replace("{ value: 'high', label: 'High' }", ""), choiceHelper],
+  ["empty choices", helperCatalog.replace(/choices: \[[\s\S]*?\]/, "choices: []"), choiceHelper],
   ["duplicate choice", helperCatalog.replace("value: 'high'", "value: 'low'"), choiceHelper],
   ["wrong emitted flag", helperCatalog.replace("], '--effort')", "], '--model')"), choiceHelper],
   ["unmapped effort form", helperCatalog.replace("names: ['--effort']", "names: ['--other']"), choiceHelper],

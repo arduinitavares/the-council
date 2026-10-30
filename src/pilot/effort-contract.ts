@@ -167,7 +167,7 @@ export function explicitEffortContract(source: string, helper?: string): { effor
           !["low", "medium", "high"].includes(value.value) || efforts.includes(value.value)) return undefined;
       efforts.push(value.value);
     }
-    if (efforts.length !== 3) return undefined;
+    if (efforts.length === 0) return undefined;
     const apply = fields.get("apply");
     if (apply?.type !== "ObjectExpression") return undefined;
     const spreads = apply.properties.filter(property => property.type === "SpreadElement");

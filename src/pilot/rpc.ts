@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { realpathSync, existsSync, readFileSync, lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
+import { explicitEffortContract } from "./effort-contract.js";
 /** Read-only subset of the official exported Orca RuntimeClient. */
 export type ReadMethod =
   | "settings.getAgentLaunch"
@@ -60,15 +61,23 @@ export class LocalReadRpc implements ReadRpc {
       if (realpathSync(modulePath) !== modulePath || lstatSync(modulePath).isSymbolicLink()) return missing;
       const bytes = readFileSync(modulePath);
       if (bytes.length > 65536) return missing;
-      const source = bytes.toString("utf8");
-      const block = source.split("const ANTIGRAVITY_EFFORT =")[1]?.split("exports.ANTIGRAVITY_SESSION_OPTION_CATALOG")[0];
-      if (!block || !/launchArgs:\s*\(value\)\s*=>\s*\['--effort',\s*String\(value\)\]/.test(block) ||
-          !/supportsWorkerLaunchPreferences:\s*true/.test(source) ||
-          !/unknownModelOptions:\s*\[ANTIGRAVITY_EFFORT\]/.test(source)) return missing;
-      const choices = block.match(/choices:\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-      const efforts = [...choices.matchAll(/value:\s*'([^']+)'/g)].map(match => match[1]!);
-      if (!efforts.length || efforts.some(e => !["low","medium","high"].includes(e))) return missing;
-      return {efforts,source:`Orca shared/agent-session-option-catalog-antigravity.js sha256=${createHash("sha256").update(bytes).digest("hex")}`,
+      const helperPath = resolve(dirname(modulePath), "agent-choice-cli-apply.js");
+      let helperBytes: Buffer | undefined;
+      // The helper is optional for the older direct literal mapping. A current
+      // spread mapping is unavailable unless its dependency is verified as data.
+      if (existsSync(helperPath)) {
+        if (realpathSync(helperPath) !== helperPath || lstatSync(helperPath).isSymbolicLink()) return missing;
+        helperBytes = readFileSync(helperPath);
+        if (helperBytes.length > 65536) return missing;
+      }
+      const contract = explicitEffortContract(bytes.toString("utf8"), helperBytes?.toString("utf8"));
+      if (!contract) return missing;
+      const identity = (name: string, content: Buffer) =>
+        name + " sha256=" + createHash("sha256").update(content).digest("hex");
+      const dependencies = contract.helper && helperBytes
+        ? "; " + identity("shared/agent-choice-cli-apply.js", helperBytes) : "";
+      return {efforts: contract.efforts,
+        source: "Orca " + identity("shared/agent-session-option-catalog-antigravity.js", bytes) + dependencies,
         detail:"Explicit unknownModelOptions effort choices map to --effort value; independent of the model ID suffix"};
     } catch { return missing; }
   }

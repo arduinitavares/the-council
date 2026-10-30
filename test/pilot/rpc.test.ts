@@ -117,3 +117,150 @@ it("rejects a symlinked runtime-client export before importing it",()=>{
     expect(()=>new LocalReadRpc("synthetic-runtime",host.orca)).toThrow("ORCA_EXPORTED_CLIENT_PATH_UNVERIFIED");
   }finally{host.close();}
 });
+
+// Audited installed Orca 1.4.245 contracts, kept as data; never imported.
+const helperCatalog = `"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = void 0;
+const agent_choice_cli_apply_1 = require("./agent-choice-cli-apply");
+const ANTIGRAVITY_EFFORT = {
+    id: 'effort',
+    label: 'Reasoning effort',
+    category: 'thought_level',
+    kind: {
+        type: 'select',
+        choices: [
+            { value: 'low', label: 'Low' },
+            { value: 'medium', label: 'Medium' },
+            { value: 'high', label: 'High' }
+        ],
+        defaultValue: 'high'
+    },
+    apply: {
+        ...(0, agent_choice_cli_apply_1.agentChoiceCliApply)('antigravity', [
+            {
+                kind: 'value',
+                names: ['--effort'],
+                lift: 'separate-and-long-equals'
+            }
+        ], '--effort'),
+        midSession: { kind: 'command', build: (value) => \`/effort \${String(value)}\` }
+    }
+};
+exports.ANTIGRAVITY_SESSION_OPTION_CATALOG = {
+    supportsWorkerLaunchPreferences: true,
+    // Model availability is account-scoped; worker-start accepts the slug reported by \`agy models\`.
+    models: [],
+    modelApply: {
+        ...(0, agent_choice_cli_apply_1.agentChoiceCliApply)('antigravity', [
+            {
+                kind: 'value',
+                names: ['--model'],
+                lift: 'separate-and-long-equals'
+            }
+        ], '--model'),
+        midSession: { kind: 'agent-picker', command: '/model' }
+    },
+    unknownModelOptions: [ANTIGRAVITY_EFFORT]
+};
+`;
+const choiceHelper = `"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.agentChoiceConfigValue = agentChoiceConfigValue;
+exports.agentChoiceCliApply = agentChoiceCliApply;
+const agent_session_option_agent_args_1 = require("./agent-session-option-agent-args");
+function agentChoiceConfigValue(value, key) {
+    const separator = value.indexOf('=');
+    return separator !== -1 && value.slice(0, separator).trim() === key
+        ? value.slice(separator + 1)
+        : undefined;
+}
+/** The declared grammar owns both forward spelling and conflicting argument removal. */
+function agentChoiceCliApply(agent, forms, emitted) {
+    const encoder = forms.find((form) => form.names.includes(emitted)) ?? forms[0];
+    return {
+        cli: forms,
+        launchArgs: (value) => encoder.kind === 'config'
+            ? [emitted, \`\${encoder.key}=\${String(value)}\`]
+            : [emitted, String(value)],
+        removeAgentArgs: (tokens) => forms.reduce((kept, form) => (0, agent_session_option_agent_args_1.removeAgentArgOption)(agent, kept, form.names, form.kind === 'config'
+            ? (value) => agentChoiceConfigValue(value ?? '', form.key) !== undefined
+            : undefined), [...tokens])
+    };
+}
+`;
+it("recognizes the explicit helper-backed prelaunch AGY effort contract", async () => {
+  const host = nativeHostFixture();
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), helperCatalog);
+    writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), choiceHelper);
+    const contract = await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity");
+    expect(contract.efforts).toEqual(["low", "medium", "high"]);
+    expect(contract.source).toContain("agent-choice-cli-apply.js sha256=");
+  } finally { host.close(); }
+});
+
+it.each([
+  ["missing helper", helperCatalog, undefined],
+  ["empty helper", helperCatalog, ""],
+  ["mapping only in a comment", "/* " + helperCatalog + " */", choiceHelper],
+  ["unrelated declaration", helperCatalog.replace("const ANTIGRAVITY_EFFORT", "const OTHER_EFFORT"), choiceHelper],
+  ["unreferenced effort", helperCatalog.replace("unknownModelOptions: [ANTIGRAVITY_EFFORT]", "unknownModelOptions: []"), choiceHelper],
+  ["worker launch disabled", helperCatalog.replace("supportsWorkerLaunchPreferences: true", "supportsWorkerLaunchPreferences: false"), choiceHelper],
+  ["unsupported choice", helperCatalog.replace("value: 'high'", "value: 'ultra'"), choiceHelper],
+  ["missing choice", helperCatalog.replace("{ value: 'high', label: 'High' }", ""), choiceHelper],
+  ["duplicate choice", helperCatalog.replace("value: 'high'", "value: 'low'"), choiceHelper],
+  ["wrong emitted flag", helperCatalog.replace("], '--effort')", "], '--model')"), choiceHelper],
+  ["unmapped effort form", helperCatalog.replace("names: ['--effort']", "names: ['--other']"), choiceHelper],
+  ["config form", helperCatalog.replace("kind: 'value'", "kind: 'config'"), choiceHelper],
+  ["wrong lift", helperCatalog.replace("lift: 'separate-and-long-equals'", "lift: 'other'"), choiceHelper],
+  ["wrong agent", helperCatalog.replace("('antigravity', [", "('other', ["), choiceHelper],
+  ["wrong helper import", helperCatalog.replace("require(\"./agent-choice-cli-apply\")", "require(\"./other\")"), choiceHelper],
+  ["overridden launch mapping", helperCatalog.replace("midSession: { kind: 'command'", "launchArgs: () => [], midSession: { kind: 'command'"), choiceHelper],
+  ["later reassignment", helperCatalog + "ANTIGRAVITY_EFFORT.apply.launchArgs = () => [];", choiceHelper],
+  ["helper mapping mismatch", helperCatalog, choiceHelper.replace("[emitted, String(value)]", "['--model', String(value)]")],
+  ["helper encoder mismatch", helperCatalog, choiceHelper.replace("const encoder = forms.find((form) => form.names.includes(emitted)) ?? forms[0];", "const encoder = {kind:'config'};")],
+  ["helper only in a comment", helperCatalog, "/* " + choiceHelper + " */"],
+  ["helper export mismatch", helperCatalog, choiceHelper.replace("exports.agentChoiceCliApply = agentChoiceCliApply;", "exports.agentChoiceCliApply = other;")],
+  ["helper automatic semicolon", helperCatalog, choiceHelper.replace("return {", "return\n{")],
+  ["helper comment automatic semicolon", helperCatalog, choiceHelper.replace("return {", "return /*\n*/ {")],
+  ["helper invalid arrow newline", helperCatalog, choiceHelper.replace("(value) =>", "(value)\n=>")],
+  ["oversized helper", helperCatalog, choiceHelper + " ".repeat(65536)],
+  ["oversized catalog", helperCatalog + " ".repeat(65536), choiceHelper],
+])("keeps %s unavailable", async (_name, catalog, helper) => {
+  const host = nativeHostFixture();
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    expect(catalog !== helperCatalog || helper !== choiceHelper).toBe(true);
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), catalog!);
+    if (helper !== undefined) writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), helper);
+    expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual([]);
+  } finally { host.close(); }
+});
+
+it("accepts harmless catalog/helper trivia and quote changes without a version gate", async () => {
+  const host = nativeHostFixture("2.0.0-dev+local");
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), "// audited shape\n" + helperCatalog.replace("'--effort'", '\"--effort\"'));
+    writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), choiceHelper.replace("return {", "return /* grammar */ {"));
+    expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual(["low", "medium", "high"]);
+  } finally { host.close(); }
+});
+
+it.each(["agent-session-option-catalog-antigravity.js", "agent-choice-cli-apply.js"])("rejects a symlinked effort dependency %s", async (filename) => {
+  const host = nativeHostFixture();
+  try {
+    const shared = resolve(dirname(host.rpc), "../shared");
+    mkdirSync(shared, {recursive:true});
+    writeFileSync(resolve(shared, "agent-session-option-catalog-antigravity.js"), helperCatalog);
+    writeFileSync(resolve(shared, "agent-choice-cli-apply.js"), choiceHelper);
+    const source = resolve(shared, filename);
+    renameSync(source, source + ".original"); symlinkSync(source + ".original", source);
+    expect((await new LocalReadRpc("synthetic-runtime", host.orca).effortSupport("antigravity")).efforts).toEqual([]);
+  } finally { host.close(); }
+});

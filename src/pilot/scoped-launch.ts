@@ -34,7 +34,7 @@ export function scopedLaunchPlan(workspace:string, selection:ModelSelection, sup
     : selection.route === "antigravity" ? ["--mode","plan","--sandbox"]
     : ["--mode","ask","--sandbox","enabled","--workspace",cwd];
   return scopedLaunchPlanSchema.parse({
-    method:"agent.launch",source:"Inspected Orca 1.4.244 agent-launch-params and exported RuntimeClient; scoped-route-analysis, 2026-10-29",
+    method:"agent.launch",source:"Orca agent-launch-params and exported RuntimeClient; inspected scoped-route-analysis, 2026-10-29",
     operationIdSource:"journal-before-mutation",promptSubmitted:false,
     request:{agent:selection.route,target:{kind:"existing",worktree:`path:${workspace}`},surface:"terminal",presentation:"background",
       sessionOptions:{model:selection.model,...(selection.effortEncoding === "model" ? {} : {effort:selection.effort}),permissionMode:"own"},

@@ -61,16 +61,26 @@ it("uses an official-client read boundary and rejects another runtime without ha
   ]);
 });
 
-it("refuses a different installed runtime version before importing its client", () => {
-  const host = nativeHostFixture("1.4.245");
+it.each(["1.4.245", "0.9.0", "2.0.0-dev+local"])("loads the installed client regardless of Orca version %s", async (version) => {
+  const host = nativeHostFixture(version);
   try {
-    writeFileSync(host.rpc, "throw Error('must not load unsupported export');");
-    expect(() => new LocalReadRpc("synthetic-runtime", host.orca)).toThrow("UNSUPPORTED_ORCA_API_VERSION");
+    const rpc = new LocalReadRpc("synthetic-runtime", host.orca);
+    expect(await rpc.call("settings.getAgentLaunch", {})).toEqual({settings:{agentPermission:{default:"full-access"},agentDefaultArgs:{}}});
+    await expect(new LocalReadRpc("foreign-runtime", host.orca).call("settings.getAgentLaunch", {})).rejects.toThrow("RPC_READ_BINDING_MISMATCH");
   } finally { host.close(); }
 });
 
-it("fails closed when the inspected installation has no RuntimeClient export", () => {
+it("loads the installed client without executing the Orca binary", async () => {
   const host = nativeHostFixture();
+  try {
+    writeFileSync(host.orca, `#!${process.execPath}\nprocess.exit(99);\n`);
+    const rpc = new LocalReadRpc("synthetic-runtime", host.orca);
+    expect(await rpc.call("agentSession.createSupport", {agent:"cursor"})).toEqual({agent:"cursor",supported:false,reason:"agent"});
+  } finally { host.close(); }
+});
+
+it.each(["1.4.245", "0.9.0", "2.0.0-dev+local"])("fails closed without a RuntimeClient export on Orca %s", (version) => {
+  const host = nativeHostFixture(version);
   try {
     writeFileSync(host.rpc, "module.exports = {};");
     expect(() => new LocalReadRpc("synthetic-runtime", host.orca)).toThrow("ORCA_EXPORTED_CLIENT_UNAVAILABLE");

@@ -22,7 +22,7 @@ export function readFailure(source: string, error: unknown): Observation {
 /** Project only quota fields from the registered account snapshot. Never store
  * accounts, credentials, provenance identifiers or infer spending authority. */
 export function accountAllowance(provider: "codex" | "cursor", value: any, now: number): Observation {
-  const source = `Orca 1.4.244 accounts.list(refreshUsage=true) rateLimits.${provider}`;
+  const source = `Orca accounts.list(refreshUsage=true) rateLimits.${provider}`;
   if (!value || value.provider !== provider)
     return { state: "missing", source, detail: "Provider usage observation absent" };
   if (value.error || value.status !== "ok") return readFailure(source, value.error ?? value.status);

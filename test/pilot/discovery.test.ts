@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { nativeHostFixture } from "./native-host-fixture.js";
+import { nativeCommand } from "../../src/pilot/native-command.js";
+import { LocalReadRpc } from "../../src/pilot/rpc.js";
+import { existsSync } from "node:fs";
 import { NativeHostInspector } from "../../src/pilot/discovery.js";
 import { mkdtempSync, writeFileSync, rmSync, realpathSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -203,4 +207,37 @@ it("distinguishes absent usage windows from explicit null windows", async () => 
   const value = {provider:"codex",status:"ok",updatedAt:Date.now()};
   expect(accountAllowance("codex",value,Date.now()).state).toBe("missing");
   expect(accountAllowance("codex",{...value,session:null,weekly:null},Date.now()).state).toBe("unknown");
+});
+
+// A version gate must not replace actual host-shape and control checks.
+it.each(["1.4.245", "0.9.0", "2.0.0-dev+local"])("inspects Orca %s and retains required host checks", async (version) => {
+  const host = nativeHostFixture(version);
+  vi.stubEnv("HOME", host.home);
+  vi.stubEnv("PATH", host.bin + ":" + process.env.PATH);
+  vi.stubEnv("ORCA_TERMINAL_HANDLE", "synthetic-coordinator");
+  vi.stubEnv("ORCA_PANE_KEY", "synthetic-pane");
+  try {
+    const command = await nativeCommand(host.orca, host.workspace);
+    const rpc = (runtimeId: string) => new LocalReadRpc(runtimeId, host.orca);
+    const controls = async () => ({bootstrap:{state:"missing" as const,source:"synthetic boundary",detail:"No launch controls"},controls:{state:"missing" as const,source:"synthetic boundary",detail:"No launch controls"},facts:[]});
+    const request = {workspace:host.workspace,policyPath:host.policy,config:incidentRoster} as PilotRequest;
+    const result = await new NativeHostInspector(command, rpc, undefined, controls).inspect(request);
+    expect(result.evidence.orcaVersion).toBe(version);
+    expect(result.evidence.versions.orca).toBe(version);
+    expect(result.evidence.runtimeId).toBe("synthetic-runtime");
+    expect(result.evidence.routes.every(route => route.controls.state === "missing")).toBe(true);
+    expect(result.evidence.routes.find(route => route.role === "xai")?.billing.state).toBe("missing");
+    for (const [field, value, failure] of [
+      ["capabilities", [], "UNSUPPORTED_REQUIRED_CAPABILITY:settings.agent-launch.v1"],
+      ["state", "starting", "ORCA_NOT_RUNNING_OR_READY"],
+    ] as const) {
+      const incomplete: typeof command = async (argv, cwd, timeout) => {
+        const response = await command(argv, cwd, timeout);
+        if (argv[0] === "status") response.runtime[field] = value;
+        return response;
+      };
+      await expect(new NativeHostInspector(incomplete, rpc, undefined, controls).inspect(request)).rejects.toThrow(failure);
+    }
+    expect(existsSync(join(host.root,"unexpected-inference"))).toBe(false);
+  } finally { vi.unstubAllEnvs(); host.close(); }
 });

@@ -49,8 +49,6 @@ export class NativeHostInspector implements HostInspector {
     if (status.runtime?.state !== "ready" || status.runtime?.reachable !== true)
       throw Error("ORCA_NOT_RUNNING_OR_READY");
     const version = status.runtime.appVersion;
-    if (version !== "1.4.244")
-      throw Error("UNSUPPORTED_ORCA_API_VERSION: expected 1.4.244");
     const runtimeId = status.runtime.runtimeId;
     if (!process.env.ORCA_TERMINAL_HANDLE || !process.env.ORCA_PANE_KEY) blockers.push({ role: null, control: "native-coordinator",
       reason: "NATIVE_COORDINATOR_CONTEXT_MISSING", source: "Orca-injected terminal caller context", observed: "A genuine stable requesting-workspace coordinator terminal is required before run-create and initialization",
@@ -217,7 +215,7 @@ export class NativeHostInspector implements HostInspector {
         settings?.agentPermission?.overrides?.[selection.route] ??
         settings?.agentPermission?.default ??
         "unexposed";
-      const source = "Orca 1.4.244 settings.getAgentLaunch";
+      const source = `Orca ${version} settings.getAgentLaunch`;
       const args = settings?.agentDefaultArgs?.[selection.route];
       const permission =
         typeof args === "string"

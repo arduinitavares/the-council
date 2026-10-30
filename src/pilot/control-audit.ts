@@ -63,7 +63,7 @@ async function nativeDisposition(snapshot: AuditSnapshot, runId: string, taskId:
       typeof dispatch.id !== "string" || typeof (dispatch.processIncarnation ?? dispatch.process_incarnation) !== "string" ||
       task?.spec !== `Council control audit sha256=${hash}` || task.status !== "completed" || result?.provenance !== "worker_report" ||
       result.outcome !== "succeeded" || result.reportedBy !== coordinator || typeof result.messageId !== "string") throw Error("AUDIT_NATIVE_DISPOSITION_UNVERIFIED");
-  // Orca 1.4.244's durable native incarnation is ptyId:incarnationId.
+  // The durable native incarnation is ptyId:incarnationId.
   // Native Task creator provenance lets reuse verify this after terminal close,
   // without asking a historical process or a reused PID whether it is alive.
   const incarnation=`${identity.ptyId}:${identity.incarnationId}`;

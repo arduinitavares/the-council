@@ -2,8 +2,7 @@ import { createRequire } from "node:module";
 import { realpathSync, existsSync, readFileSync, lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
-/** Read-only subset of the official exported Orca 1.4.244 RuntimeClient. */
+/** Read-only subset of the official exported Orca RuntimeClient. */
 export type ReadMethod =
   | "settings.getAgentLaunch"
   | "agentSession.modelCatalog"
@@ -35,12 +34,6 @@ export class LocalReadRpc implements ReadRpc {
     const real = realpathSync(executable);
     if (!real.endsWith("/Contents/Resources/bin/orca"))
       throw Error("ORCA_EXPORTED_CLIENT_INSTALLATION_UNSUPPORTED");
-    const version = execFileSync(real, ["--version"], {
-      encoding: "utf8", timeout: 5000, maxBuffer: 65536,
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    if (version !== "1.4.244")
-      throw Error("UNSUPPORTED_ORCA_API_VERSION: expected 1.4.244");
     const modulePath = resolve(
       dirname(real),
       "../app.asar.unpacked/out/cli/runtime-client.js",
@@ -75,7 +68,7 @@ export class LocalReadRpc implements ReadRpc {
       const choices = block.match(/choices:\s*\[([\s\S]*?)\]/)?.[1] ?? "";
       const efforts = [...choices.matchAll(/value:\s*'([^']+)'/g)].map(match => match[1]!);
       if (!efforts.length || efforts.some(e => !["low","medium","high"].includes(e))) return missing;
-      return {efforts,source:`Orca 1.4.244 shared/agent-session-option-catalog-antigravity.js sha256=${createHash("sha256").update(bytes).digest("hex")}`,
+      return {efforts,source:`Orca shared/agent-session-option-catalog-antigravity.js sha256=${createHash("sha256").update(bytes).digest("hex")}`,
         detail:"Explicit unknownModelOptions effort choices map to --effort value; independent of the model ID suffix"};
     } catch { return missing; }
   }

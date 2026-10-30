@@ -15,12 +15,12 @@ function fixture(completedAfter: number, lost = false) {
   vi.setSystemTime(epoch);
   let shows = 0, stops = 0;
   const driver = new OrcaPilotDriver(async (argv) => {
-    if (argv[1] === "worker-stop") { stops++; return { status: "stopping" }; }
+    if (argv[1] === "worker-stop") { stops++; return { state: "stopped", dispatchId: "dispatch", mutation: { requestId: argv[argv.indexOf("--retry-request") + 1] } }; }
     if (argv[1] === "worker-show") {
       shows++;
       const done = shows > completedAfter;
       return {
-        dispatch: { id: "dispatch", runId: "run", taskId: "task", status: done ? "succeeded" : "dispatched" },
+        dispatch: { id: "dispatch", runId: "run", taskId: "task", status: done ? stops ? "failed" : "succeeded" : "dispatched", terminationReason: stops ? "worker_stop" : null },
         observation: { status: lost ? "unverifiable" : done ? "exited" : "live", exactWorker: true },
       };
     }
@@ -49,7 +49,7 @@ it("sends cancellation once and waits for positive asynchronous exit", async () 
   const h = fixture(3);
   const result = h.driver.cancel(attempt, epoch + 10000);
   await vi.runAllTimersAsync();
-  expect(await result).toBe("settled");
+  expect(await result).toMatchObject({ state: "settled", stop: { dispatchId: "dispatch", state: "stopped" } });
   expect(h.counts()).toEqual({ shows: 4, stops: 1 });
 });
 it("gives a near-expiry stop a sane command window and observes exit after an ambiguous delivery", async () => {
@@ -69,8 +69,9 @@ it("gives a near-expiry stop a sane command window and observes exit after an am
   }, { inspect: async () => { throw Error("unused"); } });
   const result = driver.cancel(attempt, epoch + 10);
   await vi.runAllTimersAsync();
-  expect(await result).toBe("settled");
-  expect({ stops, shows }).toEqual({ stops: 1, shows: 2 });
+  expect(await result).toEqual({ state: "settled_unacknowledged" });
+  expect(await driver.cancel(attempt, epoch + 30000, "absolute-cleanup")).toEqual({ state: "settled_unacknowledged" });
+  expect({ stops, shows }).toEqual({ stops: 1, shows: 3 });
   expect(Date.now()).toBeGreaterThan(epoch + 10);
 });
 
@@ -78,7 +79,7 @@ it("never renews a caller's expired absolute cleanup window", async () => {
   const h = fixture(Infinity);
   const result = h.driver.cancel(attempt, epoch - 1, "absolute-cleanup");
   await vi.runAllTimersAsync();
-  expect(await result).toBe("unknown");
+  expect(await result).toEqual({ state: "unknown" });
   expect(h.counts()).toEqual({ stops: 0, shows: 0 });
   expect(Date.now()).toBe(epoch);
 });
@@ -87,7 +88,7 @@ it("keeps lost cancellation contact unknown without a repeated stop", async () =
   const h = fixture(3, true);
   const result = h.driver.cancel(attempt, epoch + 10000);
   await vi.runAllTimersAsync();
-  expect(await result).toBe("unknown");
+  expect(await result).toEqual({ state: "unknown" });
   expect(h.counts().stops).toBe(1);
 });
 
@@ -95,7 +96,7 @@ it("waits only to the absolute cancellation deadline for an owned live process",
   const h = fixture(Infinity);
   const result = h.driver.cancel(attempt, epoch + 2500, "absolute-cleanup");
   await vi.runAllTimersAsync();
-  expect(await result).toBe("unknown");
+  expect(await result).toEqual({ state: "unknown" });
   expect(Date.now()).toBe(epoch + 2500);
   expect(h.counts().stops).toBe(1);
 });
@@ -105,15 +106,15 @@ it("settles an owned process when cancellation begins after the inference deadli
   vi.setSystemTime(epoch + 120001);
   const result = h.driver.cancel(attempt, epoch + 120000);
   await vi.runAllTimersAsync();
-  expect(await result).toBe("settled");
+  expect(await result).toMatchObject({ state: "settled" });
   expect(h.counts()).toEqual({ shows: 3, stops: 1 });
   expect(Date.now()).toBeLessThanOrEqual(epoch + 150001);
 });
 
 it("does not reissue an already attempted stop after contact loss", async () => {
   const h = fixture(3, true);
-  expect(await h.driver.cancel(attempt, epoch + 10000)).toBe("unknown");
-  expect(await h.driver.cancel(attempt, epoch + 10000)).toBe("unknown");
+  expect(await h.driver.cancel(attempt, epoch + 10000)).toEqual({ state: "unknown" });
+  expect(await h.driver.cancel(attempt, epoch + 10000)).toEqual({ state: "unknown" });
   expect(h.counts().stops).toBe(1);
 });
 
@@ -122,11 +123,11 @@ it("bounds an expired live cleanup to30seconds and a future cancellation to120se
   vi.setSystemTime(epoch+1);
   const first=expired.driver.cancel(attempt,epoch);
   await vi.runAllTimersAsync();
-  expect(await first).toBe("unknown");
+  expect(await first).toEqual({ state: "unknown" });
   expect(Date.now()).toBe(epoch+30001);
   const future=fixture(Infinity);
   const second=future.driver.cancel(attempt,epoch+1800000);
   await vi.runAllTimersAsync();
-  expect(await second).toBe("unknown");
+  expect(await second).toEqual({ state: "unknown" });
   expect(Date.now()).toBe(epoch+120000);
 });

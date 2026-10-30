@@ -2,16 +2,23 @@ import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { proofKey } from "./preflight.js";
 import type { QualificationProof } from "./types.js";
+import { mutationRequestId } from "./mutation-id.js";
+import { decodeStrictJson } from "../workers/strict-json.js";
+import { pilotResultEnvelopeSchema, pilotPayloadSchemas } from "./payload.js";
+import { verifyContextProof } from "./context-driver.js";
 /** Cache contents never certify themselves: rebind both probes to native archived inputs/results. */
 export async function verifyNativeProof(
   proof: QualificationProof,
   command: Command,
 ): Promise<boolean> {
+  if (proof.schemaVersion === 2) return verifyContextProof(proof, command);
   try {
-    const route = proof.scope.routes.find(
+    const routes = proof.scope.routes.filter(
       (r) => proofKey(proof.scope, r) === proof.key,
     );
+    let route = routes[0];
     if (!route) return false;
+    let probeRole: string | undefined;
     for (const [phase, outcome] of [
       ["normal-probe", proof.normal],
       ["cancel-probe", proof.cancellation],
@@ -93,14 +100,14 @@ export async function verifyNativeProof(
             if (b.type === "text" && typeof b.text === "string") {
               if (m.role === "assistant") {
                 try {
-                  assistant.push(JSON.parse(b.text));
-                } catch {}
+                  assistant.push(pilotResultEnvelopeSchema.parse(decodeStrictJson(b.text)));
+                } catch { assistant.push(null); }
               } else {
                 const marker = "\nCOUNCIL_PACKET\n";
                 const i = b.text.indexOf(marker);
                 if (i >= 0) {
                   try {
-                    packet = JSON.parse(b.text.slice(i + marker.length));
+                    packet = decodeStrictJson(b.text.slice(i + marker.length));
                   } catch {}
                 }
               }
@@ -122,6 +129,9 @@ export async function verifyNativeProof(
         instruction,
         qualificationFingerprint: proof.key,
       });
+      route = routes.find(r => r.role === packet?.role);
+      if (!route || (probeRole !== undefined && probeRole !== route.role)) return false;
+      probeRole = route.role;
       if (
         !packet ||
         packet.phase !== phase ||
@@ -139,22 +149,35 @@ export async function verifyNativeProof(
         attemptKey: packet.attemptKey,
       });
       if (packet.packetHash !== packetHash) return false;
+      const resultRole = route.role;
+      const resultSelection = canonicalJson(route.selection);
       if (
         phase === "normal-probe" &&
-        !assistant.some(
+        !assistant.slice(-1).some(
           (v) =>
+            v !== null &&
             v.packetHash === packetHash &&
             v.phase === phase &&
-            v.role === route.role &&
+            v.role === resultRole &&
             v.binding?.dispatchId === d.id &&
             v.binding?.taskId === d.taskId &&
             v.binding?.runId === d.runId &&
             v.binding?.attemptKey === packet.attemptKey &&
-            v.payload?.ready === true &&
-            canonicalJson(v.selection) === canonicalJson(route.selection),
+            v.binding?.handle === d.assigneeHandle &&
+            pilotPayloadSchemas["normal-probe"].safeParse(v.payload).success &&
+            canonicalJson(v.selection) === resultSelection,
         )
       )
         return false;
+      if (phase === "cancel-probe") {
+        const stop = proof.cancellation.stop;
+        const expectedId = mutationRequestId(`stop:${canonicalJson({ runId: d.runId, taskId: d.taskId,
+          dispatchId: d.id, handle: d.assigneeHandle, attemptKey: packet.attemptKey })}`);
+        if (!stop || stop.state !== "stopped" || stop.dispatchId !== d.id || stop.requestId !== expectedId) return false;
+        const recorded = await command(["orchestration", "request-show", "--request", stop.requestId, "--json"], proof.scope.workspace, 5000);
+        if (recorded.requestId !== stop.requestId || recorded.state !== "completed" || recorded.method !== "orchestration.workerStop" ||
+            recorded.receipt?.state !== "stopped" || recorded.receipt?.dispatchId !== d.id || recorded.receipt?.mutation?.requestId !== stop.requestId) return false;
+      }
     }
     return true;
   } catch {

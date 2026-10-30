@@ -3,7 +3,7 @@ import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { pilotConfigSchema } from "./config.js";
 import type { Role } from "./config.js";
 import { classify, proofKey } from "./preflight.js";
-import { CLEANUP_GRACE_MS } from "./orca-driver.js";
+import { CLEANUP_GRACE_MS, assertNativePacketBounds } from "./orca-driver.js";
 import {pilotPayloadSchemas} from "./payload.js";
 import type {
   Attempt,
@@ -14,6 +14,7 @@ import type {
   PilotRequest,
   QualificationProof,
   Result,
+  StopAcknowledgement,
 } from "./types.js";
 
 export interface PilotOutcome {
@@ -25,6 +26,7 @@ export interface PilotOutcome {
     | "prerequisites_not_verified"
     | "failed";
   calls: { probes: number; topic: number };
+  initializations: number;
   evidence: NativeEvidence | null;
   blockers: Blocker[];
   proofs: QualificationProof[];
@@ -40,6 +42,7 @@ export async function runPilot(
   const out: PilotOutcome = {
     status: "failed",
     calls: { probes: 0, topic: 0 },
+    initializations: 0,
     evidence: null,
     blockers: [],
     proofs: [],
@@ -49,7 +52,9 @@ export async function runPilot(
   const owned: Attempt[] = [];
   const settled = new Set<string>();
   const released = new Set<string>();
+  const acknowledgedStops = new Map<string, StopAcknowledgement>();
   let pendingKey: string | null = null;
+  let pendingCounter: "probes" | "topic" | null = null;
   const proofTtlMs = request.proofTtlMs ?? 3600000;
   try {
     pilotConfigSchema.parse(request.config);
@@ -72,23 +77,25 @@ export async function runPilot(
       !request.suppliedText.trim()
     )
       throw Error("INVALID_FINITE_BOUNDS_OR_INPUT");
+    assertNativePacketBounds(canonicalJson({ candidate: request.candidate, suppliedText: request.suppliedText }));
     const inspected = await driver.inspect(request);
     out.evidence = inspected.evidence;
     out.blockers = [
       ...inspected.blockers,
-      ...classify(request, inspected.evidence),
+      ...classify(request, inspected.evidence, "bootstrap"),
     ];
     if (out.blockers.length) {
       out.status = "prerequisites_not_verified";
       return out;
     }
-    const reusable = inspected.evidence.routes.flatMap(
+    const routes = [...new Map(inspected.evidence.routes.map(r => [proofKey(inspected.evidence, r), r])).values()];
+    const reusable = routes.flatMap(
       (r) => request.proofs.filter(
           (p) =>
             p.key === proofKey(inspected.evidence, r) &&
             p.expiresAt > now() &&
             p.settled &&
-            p.schemaVersion === 1 &&
+            [1, 2].includes(p.schemaVersion) &&
             p.normal?.outcome === "completed" &&
             p.normal.settled &&
             p.cancellation?.outcome === "cancelled" &&
@@ -99,7 +106,7 @@ export async function runPilot(
     );
     // Preserve already revalidated reuse even if a subsequent fresh probe fails.
     out.proofs.push(...reusable);
-    const needed = inspected.evidence.routes.filter(r => !reusable.some(p => p.key === proofKey(inspected.evidence, r)));
+    const needed = routes.filter(r => !reusable.some(p => p.key === proofKey(inspected.evidence, r)));
     if (request.maxProbeCalls < 2 * needed.length || request.maxTopicCalls < 10)
       throw Error("INSUFFICIENT_CALL_BUDGET");
     const run = await driver.begin(request);
@@ -108,6 +115,7 @@ export async function runPilot(
       phase: Phase,
       packet: string,
     ): Promise<Result | null> => {
+      assertNativePacketBounds(packet);
       const counter = phase.endsWith("probe") ? "probes" : "topic";
       if (
         out.calls[counter] >=
@@ -124,6 +132,7 @@ export async function runPilot(
         index: out.calls[counter],
       });
       out.calls[counter]++;
+      pendingCounter = counter;
       // Launch/readiness time consumes this same inference budget.
       const inferenceDeadline = Math.min(request.deadline, now() + request.workerTimeoutMs);
       const a = await driver.launch(
@@ -135,18 +144,24 @@ export async function runPilot(
         pendingKey,
       );
       owned.push(a);
+      out.initializations += a.initializations ?? 0;
+      if (a.inferenceStarted === false) out.calls[counter]--;
       pendingKey = null;
+      pendingCounter = null;
       if(now()>=inferenceDeadline)throw Error("NATIVE_INFERENCE_DEADLINE");
-      if (!a.launchVerified) throw Error("NATIVE_EFFECTIVE_SELECTION_MISMATCH");
+      if (!a.launchVerified) throw Error(a.controlError ?? "NATIVE_EFFECTIVE_SELECTION_MISMATCH");
       if (phase === "cancel-probe") {
-        if ((await driver.cancel(a, inferenceDeadline)) !== "settled")
+        const cancellation = await driver.cancel(a, inferenceDeadline);
+        if (cancellation.state === "unknown")
           throw Error("CANCELLATION_SETTLEMENT_UNKNOWN");
         settled.add(a.binding.dispatchId);
-        released.add(a.binding.dispatchId);
         if (!(await driver.release(a))) {
           out.unresolved.push(a.binding.dispatchId);
           throw Error("RELEASE_UNKNOWN");
         }
+        released.add(a.binding.dispatchId);
+        if (cancellation.state !== "settled") throw Error("CANCELLATION_UNACKNOWLEDGED");
+        acknowledgedStops.set(a.binding.dispatchId, cancellation.stop);
         return null;
       }
       const result = await driver.observe(
@@ -207,8 +222,10 @@ export async function runPilot(
           qualificationFingerprint: proofKey(inspected.evidence, r),
         }),
       );
+      const normalContext = driver.proof?.(owned[start]!) ?? undefined;
+      const cancelContext = driver.proof?.(owned[start+1]!) ?? undefined;
       out.proofs.push({
-        schemaVersion: 1,
+        schemaVersion: normalContext && cancelContext ? 2 : 1,
         id: proofKey(inspected.evidence, r),
         key: proofKey(inspected.evidence, r),
         scope: inspected.evidence,
@@ -218,11 +235,14 @@ export async function runPilot(
           dispatchId: owned[start]!.binding.dispatchId,
           outcome: "completed",
           settled: true,
+          ...(normalContext ? { context: normalContext } : {}),
         },
         cancellation: {
           dispatchId: owned[start + 1]!.binding.dispatchId,
           outcome: "cancelled",
           settled: true,
+          stop: acknowledgedStops.get(owned[start + 1]!.binding.dispatchId)!,
+          ...(cancelContext ? { context: cancelContext } : {}),
         },
         settled: true,
       });
@@ -254,8 +274,14 @@ export async function runPilot(
     }
   } catch (error) {
     out.error = error instanceof Error ? error.message : "NATIVE_FAILURE";
+    if (out.error === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" && pendingKey && pendingCounter) {
+      out.calls[pendingCounter]--;
+      pendingKey = null;
+      pendingCounter = null;
+    }
     if (out.error.startsWith("NATIVE_RUN_CREATION_OUTCOME_UNKNOWN:")) out.unresolved.push(out.error);
-    if (out.error === "INVALID_FINITE_BOUNDS_OR_INPUT" || out.error === "INSUFFICIENT_CALL_BUDGET" || error instanceof z.ZodError) {
+    if (out.error === "INVALID_FINITE_BOUNDS_OR_INPUT" || out.error === "INSUFFICIENT_CALL_BUDGET" ||
+        (out.error === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" && out.calls.probes === 0 && out.calls.topic === 0) || error instanceof z.ZodError) {
       out.status = "invalid_request";
       out.blockers.push({ role: null, control: "request", reason: out.error, source: "native request validation", observed: out.error, nextAction: "Correct the input bounds or configuration before starting a new run." });
     } else if (
@@ -280,7 +306,7 @@ export async function runPilot(
     const cleanupDeadline = now() + CLEANUP_GRACE_MS;
     for (const a of owned) {
       if (!settled.has(a.binding.dispatchId)) {
-        if ((await driver.cancel(a, cleanupDeadline, "absolute-cleanup")) !== "settled") {
+        if ((await driver.cancel(a, cleanupDeadline, "absolute-cleanup")).state === "unknown") {
           out.unresolved.push(a.binding.dispatchId);
           continue;
         }

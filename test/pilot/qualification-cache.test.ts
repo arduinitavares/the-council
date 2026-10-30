@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { QualificationCache } from "../../src/pilot/qualification-cache.js";
@@ -54,6 +54,17 @@ const p: QualificationProof = {
   },
   settled: true,
 };
+it("reports lost lock ownership consistently when the lock disappears", () => {
+  const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-lock-")));
+  const cache = new QualificationCache(w);
+  const lock = join(w, ".council/native-qualifications/writer.lock");
+  const token = readFileSync(lock);
+  try {
+    unlinkSync(lock);
+    expect(() => cache.write([p], 1000)).toThrow("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+    expect(() => cache.close()).toThrow("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+  } finally { writeFileSync(lock, token); cache.close(); rmSync(w, { recursive: true, force: true }); }
+});
 it("loads its persisted exact-scope proof only after native evidence is rechecked and serializes writers", async () => {
   const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-")));
   try {

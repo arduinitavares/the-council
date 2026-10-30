@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -7,12 +8,14 @@ import { OrcaClient } from "../orca/client.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { freezeConfig, loadPilotConfig } from "./config.js";
 import { NativeHostInspector } from "./discovery.js";
-import { LocalReadRpc } from "./rpc.js";
+import { LocalReadRpc, LocalScopedRpc } from "./rpc.js";
+import { createNativePilotDriver } from "./composition.js";
+import { commandFromClient } from "./native-command.js";
 import { PilotJournal } from "./journal.js";
 import { OrcaPilotDriver, type Command } from "./orca-driver.js";
 import { QualificationCache } from "./qualification-cache.js";
 import { verifyNativeProof } from "./verify-proof.js";
-import { runPilot } from "./workflow.js";
+import { runPilot, type PilotOutcome } from "./workflow.js";
 const inputSchema = z.strictObject({
   runId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
   candidate: z.string().min(1).max(100000),
@@ -85,15 +88,19 @@ async function main(): Promise<void> {
   const inputPath = resolve(workspace, required("--input"));
   const bytes = readFileSync(inputPath);
   if (bytes.length > 250000) throw Error("NATIVE_INPUT_TOO_LARGE");
-  const input = inputSchema.parse(JSON.parse(bytes.toString("utf8")));
+  const input = inputSchema.parse(decodeStrictJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
   const policyPath = realpathSync(resolve(workspace, required("--policy")));
   const orca = opts.get("--orca") ?? "/usr/local/bin/orca";
   if (!isAbsolute(orca)) throw Error("ABSOLUTE_ORCA_EXECUTABLE_REQUIRED");
   let journal: PilotJournal | undefined;
   let cache: QualificationCache | undefined;
+  let outcome: PilotOutcome | undefined;
+  let record: string | undefined;
+  let finalError: unknown;
   try {
     // A competing cache writer does not reserve or consume this run identity.
     cache = new QualificationCache(workspace);
+    const client = await OrcaClient.connect({ executable: orca, cwd: workspace });
     journal = new PilotJournal(workspace, input.runId, {
       runId: input.runId,
       maxProbeCalls: input.maxProbeCalls,
@@ -103,31 +110,7 @@ async function main(): Promise<void> {
       proofTtlMs: input.proofTtlMs ?? 3600000,
       configHash: config.hash,
     });
-    const client = await OrcaClient.connect({
-      executable: orca,
-      cwd: workspace,
-    });
-    const command: Command = async (argv, cwd, timeoutMs) => {
-      const p = await client.run(argv, { cwd, timeoutMs });
-      if (p.exitCode !== 0 || p.timedOut || p.overflow || !p.closed)
-        throw Error(
-          `ORCA_COMMAND_UNVERIFIED:${argv.slice(0, 2).join(" ")}:${p.exitCode ?? "unknown"}`,
-        );
-      const envelope: any = decodeStrictJson(
-        new TextDecoder().decode(p.stdout),
-      );
-      // agent-context is a CLI registry document, not an RPC envelope.
-      if (argv[0] === "agent-context") {
-        if (envelope.schemaVersion !== 1 || !Number.isSafeInteger(envelope.commandCount) ||
-            !Array.isArray(envelope.commands) || envelope.commandCount !== envelope.commands.length ||
-            !envelope.commands.every((entry:any) => typeof entry?.command === "string" && entry.command.length > 0))
-          throw Error("ORCA_COMMAND_REGISTRY_INVALID");
-        return envelope;
-      }
-      if (envelope.ok !== true)
-        throw Error(`ORCA_${envelope.error?.code ?? "INVALID_ENVELOPE"}`);
-      return envelope.result;
-    };
+    const command: Command = commandFromClient(client);
     const host = new NativeHostInspector(
       command,
       (id) => new LocalReadRpc(id, orca),
@@ -144,41 +127,45 @@ async function main(): Promise<void> {
         return observation;
       },
     };
-    const driver = new OrcaPilotDriver(command, cachedInspector);
-    const outcome = await runPilot(
+    const driver = createNativePilotDriver({ command, inspector: cachedInspector, rpc: id => new LocalScopedRpc(id, orca), orca, record: event => journal!.append(event) });
+    outcome = await runPilot(
       { workspace, config: config.config, policyPath, ...input, proofs: [] },
       journal.wrap(driver),
     );
-    // Each proof already requires both positively released probes. A later
-    // unrelated topic cleanup failure must not discard that valid evidence.
-    if (outcome.proofs.length) cache.write(outcome.proofs);
+    // Preserve the operational outcome before optional cache persistence or
+    // lifecycle cleanup can fail. Both failures remain visible in the final copy.
+    const outcomePath = resolve(journal.path, "outcome.json");
     writeFileSync(
-      resolve(journal.path, "outcome.json"),
+      outcomePath,
       JSON.stringify(outcome, null, 2) + "\n",
       { mode: 0o600, flag: "wx" },
     );
+    record = outcomePath;
+    if (outcome.proofs.length) cache.write(outcome.proofs);
     journal.append({
       event: "outcome-recorded",
       status: outcome.status,
       calls: outcome.calls,
       unresolved: outcome.unresolved,
     });
-    console.log(
-      JSON.stringify({
-        ...outcome,
-        record: resolve(journal.path, "outcome.json"),
-      }),
-    );
-    if (outcome.status === "prerequisites_not_verified") process.exitCode = 3;
-    else if (outcome.status === "invalid_request") process.exitCode = 2;
-    else if (outcome.status === "failed") process.exitCode = 4;
+  } catch (error) {
+    finalError = error;
   } finally {
-    try {
-      cache?.close();
-    } finally {
-      journal?.close();
-    }
+    try { cache?.close(); } catch (error) { finalError ??= error; }
+    try { journal?.close(); } catch (error) { finalError ??= error; }
   }
+  if (!outcome || !record) throw finalError ?? Error("NATIVE_OUTCOME_NOT_RECORDED");
+  if (finalError !== undefined) {
+    outcome.status = "failed";
+    outcome.error = finalError instanceof Error ? finalError.message : "NATIVE_PERSISTENCE_OR_CLOSE_FAILED";
+    const temporary = resolve(dirname(record), `outcome-${randomUUID()}.tmp`);
+    writeFileSync(temporary, JSON.stringify(outcome, null, 2)+"\n", { mode: 0o600, flag: "wx" });
+    renameSync(temporary, record);
+  }
+  console.log(JSON.stringify({ ...outcome, record }));
+  if (outcome.status === "prerequisites_not_verified") process.exitCode = 3;
+  else if (outcome.status === "invalid_request") process.exitCode = 2;
+  else if (outcome.status === "failed") process.exitCode = 4;
 }
 main().catch((error) => {
   const reason = error instanceof Error ? error.message : "NATIVE_FAILURE";

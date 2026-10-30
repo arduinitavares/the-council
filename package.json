@@ -24,15 +24,16 @@
     "postbuild": "node scripts/copy-assets.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "smol-toml": "1.9.1",
     "xstate": "5.33.3",
-    "zod": "4.6.7",
     "yaml": "2.9.1",
-    "better-sqlite3": "13.0.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "typescript": "7.0.2",
-    "vitest": "5.0.5",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "22.20.5",
-    "@types/better-sqlite3": "9.6.0"
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }

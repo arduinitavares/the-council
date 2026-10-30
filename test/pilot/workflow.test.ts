@@ -78,7 +78,7 @@ it("uses cleanup grace after workflow expiry without launching another inference
   });
   const cancel = vi.spyOn(h.driver, "cancel").mockImplementation(async (_a, deadline) => {
     expect(deadline).toBe(clock + 30000);
-    return "settled";
+    return { state: "settled_unacknowledged" } as const;
   });
   const result = await runPilot(request, h.driver, () => clock);
   expect(result.status).toBe("failed");
@@ -123,11 +123,49 @@ it("caps cancel-probe settlement to the per-attempt inference bound", async () =
   const h = harness();
   const cancel = vi.spyOn(h.driver, "cancel").mockImplementation(async (_a, deadline) => {
     expect(deadline).toBe(now + request.workerTimeoutMs);
-    return "settled";
+    return { state: "settled", stop: { dispatchId: _a.binding.dispatchId, requestId: "synthetic-request", state: "stopped" } } as const;
   });
   const result = await runPilot(request, h.driver, () => now);
   expect(result.status).toBe("consensus");
   expect(cancel).toHaveBeenCalledTimes(4);
+});
+
+for (const stop of ["timeout", "refused", "foreign-receipt", "natural-exit"] as const) {
+  it(`cleans up a naturally exited cancel probe after ${stop} without qualifying or launching topics`, async () => {
+    const h = harness({ stop });
+    const result = await runPilot(request, h.driver, () => now);
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("CANCELLATION_UNACKNOWLEDGED");
+    expect(result.calls).toEqual({ probes: 2, topic: 0 });
+    expect(result.proofs).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+    expect(h.calls.filter(c => c.argv[1] === "worker-stop")).toHaveLength(1);
+    expect(h.calls.filter(c => c.argv[1] === "worker-release")).toHaveLength(2);
+  });
+}
+it("rejects unsupported outer result fields from a bound native transcript", async () => {
+  const h = harness({ extraResultField: true });
+  const result = await runPilot(request, h.driver, () => now);
+  expect(result.status).toBe("failed");
+  expect(result.calls).toEqual({ probes: 1, topic: 0 });
+  expect(result.proofs).toEqual([]);
+  expect(result.error).toBe("NATIVE_RESULT_MALFORMED_OR_MISMATCHED");
+});
+it("does not replace a malformed final assistant output with an earlier valid result", async () => {
+  const h = harness({ trailingInvalidResult: true });
+  const result = await runPilot(request, h.driver, () => now);
+  expect(result.status).toBe("failed");
+  expect(result.calls).toEqual({ probes: 1, topic: 0 });
+  expect(result.proofs).toEqual([]);
+  expect(result.error).toBe("NATIVE_RESULT_MALFORMED_OR_MISMATCHED");
+});
+it("rejects an oversized native packet before any qualification or topic mutation", async () => {
+  const h = harness();
+  const result = await runPilot({ ...request, suppliedText: "x".repeat(50000) }, h.driver, () => now);
+  expect(result.status).toBe("invalid_request");
+  expect(result.error).toBe("NATIVE_PACKET_ARGUMENT_TOO_LARGE");
+  expect(result.calls).toEqual({ probes: 0, topic: 0 });
+  expect(h.calls).toEqual([]);
 });
 
 it("never observes or qualifies a launch which exhausted the inference budget",async()=>{
@@ -166,6 +204,23 @@ it("retains mixed reused proofs and the first new proof when the next route fail
   } finally { rmSync(w, { recursive: true, force: true }); }
 });
 
+it("qualifies and reuses a shared exact selection once across reviewer and judge roles", async () => {
+  const config = structuredClone(incidentRoster);
+  config.judge = config.reviewers.openai;
+  const shared = structuredClone(evidence);
+  shared.routes.find(r => r.role === "judge")!.selection = config.judge;
+  const current = { ...request, config, maxProbeCalls: 6 };
+  const first = await runPilot(current, harness({ evidence: shared }).driver, () => now);
+  expect(first.status).toBe("consensus");
+  expect(first.calls).toEqual({ probes: 6, topic: 10 });
+  expect(first.proofs).toHaveLength(3);
+  const reused = await runPilot({ ...current, proofs: first.proofs, maxProbeCalls: 0 }, harness({ evidence: shared }).driver, () => now);
+  expect(reused.status).toBe("consensus");
+  expect(reused.calls).toEqual({ probes: 0, topic: 10 });
+  expect(reused.proofs).toHaveLength(3);
+  expect(reused.results.filter(r => r.role === "judge")).toHaveLength(1);
+});
+
 function harness(
   options: {
     fail?: string;
@@ -177,10 +232,14 @@ function harness(
     judgeUnresolved?: boolean;
     clock?: () => number;
     evidence?: NativeEvidence;
+    stop?: "timeout" | "refused" | "foreign-receipt" | "natural-exit";
+    extraResultField?: boolean;
+    trailingInvalidResult?: boolean;
   } = {},
 ) {
   const calls: { argv: readonly string[]; packet?: any; timeout?: number }[] = [];
   const attempts = new Map<string, any>();
+  const stopped = new Set<string>();
   let count = 0;
   const command = async (argv: readonly string[], _cwd?: string, timeout?: number) => {
     calls.push({ argv, ...(timeout === undefined ? {} : { timeout }) });
@@ -223,7 +282,8 @@ function harness(
           id,
           taskId: a.b.taskId,
           runId: a.b.runId,
-          status: options.unknown ? "dispatched" : "succeeded",
+          status: options.unknown ? "dispatched" : stopped.has(id) ? "failed" : "succeeded",
+          terminationReason: stopped.has(id) ? "worker_stop" : null,
         },
         observation: {
           status: options.unknown || (options.cancelUnknown && a.packet.phase === "cancel-probe") ? "unverifiable" : "exited",
@@ -244,6 +304,7 @@ function harness(
         };
       if (options.fail === a.packet.phase) payload = { wrong: true };
       const result = {
+        ...(options.extraResultField ? { admissionOverride: true } : {}),
         binding: {
           ...a.b,
           ...(options.mismatch ? { dispatchId: "foreign" } : {}),
@@ -265,17 +326,22 @@ function harness(
               role: "assistant",
               blocks: [{ type: "text", text: JSON.stringify(result) }],
             },
+            ...(options.trailingInvalidResult ? [{ role: "assistant", blocks: [{ type: "text", text: '{"malformedFinal":true}' }] }] : []),
           ],
           limited: false,
         },
       };
     }
-    if (verb === "worker-stop")
+    if (verb === "worker-stop") {
+      if (options.stop === "timeout") throw Object.assign(Error("stop response lost"), { code: "ETIMEDOUT" });
+      if (!options.stop && !options.unknown && !options.cancelUnknown) stopped.add(id);
       return {
-        status:
-          options.unknown || options.cancelUnknown ? "stop_unknown" : "stopped",
+        dispatchId: options.stop === "foreign-receipt" ? "foreign" : id,
+        state: options.stop === "refused" || options.unknown || options.cancelUnknown ? "stop_unknown" : "stopped",
+        mutation: { requestId: argv[argv.indexOf("--retry-request") + 1] },
         processAction: "closed_agent_terminal",
       };
+    }
     if (verb === "worker-release")
       return { state: options.releaseUnknown ? "release_unknown" : "released" };
     throw Error("unexpected command " + argv.join(" "));

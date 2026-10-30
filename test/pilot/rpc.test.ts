@@ -3,6 +3,19 @@ import { LocalReadRpc } from "../../src/pilot/rpc.js";
 import { nativeHostFixture } from "./native-host-fixture.js";
 import { writeFileSync, mkdirSync, renameSync, symlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readFailure } from "../../src/pilot/allowance.js";
+it("preserves sanitized structured RPC diagnostics through the official read boundary", async () => {
+  for (const [code, diagnosticClass, state] of [["runtime_timeout", "timeout", "missing"], ["permission_denied", "denial", "denied"]]) {
+    const rpc = new LocalReadRpc("runtime", "/test/orca", { call: async () => ({ ok: false, error: { code, message: "private account" }, _meta: { runtimeId: "runtime" } }) });
+    try { await rpc.call("accounts.list", { refreshUsage: true }); throw Error("expected RPC failure"); }
+    catch (error) {
+      const observed = readFailure("official native source", error);
+      expect(observed.state).toBe(state);
+      expect(JSON.parse(observed.detail).diagnostic).toEqual({ class: diagnosticClass, code });
+      expect(JSON.stringify(observed)).not.toContain("private account");
+    }
+  }
+});
 it("uses a bounded longer timeout only for the supported accounts refresh read", async () => {
   const seen: unknown[] = [];
   const rpc = new LocalReadRpc("runtime", "/test/orca", {

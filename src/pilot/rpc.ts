@@ -17,7 +17,7 @@ export interface ReadRpc {
 export interface OfficialClient {
   call(method: string, params: Record<string, unknown>, options?: { timeoutMs: number }): Promise<any>;
 }
-export type ScopedMethod="agent.launch"|"terminal.show"|"terminal.inspectProcess"|"terminal.close";
+export type ScopedMethod="agent.launch"|"terminal.create"|"terminal.show"|"terminal.inspectProcess"|"terminal.close";
 export interface ScopedRpc {callScoped(method:ScopedMethod,params:Record<string,unknown>):Promise<any>;}
 export class LocalReadRpc implements ReadRpc {
   protected client: OfficialClient;
@@ -102,8 +102,10 @@ export class LocalReadRpc implements ReadRpc {
       method === "accounts.list" && params.refreshUsage === true ? { timeoutMs: 30000 } : undefined);
     if (envelope._meta?.runtimeId !== this.runtimeId)
       throw Error("RPC_READ_BINDING_MISMATCH");
-    if (envelope.ok !== true)
-      throw Error("RPC_READ_" + (envelope.error?.code ?? "FAILED"));
+    if (envelope.ok !== true) {
+      const code = envelope.error?.code ?? "FAILED";
+      throw Object.assign(Error("RPC_READ_" + code), { code });
+    }
     return envelope.result;
   }
 }
@@ -111,7 +113,7 @@ export class LocalReadRpc implements ReadRpc {
  * methods. No settings, trust, billing or permission mutation is exposed. */
 export class LocalScopedRpc extends LocalReadRpc implements ScopedRpc {
   async callScoped(method:ScopedMethod,params:Record<string,unknown>):Promise<any>{
-    if(!["agent.launch","terminal.show","terminal.inspectProcess","terminal.close"].includes(method))throw Error("SCOPED_RPC_METHOD_REQUIRED");
+    if(!["agent.launch","terminal.create","terminal.show","terminal.inspectProcess","terminal.close"].includes(method))throw Error("SCOPED_RPC_METHOD_REQUIRED");
     return this.callNative(method,params);
   }
 }

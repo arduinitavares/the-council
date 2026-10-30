@@ -1,6 +1,8 @@
 import { readProvider, type ProviderRead } from "./provider-read.js";
 import { readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import type { ReadRpc } from "./rpc.js";
@@ -15,7 +17,8 @@ import type {
 import type { Role } from "./config.js";
 import { accountAllowance, readFailure } from "./allowance.js";
 import { scopedLaunchPlan } from "./scoped-launch.js";
-const digest = (x: string) => createHash("sha256").update(x).digest("hex");
+import { inspectProviderControls, type ProviderControlSource } from "./provider-controls.js";
+const digest = (x: string | Buffer) => createHash("sha256").update(x).digest("hex");
 const observation = (
   state: Observation["state"],
   source: string,
@@ -26,11 +29,17 @@ export class NativeHostInspector implements HostInspector {
     private readonly command: Command,
     private readonly rpc: (runtimeId: string) => ReadRpc,
     private readonly provider: ProviderRead = readProvider,
+    private readonly controlSource: ProviderControlSource = inspectProviderControls,
   ) {}
   async inspect(
     request: PilotRequest,
   ): Promise<{ evidence: NativeEvidence; blockers: Blocker[] }> {
     const blockers: Blocker[] = [];
+    let canonicalPolicy: string;
+    try { canonicalPolicy = realpathSync(join(homedir(), ".agents/policies/model-policy.md")); }
+    catch (cause) { throw Error("EXECUTION_HOST_POLICY_UNAVAILABLE", { cause }); }
+    if (realpathSync(request.policyPath) !== canonicalPolicy)
+      throw Error("EXECUTION_HOST_POLICY_PATH_MISMATCH");
     const status = await this.command(
       ["status", "--json"],
       request.workspace,
@@ -42,6 +51,9 @@ export class NativeHostInspector implements HostInspector {
     if (version !== "1.4.244")
       throw Error("UNSUPPORTED_ORCA_API_VERSION: expected 1.4.244");
     const runtimeId = status.runtime.runtimeId;
+    if (!process.env.ORCA_TERMINAL_HANDLE || !process.env.ORCA_PANE_KEY) blockers.push({ role: null, control: "native-coordinator",
+      reason: "NATIVE_COORDINATOR_CONTEXT_MISSING", source: "Orca-injected terminal caller context", observed: "A genuine stable requesting-workspace coordinator terminal is required before run-create and initialization",
+      nextAction: "Invoke the packaged native entry inside an existing task-owned Orca terminal in this requesting workspace; do not copy --from or caller environment from another session." });
     for (const capability of [
       "settings.agent-launch.v1",
       "agent-session.coherent-model-catalog.v1",
@@ -61,6 +73,7 @@ export class NativeHostInspector implements HostInspector {
       "orchestration worker-read",
       "orchestration worker-stop",
       "orchestration worker-release",
+      "orchestration request-show",
     ])
       if (!registry.commands?.some((entry: any) => entry.command === required))
         throw Error("UNSUPPORTED_REQUIRED_COMMAND:" + required);
@@ -74,7 +87,8 @@ export class NativeHostInspector implements HostInspector {
     ).worktree;
     if (!w || w.path !== workspace || typeof w.id !== "string")
       throw Error("REQUESTING_WORKSPACE_UNVERIFIED");
-    const policy = readFileSync(request.policyPath, "utf8");
+    const policyBytes = readFileSync(canonicalPolicy);
+    const policy = policyBytes.toString("utf8");
     if (!policy.trim()) throw Error("EXECUTION_HOST_POLICY_EMPTY");
     const api = this.rpc(runtimeId);
     const settings = (await api.call("settings.getAgentLaunch", {})).settings;
@@ -208,6 +222,10 @@ export class NativeHostInspector implements HostInspector {
         typeof args === "string"
           ? `permission=${mode}; launch argument digest=${digest(args)}`
           : "launch arguments unexposed";
+      const billing = observation(selection.route === "cursor" ? "missing" : "unknown",
+        selection.route === "cursor" ? "No supported Cursor included-only debit source integrated" : `execution-host policy sha256=${digest(policyBytes)} and existing authorized provider access`,
+        selection.route === "cursor" ? "Included-only enforcement must come from the existing supported account constraint; plan, quota and extraUsage=false alone are insufficient." : "Existing provider access is preserved; no new spending authority.");
+      const controls = await this.controlSource(selection, versions[selection.route] ?? "unexposed", workspace, billing);
       routes.push({
         role: role as Role,
         selection,
@@ -235,23 +253,16 @@ export class NativeHostInspector implements HostInspector {
                   ? `exact selection exposed${effortContract?.efforts.includes(selection.effort) ? "; " + effortContract.detail : ""}`
                   : model ? "exact model present; effort mapping unverified" : "exact model unavailable",
         ),
-        controls: observation(
-          ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport.state : "missing",
-          "Orca settings, registered scoped launch contract and createSupport",
-          `${permission}; scoped agent.launch/background/no-prompt candidate recorded. Remaining controls: ${plan.pendingControls.join(", ")}. Host completion/process-group source is development-only and excluded from distribution. External-custody API components remain conditional; wrapper/adoption integration, effective controls and complete descendant/wrapper/timer/terminal qualification remain unverified. No component or plan is admission evidence.`,
-        ),
+        controls: ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport : controls.controls,
+        bootstrap: ["denied","authentication_failed","exhausted"].includes(plan.structuredSupport.state) ? plan.structuredSupport : controls.bootstrap,
+        controlFacts: controls.facts,
+        ...(controls.recipe ? { recipe: controls.recipe } : {}),
         scopedLaunchPlan: plan,
         allowance:
           selection.route === "antigravity"
             ? agyAllowance
             : accountFailure ?? accountAllowance(selection.route, rateLimits?.[selection.route], Date.now()),
-        billing: observation(
-          selection.route === "cursor" ? "missing" : "unknown",
-          selection.route === "cursor" ? "No supported Cursor included-only debit source integrated" : `execution-host policy sha256=${digest(policy)} and existing authorized provider access`,
-          selection.route === "cursor"
-            ? "Included Premium weekly debit binding remains unverified. accounts.list extraUsage=false alone would not prove the permitted debit source; no supported binding source is integrated. Credits/overflow are not authorized."
-            : "Existing Codex access and AGY credit authorization are preserved. No new spending authority is derived from allowance; no universal debit lock is required.",
-        ),
+        billing,
         optionalTelemetry: observation(
           "unknown",
           "Orca prelaunch API",
@@ -273,7 +284,12 @@ export class NativeHostInspector implements HostInspector {
         );
       });
       const cells = admissionRow?.split("|").map(cell => cell.trim());
+      // Bootstrap probes cannot establish the separately required Ultra host,
+      // transport and helper-action qualification. No such native source is
+      // integrated, so a table mention alone must never admit this effort.
+      const requiresPriorQualification = selection.effort === "ultra";
       const admitted =
+        !requiresPriorQualification &&
         cells?.[3]?.includes("`" + selection.effort + "`") &&
         (!cells[3].includes("Matching") || selection.model.endsWith("-" + selection.effort));
       if (admitted) {
@@ -292,7 +308,7 @@ export class NativeHostInspector implements HostInspector {
         blockers.push({
           role: role as Role,
           control: "policy",
-          reason: "EXACT_SELECTION_NOT_IN_HOST_POLICY",
+          reason: requiresPriorQualification ? "POLICY_ROUTE_QUALIFICATION_REQUIRED" : "EXACT_SELECTION_NOT_IN_HOST_POLICY",
           source: "execution-host policy bytes",
           observed: selection.model,
           nextAction:
@@ -308,7 +324,7 @@ export class NativeHostInspector implements HostInspector {
       workspace,
       workspaceId: w.id,
       action: "supplied-packet-read-only",
-      policyHash: digest(policy),
+      policyHash: digest(policyBytes),
       controlsHash: digest(
         canonicalJson({
           settings: {
@@ -318,6 +334,8 @@ export class NativeHostInspector implements HostInspector {
           },
           workspaceId: w.id,
           scopedPlans: routes.map(r => r.scopedLaunchPlan),
+          providerControls: routes.map(r => ({ bootstrap: r.bootstrap, controls: r.controls,
+            recipe: r.recipe ? { ...r.recipe, facts: r.recipe.facts.map(({ observedAt: _observedAt, ...fact }) => fact) } : null })),
         }),
       ),
       routes,

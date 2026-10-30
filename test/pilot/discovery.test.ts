@@ -1,14 +1,17 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { NativeHostInspector } from "../../src/pilot/discovery.js";
-import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, realpathSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { incidentRoster, policyTable } from "./fixtures.js";
 import type { PilotRequest } from "../../src/pilot/types.js";
 it("uses supported provider catalog/usage sources while preserving actual missing controls and billing binding", async () => {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "pilot-host-")));
+  vi.stubEnv("HOME", workspace);
   try {
-    const policy = join(workspace, "policy.md");
+    const policy = join(workspace, ".agents/policies/model-policy.md");
+    mkdirSync(join(workspace, ".agents/policies"), { recursive: true });
     writeFileSync(
       policy,
       policyTable,
@@ -19,6 +22,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     let supportDenied = false;
     let effortMapping = true;
     let nativeOmission = false;
+    let omitRequestShow = false;
     const inspector = new NativeHostInspector(
       async (argv) =>
         argv[0] === "agent-context"
@@ -30,7 +34,8 @@ it("uses supported provider catalog/usage sources while preserving actual missin
                 "orchestration worker-read",
                 "orchestration worker-stop",
                 "orchestration worker-release",
-              ].map((command) => ({ command })),
+                "orchestration request-show",
+              ].filter(command => !omitRequestShow || command !== "orchestration request-show").map((command) => ({ command })),
             }
           : argv[0] === "status"
             ? {
@@ -98,15 +103,32 @@ it("uses supported provider catalog/usage sources while preserving actual missin
           },
         });
       },
+      async () => ({ bootstrap: { state: "missing", source: "synthetic control boundary", detail: "No enforcement fixture supplied" }, controls: { state: "missing", source: "synthetic control boundary", detail: "No enforcement fixture supplied" }, facts: [] }),
     );
     const r = await inspector.inspect({
       workspace,
       policyPath: policy,
       config: incidentRoster,
     } as PilotRequest);
+    omitRequestShow = true;
+    await expect(inspector.inspect({ workspace, policyPath: policy, config: incidentRoster } as PilotRequest)).rejects.toThrow("UNSUPPORTED_REQUIRED_COMMAND:orchestration request-show");
+    omitRequestShow = false;
     expect(r.evidence.routes.find((r) => r.role === "xai")?.catalog.state).toBe(
       "verified",
     );
+    const policyBytes = Buffer.concat([Buffer.from(policyTable), Buffer.from([0xff])]);
+    writeFileSync(policy, policyBytes);
+    const raw = await inspector.inspect({ workspace, policyPath: policy, config: incidentRoster } as PilotRequest);
+    expect(raw.evidence.policyHash).toBe(createHash("sha256").update(policyBytes).digest("hex"));
+    writeFileSync(policy, policyTable.replace("| `max` |", "| `max`; `ultra` on a qualified route |"));
+    const ultraConfig = structuredClone(incidentRoster);
+    ultraConfig.reviewers.openai.effort = "ultra";
+    const ultra = await inspector.inspect({ workspace, policyPath: policy, config: ultraConfig } as PilotRequest);
+    expect(ultra.blockers).toContainEqual(expect.objectContaining({ role: "openai", control: "policy", reason: "POLICY_ROUTE_QUALIFICATION_REQUIRED" }));
+    writeFileSync(policy, policyTable);
+    const foreignPolicy = join(workspace, "caller-policy.md");
+    writeFileSync(foreignPolicy, policyTable);
+    await expect(inspector.inspect({ workspace, policyPath: foreignPolicy, config: incidentRoster } as PilotRequest)).rejects.toThrow("EXECUTION_HOST_POLICY_PATH_MISMATCH");
     expect(r.evidence.routes.find(r => r.role === "gemini")?.catalog.state).toBe("verified");
     effortMapping = false;
     const noEffortMapping = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
@@ -171,6 +193,7 @@ it("uses supported provider catalog/usage sources while preserving actual missin
     const refusedSupport = await inspector.inspect({workspace,policyPath:policy,config:incidentRoster} as PilotRequest);
     expect(refusedSupport.evidence.routes[0]?.controls.state).toBe("denied");
   } finally {
+    vi.unstubAllEnvs();
     rmSync(workspace, { recursive: true, force: true });
   }
 });

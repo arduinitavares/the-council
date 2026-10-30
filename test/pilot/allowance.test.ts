@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { readFailure } from "../../src/pilot/allowance.js";
+import { readFailure, accountAllowance } from "../../src/pilot/allowance.js";
+
+it("distinguishes an empty bucket list from an explicitly unknown usage window", () => {
+  const now = 1800000000000;
+  const observed = { provider: "cursor", status: "ok", updatedAt: now };
+  expect(accountAllowance("cursor", { ...observed, buckets: [] }, now).state).toBe("missing");
+  expect(accountAllowance("cursor", { ...observed, buckets: null }, now).state).toBe("missing");
+  expect(accountAllowance("cursor", { ...observed, buckets: [], weekly: null }, now).state).toBe("unknown");
+});
 
 it("retains a named timeout diagnostic without account strings", () => {
   const error = Object.assign(new Error("Request timed out for secret-account@example.test"), { code: "ETIMEDOUT" });

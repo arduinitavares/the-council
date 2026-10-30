@@ -9,11 +9,13 @@ import { policyTable } from "./fixtures.js";
 export function nativeHostFixture(version = "1.4.244", allowance = "unknown") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "council-native-input-")));
   const workspace = join(root, "project-B");
+  const home = join(root, "host-home");
   const bin = join(root, "providers");
   const orca = join(root, "Orca.app/Contents/Resources/bin/orca");
   const rpc = join(root, "Orca.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js");
   for (const path of [workspace, bin, dirname(orca), dirname(rpc)]) mkdirSync(path, { recursive: true });
-  const policy = join(workspace, "policy.md");
+  const policy = join(home, ".agents/policies/model-policy.md");
+  mkdirSync(dirname(policy), { recursive: true });
   writeFileSync(policy, policyTable);
   const command = `#!${process.execPath}
 const fs = require('node:fs');
@@ -21,7 +23,7 @@ const path = require('node:path');
 const args = process.argv.slice(2), name = path.basename(process.argv[1]);
 const emit = result => console.log(JSON.stringify({ok:true,result,_meta:{runtimeId:'synthetic-runtime'}}));
 if (name !== 'orca') {
-  if (args[0] === '--version') console.log('synthetic-provider-1');
+  if (args[0] === '--version') console.log(name==='codex'?'codex-cli 0.164.0':name==='agy'?'1.4.11':'2026.10.22-27dcf5f');
   else if (args[0] === 'models') console.log(name === 'agy' ? 'gemini-4-argon-high' : 'grok-4.7-xhigh');
   else if (name === 'agy' && args[1] === '/usage') console.log(JSON.stringify({command:{name:'usage',data:{groups:[{name:'Gemini Models',buckets:[{remaining_fraction:0.8}]}]}},num_turns:0,conversation_id:'',usage:{total_tokens:0}}));
   else process.exit(99);
@@ -29,7 +31,7 @@ if (name !== 'orca') {
 else if (args[0] === 'skills') console.log('{}');
 else if (args[0] === 'status') emit({runtime:{state:'ready',reachable:true,appVersion:${JSON.stringify(version)},runtimeId:'synthetic-runtime',capabilities:['settings.agent-launch.v1','agent-session.coherent-model-catalog.v1','orchestration.worker-stop-verdict.v1']}});
 // Real 1.4.244 agent-context is unwrapped, unlike runtime RPC receipts.
-else if (args[0] === 'agent-context') console.log(JSON.stringify({schemaVersion:1,commandCount:6,commands:['worktree show','orchestration worker-start','orchestration worker-show','orchestration worker-read','orchestration worker-stop','orchestration worker-release'].map(command=>({command}))}));
+else if (args[0] === 'agent-context') console.log(JSON.stringify({schemaVersion:1,commandCount:7,commands:['worktree show','orchestration worker-start','orchestration worker-show','orchestration worker-read','orchestration worker-stop','orchestration worker-release','orchestration request-show'].map(command=>({command}))}));
 else if (args[0] === 'worktree') emit({worktree:{id:'synthetic-repo::'+process.cwd(),path:process.cwd(),hostId:'synthetic-host'}});
 else { fs.appendFileSync(${JSON.stringify(join(root, "unexpected-inference"))}, JSON.stringify(args)); process.exit(98); }
 `;
@@ -51,5 +53,5 @@ else { fs.appendFileSync(${JSON.stringify(join(root, "unexpected-inference"))}, 
     }
   };
 `);
-  return { root, workspace, orca, rpc, bin, policy, close: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, workspace, home, orca, rpc, bin, policy, close: () => rmSync(root, { recursive: true, force: true }) };
 }

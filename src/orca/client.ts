@@ -27,6 +27,10 @@ const inheritedKeys = new Set([
   "ORCA_CLI_COMMAND",
   "ORCA_SESSION_ID",
   "ORCA_SOCKET_PATH",
+  "ORCA_TERMINAL_HANDLE",
+  "ORCA_PANE_KEY",
+  "ORCA_AGENT_SESSION_ID",
+  "ORCA_AGENT_SESSION_SPAWN_TOKEN",
 ]);
 export function inheritedEnvironment(
   input: NodeJS.ProcessEnv,

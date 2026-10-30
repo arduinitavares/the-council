@@ -1,5 +1,6 @@
 import type { ModelSelection, PilotConfig, Role } from "./config.js";
 import type { ScopedLaunchPlan } from "./scoped-launch.js";
+import type { ContextProof, ControlFact, ProviderRecipe } from "./wrapper-contract.js";
 export type Phase =
   | "normal-probe"
   | "cancel-probe"
@@ -30,6 +31,9 @@ export interface RouteEvidence {
   billing: Observation;
   optionalTelemetry: Observation;
   scopedLaunchPlan?: ScopedLaunchPlan | undefined;
+  bootstrap?: Observation | undefined;
+  controlFacts?: ControlFact[] | undefined;
+  recipe?: ProviderRecipe | undefined;
   policyAdmission?: {
     state: "admitted" | "conditional";
     routeCell: string;
@@ -59,16 +63,26 @@ export interface Blocker {
   nextAction: string;
 }
 export interface QualificationProof {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   id: string;
   key: string;
   issuedAt: number;
   expiresAt: number;
   scope: NativeEvidence;
-  normal: { dispatchId: string; outcome: "completed"; settled: true };
-  cancellation: { dispatchId: string; outcome: "cancelled"; settled: true };
+  normal: { dispatchId: string; outcome: "completed"; settled: true; context?: ContextProof | undefined };
+  cancellation: { dispatchId: string; outcome: "cancelled"; settled: true; stop?: StopAcknowledgement | undefined; context?: ContextProof | undefined };
   settled: true;
 }
+export interface StopAcknowledgement {
+  dispatchId: string;
+  requestId: string;
+  state: "stopped";
+  kind?: "wrapper-control" | undefined;
+}
+export type CancellationResult =
+  | { state: "settled"; stop: StopAcknowledgement }
+  | { state: "settled_unacknowledged" }
+  | { state: "unknown" };
 export interface Binding {
   runId: string;
   taskId: string;
@@ -83,6 +97,10 @@ export interface Attempt {
   selection: ModelSelection;
   packetHash: string;
   launchVerified: boolean;
+  context?: { directory: string; assignmentHash: string } | undefined;
+  inferenceStarted?: boolean | undefined;
+  initializations?: number | undefined;
+  controlError?: string | undefined;
 }
 export interface Result {
   binding: Binding;
@@ -114,6 +132,7 @@ export interface HostInspector {
   ): Promise<{ evidence: NativeEvidence; blockers: Blocker[] }>;
 }
 export interface PilotDriver extends HostInspector {
+  proof?(attempt: Attempt): ContextProof | null;
   begin(request: PilotRequest, mutationRequestId?: string): Promise<string>;
   launch(
     runId: string,
@@ -124,6 +143,6 @@ export interface PilotDriver extends HostInspector {
     attemptKey: string,
   ): Promise<Attempt>;
   observe(attempt: Attempt, deadline: number): Promise<Result>;
-  cancel(attempt: Attempt, deadline: number, mode?: "absolute-cleanup"): Promise<"settled" | "unknown">;
+  cancel(attempt: Attempt, deadline: number, mode?: "absolute-cleanup"): Promise<CancellationResult>;
   release(attempt: Attempt, deadline?: number): Promise<boolean>;
 }

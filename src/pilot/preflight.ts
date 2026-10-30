@@ -22,7 +22,7 @@ export function proofKey(e: NativeEvidence, r: RouteEvidence): string {
     version: r.version,
   });
 }
-export function classify(request: PilotRequest, e: NativeEvidence): Blocker[] {
+export function classify(request: PilotRequest, e: NativeEvidence, stage: "bootstrap" | "effective" = "effective"): Blocker[] {
   const blockers: Blocker[] = [];
   const add = (
     role: Role | null,
@@ -63,7 +63,7 @@ export function classify(request: PilotRequest, e: NativeEvidence): Blocker[] {
       "allowance",
       "billing",
     ] as const) {
-      const o = r[control];
+      const o = control === "controls" && stage === "bootstrap" ? r.bootstrap ?? r.controls : r[control];
       const allowed =
         o.state === "verified" ||
         (control === "allowance" && o.state === "unknown") ||

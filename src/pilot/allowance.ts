@@ -15,7 +15,7 @@ export function readFailure(source: string, error: unknown): Observation {
   // Only known protocol codes survive. Messages and arbitrary provider strings
   // may contain account identifiers, so they are used for classification only.
   const safeCode = typeof rawCode === "number" && Number.isSafeInteger(rawCode) ? rawCode
-    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|unauthorized|unsupported|quota_exceeded)$/i.test(rawCode) ? rawCode : null;
+    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|unauthorized|unsupported|quota_exceeded|stable_pane_required|run_required|terminal_handle_stale|operation_unknown|incompatible_runtime)$/i.test(rawCode) ? rawCode : null;
   return { state, source, detail: canonicalJson({ reason: "NATIVE_SOURCE_READ_FAILED", diagnostic: { class: diagnosticClass, code: safeCode } }) };
 }
 
@@ -28,7 +28,8 @@ export function accountAllowance(provider: "codex" | "cursor", value: any, now: 
   if (value.error || value.status !== "ok") return readFailure(source, value.error ?? value.status);
   if (!Number.isFinite(value.updatedAt) || value.updatedAt > now + 60000 || now - value.updatedAt > 300000)
     return { state: "missing", source, detail: canonicalJson({ reason: "STALE_OR_UNDATED_ALLOWANCE", updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : null, observedAt: now }) };
-  if (!["session","weekly","monthly","buckets"].some(key => Object.hasOwn(value,key) && value[key] !== undefined))
+  if (!["session","weekly","monthly"].some(key => Object.hasOwn(value,key) && value[key] !== undefined) &&
+      !(Array.isArray(value.buckets) && value.buckets.length > 0))
     return {state:"missing",source,detail:"No usage windows exposed; absence is not an explicit unknown observation"};
   const project = (window: any) => window == null ? null : {
     usedPercent: typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100 ? window.usedPercent : null,

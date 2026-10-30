@@ -22,6 +22,7 @@ import { scopedLaunchPlanSchema } from "./scoped-launch.js";
 import { proofKey } from "./preflight.js";
 import type { NativeEvidence, QualificationProof } from "./types.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
+import { contextProofSchema, controlFactSchema, recipeSchema } from "./wrapper-contract.js";
 const observation = z.strictObject({
   state: z.enum([
     "verified",
@@ -58,6 +59,9 @@ const scope = z.strictObject({
       billing: observation,
       optionalTelemetry: observation,
       scopedLaunchPlan: scopedLaunchPlanSchema.optional(),
+      bootstrap: observation.optional(),
+      controlFacts: z.array(controlFactSchema).optional(),
+      recipe: recipeSchema.optional(),
       policyAdmission: z.strictObject({
         state: z.enum(["admitted", "conditional"]),
         routeCell: z.string(), qualifier: z.string(), firstUseOnly: z.boolean(),
@@ -71,7 +75,7 @@ const outcome = <Kind extends "completed" | "cancelled">(kind: Kind) =>
     outcome: z.literal(kind),
     settled: z.literal(true),
   });
-export const proofSchema = z
+const legacyProofSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
     id: z.string().regex(/^[a-f0-9]{64}$/),
@@ -80,10 +84,13 @@ export const proofSchema = z
     expiresAt: z.number().int().positive(),
     scope,
     normal: outcome("completed"),
-    cancellation: outcome("cancelled"),
+    cancellation: outcome("cancelled").extend({ stop: z.strictObject({ dispatchId: z.string().min(1), requestId: z.uuid(), state: z.literal("stopped") }).optional() }),
     settled: z.literal(true),
   })
-  .refine(
+;
+const contextProof = legacyProofSchema.extend({ schemaVersion: z.literal(2), normal: outcome("completed").extend({ context: contextProofSchema }),
+  cancellation: outcome("cancelled").extend({ context: contextProofSchema, stop: z.strictObject({ dispatchId: z.string(), requestId: z.uuid(), state: z.literal("stopped"), kind: z.literal("wrapper-control") }) }) });
+export const proofSchema = z.union([legacyProofSchema, contextProof]).refine(
     (p) =>
       p.expiresAt > p.issuedAt &&
       p.expiresAt - p.issuedAt <= 86400000 &&
@@ -161,8 +168,7 @@ export class QualificationCache {
     return matches;
   }
   write(proofs: readonly QualificationProof[], now = Date.now()): void {
-    if (readFileSync(this.lock, "utf8") !== this.token)
-      throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+    this.assertLockOwned();
     if (!Number.isSafeInteger(now)) throw Error("QUALIFICATION_CACHE_CLOCK_INVALID");
     const incoming = cacheSchema.parse({ version: 1, proofs }).proofs;
     // The exclusive writer lock covers read/merge/atomic replace. Keep proofs
@@ -192,8 +198,17 @@ export class QualificationCache {
     renameSync(temporary, this.file);
   }
   close() {
-    if (readFileSync(this.lock, "utf8") !== this.token)
-      throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+    this.assertLockOwned();
     unlinkSync(this.lock);
+  }
+  private assertLockOwned(): void {
+    try {
+      if (lstatSync(this.lock).isSymbolicLink() || readFileSync(this.lock, "utf8") !== this.token)
+        throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT")
+        throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { cause });
+      throw cause;
+    }
   }
 }

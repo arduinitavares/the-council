@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mutationRequestId } from "./mutation-id.js";
 import { canonicalJson } from "../domain/hash.js";
+import { readFailure } from "./allowance.js";
 import type { Attempt, PilotDriver, PilotRequest, Phase } from "./types.js";
 import type { Role } from "./config.js";
 
@@ -64,6 +65,7 @@ export class PilotJournal {
         throw Error("NATIVE_RESOURCE_NOT_JOURNAL_OWNED");
     };
     return {
+      ...(driver.proof ? { proof: (a: Attempt) => { check(a); return driver.proof!(a); } } : {}),
       inspect: (r) => driver.inspect(r),
       begin: async (r) => {
         const mutationRequestId=randomUUID();
@@ -71,7 +73,7 @@ export class PilotJournal {
         let id:string;
         try { id = await driver.begin(r,mutationRequestId); }
         catch(error) {
-          this.append({event:"run-creation-unknown",mutationRequestId});
+          this.append({event:"run-creation-unknown",mutationRequestId,diagnostic:readFailure("native run-create",error)});
           throw Error(`NATIVE_RUN_CREATION_OUTCOME_UNKNOWN:${mutationRequestId}`,{cause:error});
         }
         this.append({ event: "native-run-bound", runId: id });
@@ -96,7 +98,8 @@ export class PilotJournal {
         let a:Attempt;
         try { a = await driver.launch(runId, r, role, phase, packet, key); }
         catch(error) {
-          this.append({event:"launch-unknown",runId,role,phase,key,mutationRequestId:mutationRequestId(key)});
+          const beforeMutation = error instanceof Error && error.message === "NATIVE_PACKET_ARGUMENT_TOO_LARGE";
+          this.append({event:beforeMutation ? "launch-rejected-before-mutation" : "launch-unknown",runId,role,phase,key,mutationRequestId:mutationRequestId(key)});
           throw error;
         }
         owned.add(a.binding.dispatchId);
@@ -123,7 +126,7 @@ export class PilotJournal {
       },
       cancel: async (a, deadline, mode) => {
         check(a);
-        this.append({ event: "cancel-reserved", binding: a.binding });
+        this.append({ event: "cancel-reserved", binding: a.binding, mutationRequestId: mutationRequestId(`stop:${canonicalJson(a.binding)}`) });
         const result = await driver.cancel(a, deadline, mode);
         this.append({ event: "cancel-observed", binding: a.binding, result });
         return result;

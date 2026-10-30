@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { codexKernel } from "../../src/pilot/codex-controls.js";
 import { incidentRoster } from "./fixtures.js";
 import { nativeCommand } from "../../src/pilot/native-command.js";
@@ -9,6 +10,7 @@ import { commandFromClient } from "../../src/pilot/native-command.js";
 import { OrcaClient } from "../../src/orca/client.js";
 import type { NativeEvidence } from "../../src/pilot/types.js";
 import type { ScopedRpc } from "../../src/pilot/rpc.js";
+const { codexFixtureConfiguration } = createRequire(import.meta.url)("./fixtures/context-provider.cjs");
 
 /** Stateful native boundary stand-in: completion is accepted only from the
  * exact spawned wrapper's terminal context, and durable Task.result is real
@@ -67,7 +69,7 @@ else fail();
     roots: [workspace], workspace, workspaceId: "synthetic-repo::B", action: "supplied-packet-read-only", policyHash: "synthetic-policy", controlsHash: "synthetic-controls",
     routes: [...Object.entries(incidentRoster.reviewers), ["judge", incidentRoster.judge]].map(([role, selection]: any) => ({ role, selection, version: "synthetic", catalog: observation, controls: observation, bootstrap: observation, allowance: { ...observation, state: "unknown" }, billing: observation, optionalTelemetry: { ...observation, state: "unknown" },
       recipe: { protocol: selection.route === "codex" ? "codex-app-server" : selection.route === "cursor" ? "cursor-stream" : "agy-stream", executable: process.execPath,
-        argv: [resolve("test/pilot/fixtures/context-provider.cjs"), selection.route === "codex" ? "codex-app-server" : selection.route === "cursor" ? "cursor-stream" : "agy-stream", selection.model, behavior, ...(selection.route === "codex" ? ["", ...codexKernel([],join(workspace,".council/native-packets"),selection.model,selection.effort).argv] : [])], cwd: join(workspace, ".council/native-packets"), version: "synthetic", selection, expectedPermission: "request-review", sources: [], facts: [{ name: "synthetic-enforcement-boundary", stage: "bootstrap", observation, enforcement: "Credential-free deterministic process fixture", observedAt: Date.now(), digest: "synthetic" }],
+        argv: [resolve("test/pilot/fixtures/context-provider.cjs"), selection.route === "codex" ? "codex-app-server" : selection.route === "cursor" ? "cursor-stream" : "agy-stream", selection.model, behavior, ...(selection.route === "codex" ? ["", ...codexKernel(behavior === "configured-startup" ? [codexFixtureConfiguration] : [],join(workspace,".council/native-packets"),selection.model,selection.effort).argv] : [])], cwd: join(workspace, ".council/native-packets"), version: "synthetic", selection, expectedPermission: "request-review", sources: [], facts: [{ name: "synthetic-enforcement-boundary", stage: "bootstrap", observation, enforcement: "Credential-free deterministic process fixture", observedAt: Date.now(), digest: "synthetic" }],
         ...(selection.route === "codex" ? { codexPolicy: {name:"council_packet",filesystem:{[join(workspace,".council/native-packets")]:"read"}, featureKeys:["hooks","apps","plugins","multi_agent","multi_agent_v2","shell_tool","view_image","request_permissions_tool","image_generation","code_mode","code_mode_only","code_mode_host","browser_use","computer_use","memories","external_agent_memory_import","standalone_web_search","shell_snapshot","shell_snapshot_v2","recommended_plugins","remote_plugin","skill_search"]} } : {}) } })) };
   return { root, workspace, orca, command, rpc, evidence, events, terminals, state,
     close: async () => { for(const entry of terminals.values())if(entry.child.exitCode===null){entry.child.kill("SIGKILL");await new Promise(resolve=>entry.child.once("close",resolve));} rmSync(root,{recursive:true,force:true}); } };

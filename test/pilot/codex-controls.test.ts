@@ -1,11 +1,46 @@
 import { expect, it } from "vitest";
+import { createRequire } from "node:module";
 import { codexKernel, verifyCodexConfig } from "../../src/pilot/codex-controls.js";
+const { codexCliLayer, codexEffectiveConfig } = createRequire(import.meta.url)("./fixtures/context-provider.cjs");
+
+it("models literal CLI paths, TOML values, first equals and leaf replacement", () => {
+  expect(codexCliLayer(["-c", 'mcp_servers."github".enabled=false'])).toEqual({mcp_servers:{'"github"':{enabled:false}}});
+  expect(codexCliLayer(["-c", 'plugins."a.b@local".enabled=false'])).toEqual({plugins:{'"a':{'b@local"':{enabled:false}}}});
+  expect(codexCliLayer(["-c", 'model=unquoted', "-c", 'mcp_servers={"a.b"={command="x=y"}}', "-c", 'mcp_servers={"other"={enabled=false}}'])).toEqual({model:"unquoted",mcp_servers:{other:{enabled:false}}});
+});
+
+it("disables original MCP and plugin map keys without synthetic entries under literal CLI parsing", () => {
+  const configurations = [
+    {mcp_servers:{github:{command:"never-execute",enabled:true},'dot.name':{url:"https://fixture.invalid",enabled:true}},plugins:{'a.b@local':{enabled:true}}},
+    {mcp_servers:{github:{enabled:true},'quote"=slash\\ space':{command:"never-execute"}},plugins:{'quote".name@local':{enabled:true},'second@local':{enabled:false}}},
+  ];
+  const kernel = codexKernel(configurations, "/test/packet", "gpt-6.1-sol", "max");
+  const layer = codexCliLayer(kernel.argv);
+  expect(layer.mcp_servers).toEqual({github:{enabled:false},'dot.name':{enabled:false},'quote"=slash\\ space':{enabled:false}});
+  expect(layer.plugins).toEqual({'a.b@local':{enabled:false},'quote".name@local':{enabled:false},'second@local':{enabled:false}});
+});
 
 // rust-v0.164.0 ConfigReadResponse: raw-only fields belong to layers, not Config.
 const features = "hooks apps plugins multi_agent multi_agent_v2 shell_tool view_image request_permissions_tool image_generation code_mode code_mode_only code_mode_host browser_use computer_use memories external_agent_memory_import standalone_web_search shell_snapshot shell_snapshot_v2 recommended_plugins remote_plugin skill_search".split(" ");
 const cwd = "/test/packet";
 const model = "gpt-6.1-sol";
 const policy = codexKernel([{ permissions: { old: { filesystem: { "/secret": "deny" } } } }], cwd, model, "max").policy;
+it("admits disabled actual entries while preserving lower-layer transports, settings and Deny", () => {
+  const lower = {permissions:{old:{filesystem:{"/secret":"deny"}}},mcp_servers:{'server.with.dot':{command:"never-execute",args:["keep"],enabled:true}},plugins:{'plugin.with.dot@local':{enabled:true}}};
+  const kernel = codexKernel([lower],cwd,model,"max");
+  const value = {config:{model,model_reasoning_effort:"max",approval_policy:"never",web_search:"disabled",apps:{_default:{enabled:false}}},origins:{},layers:[
+    {name:{type:"sessionFlags"},version:"session",config:codexCliLayer(kernel.argv)},
+    {name:{type:"user",file:"/test/config.toml"},version:"lower",config:lower},
+  ]};
+  const effective = codexEffectiveConfig(value.layers);
+  expect(effective.mcp_servers).toEqual({'server.with.dot':{command:"never-execute",args:["keep"],enabled:false}});
+  expect(effective.plugins).toEqual({'plugin.with.dot@local':{enabled:false}});
+  expect(effective.permissions.old.filesystem).toEqual({"/secret":"deny"});
+  expect(verifyCodexConfig(value,kernel.policy,model,"max")).toBe(true);
+  // Raw admission must still reject a higher-priority original-entry re-enable.
+  value.layers.unshift({name:{type:"legacyManagedConfigTomlFromMdm"},version:"managed",config:{mcp_servers:{'server.with.dot':{enabled:true}}}});
+  expect(verifyCodexConfig(value,kernel.policy,model,"max")).toBe(false);
+});
 function response() {
   const config = { model, model_reasoning_effort: "max", approval_policy: "never", web_search: "disabled", apps: { _default: { enabled: false } } };
   const raw = { ...config, default_permissions: "council_packet", notify: [], features: Object.fromEntries(features.map(f => [f, false])), agents: { enabled: false }, permissions: { council_packet: { filesystem: { [cwd]: "read", "/secret": "deny" }, network: { enabled: false } } }, mcp_servers: {}, plugins: {} };

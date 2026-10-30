@@ -46,8 +46,8 @@ for (const behavior of ["normal", "normal-judge", "normal-instructions", "duplic
   },15000);
 }
 
-for (const role of ["openai", "judge"] as const) it(`withholds all ${role} model input during startup-only cancellation`, async()=>{
-  const h=await contextFixture();let timer:ReturnType<typeof setInterval>|undefined;
+for (const role of ["openai", "judge"] as const) it(`withholds all ${role} model input during startup-only cancellation with inherited MCP/plugins`, async()=>{
+  const h=await contextFixture("configured-startup");let timer:ReturnType<typeof setInterval>|undefined;
   try {
     const directory=join(h.root,"startup-only");mkdirSync(directory);
     const recipe=h.evidence.routes.find(r=>r.role===role)!.recipe!;

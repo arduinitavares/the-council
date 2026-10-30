@@ -1,4 +1,47 @@
 // Credential-free process fixture. Never native provider/control qualification.
+// rust-v0.164.0 utils/cli/src/config_override.rs and config/src/overrides.rs:
+// only the VALUE is TOML; path segments remain literal, including quotes.
+function codexCliLayer(argv) {
+  const root = Object.create(null);
+  for (let i = 0; i < argv.length; i++) {
+    let path, value;
+    if (argv[i] === '-c') {
+      const argument = argv[++i];
+      const equals = argument.indexOf('=');
+      if (equals < 0 || !argument.slice(0, equals).trim()) throw Error('Invalid override');
+      path = argument.slice(0, equals).trim();
+      if (path === 'use_legacy_landlock') path = 'features.use_legacy_landlock';
+      const text = argument.slice(equals + 1).trim();
+      try { value = require('smol-toml').parse('_x_ = ' + text)._x_; }
+      catch { value = text.replace(/^["']+|["']+$/g, ''); }
+    } else if (argv[i] === '--disable') { path = 'features.' + argv[++i]; value = false; }
+    else continue;
+    const segments = path.split('.');
+    let current = root;
+    for (const segment of segments.slice(0, -1)) {
+      if (!Object.hasOwn(current, segment) || !current[segment] || typeof current[segment] !== 'object' || Array.isArray(current[segment])) current[segment] = Object.create(null);
+      current = current[segment];
+    }
+    // Ordinary CLI writes replace a leaf; separate config layers merge later.
+    current[segments.at(-1)] = value;
+  }
+  return root;
+}
+// config/src/state.rs:599 and merge.rs:133: high-to-low raw layers are
+// recursively merged in reverse order, preserving lower per-entry settings.
+function codexEffectiveConfig(layers) {
+  const table = value => value && typeof value === 'object' && !Array.isArray(value);
+  const merge = (base, overlay) => {
+    const result = Object.assign(Object.create(null), base);
+    for (const [key, value] of Object.entries(overlay)) result[key] = table(value) ? merge(table(result[key]) ? result[key] : {}, value) : value;
+    return result;
+  };
+  return [...layers].reverse().filter(layer => layer.disabledReason == null).reduce((base, layer) => merge(base, layer.config), Object.create(null));
+}
+const codexFixtureConfiguration = {mcp_servers:{'fixture.mcp':{command:'never-execute',args:['preserve'],enabled:true}},plugins:{'fixture.plugin@local':{enabled:true}}};
+module.exports = { codexCliLayer, codexEffectiveConfig, codexFixtureConfiguration };
+if (require.main === module) main();
+function main() {
 const readline = require('node:readline');
 const protocol = process.argv[2] || 'agy-stream';
 const model = process.argv[3];
@@ -45,14 +88,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       // cli/src/main.rs AppServer forwards root_config_overrides only;
       // interactive --model / --ask-for-approval selectors do not configure it.
       const startup=process.argv.slice(6);let raw={model:'fixture-global-default',model_reasoning_effort:'low',approval_policy:'on-request'};
-      const merge=(a,b)=>{for(const [key,value]of Object.entries(b))a[key]=value&&typeof value==='object'&&!Array.isArray(value)?merge(a[key]||{},value):value;return a;};
-      for(let i=0;i<startup.length;i++) {
-        if(startup[i]==='-c')merge(raw,require('smol-toml').parse(startup[++i]));
-        else if(startup[i]==='--disable')merge(raw,{features:{[startup[++i]]:false}});
-      }
-      const config=Object.fromEntries(['model','model_reasoning_effort','approval_policy','model_provider','web_search','apps'].map(key=>[key,raw[key]??null]));
+      Object.assign(raw, codexCliLayer(startup));
       const layers=[{name:{type:'sessionFlags'},version:'fixture-session',config:raw},
-        {name:{type:'user',file:'/fixture/config.toml'},version:'fixture-user',config:{features:{hooks:true},web_search:'live'}}];
+        {name:{type:'user',file:'/fixture/config.toml'},version:'fixture-user',config:{features:{hooks:true},web_search:'live',...(behavior==='configured-startup'?codexFixtureConfiguration:{})}}];
+      const effective=codexEffectiveConfig(layers);
+      const config=Object.fromEntries(['model','model_reasoning_effort','approval_policy','model_provider','web_search','apps'].map(key=>[key,effective[key]??null]));
       const origins={model:{name:{type:'sessionFlags'},version:'fixture-session'}};
       if(behavior==='selected-profile')raw.profile='legacy';
       if(behavior==='provider-endpoint')raw.model_providers={openai:{base_url:'https://unverified.invalid'}};
@@ -79,3 +119,4 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     if(message.id===4){if(behavior!=='no-turn-ack')emit({id:4,result:{turn:{id:'synthetic-turn',status:'inProgress'}}});respond(message.params.input[0].text);}
   }
 }).on('close',()=>{if(protocol==='cursor-stream')respond(cursorInput.join('\n'));if(!hold&&behavior!=='final-then-hang'&&behavior!=='hang')setImmediate(()=>process.exit(0));});
+}

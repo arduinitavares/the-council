@@ -21,9 +21,13 @@ export function codexKernel(configurations: readonly any[], cwd: string, model: 
     ...CODEX_DISABLED_FEATURES.flatMap(feature => ["--disable", feature]),
     "-c", `default_permissions=${JSON.stringify(name)}`, "-c", "notify=[]", "-c", "web_search=\"disabled\"", "-c", "agents.enabled=false", "-c", "apps._default.enabled=false",
     "-c", `permissions.${name}.filesystem=${inline}`, "-c", `permissions.${name}.network.enabled=false`];
-  for (const config of configurations) {
-    for (const key of Object.keys(config.mcp_servers ?? {})) argv.push("-c", `mcp_servers.${JSON.stringify(key)}.enabled=false`);
-    for (const key of Object.keys(config.plugins ?? {})) argv.push("-c", `plugins.${JSON.stringify(key)}.enabled=false`);
+  // Codex splits CLI paths literally on dots; quoting a path segment does not
+  // escape it. Quote map keys inside a TOML VALUE instead. One override per
+  // root retains every source's names (repeated CLI roots replace each other),
+  // while the config-layer deep merge preserves inherited transport/settings.
+  for (const root of ["mcp_servers", "plugins"] as const) {
+    const keys = new Set(configurations.flatMap(config => Object.keys(config[root] ?? {})));
+    if (keys.size) argv.push("-c", `${root}={${[...keys].map(key => `${JSON.stringify(key)}={enabled=false}`).join(",")}}`);
   }
   argv.push("app-server");
   return { argv, policy: { name, filesystem, featureKeys: [...CODEX_DISABLED_FEATURES] }, issues };

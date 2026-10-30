@@ -128,3 +128,22 @@ it("reports corrupt cache explicitly rather than treating it as no proof", () =>
     rmSync(w, { recursive: true, force: true });
   }
 });
+
+it("does not reuse unexposed Orca proofs and still rejects corrupt cache", async () => {
+  const w = realpathSync(mkdtempSync(join(tmpdir(), "pilot-cache-unexposed-")));
+  const cache = new QualificationCache(w);
+  try {
+    const hidden = { ...e, orcaVersion: "unexposed", versions: { orca: "unexposed" } };
+    const hiddenKey = proofKey(hidden, hidden.routes[0]!);
+    const hiddenProof = { ...p, id: hiddenKey, key: hiddenKey, scope: hidden };
+    cache.write([hiddenProof], 1000);
+    expect(cache.read()).toEqual([hiddenProof]);
+    await expect(cache.matching(hidden, 2000, async () => true)).resolves.toEqual([]);
+    writeFileSync(join(w, ".council/native-qualifications/receipts.json"), "broken");
+    await expect(cache.matching(hidden, 2000, async () => true)).rejects.toThrow("QUALIFICATION_CACHE_CORRUPT");
+  } finally { cache.close(); rmSync(w, { recursive: true, force: true }); }
+});
+it("binds qualification proof keys to the observed Orca version", () => {
+  const newer = { ...e, orcaVersion: "2.0.0-dev+local", versions: { orca: "2.0.0-dev+local" } };
+  expect(proofKey(newer, newer.routes[0]!)).not.toBe(proofKey(e, e.routes[0]!));
+});

@@ -157,7 +157,10 @@ export class QualificationCache {
     now: number,
     verify: (p: QualificationProof) => Promise<boolean>,
   ): Promise<QualificationProof[]> {
-    const matches = this.read().filter(
+    const proofs = this.read();
+    // Unknown version metadata cannot establish that a prior host is unchanged.
+    if (evidence.orcaVersion === "unexposed" || evidence.versions.orca === "unexposed") return [];
+    const matches = proofs.filter(
       (p) =>
         p.issuedAt <= now &&
         p.expiresAt > now &&

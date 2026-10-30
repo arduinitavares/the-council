@@ -48,7 +48,10 @@ export class NativeHostInspector implements HostInspector {
     );
     if (status.runtime?.state !== "ready" || status.runtime?.reachable !== true)
       throw Error("ORCA_NOT_RUNNING_OR_READY");
-    const version = status.runtime.appVersion;
+    const observedVersion = status.runtime.appVersion;
+    const version = typeof observedVersion === "string" && observedVersion.trim()
+      ? observedVersion
+      : "unexposed";
     const runtimeId = status.runtime.runtimeId;
     if (!process.env.ORCA_TERMINAL_HANDLE || !process.env.ORCA_PANE_KEY) blockers.push({ role: null, control: "native-coordinator",
       reason: "NATIVE_COORDINATOR_CONTEXT_MISSING", source: "Orca-injected terminal caller context", observed: "A genuine stable requesting-workspace coordinator terminal is required before run-create and initialization",

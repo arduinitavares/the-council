@@ -2,9 +2,8 @@ import { expect, it, vi } from "vitest";
 import { nativeHostFixture } from "./native-host-fixture.js";
 import { nativeCommand } from "../../src/pilot/native-command.js";
 import { LocalReadRpc } from "../../src/pilot/rpc.js";
-import { existsSync } from "node:fs";
 import { NativeHostInspector } from "../../src/pilot/discovery.js";
-import { mkdtempSync, writeFileSync, rmSync, realpathSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync, realpathSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -210,20 +209,33 @@ it("distinguishes absent usage windows from explicit null windows", async () => 
 });
 
 // A version gate must not replace actual host-shape and control checks.
-it.each(["1.4.245", "0.9.0", "2.0.0-dev+local"])("inspects Orca %s and retains required host checks", async (version) => {
-  const host = nativeHostFixture(version);
+it.each([
+  ["1.4.244", "1.4.244"], ["1.4.245", "1.4.245"], ["0.9.0", "0.9.0"],
+  ["2.0.0-dev+local", "2.0.0-dev+local"], [" custom version ", " custom version "],
+  [undefined, "unexposed"], [null, "unexposed"], ["", "unexposed"],
+  ["   ", "unexposed"], [42, "unexposed"], [{}, "unexposed"],
+])("inspects Orca %s and retains required host checks", async (version, expectedVersion) => {
+  const host = nativeHostFixture();
   vi.stubEnv("HOME", host.home);
   vi.stubEnv("PATH", host.bin + ":" + process.env.PATH);
   vi.stubEnv("ORCA_TERMINAL_HANDLE", "synthetic-coordinator");
   vi.stubEnv("ORCA_PANE_KEY", "synthetic-pane");
   try {
-    const command = await nativeCommand(host.orca, host.workspace);
+    const native = await nativeCommand(host.orca, host.workspace);
+    const command: typeof native = async (argv, cwd, timeout) => {
+      const response = await native(argv, cwd, timeout);
+      if (argv[0] === "status") {
+        if (version === undefined) delete response.runtime.appVersion;
+        else response.runtime.appVersion = version;
+      }
+      return response;
+    };
     const rpc = (runtimeId: string) => new LocalReadRpc(runtimeId, host.orca);
     const controls = async () => ({bootstrap:{state:"missing" as const,source:"synthetic boundary",detail:"No launch controls"},controls:{state:"missing" as const,source:"synthetic boundary",detail:"No launch controls"},facts:[]});
     const request = {workspace:host.workspace,policyPath:host.policy,config:incidentRoster} as PilotRequest;
     const result = await new NativeHostInspector(command, rpc, undefined, controls).inspect(request);
-    expect(result.evidence.orcaVersion).toBe(version);
-    expect(result.evidence.versions.orca).toBe(version);
+    expect(result.evidence.orcaVersion).toBe(expectedVersion);
+    expect(result.evidence.versions.orca).toBe(expectedVersion);
     expect(result.evidence.runtimeId).toBe("synthetic-runtime");
     expect(result.evidence.routes.every(route => route.controls.state === "missing")).toBe(true);
     expect(result.evidence.routes.find(route => route.role === "xai")?.billing.state).toBe("missing");

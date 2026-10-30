@@ -121,11 +121,11 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
       } else if (event.id === 3) {
         const selected = event.result;
         threadId = selected?.thread?.id;
-        if (!threadId || selected.model !== a.selection.model || selected.reasoningEffort !== a.selection.effort || selected.cwd !== recipe.cwd || selected.approvalPolicy !== "never" ||
+        if (!threadId || selected.modelProvider !== "openai" || selected.thread.modelProvider !== "openai" || selected.model !== a.selection.model || selected.reasoningEffort !== a.selection.effort || selected.cwd !== recipe.cwd || selected.approvalPolicy !== "never" ||
             selected.activePermissionProfile?.id !== recipe.codexPolicy?.name || selected.activePermissionProfile?.extends != null ||
             !Array.isArray(selected.instructionSources) || canonicalJson(selected.instructionSources) !== canonicalJson((recipe.instructionSources??[]).map(source=>source.path)) ||
             (recipe.instructionSources??[]).some(source=>sha256(readFileSync(source.path))!==source.sha256)) throw Error("CODEX_THREAD_SELECTION_UNVERIFIED");
-        initialized = true; ready = true; init = { ...init, activePermissionProfile: selected.activePermissionProfile, reasoningEffort: selected.reasoningEffort, instructionSources: selected.instructionSources };
+        initialized = true; ready = true; init = { ...init, modelProvider: selected.modelProvider, activePermissionProfile: selected.activePermissionProfile, reasoningEffort: selected.reasoningEffort, instructionSources: selected.instructionSources };
       } else if (event.id === 4) {
         if (!inputDelivered || event.result?.turn?.status !== "inProgress" || typeof event.result.turn.id !== "string") throw Error("CODEX_ACTIVE_TURN_UNVERIFIED");
         activeTurn={source:"Codex original turn/start response",identity:event.result.turn.id};
@@ -185,7 +185,7 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
       }
       if (recipe.protocol === "codex-app-server" && configAccepted && requirementsAccepted && profileAllowed && !threadRequested) {
         threadRequested = true;
-        await send({ id: 3, method: "thread/start", params: { model: a.selection.model, cwd: recipe.cwd, approvalPolicy: "never", permissions: recipe.codexPolicy!.name,
+        await send({ id: 3, method: "thread/start", params: { model: a.selection.model, modelProvider: "openai", cwd: recipe.cwd, approvalPolicy: "never", permissions: recipe.codexPolicy!.name,
           ephemeral: true, config: { model_reasoning_effort: a.selection.effort } } });
       }
       await sleep(10);

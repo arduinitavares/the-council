@@ -17,7 +17,7 @@ export function codexKernel(configurations: readonly any[], cwd: string, model: 
   }
   const name = "council_packet";
   const inline = "{"+Object.entries(filesystem).map(([target, access]) => `${JSON.stringify(target)}=${JSON.stringify(access)}`).join(",")+"}";
-  const argv = ["-c", `model=${JSON.stringify(model)}`, "-c", 'approval_policy="never"', "-c", `model_reasoning_effort=${JSON.stringify(effort)}`,
+  const argv = ["-c", 'model_provider="openai"', "-c", `model=${JSON.stringify(model)}`, "-c", 'approval_policy="never"', "-c", `model_reasoning_effort=${JSON.stringify(effort)}`,
     ...CODEX_DISABLED_FEATURES.flatMap(feature => ["--disable", feature]),
     "-c", `default_permissions=${JSON.stringify(name)}`, "-c", "notify=[]", "-c", "web_search=\"disabled\"", "-c", "agents.enabled=false", "-c", "apps._default.enabled=false",
     "-c", `permissions.${name}.filesystem=${inline}`, "-c", `permissions.${name}.network.enabled=false`];
@@ -29,6 +29,13 @@ export function codexKernel(configurations: readonly any[], cwd: string, model: 
   return { argv, policy: { name, filesystem, featureKeys: [...CODEX_DISABLED_FEATURES] }, issues };
 }
 const object = (value: any): value is Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value);
+// A selected provider definition or endpoint needs separate source-backed
+// verification. Other provider definitions are inactive in this OpenAI kernel.
+const openaiProvider = (selected: any, providers: any) =>
+  (selected == null || selected === "openai") &&
+  (providers == null || (object(providers) && providers.openai == null));
+const onlyValidated = (value: Record<string, any>, keys: readonly string[]) =>
+  Object.entries(value).every(([key, entry]) => entry == null || keys.includes(key));
 const nonempty = (value: any) => typeof value === "string" && value.length > 0;
 const absolute = (value: any) => nonempty(value) && value.startsWith("/");
 function layerName(name: any): boolean {
@@ -58,6 +65,7 @@ export function verifyCodexConfig(response: any, policy: CodexPolicy, model: str
       !Array.isArray(response.layers) || !response.layers.length) return false;
   const config = response.config;
   if (config.model !== model || config.model_reasoning_effort !== effort || config.approval_policy !== "never" ||
+      (config.model_provider != null && config.model_provider !== "openai") ||
       config.web_search !== "disabled" || config.apps?._default?.enabled !== false) return false;
   const identities = new Set<string>();
   let session = 0;
@@ -89,6 +97,10 @@ export function verifyCodexConfig(response: any, policy: CodexPolicy, model: str
     }
     raw = merge(raw, layer.config);
   }
+  // core/src/config/mod.rs:3494 rejects legacy profile selection in 0.164;
+  // named user profile files are already represented as ordered raw layers.
+  if (raw.profile != null || !openaiProvider(raw.model_provider, raw.model_providers) ||
+      raw.openai_base_url != null || raw.chatgpt_base_url != null) return false;
   const profile = raw.permissions?.[policy.name];
   const disabledEntries = (entries: any) => entries === undefined || (object(entries) && Object.values(entries).every(entry => object(entry) && entry.enabled === false));
   return raw.model === model && raw.model_reasoning_effort === effort && raw.approval_policy === "never" &&
@@ -108,20 +120,26 @@ export function verifyCodexConfig(response: any, policy: CodexPolicy, model: str
 export function verifyCodexRequirements(requirements: any, name: string, model?: string, effort?: string): boolean {
   if (requirements === null) return true;
   if (!object(requirements)) return false;
+  const validated = ["allowedApprovalPolicies", "allowedWebSearchModes", "allowedPermissionProfiles", "defaultPermissions",
+    "featureRequirements", "network", "hooks", "models", "modelProvider", "modelProviders"];
+  if (!onlyValidated(requirements, validated) || !openaiProvider(requirements.modelProvider, requirements.modelProviders)) return false;
   const allows = (values: any, expected: string) => values == null || (Array.isArray(values) && values.every(value => typeof value === "string") && values.includes(expected));
   if (!allows(requirements.allowedApprovalPolicies, "never") || !allows(requirements.allowedWebSearchModes, "disabled")) return false;
   const profiles = requirements.allowedPermissionProfiles;
   if (profiles != null && (!object(profiles) || !Object.values(profiles).every(value => typeof value === "boolean") || profiles[name] !== true)) return false;
   if (requirements.defaultPermissions != null && requirements.defaultPermissions !== name) return false;
   const features = requirements.featureRequirements;
-  if (features != null && (!object(features) || !Object.values(features).every(value => typeof value === "boolean") ||
+  if (features != null && (!object(features) || !Object.entries(features).every(([key, value]) => (CODEX_DISABLED_FEATURES as readonly string[]).includes(key) && typeof value === "boolean") ||
       CODEX_DISABLED_FEATURES.some(feature => features[feature] === true))) return false;
-  if (requirements.network != null && (!object(requirements.network) || (requirements.network.enabled != null && requirements.network.enabled !== false))) return false;
+  if (requirements.network != null && (!object(requirements.network) || !onlyValidated(requirements.network, ["enabled"]) || (requirements.network.enabled != null && requirements.network.enabled !== false))) return false;
   // Unknown managed hook sources must not be dispositioned as ordinary disabled hooks.
-  if (requirements.hooks != null && (!object(requirements.hooks) || Object.values(requirements.hooks).some(value => value != null && (!Array.isArray(value) || value.length > 0)))) return false;
+  const hookEvents = ["Interrupt", "PermissionRequest", "PostCompact", "PostModelRequest", "PostToolUse", "PreCompact", "PreModelRequest", "PreToolUse", "SessionEnd", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"];
+  if (requirements.hooks != null && (!object(requirements.hooks) || !onlyValidated(requirements.hooks, hookEvents) ||
+      Object.values(requirements.hooks).some(value => value != null && (!Array.isArray(value) || value.length > 0)))) return false;
   if (requirements.models != null) {
     const defaults = requirements.models.newThread;
-    if (!object(requirements.models) || (defaults != null && (!object(defaults) ||
+    if (!object(requirements.models) || !onlyValidated(requirements.models, ["newThread"]) || (defaults != null && (!object(defaults) ||
+        !onlyValidated(defaults, ["model", "modelReasoningEffort"]) ||
         (defaults.model != null && defaults.model !== model) || (defaults.modelReasoningEffort != null && defaults.modelReasoningEffort !== effort)))) return false;
   }
   return true;

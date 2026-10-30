@@ -87,3 +87,44 @@ it("configures app-server model and approval through root -c overrides, independ
   expect(overrides).toContain('model="gpt-6-astra"');
   expect(overrides).toContain('approval_policy="never"');
 });
+
+// Fix round 1: managed data is a closed, explicitly validated contract.
+it.each([
+  {additionalDeveloperInstructions:"unacquired instructions"}, {futureRequirement:{}},
+  {modelProvider:"foreign"}, {modelProvider:[]}, {modelProviders:{openai:{base_url:"https://unverified.invalid"}}},
+  {modelProviders:[]}, {chatgptBaseUrl:"https://unverified.invalid"}, {logDir:"/unacquired"}, {sqliteHome:"/unacquired"},
+  {network:{enabled:null,domains:{"unverified.invalid":"allow"}}}, {network:{allowedDomains:["unverified.invalid"]}},
+  {network:{enabled:false,futureNetwork:false}}, {network:{enabled:false,allowUnixSockets:["/unacquired"]}},
+  {models:{futureDefaults:{}}}, {models:{newThread:{serviceTier:"fast"}}}, {models:{newThread:[]}},
+  {hooks:{futureEvent:[]}}, {featureRequirements:{futureFeature:false}},
+])("rejects unverified managed identity, instructions, paths and nested fields %j", requirement => {
+  expect(verifyCodexRequirements(requirement,policy.name,model,"max")).toBe(false);
+});
+it("admits only explicit neutral managed fields, matching defaults and inactive other-provider definitions",()=>{
+  expect(verifyCodexRequirements({futureRequirement:null,modelProvider:"openai",modelProviders:{unused:{base_url:"https://unused.invalid"}},models:{newThread:{model,modelReasoningEffort:"max",serviceTier:null}},network:{enabled:false,domains:null},hooks:{SessionStart:[],managedDir:null}},policy.name,model,"max")).toBe(true);
+});
+it.each([
+  ["selected legacy profile",{profile:"legacy",profiles:{legacy:{features:{hooks:true},web_search:"live"}}}],
+  ["malformed selected legacy profile",{profile:[]}],
+  ["foreign provider",{model_provider:"foreign"}],
+  ["malformed provider",{model_provider:[]}],
+  ["selected provider endpoint",{model_providers:{openai:{base_url:"https://unverified.invalid"}}}],
+  ["malformed provider definitions",{model_providers:[]}],
+  ["OpenAI base endpoint",{openai_base_url:"https://unverified.invalid"}],
+  ["ChatGPT base endpoint",{chatgpt_base_url:"https://unverified.invalid"}],
+] as const)("rejects %s before thread creation",(_label,change)=>{
+  const value:any=response();Object.assign(value.layers[0].config,change);
+  expect(verifyCodexConfig(value,policy,model,"max")).toBe(false);
+});
+it("rejects a conflicting typed provider even when raw provider selection is OpenAI",()=>{
+  const value:any=response();value.config.model_provider="foreign";
+  expect(verifyCodexConfig(value,policy,model,"max")).toBe(false);
+});
+it("leaves unused legacy profiles and inactive provider definitions inactive",()=>{
+  const value:any=response();Object.assign(value.layers[0].config,{model_provider:"openai",profiles:{unused:{features:{hooks:true}}},model_providers:{unused:{base_url:"https://unused.invalid"}}});
+  expect(verifyCodexConfig(value,policy,model,"max")).toBe(true);
+});
+it("pins OpenAI provider selection in the owned app-server kernel",()=>{
+  const kernel=codexKernel([],cwd,model,"max");
+  expect(kernel.argv.filter((_arg,index)=>kernel.argv[index-1]==="-c")).toContain('model_provider="openai"');
+});

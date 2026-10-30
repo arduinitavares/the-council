@@ -50,14 +50,21 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         if(startup[i]==='-c')merge(raw,require('smol-toml').parse(startup[++i]));
         else if(startup[i]==='--disable')merge(raw,{features:{[startup[++i]]:false}});
       }
-      const config=Object.fromEntries(['model','model_reasoning_effort','approval_policy','web_search','apps'].map(key=>[key,raw[key]??null]));
-      const layers=[{name:{type:'sessionFlags'},version:'fixture-session',config:raw}];
+      const config=Object.fromEntries(['model','model_reasoning_effort','approval_policy','model_provider','web_search','apps'].map(key=>[key,raw[key]??null]));
+      const layers=[{name:{type:'sessionFlags'},version:'fixture-session',config:raw},
+        {name:{type:'user',file:'/fixture/config.toml'},version:'fixture-user',config:{features:{hooks:true},web_search:'live'}}];
+      const origins={model:{name:{type:'sessionFlags'},version:'fixture-session'}};
+      if(behavior==='selected-profile')raw.profile='legacy';
+      if(behavior==='provider-endpoint')raw.model_providers={openai:{base_url:'https://unverified.invalid'}};
+      if(behavior==='typed-provider')config.model_provider='foreign';
       if(behavior==='higher-hook')layers.unshift({name:{type:'legacyManagedConfigTomlFromMdm'},version:'fixture-managed',config:{features:{hooks:true}}});
       if(behavior==='typed-model')config.model='foreign';
       if(behavior==='typed-effort')config.model_reasoning_effort='low';
-      emit({id:2,result:{config,origins:{},...(behavior==='missing-layers'?{}:{layers})}});
+      // Match config_manager_service.rs: layers are conditional on includeLayers.
+      emit({id:2,result:{config,origins,...(behavior==='missing-layers'||message.params?.includeLayers!==true?{}:{layers})}});
+      if(message.params?.includeLayers===true&&process.argv[5])require('node:fs').appendFileSync(process.argv[5], 'includeLayers:true\n');
     }
-    if(message.id===5)emit({id:5,result:{requirements:behavior==='requirements-denied'?{allowedApprovalPolicies:['on-request']}:behavior==='managed-hooks'?{featureRequirements:{hooks:true}}:behavior==='managed-permissions'?{defaultPermissions:'foreign'}:null}});
+    if(message.id===5)emit({id:5,result:{requirements:behavior==='requirements-denied'?{allowedApprovalPolicies:['on-request']}:behavior==='managed-instructions'?{additionalDeveloperInstructions:'unacquired'}:behavior==='managed-provider'?{modelProvider:'foreign'}:behavior==='managed-unknown'?{futureRequirement:{}}:behavior==='managed-hooks'?{featureRequirements:{hooks:true}}:behavior==='managed-permissions'?{defaultPermissions:'foreign'}:null}});
     if(message.id===6)emit({id:6,result:{data:[{id:'council_packet',allowed:true}],nextCursor:null}});
     if(message.id===3){
       const instruction=require('node:path').join(process.cwd(),'AGENTS.md');
@@ -68,7 +75,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       if(behavior==='object-instructions')instructionSources=[{path:instruction,sha256:'provider-cannot-attest-this'}];
       if(behavior==='missing-instructions')instructionSources=undefined;
       if(behavior==='drift-instructions')require('node:fs').writeFileSync(instruction,'changed after prelaunch fingerprint');
-      if(message.params.sandbox||message.params.permissions!=='council_packet')process.exit(8);emit({id:3,result:{thread:{id:'synthetic-session',cliVersion:'0.164.0',createdAt:0,updatedAt:0,cwd:process.cwd(),ephemeral:true,modelProvider:'openai',preview:'',projectId:null,sessionId:'synthetic-session',source:'appServer',status:{type:'idle'},turns:[]},model,modelProvider:'openai',sandbox:{type:'readOnly',networkAccess:false},approvalsReviewer:'user',reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources}});}
+      if(message.params.sandbox||message.params.permissions!=='council_packet'||message.params.modelProvider!=='openai')process.exit(8);emit({id:3,result:{thread:{id:'synthetic-session',cliVersion:'0.164.0',createdAt:0,updatedAt:0,cwd:process.cwd(),ephemeral:true,modelProvider:behavior==='wrong-thread-provider'?'foreign':behavior==='missing-thread-provider'?undefined:'openai',preview:'',projectId:null,sessionId:'synthetic-session',source:'appServer',status:{type:'idle'},turns:[]},model,modelProvider:behavior==='wrong-provider'?'foreign':behavior==='missing-provider'?undefined:'openai',sandbox:{type:'readOnly',networkAccess:false},approvalsReviewer:'user',reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources}});}
     if(message.id===4){if(behavior!=='no-turn-ack')emit({id:4,result:{turn:{id:'synthetic-turn',status:'inProgress'}}});respond(message.params.input[0].text);}
   }
 }).on('close',()=>{if(protocol==='cursor-stream')respond(cursorInput.join('\n'));if(!hold&&behavior!=='final-then-hang'&&behavior!=='hang')setImmediate(()=>process.exit(0));});

@@ -6,14 +6,15 @@ import { fileURLToPath } from 'node:url';
 
 // Canonicalize the script itself: a personal skill symlink is not a package root.
 const packageRoot = resolve(dirname(realpathSync(fileURLToPath(import.meta.url))), '../../..');
-const cli = resolve(packageRoot, 'dist/cli/index.js');
+const native = process.argv[2] === 'native';
+const cli = resolve(packageRoot, native ? 'dist/pilot/cli.js' : 'dist/cli/index.js');
 if (!existsSync(cli)) {
   process.stderr.write(`Council build is missing at ${cli}. Run npm run build in ${packageRoot} after explicitly preparing project-local dependencies.\n`);
   process.exitCode = 4;
 } else {
   // The CLI owns validation, policy, control schemas, output and exit codes.
   // No shell, installation, inferred input, auto-resume or configuration rewrite.
-  const child = spawn(process.execPath, [cli, ...process.argv.slice(2)], { stdio: 'inherit', shell: false });
+  const child = spawn(process.execPath, [cli, ...process.argv.slice(native ? 3 : 2)], { stdio: 'inherit', shell: false });
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   const handlers = signals.map(signal => {
     const forward = () => child.kill(signal);

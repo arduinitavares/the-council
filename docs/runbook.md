@@ -114,3 +114,8 @@ This is a proposal, not an installed link:
 Before installation, present the exact source/target, package version and commit, test/typecheck/build and actual pack receipts, qualification decision, source hashes, rollback, current `lstat` target state, and the existing authorization record. An existing file, directory or dangling symlink is preserved and stops installation for a scoped decision. Never replace it automatically. Record owned-link identity and preexisting state when the gates pass and installation occurs. Verify `$the-council` discovery and explicit-only metadata from a fresh client session. Rollback removes only the owned link after all processes settle; it does not restore whole settings files, remove an existing skill, or modify model policy. Ask only for a material new action/permission or a conflicting existing target that the recorded authorization does not cover.
 
 Language profile: Issue 9-oriented technical description. The official dictionary and full ASD-STE100 conformance were not verified. Commands, identifiers, paths and model selections retain their exact forms.
+
+
+## Packaged native first use
+
+See [the native first-use procedure](../skills/the-council/references/first-use.md) and [issue #1 validation](qualification/issue-1-validation.md). The explicit `native` command is separate from retained controller runs. Build a fresh clone with `npm ci` and `npm run build`. This repair includes real read-only host discovery and native lifecycle commands, but scoped native launch controls and Cursor debit binding remain unverified. A blocked first-use record is not operational acceptance.

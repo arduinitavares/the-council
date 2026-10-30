@@ -661,6 +661,452 @@
       "rawStdoutSha256": "0cb628cd3b6f9941f9d913ccfcb2bbd2da94fd0ba782abadc54b4b12c8692975",
       "qualification": "zero-probe prerequisite check only; no live Council qualification or topic inference",
       "review": "Opus5.5 medium completed scoped repairs; C1 and latent cancellation-acknowledgment qualification finding remain open; operational acceptance rejected"
+    },
+    {
+      "sourceRevision": "c7d098bdbb0c488021d23ce7fca3ade2503b72b8",
+      "recordedAt": "2026-10-30T13:38:47.421767+00:00",
+      "status": "prerequisites_not_verified",
+      "exitCode": 3,
+      "calls": {
+        "probes": 0,
+        "topic": 0
+      },
+      "stderrBytes": 0,
+      "rawStdoutSha256": "2e76d93f6631f40bd89fbbfb0b43fdd848efd7bedae7bc476b2a730f1062763a",
+      "requestingWorkspaceSha256": "8b498538a11393966fcf4f016f76e9e0204f6b1baa8eb86a1b84d62adf25fe9e",
+      "foreignCwd": true,
+      "maxProbeCalls": 0,
+      "maxTopicCalls": 10,
+      "workerTimeoutMs": 120000,
+      "absoluteDeadlineMs": 600000,
+      "versions": {
+        "orca": "1.4.244",
+        "codex": "codex-cli 0.164.0",
+        "antigravity": "1.4.11",
+        "cursor": "2026.10.22-27dcf5f"
+      },
+      "policyHash": "6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0",
+      "controlsHash": "51cfc825d67d60436fd5436f735aab0a8f8bddaf43120bc03e6fec58897b2726",
+      "producerCodeHash": "d27cbd956a4463997951a12472e351a10249e02690e58ee9a40e66f4aef6bff2",
+      "routes": [
+        {
+          "role": "openai",
+          "selection": {
+            "route": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "max"
+          },
+          "catalog": {
+            "state": "verified",
+            "sourceSha256": "3af6bc331727b1dc7e6ad7f01bfe34e05445c6e50ab810a78f00b9c2d4f3dd90",
+            "detailSha256": "fe73aba378ff22004286c98f360b517f391734a0de635bbe9afd8cbefd2492ef"
+          },
+          "bootstrap": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "fb90515e5d5e9708f5f8c0e1f13d2af74684d8fa442dcfc2d7bbfab6fcf28bd8"
+          },
+          "controls": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "e91768e17ee4c0cfa0e1e721812aef583f8ecf27fa7d047b15ece755f65133b8"
+          },
+          "allowance": {
+            "state": "verified",
+            "sourceSha256": "7f0599e247e453a0aabd1725a8e94c7671f838874d298ddf1bfeaf3211c54602",
+            "detailSha256": "b259c4b3b2cd826241242db49ed70b62db04d9dee1b9c9d03b4c0964a0bd7d09"
+          },
+          "billing": {
+            "state": "unknown",
+            "sourceSha256": "13c51d25824a4d3d65fa5a5240e7366ff50a6085bd780ddd2d8f8c75a28ddd59",
+            "detailSha256": "fad02e98f546312020f3d492d6fd929ff554e8189e5855a1aa885e1f07fb5acc"
+          },
+          "controlFacts": [
+            {
+              "name": "provider-version-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "9688b98ed1683f5acadee73eaf1d58249376da722782796c19c786936d137eb8",
+              "detailSha256": "fb335bb5e295fd43f814dc43732f40b925452d1655d52ff4a58dc3663c9cd429"
+            },
+            {
+              "name": "installed-command-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "deaa8eb3375865c07a03ef649c1acdefed8e563b13c1f9d7cde2d2e0bdb5488a",
+              "detailSha256": "95179ec8f548a146a655940c4229514d95c00242bc41651c7f4a6da018914582"
+            },
+            {
+              "name": "named-permissions-kernel",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "eaa5750d137304aa36520d02e24729140a77c0062593ebe6174a2c4dbf7a9f6d",
+              "detailSha256": "4feed07fe39a7f9a482c90f7147a820444de16ae78a64af633657df067b811df"
+            },
+            {
+              "name": "startup-and-platform-exceptions",
+              "stage": "bootstrap",
+              "state": "unknown",
+              "sourceSha256": "e1d05bc96676efa470fb5bdb137ad426e5baab630f17463e336703b8b89965a7",
+              "detailSha256": "7064063745c13013e992a59802d74e870711102eaf23312934a87edb628957a8"
+            },
+            {
+              "name": "pre-input-effective-config",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "b776f4e80d259f84df5626239f8367ee5b4b5d6d3b3d8a00a5c398eb4a31f589",
+              "detailSha256": "70a774d785452208b73f5f1692940e4bf54bac9dca13943d7d4145d30a32b0a3"
+            },
+            {
+              "name": "all-tool-effects-and-packet-read-boundary",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "be7a49601ddd8f4694b7ce2ea7ce22f03b9f20a4a0c8424bbed39b8fc5cf7d81",
+              "detailSha256": "6ce0d47aa366292832822c6dd854365628f8d2044feb1a95b2af9796f96c02e1"
+            }
+          ]
+        },
+        {
+          "role": "gemini",
+          "selection": {
+            "route": "antigravity",
+            "model": "gemini-4-argon-high",
+            "effort": "high"
+          },
+          "catalog": {
+            "state": "verified",
+            "sourceSha256": "6e2a2f2b3d4b0b569b24457be1ae2e0566a1a64dba639d0877733a7c26835913",
+            "detailSha256": "374ef57afbe91c0de0a1cfb884b2e5e0560be2f139bdbd45bc036d587d0a421e"
+          },
+          "bootstrap": {
+            "state": "missing",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "880223925801339a5b5da18f5b36bc4f8360400d058106a6f34d40cdddb99b41"
+          },
+          "controls": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "48bff7374564b2f3a1de8e88c117f3bfcd7b20c64a3029e834846fe3346636ec"
+          },
+          "allowance": {
+            "state": "verified",
+            "sourceSha256": "3dd3c10bf6167dc59a1c7559dc04c12d0a95fca04f76110ca11f0757e6069c1d",
+            "detailSha256": "a2686060e62c4e3a27b891c543c08ae709f6b833579cc2f43b012bd1755cc07c"
+          },
+          "billing": {
+            "state": "unknown",
+            "sourceSha256": "13c51d25824a4d3d65fa5a5240e7366ff50a6085bd780ddd2d8f8c75a28ddd59",
+            "detailSha256": "fad02e98f546312020f3d492d6fd929ff554e8189e5855a1aa885e1f07fb5acc"
+          },
+          "controlFacts": [
+            {
+              "name": "provider-version-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "9688b98ed1683f5acadee73eaf1d58249376da722782796c19c786936d137eb8",
+              "detailSha256": "f3d373142c40dc60322d13d55cd6bf40c371c46670cacfebe2abc9fe2c70eb2e"
+            },
+            {
+              "name": "installed-command-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "ed9f498143a891caaccbcee0ddb0552496a364e269e59925b6f3f64289809e91",
+              "detailSha256": "6a1c84a8b3a2de848c845dc92a09884ed3b7823b979439750108c520e3c74706"
+            },
+            {
+              "name": "workspace-trust",
+              "stage": "bootstrap",
+              "state": "missing",
+              "sourceSha256": "ba5a82c56a78fb39ccfae422d42b9c966c98e0f9c47730e0a487c4c677cf56e4",
+              "detailSha256": "04c839b6f89df879e277917f641110793cdc35ff40ffc182ab825634311d1623"
+            },
+            {
+              "name": "startup-hooks-and-plugins",
+              "stage": "bootstrap",
+              "state": "unknown",
+              "sourceSha256": "e1d05bc96676efa470fb5bdb137ad426e5baab630f17463e336703b8b89965a7",
+              "detailSha256": "66ca81c1a65552163a35037ade5b6ba438001cf71afb745db2e3857569d942fb"
+            },
+            {
+              "name": "custom-agent-tool-ceiling",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "59be73e0e5508e5e72b5e45b2480d890b0152f2f6052bfdbf76a824466cbb8ea",
+              "detailSha256": "c5f2f965fd7af9ebc671c42e1cff86e20558aa6ac97536123a17cfc98123c5e6"
+            },
+            {
+              "name": "effective-input-gate",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "ed05a61a349fc7d72713a4231b49dfbf59ecae5907f9ebfa58213f8b017b52cc",
+              "detailSha256": "57396f3f8eda8f885747c69fac0d8b24a27662d26ce75e1f26e4825cab0489e8"
+            }
+          ]
+        },
+        {
+          "role": "xai",
+          "selection": {
+            "route": "cursor",
+            "model": "grok-4.7-xhigh",
+            "effort": "xhigh",
+            "effortEncoding": "model"
+          },
+          "catalog": {
+            "state": "verified",
+            "sourceSha256": "f111a400795bde668572691d73dce1bc34d59e706ccc066c702d161e4ab631f3",
+            "detailSha256": "fe73aba378ff22004286c98f360b517f391734a0de635bbe9afd8cbefd2492ef"
+          },
+          "bootstrap": {
+            "state": "missing",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "383e176c17927700960313dc3ba12b73fe587463fa8ff8a513fdc628693516f4"
+          },
+          "controls": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "5caddf3e28748a30ddab728c3e05a2d6123371208cedc50744c4f0cf20a5e4e4"
+          },
+          "allowance": {
+            "state": "verified",
+            "sourceSha256": "e80b2ded0fb029341be65434ee671e50cebf3b73a14f5a5a00f2af6f76305949",
+            "detailSha256": "de5647cab3ada5c07ff2035d2991ec681d860c8e723b1e100e4c86960797dda2"
+          },
+          "billing": {
+            "state": "missing",
+            "sourceSha256": "3cd754b3eed5865d6043bfa7554d56771af35724dbe65206ffd97b810d3b0537",
+            "detailSha256": "65d389d40c30fe3d33484c8bb03c0580e95718e16da05b567344803c457e6049"
+          },
+          "controlFacts": [
+            {
+              "name": "provider-version-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "9688b98ed1683f5acadee73eaf1d58249376da722782796c19c786936d137eb8",
+              "detailSha256": "3b31e6701cb8d0bafd9eafcb8d45dbfdd445a9293f3c7a4a0690621acc1fdf43"
+            },
+            {
+              "name": "installed-command-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "1b9992032a75f3f3fd3451d2c525d7eff76c41bc4ea0c65312b08a20d4e6a563",
+              "detailSha256": "76e66bbc6126892fdf0944c1c1b6a0dd3ecff44ddf6fb04e67113cae6701fd2c"
+            },
+            {
+              "name": "workspace-trust",
+              "stage": "bootstrap",
+              "state": "missing",
+              "sourceSha256": "7b8864f68a0c3ac44b404b2c89f9179a19930dccf4c1c8573a37083943d23c7e",
+              "detailSha256": "a35c356980dc80734fc9e88577d07f85729f1ba657892680ec4ea52325b5c8fb"
+            },
+            {
+              "name": "configured-read-boundary",
+              "stage": "bootstrap",
+              "state": "missing",
+              "sourceSha256": "9bfa4f295f21612992cb9a88f91e719cec5ba82d69f0d18134b396beb190e7f0",
+              "detailSha256": "70b3f980a9469dd96f5e50b4dc708875e5bc9e55ef06050ff8ef8eb82e6ba7f6"
+            },
+            {
+              "name": "packet-read-boundary-and-deny-rules",
+              "stage": "bootstrap",
+              "state": "unknown",
+              "sourceSha256": "d7c400461077b29b07637c93ac88a4c369fb1649c0bc3f952a149fb21a1b9caa",
+              "detailSha256": "48c708e44bfd829372b826698f16ff17cb86c87d1d7b35964aa62a34a0cdc81d"
+            },
+            {
+              "name": "helper-loader-root",
+              "stage": "bootstrap",
+              "state": "missing",
+              "sourceSha256": "fbffb5689fed1b0067fc33e5110105938f7abe4bfe2afdca388420de5f85282c",
+              "detailSha256": "a7ecb6b63afc389507ff5e03776da16488ee2238a349da033b7c3915de1b56e5"
+            },
+            {
+              "name": "helper-and-startup-effect-enforcement",
+              "stage": "bootstrap",
+              "state": "unknown",
+              "sourceSha256": "e1d05bc96676efa470fb5bdb137ad426e5baab630f17463e336703b8b89965a7",
+              "detailSha256": "3036940b936cbe92ed3c0beba273fcbfd8d1caba0c68766bf8acbf86266f5184"
+            },
+            {
+              "name": "included-only-billing",
+              "stage": "bootstrap",
+              "state": "missing",
+              "sourceSha256": "3cd754b3eed5865d6043bfa7554d56771af35724dbe65206ffd97b810d3b0537",
+              "detailSha256": "65d389d40c30fe3d33484c8bb03c0580e95718e16da05b567344803c457e6049"
+            },
+            {
+              "name": "effective-input-gate",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "1707643a9187d671b5339ce29406a142b2805a2207c543bd5bffd63e523e07ab",
+              "detailSha256": "4adfad3a0226c3c831b5fae626975d2237a591d3b1e5e550cc3f9454ba942041"
+            }
+          ]
+        },
+        {
+          "role": "judge",
+          "selection": {
+            "route": "codex",
+            "model": "gpt-6-astra",
+            "effort": "max"
+          },
+          "catalog": {
+            "state": "verified",
+            "sourceSha256": "3af6bc331727b1dc7e6ad7f01bfe34e05445c6e50ab810a78f00b9c2d4f3dd90",
+            "detailSha256": "fe73aba378ff22004286c98f360b517f391734a0de635bbe9afd8cbefd2492ef"
+          },
+          "bootstrap": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "81054dae9ea83a1aef1e546f49fd98f1833b4740a49572e804f1020cc4a657d6"
+          },
+          "controls": {
+            "state": "unknown",
+            "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+            "detailSha256": "e91768e17ee4c0cfa0e1e721812aef583f8ecf27fa7d047b15ece755f65133b8"
+          },
+          "allowance": {
+            "state": "verified",
+            "sourceSha256": "7f0599e247e453a0aabd1725a8e94c7671f838874d298ddf1bfeaf3211c54602",
+            "detailSha256": "674b125bdcf48861ae1047977f1b379f6c2c0874686949fd146c62ffca9a1656"
+          },
+          "billing": {
+            "state": "unknown",
+            "sourceSha256": "13c51d25824a4d3d65fa5a5240e7366ff50a6085bd780ddd2d8f8c75a28ddd59",
+            "detailSha256": "fad02e98f546312020f3d492d6fd929ff554e8189e5855a1aa885e1f07fb5acc"
+          },
+          "controlFacts": [
+            {
+              "name": "provider-version-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "9688b98ed1683f5acadee73eaf1d58249376da722782796c19c786936d137eb8",
+              "detailSha256": "fb335bb5e295fd43f814dc43732f40b925452d1655d52ff4a58dc3663c9cd429"
+            },
+            {
+              "name": "installed-command-contract",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "deaa8eb3375865c07a03ef649c1acdefed8e563b13c1f9d7cde2d2e0bdb5488a",
+              "detailSha256": "95179ec8f548a146a655940c4229514d95c00242bc41651c7f4a6da018914582"
+            },
+            {
+              "name": "named-permissions-kernel",
+              "stage": "bootstrap",
+              "state": "verified",
+              "sourceSha256": "eaa5750d137304aa36520d02e24729140a77c0062593ebe6174a2c4dbf7a9f6d",
+              "detailSha256": "4feed07fe39a7f9a482c90f7147a820444de16ae78a64af633657df067b811df"
+            },
+            {
+              "name": "startup-and-platform-exceptions",
+              "stage": "bootstrap",
+              "state": "unknown",
+              "sourceSha256": "e1d05bc96676efa470fb5bdb137ad426e5baab630f17463e336703b8b89965a7",
+              "detailSha256": "bded3bb1c3b3e7e8f87d1821f0d9ddeae78e0c235293046d21d8b4a54f6157cc"
+            },
+            {
+              "name": "pre-input-effective-config",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "b776f4e80d259f84df5626239f8367ee5b4b5d6d3b3d8a00a5c398eb4a31f589",
+              "detailSha256": "70a774d785452208b73f5f1692940e4bf54bac9dca13943d7d4145d30a32b0a3"
+            },
+            {
+              "name": "all-tool-effects-and-packet-read-boundary",
+              "stage": "effective",
+              "state": "unknown",
+              "sourceSha256": "be7a49601ddd8f4694b7ce2ea7ce22f03b9f20a4a0c8424bbed39b8fc5cf7d81",
+              "detailSha256": "6ce0d47aa366292832822c6dd854365628f8d2044feb1a95b2af9796f96c02e1"
+            }
+          ]
+        }
+      ],
+      "blockers": [
+        {
+          "role": null,
+          "control": "native-coordinator",
+          "reason": "NATIVE_COORDINATOR_CONTEXT_MISSING",
+          "sourceSha256": "c76f2c754f1d46af11819db9d3d9ec53e59f7116e78e4a069a359b37d5d81250",
+          "observationSha256": "450bf0eb6734b2e2e23bac793e885af0d274014b58432bcd24e4acec829862c9"
+        },
+        {
+          "role": "openai",
+          "control": "controls",
+          "reason": "CONTROLS_UNKNOWN",
+          "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+          "observationSha256": "fb90515e5d5e9708f5f8c0e1f13d2af74684d8fa442dcfc2d7bbfab6fcf28bd8"
+        },
+        {
+          "role": "gemini",
+          "control": "controls",
+          "reason": "CONTROLS_MISSING",
+          "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+          "observationSha256": "880223925801339a5b5da18f5b36bc4f8360400d058106a6f34d40cdddb99b41"
+        },
+        {
+          "role": "xai",
+          "control": "controls",
+          "reason": "CONTROLS_MISSING",
+          "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+          "observationSha256": "383e176c17927700960313dc3ba12b73fe587463fa8ff8a513fdc628693516f4"
+        },
+        {
+          "role": "xai",
+          "control": "billing",
+          "reason": "BILLING_MISSING",
+          "sourceSha256": "3cd754b3eed5865d6043bfa7554d56771af35724dbe65206ffd97b810d3b0537",
+          "observationSha256": "65d389d40c30fe3d33484c8bb03c0580e95718e16da05b567344803c457e6049"
+        },
+        {
+          "role": "judge",
+          "control": "controls",
+          "reason": "CONTROLS_UNKNOWN",
+          "sourceSha256": "d9b1da55af456a07d7cee83860bc56743c791dad94556e54cd6f6d36efcff862",
+          "observationSha256": "81054dae9ea83a1aef1e546f49fd98f1833b4740a49572e804f1020cc4a657d6"
+        }
+      ],
+      "unresolvedCount": 0,
+      "qualification": "Actual zero-probe second-project prerequisite check; no live model qualification or topic inference. Real native Node stand-in checks are separate software evidence.",
+      "genuineCoordinatorCheck": {
+        "sourceRevision": "c7d098bdbb0c488021d23ce7fca3ade2503b72b8",
+        "genuineCoordinator": true,
+        "status": "prerequisites_not_verified",
+        "calls": {
+          "probes": 0,
+          "topic": 0
+        },
+        "stderrBytes": 0,
+        "rawStdoutSha256": "93c96729a41e2dad2c794319aece6c00ed225b99da0c46a16a89f4ad02e0bf74",
+        "originalNodeExit": "unexposed; native host_status_unavailable retained",
+        "originalPidsAbsent": true,
+        "closed": true,
+        "blockers": [
+          {
+            "role": "openai",
+            "control": "controls",
+            "reason": "CONTROLS_UNKNOWN"
+          },
+          {
+            "role": "gemini",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING"
+          },
+          {
+            "role": "xai",
+            "control": "controls",
+            "reason": "CONTROLS_MISSING"
+          },
+          {
+            "role": "xai",
+            "control": "billing",
+            "reason": "BILLING_MISSING"
+          },
+          {
+            "role": "judge",
+            "control": "controls",
+            "reason": "CONTROLS_UNKNOWN"
+          }
+        ]
+      }
     }
   ],
   "runtimeIdSha256": "934964979163ac838d8f0245f1b4c5f6a6c04a1ec259277e0f156c7594dbe7ad",
@@ -668,16 +1114,44 @@
   "currentReview": {
     "model": "claude-opus-5-5-medium",
     "effort": "medium",
-    "cleanFunctionalRevision": "e19748a3fafd4b3bc48b1e4680764374e768bec4",
-    "reviewedTree": "2fb41b738ce64026901d9c4fa65f7e24f5852783",
-    "byteIdentityVerified": true,
-    "status": "blocked partial draft accepted; operational acceptance rejected",
-    "openCritical": [
-      "C1: executable scoped admission/control/wrapper integration"
-    ],
+    "reviewedBase": "a2fd1a1ad8be350e8367ee1694dbe1af57957905",
+    "cleanFunctionalRevision": "c7d098bdbb0c488021d23ce7fca3ade2503b72b8",
+    "status": "draft reviewable; operational and merge acceptance rejected",
+    "openCritical": [],
     "openImportant": [
-      "final-N1: cancellation qualification requires acknowledged stop, not natural exit after ambiguous stop"
+      "N-I1: incomplete hook executable/relative-script closure can be approved",
+      "N-I2: enabled type-only hooks can be omitted from required effects",
+      "N-I3: Codex notification allowlist compatibility is unverified and may reject normal protocol events"
     ],
-    "nativeAcceptance": "pending; no qualified probes or topic calls"
+    "remainingLocalMinor": [
+      "M1 pre-assignment cleanup",
+      "M3 outcome-write failure",
+      "M6 late packet limits",
+      "M7/N-M2 Cursor materialization ownership",
+      "M8/M9 diagnostics",
+      "N-M1 project instruction layers",
+      "N-M3 symlink acquisition",
+      "N-M4 concrete platform exception scope",
+      "N-M5 audit producer drift semantics",
+      "N-M6 fast active-event ordering",
+      "historical source-integrity and exit-semantics limitations"
+    ],
+    "nativeSoftwareCheck": {
+      "status": "passed",
+      "sourceRevision": "c7d098bdbb0c488021d23ce7fca3ade2503b72b8",
+      "distributionFilesMatched": 128,
+      "providerCalls": 0,
+      "deterministicInputs": 2,
+      "normalAndCancellation": true,
+      "exactCloseAndDurableReadback": true
+    },
+    "nativeAcceptance": "pending; no real provider qualification or topic calls",
+    "tests": {
+      "full": 727,
+      "fullFiles": 64,
+      "focused": 137,
+      "freshInstallation": 140
+    },
+    "effectApprovalsGranted": 0
   }
 }

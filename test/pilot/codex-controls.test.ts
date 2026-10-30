@@ -74,7 +74,7 @@ it.each([
   undefined, [], {allowedApprovalPolicies:[]}, {allowedApprovalPolicies:"never"},
   {allowedPermissionProfiles:["council_packet"]}, {allowedPermissionProfiles:{council_packet:false}},
   {allowedPermissionProfiles:{}}, {defaultPermissions:"foreign"}, {allowedWebSearchModes:["live"]},
-  {featureRequirements:{hooks:true}}, {featureRequirements:{shell_tool:true}}, {featureRequirements:{hooks:"false"}},
+  {featureRequirements:{hooks:true}}, {featureRequirements:{plugins:true}}, {featureRequirements:{shell_tool:true}}, {featureRequirements:{hooks:"false"}},
   {network:{enabled:true}}, {hooks:{managedDir:"/unacquired"}}, {hooks:{SessionStart:[{hooks:[{command:"unacquired"}]}]}},
   {models:{newThread:{model:"foreign"}}}, {models:{newThread:{modelReasoningEffort:"low"}}},
 ])("rejects incompatible or malformed managed requirements %j", requirement => {

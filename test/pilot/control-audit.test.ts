@@ -2,7 +2,7 @@ import { it, expect, vi } from "vitest";
 import { mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { prepareProviderAudit, adoptProviderAudit, inspectProviderControls } from "../../dist/pilot/provider-controls.js";
-import { acquiredAuditDisposition } from "../../dist/pilot/control-audit.js";
+import { acquiredAuditDisposition, auditHash } from "../../dist/pilot/control-audit.js";
 import { incidentRoster, policyTable } from "./fixtures.js";
 import { contextFixture } from "./context-fixture.js";
 
@@ -56,6 +56,10 @@ for (const [role, selection] of [["openai", incidentRoster.reviewers.openai], ["
       mkdirSync(join(h.root,".codex"));const config=join(h.root,".codex/config.toml");
       writeFileSync(config,'notify=["unresolved-notifier"]\n[hooks]\nSessionStart=[{command="unresolved-hook ./private.cjs"}]\n');
       const hook=join(h.root,".codex/hooks.json");writeFileSync(hook,'{"hooks":{"SessionStart":[{"command":"unresolved-hook ./private.cjs"}]}}');
+      // Cached builtin-looking handlers are inactive for the feature-disabled kernel.
+      const cachedHook=join(h.root,".codex/plugins/cache/market/example/v1/hooks/hooks.json");
+      mkdirSync(join(cachedHook,".."),{recursive:true});
+      writeFileSync(cachedHook,JSON.stringify({hooks:{Stop:[{hooks:[{type:"mcp_tool",server:"node_repl",tool:"turn_ended",input:{}}]}]}}));
       const exe=join(h.root,"codex");writeFileSync(exe,`#!${process.execPath}\nconsole.log('Usage: codex --model --disable --config');`);chmodSync(exe,0o700);
       const prepared=await prepareProviderAudit(selection,"codex-cli 0.164.0",h.workspace);
       expect(prepared.snapshot.effects).toEqual(["codex-platform-runtime-reads-and-state"]);
@@ -73,6 +77,9 @@ for (const [role, selection] of [["openai", incidentRoster.reviewers.openai], ["
       const adopted=await adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command);
       expect(adopted.providerQualification).toBe("separate-required");
       const after=await inspect();expect(after.bootstrap.state).toBe("verified");expect(after.controls.state).toBe("unknown");
+      writeFileSync(cachedHook,"invalid inactive cache bytes");
+      expect(auditHash((await inspect()).audit!)).toBe(prepared.hash);
+      expect((await inspect()).bootstrap.state).toBe("verified");
       expect((await acquiredAuditDisposition(prepared.snapshot)).detail).toBe("AUDIT_NATIVE_AUTHORITY_READER_UNAVAILABLE");
       expect((await acquiredAuditDisposition(other.snapshot,h.command)).verified).toBe(false);
       // Mutate only the stateful native stand-in to exercise each integrity gate.

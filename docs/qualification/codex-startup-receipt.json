@@ -1,0 +1,388 @@
+{
+  "version": 1,
+  "scope": "Rank2 only: shared Codex OpenAI/judge startup and pre-input controls. No question input, inference, full Council discussion or provider/action qualification.",
+  "host": {
+    "orcaVersion": "1.4.245",
+    "codexVersion": "0.164.0",
+    "nodeVersion": "22.23.4",
+    "transport": "Orca-owned background terminal; Codex app-server stdio"
+  },
+  "base": "e2532f2c5cfc164267b17f977bc8b37a362c615e",
+  "functionalHead": "6b45c327ef32d6933f6243f6c8df4cdf551f23a8",
+  "softwareChecks": {
+    "finalFocused": {
+      "tests": 266,
+      "files": 8,
+      "exitCode": 0
+    },
+    "typecheckExitCode": 0,
+    "buildExitCode": 0,
+    "finalFull": {
+      "command": "npm test -- --maxWorkers 2",
+      "tests": 1031,
+      "files": 66,
+      "exitCode": 0,
+      "seconds": 324.5,
+      "frozenFiles": 329,
+      "changedFrozenFiles": []
+    },
+    "earlierFullRuns": [
+      {
+        "head": "d6519ae",
+        "passed": 892,
+        "failed": 1,
+        "error": "WRAPPER_NATIVE_COMPLETION_UNVERIFIED",
+        "test": "context-cleanup uncertain-close",
+        "cause": "unproven; separate investigation left unchanged"
+      },
+      {
+        "head": "0def263",
+        "passed": 938,
+        "failed": 0
+      },
+      {
+        "head": "1d41511",
+        "passed": 941,
+        "failed": 0
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "functionalHead": "0def26349108991ee958d08c206eb7f95db5e45b",
+      "roles": [
+        {
+          "role": "openai",
+          "ready": false,
+          "calls": 0,
+          "inputDelivered": false,
+          "startupProof": false,
+          "providerResult": {
+            "status": "failed",
+            "error": "PROVIDER_STDERR_UNCLASSIFIED",
+            "exitCode": 1,
+            "signal": null
+          },
+          "shutdown": {
+            "closed": true,
+            "groupSettled": true,
+            "trackedDescendantsSettled": true,
+            "escapedDescendantObserved": false,
+            "timersSettled": true
+          },
+          "stderrNonempty": true
+        }
+      ],
+      "allOwnedNativeTasksSettled": true,
+      "protectedConfigAndSourceUnchanged": true,
+      "watchdogExitCode": 1,
+      "exactRuntimeTerminalClosed": true,
+      "judgeAttempted": false,
+      "fullProviderQualification": false
+    },
+    {
+      "attempt": 2,
+      "functionalHead": "1d41511e76d31b4aac270790ba778efc4732ec65",
+      "roles": [
+        {
+          "role": "openai",
+          "ready": false,
+          "calls": 0,
+          "inputDelivered": false,
+          "startupProof": false,
+          "providerResult": {
+            "status": "failed",
+            "error": "HARNESS_OPERATION_FAILED",
+            "exitCode": 0,
+            "signal": null
+          },
+          "shutdown": {
+            "closed": true,
+            "groupSettled": true,
+            "trackedDescendantsSettled": true,
+            "escapedDescendantObserved": false,
+            "timersSettled": true
+          },
+          "stderrNonempty": false
+        }
+      ],
+      "allOwnedNativeTasksSettled": true,
+      "protectedConfigAndSourceUnchanged": true,
+      "watchdogExitCode": 1,
+      "exactRuntimeTerminalClosed": true,
+      "judgeAttempted": false,
+      "fullProviderQualification": false
+    },
+    {
+      "attempt": 3,
+      "functionalHead": "1d41511e76d31b4aac270790ba778efc4732ec65",
+      "roles": [
+        {
+          "role": "openai",
+          "ready": false,
+          "calls": 0,
+          "inputDelivered": false,
+          "startupProof": false,
+          "providerResult": {
+            "status": "failed",
+            "error": "PROVIDER_STREAM_EVENT_UNSUPPORTED",
+            "exitCode": 0,
+            "signal": null
+          },
+          "shutdown": {
+            "closed": true,
+            "groupSettled": true,
+            "trackedDescendantsSettled": true,
+            "escapedDescendantObserved": false,
+            "timersSettled": true
+          },
+          "stderrNonempty": false,
+          "protocol": [
+            {
+              "id": 1,
+              "method": null,
+              "errorCode": null
+            },
+            {
+              "id": null,
+              "method": "remoteControl/status/changed",
+              "errorCode": null
+            }
+          ]
+        }
+      ],
+      "allOwnedNativeTasksSettled": true,
+      "protectedConfigAndSourceUnchanged": true,
+      "watchdogExitCode": 1,
+      "exactRuntimeTerminalClosed": true,
+      "judgeAttempted": false,
+      "fullProviderQualification": false
+    },
+    {
+      "attempt": 4,
+      "functionalHead": "6b45c327ef32d6933f6243f6c8df4cdf551f23a8",
+      "roles": [
+        {
+          "role": "openai",
+          "ready": true,
+          "calls": 0,
+          "inputDelivered": false,
+          "startupProof": true,
+          "providerResult": {
+            "status": "failed",
+            "error": "PROVIDER_INITIALIZATION_CANCELLED",
+            "exitCode": null,
+            "signal": "SIGKILL"
+          },
+          "shutdown": {
+            "closed": true,
+            "groupSettled": true,
+            "trackedDescendantsSettled": true,
+            "escapedDescendantObserved": false,
+            "timersSettled": true
+          },
+          "stderrNonempty": false,
+          "protocol": [
+            {
+              "id": 1,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": null,
+              "method": "remoteControl/status/changed",
+              "errorCode": null,
+              "remoteControlStatus": "disabled"
+            },
+            {
+              "id": 5,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 6,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 2,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 3,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": null,
+              "method": "thread/started",
+              "errorCode": null,
+              "remoteControlStatus": null
+            }
+          ],
+          "observedConfig": {
+            "model": "gpt-6.1-sol",
+            "provider": "openai",
+            "effort": "max",
+            "approval": "never",
+            "modelMatches": true,
+            "providerMatches": true,
+            "layersPresent": true,
+            "layerTypes": [
+              "sessionFlags",
+              "user",
+              "system"
+            ]
+          },
+          "observedRequirementsShape": "null",
+          "observedThread": {
+            "model": "gpt-6.1-sol",
+            "provider": "openai",
+            "providerMatches": true,
+            "threadProviderMatches": true,
+            "effort": "max",
+            "approval": "never",
+            "activeProfile": "council_packet",
+            "profileExtendsPresent": false,
+            "cwdMatches": true
+          },
+          "nativeSourceAudit": {
+            "exactInspectedHashMatched": true,
+            "approvedEffects": [
+              "codex-platform-runtime-reads-and-state"
+            ],
+            "unavailableCount": 0,
+            "reused": true
+          }
+        },
+        {
+          "role": "judge",
+          "ready": true,
+          "calls": 0,
+          "inputDelivered": false,
+          "startupProof": true,
+          "providerResult": {
+            "status": "failed",
+            "error": "PROVIDER_INITIALIZATION_CANCELLED",
+            "exitCode": null,
+            "signal": "SIGKILL"
+          },
+          "shutdown": {
+            "closed": true,
+            "groupSettled": true,
+            "trackedDescendantsSettled": true,
+            "escapedDescendantObserved": false,
+            "timersSettled": true
+          },
+          "stderrNonempty": false,
+          "protocol": [
+            {
+              "id": 1,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": null,
+              "method": "remoteControl/status/changed",
+              "errorCode": null,
+              "remoteControlStatus": "disabled"
+            },
+            {
+              "id": 5,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 6,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 2,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": 3,
+              "method": null,
+              "errorCode": null,
+              "remoteControlStatus": null
+            },
+            {
+              "id": null,
+              "method": "thread/started",
+              "errorCode": null,
+              "remoteControlStatus": null
+            }
+          ],
+          "observedConfig": {
+            "model": "gpt-6-astra",
+            "provider": "openai",
+            "effort": "max",
+            "approval": "never",
+            "modelMatches": true,
+            "providerMatches": true,
+            "layersPresent": true,
+            "layerTypes": [
+              "sessionFlags",
+              "user",
+              "system"
+            ]
+          },
+          "observedRequirementsShape": "null",
+          "observedThread": {
+            "model": "gpt-6-astra",
+            "provider": "openai",
+            "providerMatches": true,
+            "threadProviderMatches": true,
+            "effort": "max",
+            "approval": "never",
+            "activeProfile": "council_packet",
+            "profileExtendsPresent": false,
+            "cwdMatches": true
+          },
+          "nativeSourceAudit": {
+            "exactInspectedHashMatched": true,
+            "approvedEffects": [
+              "codex-platform-runtime-reads-and-state"
+            ],
+            "unavailableCount": 0,
+            "reused": false
+          }
+        }
+      ],
+      "allOwnedNativeTasksSettled": true,
+      "protectedConfigAndSourceUnchanged": true,
+      "watchdogExitCode": 0,
+      "exactRuntimeTerminalClosed": true,
+      "judgeAttempted": true,
+      "fullProviderQualification": false
+    }
+  ],
+  "reviews": {
+    "model": "claude-opus-5-5-medium",
+    "explicitEffort": "medium",
+    "route": "Orca/AGY ordinary plan session with sandbox and existing Deny rules",
+    "taskFixRounds1to4": "All scoped Important findings addressed; no new Critical or Important breakage reported.",
+    "firstTaskReview": "Needs fixes; forbidden ls blocked by existing command Deny, no command executed. That attempt was not clean acceptance.",
+    "wholeChange": "pending"
+  },
+  "limits": [
+    "Both real providers required SIGKILL after deliberate before-input cancellation; exit codes remain null. This is not graceful-cancellation qualification.",
+    "No input.json or inference-started.json was created in the real startup directories; no turn/start or question call was authorized.",
+    "Runtime trace contains known methods, small fixed metadata and hashes; no raw config layers, instructions, endpoints or remote identity values are published.",
+    "Existing production local result.json raw-stdout persistence is unchanged.",
+    "Broader post-input protocol compatibility, other provider gates and full provider/action qualification remain open."
+  ]
+}

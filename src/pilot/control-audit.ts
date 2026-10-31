@@ -47,30 +47,46 @@ const dispositionSchema = z.strictObject({ kind: z.literal("council-control-audi
 async function nativeDisposition(snapshot: AuditSnapshot, runId: string, taskId: string, command: Command, retainedIdentity?: z.infer<typeof auditIdentitySchema>) {
   const hash = auditHash(snapshot);
   const run = (await command(["orchestration", "run-show", "--id", runId, "--json"], snapshot.workspace, 5000)).run;
-  const coordinator = run?.coordinator_handle ?? run?.coordinatorHandle;
-  if (run?.id !== runId || typeof coordinator !== "string" || !coordinator) throw Error("AUDIT_NATIVE_OWNER_UNVERIFIED");
+  const coordinator = run?.coordinator_handle;
+  if (run?.id !== runId || run.legacy !== 0 ||
+      !Number.isInteger(run.consumer_generation) || run.consumer_generation <= 0 ||
+      !(coordinator === null || (typeof coordinator === "string" && coordinator)) ||
+      (!retainedIdentity && coordinator === null)) throw Error("AUDIT_NATIVE_OWNER_UNVERIFIED");
   const workspace=(await command(["worktree","show","--worktree",`path:${snapshot.workspace}`,"--json"],snapshot.workspace,5000)).worktree;
   const terminal=retainedIdentity??(await command(["terminal","show","--terminal",coordinator,"--json"],snapshot.workspace,5000)).terminal;
   if(workspace?.path!==snapshot.workspace||typeof workspace.id!=="string"||terminal?.worktreePath!==snapshot.workspace||terminal?.worktreeId!==workspace.id)throw Error("AUDIT_NATIVE_WORKSPACE_UNVERIFIED");
   const identity=auditIdentitySchema.parse({handle:terminal.handle,worktreeId:terminal.worktreeId,worktreePath:terminal.worktreePath,ptyId:terminal.ptyId,incarnationId:terminal.incarnationId,paneKey:terminal.paneKey??`${terminal.tabId}:${terminal.leafId}`});
-  if(identity.handle!==coordinator||!identity.ptyId.startsWith(workspace.id+"@@"))throw Error("AUDIT_NATIVE_IDENTITY_UNVERIFIED");
+  if(!identity.handle||(!retainedIdentity&&identity.handle!==coordinator)||!identity.ptyId.startsWith(workspace.id+"@@"))throw Error("AUDIT_NATIVE_IDENTITY_UNVERIFIED");
   const dispatch = (await command(["orchestration", "dispatch-show", "--task", taskId, "--json"], snapshot.workspace, 5000)).dispatch;
   const tasks = await command(["orchestration", "task-list", "--run", runId, "--json"], snapshot.workspace, 5000);
   const task = tasks.tasks?.find((entry: any) => entry.id === taskId);
   const result = typeof task?.result === "string" ? decodeStrictJson(task.result) as any : null;
+  // Rebinding a terminal advances the Run's consumer generation without
+  // revoking its completed root Tasks. Reuse authenticates the saved approver;
+  // initial adoption still requires the current owner and creation generation.
+  const taskGeneration = task?.created_by_run_generation;
+  if (!Number.isInteger(taskGeneration) || taskGeneration <= 0 ||
+      (retainedIdentity
+        ? run.consumer_generation < taskGeneration || (coordinator !== identity.handle && run.consumer_generation === taskGeneration)
+        : run.consumer_generation !== taskGeneration)) throw Error("AUDIT_NATIVE_IDENTITY_UNVERIFIED");
   if ((dispatch?.runId ?? dispatch?.run_id) !== runId || (dispatch?.taskId ?? dispatch?.task_id) !== taskId ||
-      (dispatch?.assigneeHandle ?? dispatch?.assignee_handle) !== coordinator || dispatch?.status !== "completed" ||
+      (dispatch?.assigneeHandle ?? dispatch?.assignee_handle) !== identity.handle || dispatch?.status !== "completed" ||
       typeof dispatch.id !== "string" || typeof (dispatch.processIncarnation ?? dispatch.process_incarnation) !== "string" ||
-      task?.spec !== `Council control audit sha256=${hash}` || task.status !== "completed" || result?.provenance !== "worker_report" ||
-      result.outcome !== "succeeded" || result.reportedBy !== coordinator || typeof result.messageId !== "string") throw Error("AUDIT_NATIVE_DISPOSITION_UNVERIFIED");
+      task?.run_id !== runId || task.parent_id !== null || task.spec !== `Council control audit sha256=${hash}` ||
+      task.status !== "completed" || result?.provenance !== "worker_report" ||
+      result.outcome !== "succeeded" || result.reportedBy !== identity.handle || result.completedBy !== identity.handle ||
+      typeof result.messageId !== "string") throw Error("AUDIT_NATIVE_DISPOSITION_UNVERIFIED");
   // The durable native incarnation is ptyId:incarnationId.
   // Native Task creator provenance lets reuse verify this after terminal close,
   // without asking a historical process or a reused PID whether it is alive.
   const incarnation=`${identity.ptyId}:${identity.incarnationId}`;
   if((dispatch.assigneePaneKey??dispatch.assignee_pane_key)!==identity.paneKey||
       (dispatch.processIncarnation??dispatch.process_incarnation)!==incarnation||
-      task.created_by_terminal_handle!==coordinator||task.created_by_pane_key!==identity.paneKey||
-      task.created_by_process_incarnation!==incarnation)throw Error("AUDIT_NATIVE_IDENTITY_UNVERIFIED");
+      task.created_by_terminal_handle!==identity.handle||task.created_by_pane_key!==identity.paneKey||
+      task.created_by_process_incarnation!==incarnation||
+      dispatch.creator_handle!==identity.handle||dispatch.creator_pane_key!==identity.paneKey||
+      dispatch.creator_dispatch_id!==null||dispatch.retry_of_dispatch_id!==null||dispatch.termination_reason!==null||
+      dispatch.depth!==1||dispatch.failure_count!==0)throw Error("AUDIT_NATIVE_IDENTITY_UNVERIFIED");
   const disposition = dispositionSchema.parse(decodeStrictJson(result.body));
   if (disposition.snapshotHash !== hash || disposition.approvedEffects.some(effect => !snapshot.effects.includes(effect))) throw Error("AUDIT_DISPOSITION_SCOPE_MISMATCH");
   return { reference: { identity, version: 1 as const, snapshotHash: hash, runId, taskId, dispatchId: dispatch.id as string, messageId: result.messageId as string }, approvedEffects: disposition.approvedEffects };

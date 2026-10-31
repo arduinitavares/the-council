@@ -1,0 +1,299 @@
+{
+  "version": 1,
+  "scope": "issue-1-ranking-item-3-gemini-startup-source-repairs",
+  "evidenceDateLocal": "2026-10-30",
+  "executionHost": "local macOS",
+  "baseline": "6b5378ef60fac4c302cd4422deb3258fd6a4ce2b",
+  "codeAcceptance": "software-checks-pass-independent-review-pending",
+  "operationalAcceptance": "open",
+  "before": {
+    "version": "1.4.12",
+    "recipeAvailable": false,
+    "bootstrap": "unsupported",
+    "effectiveControls": "unknown",
+    "providerSpawned": false,
+    "inputDelivered": false,
+    "modelCalls": 0,
+    "facts": [
+      {
+        "name": "provider-version-contract",
+        "state": "unsupported"
+      },
+      {
+        "name": "installed-command-contract",
+        "state": "missing"
+      },
+      {
+        "name": "workspace-trust",
+        "state": "missing"
+      },
+      {
+        "name": "startup-hooks-and-plugins",
+        "state": "unknown"
+      },
+      {
+        "name": "custom-agent-tool-ceiling",
+        "state": "verified"
+      },
+      {
+        "name": "effective-input-gate",
+        "state": "unknown"
+      },
+      {
+        "name": "session-controls",
+        "state": "unsupported"
+      }
+    ]
+  },
+  "after": {
+    "version": "1.4.12",
+    "recipeAvailable": true,
+    "bootstrap": "missing",
+    "effectiveControls": "unknown",
+    "providerSpawned": false,
+    "inputDelivered": false,
+    "modelCalls": 0,
+    "facts": [
+      {
+        "name": "installed-command-contract",
+        "state": "verified"
+      },
+      {
+        "name": "public-cli-capability-contract",
+        "state": "verified"
+      },
+      {
+        "name": "provider-startup-source-contract",
+        "state": "verified"
+      },
+      {
+        "name": "workspace-trust",
+        "state": "missing"
+      },
+      {
+        "name": "startup-hooks-and-plugins",
+        "state": "unknown"
+      },
+      {
+        "name": "custom-agent-definition",
+        "state": "verified"
+      },
+      {
+        "name": "effective-input-gate",
+        "state": "unknown"
+      }
+    ],
+    "protectedFilesUnchanged": true,
+    "unresolvedAuditClasses": [
+      "HOOK_DYNAMIC_CLOSURE_UNAVAILABLE"
+    ]
+  },
+  "realProviderDiagnostics": [
+    {
+      "name": "intended-packet-definition",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "initFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true
+    },
+    {
+      "name": "exact-packet-add-dir",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "initFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true
+    },
+    {
+      "name": "one-read-tool-definition",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "separate read-tool probe agent",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "initFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true
+    },
+    {
+      "name": "init-schema-check",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "initFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true
+    }
+  ],
+  "softwareChecks": [
+    {
+      "stage": "baseline RED",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts",
+      "exitCode": 1,
+      "failed": 16,
+      "passed": 131,
+      "productionHashesUnchanged": true
+    },
+    {
+      "stage": "initial GREEN",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts",
+      "exitCode": 0,
+      "passed": 147
+    },
+    {
+      "stage": "R1 intermediate RED",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "exitCode": 1,
+      "failed": 1,
+      "passed": 22,
+      "reason": "future version must not inherit startup/source contract from identical help"
+    },
+    {
+      "stage": "R1 GREEN",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "exitCode": 0,
+      "passed": 23
+    },
+    {
+      "stage": "final typecheck",
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    {
+      "stage": "final build",
+      "command": "npm run build",
+      "exitCode": 0
+    },
+    {
+      "stage": "full suite attempt1",
+      "command": "npm test -- --maxWorkers 2",
+      "status": "failed",
+      "exitCode": 1,
+      "failed": 2,
+      "passed": 1054,
+      "total": 1056,
+      "files": 66,
+      "durationSeconds": 322.61,
+      "failures": [
+        "test/pilot/fix5-regressions.test.ts > uses AGY four-field init with source-bound agent selection: normal",
+        "test/pilot/control-audit.test.ts > prepares actual versioned hook sources, adopts only matching native owner disposition, and invalidates drift"
+      ],
+      "disposition": "directly affected positive fixtures corrected after settled attempt; production gates retained"
+    },
+    {
+      "stage": "covering focused tests after fixture corrections",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts test/pilot/fix5-regressions.test.ts test/pilot/control-audit.test.ts",
+      "status": "passed",
+      "exitCode": 0,
+      "passed": 172,
+      "files": 4,
+      "durationSeconds": 76.74
+    },
+    {
+      "stage": "typecheck after fixture corrections",
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    {
+      "stage": "full suite attempt2",
+      "command": "npm test -- --maxWorkers 2",
+      "status": "passed",
+      "exitCode": 0,
+      "failed": 0,
+      "passed": 1056,
+      "total": 1056,
+      "files": 66,
+      "durationSeconds": 322.43,
+      "sourceBuildTestsAndConfigFrozen": true,
+      "processExitObserved": true
+    }
+  ],
+  "frozenManifest": {
+    "fileCount": 279,
+    "sha256": "d2cdc88670242d796c15268bb6fa082464f819b60b7ffdcf9160b12b9432d7e6",
+    "wrapperProducerHash": "2a54a48d830b6e29619d15381417ad0ca3216fa2cf6dd6e00be25bc8ced42620",
+    "files": {
+      "src/pilot/provider-controls.ts": "807315cbb7f681a10702e00115623a6c8a46c6c59f1eec2c62d76dfdc09ee993",
+      "src/pilot/provider-session.ts": "2df4e0c6492f50c23bb1da900f05b1e31196dbe1d21e512432ccfdcca353aada",
+      "dist/pilot/provider-controls.js": "7bf7f0dd48097bd2b9109a96a0b3f43caef2c6c09d894f03efa0dca81f2113d0",
+      "dist/pilot/provider-session.js": "8f39e135812243656d96e939ecc94bb60d0c3cf615541c38cd85a4972a376d71"
+    },
+    "includes": "all source/build/test files and package/build/test configuration",
+    "sourceBuildUnchangedFromAttempt1": true
+  },
+  "remainingOperationalGates": [
+    "Council-required exact packet enrollment metadata",
+    "complete startup hook/source audit closure",
+    "effective main-agent tool containment; captured60-tool init remains rejected",
+    "authentic Council startup with every pre-input fact verified"
+  ],
+  "independentChangeReviews": "coordinator-owned; pending",
+  "workerProviderLaunches": 0,
+  "workerDelegates": 0,
+  "publicEvidenceSanitized": true
+}

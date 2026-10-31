@@ -1,10 +1,86 @@
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
 import { auditHash } from "../../src/pilot/control-audit.js";
 import { incidentRoster } from "./fixtures.js";
+
+const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
+const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  -${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
+
+async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-contract-")));
+  try {
+    vi.stubEnv("HOME", root); vi.stubEnv("PATH", root+delimiter+process.env.PATH);
+    const workspace = join(root, "project"); mkdirSync(workspace);
+    mkdirSync(join(root, ".agents/policies"), { recursive: true });
+    writeFileSync(join(root, ".agents/policies/model-policy.md"), "fixture policy");
+    mkdirSync(join(root, ".gemini/antigravity-cli"), { recursive: true });
+    writeFileSync(join(root, ".gemini/antigravity-cli/settings.json"), JSON.stringify({ trustedWorkspaces: [join(workspace, ".council/native-packets")] }));
+    const executable = join(root, "agy");
+    writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});process.exitCode=${exitCode};`); chmodSync(executable, 0o700);
+    check(await inspectProviderControls(incidentRoster.reviewers.gemini, version, workspace, { state: "unknown", source: "fixture", detail: "not qualification" }), workspace);
+  } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
+}
+
+it("acquires successful recognizable AGY 1.4.12 stderr help without a version-only refusal", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", result => {
+    expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
+    expect(result.bootstrap.state).toBe("verified");
+    expect(result.recipe?.version).toBe("1.4.12");
+    expect(result.controls.state).toBe("unknown");
+    expect(result.audit?.providerVersion).toBe("1.4.12");
+  });
+});
+
+// Break caught: rejecting the actual successful 1.4.12 double-dash help and
+// subcommand section, despite every recipe option being publicly exposed.
+it("acquires the captured AGY 1.4.12 public help layout including subcommands", async () => {
+  const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
+  await withAgyControls(help, "1.4.12", result => {
+    expect(result.bootstrap.state).toBe("verified");
+    expect(result.recipe?.argv).toContain("--add-dir");
+    expect(result.controls.state).toBe("unknown");
+  });
+});
+
+it("blocks an unreviewed future AGY startup-source contract despite complete recognizable public help", async () => {
+  await withAgyControls(agyHelp(), "9.9.9", result => {
+    expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
+    expect(result.recipe?.version).toBe("9.9.9");
+    expect(result.bootstrap.state).toBe("unsupported");
+  });
+});
+
+it.each(agyFlags)("rejects an AGY launch contract missing the actual --%s recipe flag", async missing => {
+  await withAgyControls(agyHelp(agyFlags.filter(flag => flag !== missing)), "1.4.11", result => {
+    expect(result.bootstrap.state).toBe("unsupported");
+  });
+});
+
+it.each([
+  ["arbitrary diagnostics", "authentication unavailable\n", 0],
+  ["diagnostics appended to recognizable help", agyHelp()+"authentication unavailable\n", 0],
+  ["diagnostics before recognizable help", "authentication unavailable\n"+agyHelp(), 0],
+  ["a usage heading without flag definitions", "Usage of agy:\n", 0],
+  ["nonzero help", agyHelp(), 2],
+])("does not acquire AGY command evidence from %s", async (_description, help, exitCode) => {
+  await withAgyControls(help as string, "1.4.11", result => {
+    expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("missing");
+    expect(result.recipe).toBeUndefined();
+  }, exitCode as number);
+});
+
+it("binds AGY discovery to the exact packet directory containing its source-bound agent", async () => {
+  await withAgyControls(agyHelp(), "1.4.11", (result, workspace) => {
+    const packet = join(workspace, ".council/native-packets");
+    expect(result.recipe?.argv).toEqual(expect.arrayContaining(["--add-dir", packet]));
+    expect(result.recipe?.argv.filter(arg => arg === "--add-dir")).toHaveLength(1);
+    expect(result.recipe?.argv[result.recipe.argv.indexOf("--add-dir")+1]).toBe(packet);
+    expect(result.recipe?.agentDefinition?.path).toBe(join(packet, ".agents/agents/council-packet/agent.md"));
+  });
+});
 
 it("acquires a reachable AGY recipe from its versioned stderr help and existing trust without changing global files", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "provider-controls-")));
@@ -14,7 +90,7 @@ it("acquires a reachable AGY recipe from its versioned stderr help and existing 
     mkdirSync(join(root,".gemini/antigravity-cli"),{recursive:true});
     const settings = { trustedWorkspaces:[join(workspace,".council/native-packets")], permissions:{deny:["existing-deny(*)"]} };
     writeFileSync(join(root,".gemini/antigravity-cli/settings.json"),JSON.stringify(settings));
-    const executable=join(root,"agy");writeFileSync(executable,`#!${process.execPath}\nprocess.stderr.write('Usage of agy:\\n -settings string\\n -agent string\\n');`);chmodSync(executable,0o700);
+    const executable=join(root,"agy");writeFileSync(executable,`#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(agyHelp())});`);chmodSync(executable,0o700);
     const result=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.11",workspace,{state:"unknown",source:"existing access",detail:"unchanged"});
     expect(result.bootstrap.state).toBe("verified");
     expect(result.recipe?.argv).toEqual(expect.arrayContaining(["--agent","council-packet","--settings"]));

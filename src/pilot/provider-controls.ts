@@ -14,6 +14,26 @@ import { codexKernel } from "./codex-controls.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
+
+/** Recognize the public AGY help layout without treating arbitrary diagnostics
+ * as help. This acquires CLI syntax only; effective controls remain separate. */
+function agyHelpFlags(text: string): Set<string> | undefined {
+  const lines = text.trimEnd().split(/\r?\n/);
+  if (lines.shift() !== "Usage of agy:") return;
+  const flags = new Set<string>();
+  let subcommands = false, optionIndent = 0;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (line === "Available subcommands:" && flags.size && !subcommands) { subcommands = true; continue; }
+    const option = line.match(/^([ \t]+)--?([a-zA-Z][\w-]*)(?:[ \t]+.*)?$/);
+    if (!subcommands && option) { flags.add(option[2]!); optionIndent = option[1]!.length; continue; }
+    if (subcommands && /^[ \t]+[a-z][\w-]*[ \t]{2,}\S/.test(line)) continue;
+    const description = line.match(/^([ \t]+)\S/);
+    if (!subcommands && flags.size && description && description[1]!.length > optionIndent) continue;
+    return;
+  }
+  return flags.size ? flags : undefined;
+}
 /** Read-only mirror of the inspected exact Cursor version's normalization and
  * eligible-ancestor trust checks. It never creates or copies a trust marker. */
 export const nonblankRoot = (value: string | undefined) => value?.trim() ? value : undefined;
@@ -45,8 +65,10 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     facts.push(controlFactSchema.parse({ name, stage, observation: { state, source, detail }, enforcement, observedAt: Date.now(), digest: sha256(JSON.stringify({ source, detail })) }));
   };
   const name = { codex: "codex", antigravity: "agy", cursor: "cursor-agent" }[selection.route];
-  const supportedVersion = selection.route === "codex" ? /(?:^|\s)0\.164\.0(?:\s|$)/.test(version) : selection.route === "antigravity" ? /(?:^|\s)1\.4\.11(?:\s|$)/.test(version) : /2026\.10\.22-27dcf5f/.test(version);
-  add("provider-version-contract", supportedVersion ? "verified" : "unsupported", "Installed exact provider version", supportedVersion ? version : "No current scoped control contract for this exposed version", "No inherited stale qualification");
+  if (selection.route !== "antigravity") {
+    const supportedVersion = selection.route === "codex" ? /(?:^|\s)0\.164\.0(?:\s|$)/.test(version) : /2026\.10\.22-27dcf5f/.test(version);
+    add("provider-version-contract", supportedVersion ? "verified" : "unsupported", "Installed exact provider version", supportedVersion ? version : "No current scoped control contract for this exposed version", "No inherited stale qualification");
+  }
   let executable: string | undefined;
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     const candidate = join(directory, name);
@@ -56,9 +78,15 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   try {
     if (!executable) throw Error("missing executable");
     const result = await promisify(execFile)(executable, ["--help"], { cwd: workspace, timeout: 5000, maxBuffer: 256000, encoding: "utf8" });
-    const agyHelpOnStderr = selection.route === "antigravity" && /1\.4\.11/.test(version) && !result.stdout.trim() && /^Usage of agy:/m.test(result.stderr);
-    if (result.stderr.trim() && !agyHelpOnStderr) throw Error("help diagnostics");
-    help = agyHelpOnStderr ? result.stderr : result.stdout;
+    if (selection.route === "antigravity") {
+      if (result.stdout.trim() && result.stderr.trim()) throw Error("help diagnostics");
+      const output = result.stdout.trim() ? result.stdout : result.stderr;
+      if (!agyHelpFlags(output)) throw Error("unrecognized help");
+      help = output;
+    } else {
+      if (result.stderr.trim()) throw Error("help diagnostics");
+      help = result.stdout;
+    }
     add("installed-command-contract", "verified", `${name} --help / ${version}`, sha256(help), "Installed public CLI parameters, not effective configuration");
   } catch { add("installed-command-contract", "missing", `${name} --help`, "Bounded non-inference command evidence unavailable", "No initialization"); }
   const track = (file: string, kind: "file" | "metadata" = "file") => {
@@ -125,10 +153,20 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const materializations: { path: string; content: string; sha256: string }[] = [];
   let codexPolicy: ProviderRecipe["codexPolicy"];
   if (selection.route === "antigravity") {
+    const exposed = agyHelpFlags(help);
+    const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
+    const missing = required.filter(flag => !exposed?.has(flag));
+    add("public-cli-capability-contract", missing.length ? "unsupported" : "verified", `installed AGY --help / ${version}`,
+      missing.length ? `Required recipe flags not exposed: ${missing.map(flag => "--"+flag).join(", ")}` : `Required recipe flags exposed; help sha256=${sha256(help)}`,
+      "Public launch syntax only; version, executable, sources and effective gates remain independently bound");
+    const sourceContract = /(?:^|\s)1\.4\.(?:11|12)(?:\s|$)/.test(version);
+    add("provider-startup-source-contract", sourceContract ? "verified" : "unsupported", "Inspected AGY startup/source acquisition contract",
+      sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
+      "Unreviewed versions cannot inherit loader/hook-source qualification");
     const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
     const config = read(global);
     const trusted = Array.isArray(config?.trustedWorkspaces) && config.trustedWorkspaces.some((entry: unknown) => typeof entry === "string" && entry === cwd);
-    add("workspace-trust", trusted ? "verified" : "missing", "AGY existing trustedWorkspaces", trusted ? "Exact canonical workspace already trusted" : "Exact workspace trust not established; no trust change attempted", "Existing provider trust gate");
+    add("workspace-trust", trusted ? "verified" : "missing", "Council-required AGY trustedWorkspaces enrollment metadata", trusted ? "Exact packet workspace enrollment already recorded" : "Exact packet workspace enrollment not recorded; no enrollment change attempted", "Council enrollment prerequisite; not an observed AGY refusal");
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = true;
     for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(workspace, ".agents/plugins")]) if (existsSync(root)) {
@@ -148,10 +186,9 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     materializations.push({ path: join(cwd, ".agents/agents/council-packet/agent.md"), content: agent, sha256: sha256(agent) }, { path: join(cwd, ".council-profiles", sha256(session), "session-settings.json"), content: session, sha256: sha256(session) });
     const collisionSources = [join(homedir(), ".gemini/config/agents/council-packet.md"), join(homedir(), ".gemini/config/agents/council-packet/agent.md")];
     for(const file of collisionSources)track(file);const collision=collisionSources.some(existsSync);
-    add("custom-agent-tool-ceiling", collision ? "missing" : "verified", "AGY public custom main-agent definition", collision ? "A preexisting global agent has the task-owned name" : sha256(agent), "Empty tools/MCP/skills/plugins; verify actual selected agent and init.tools before input");
+    add("custom-agent-definition", collision ? "missing" : "verified", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : sha256(agent), "Definition metadata only; verify actual selected agent and empty init.tools before input");
     add("effective-input-gate", "unknown", "AGY stream-json init", "Require init before user input, exact model/agent/cwd/permission and empty tools", "Wrapper withholds stdin until effective checks pass", "effective");
-    if (!/(?:^|\s)--?settings\b/m.test(help) || !/(?:^|\s)--?agent\b/m.test(help)) add("session-controls", "unsupported", "installed AGY --help", "Required session-only settings/custom-agent parameters not exposed", "No initialization");
-    argv.push("--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--mode", "plan", "--sandbox", "--settings", join(cwd, ".council-profiles", sha256(session), "session-settings.json"), "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s");
+    argv.push("--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--add-dir", cwd, "--mode", "plan", "--sandbox", "--settings", join(cwd, ".council-profiles", sha256(session), "session-settings.json"), "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s");
   } else if (selection.route === "codex") {
     const configurations: any[] = [];
     const codexHome = nonblankRoot(process.env.CODEX_HOME) ?? join(homedir(),".codex");
@@ -236,7 +273,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   if (recipe && codexPolicy) recipe.codexPolicy = codexPolicy;
   if(recipe?.agent){const definition=materializations.find(item=>item.path.endsWith("/council-packet/agent.md"));if(definition)recipe.agentDefinition={path:definition.path,sha256:definition.sha256};}
   const audit: AuditSnapshot = { version:1,workspace:realpathSync(workspace),route:selection.route,providerVersion:version,
-    contract: selection.route === "codex" ? "rust-v0.164.0" : selection.route === "antigravity" ? "agy-1.4.11" : "cursor-2026.10.22-27dcf5f",
+    contract: selection.route === "codex" ? "rust-v0.164.0" : selection.route === "antigravity" ? "agy-startup-source-v1" : "cursor-2026.10.22-27dcf5f",
     executable:executable??"unavailable",sources,ordering,effects:[...new Set(effects)],unavailable:[...new Set(unavailable)],
     recipeHash:sha256(canonicalJson({argv,materializations,codexPolicy:codexPolicy??null})) };
   const disposition=await acquiredAuditDisposition(audit,command);

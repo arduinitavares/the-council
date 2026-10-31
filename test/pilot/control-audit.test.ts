@@ -14,7 +14,8 @@ it("prepares actual versioned hook sources, adopts only matching native owner di
     const settings=join(h.root,".gemini/antigravity-cli");mkdirSync(settings,{recursive:true});
     writeFileSync(join(settings,"settings.json"),JSON.stringify({trustedWorkspaces:[join(h.workspace,".council/native-packets")]}));
     const hook=join(settings,"hooks.json");writeFileSync(hook,JSON.stringify({hooks:{SessionStart:[{command:"/bin/echo sanitized-lifecycle"}]}}));
-    const exe=join(h.root,"agy");writeFileSync(exe,`#!${process.execPath}\nprocess.stderr.write('Usage of agy:\\n -settings string\\n -agent string\\n');`);chmodSync(exe,0o700);
+    const help=readFileSync(new URL("./fixtures/agy-1.4.12-help.txt",import.meta.url),"utf8");
+    const exe=join(h.root,"agy");writeFileSync(exe,`#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});`);chmodSync(exe,0o700);
     const prepared=await prepareProviderAudit(incidentRoster.reviewers.gemini,"1.4.11",h.workspace);
     expect(prepared.snapshot.sources.find(s=>s.path===hook)?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(prepared.snapshot.sources.some(s=>s.path===policy)).toBe(true);expect(prepared.snapshot.effects).toHaveLength(1);expect(prepared.snapshot.unavailable).toEqual([]);

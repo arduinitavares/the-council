@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { codexKernel } from "../../src/pilot/codex-controls.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { incidentRoster } from "./fixtures.js";
 import { contextFixture } from "./context-fixture.js";
 import { runProviderSession } from "../../src/pilot/provider-session.js";
 import { sha256 } from "../../src/pilot/wrapper-contract.js";
@@ -248,3 +250,68 @@ it.each([
   expect(session.prepared.ready).toBe(true);
   expect(session.result).toMatchObject({ status: "failed", error: "PROVIDER_STREAM_EVENT_UNSUPPORTED", calls: 1 });
 }, 15000);
+
+async function agyStartupSession(behavior: string) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-startup-")));
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    const workspace = join(root, "project"); mkdirSync(workspace);
+    const directory = join(root, "session"); mkdirSync(directory);
+    const trace = join(root, "input-trace.txt"); writeFileSync(trace, "");
+    const packetRoot = join(workspace, ".council/native-packets");
+    const agentPath = join(packetRoot, ".agents/agents/council-packet/agent.md");
+    const agent = "---\nname: council-packet\ntools: []\nmainAgent: true\n---\nFixture reader\n";
+    const assignment: WrapperAssignment = {
+      version: 1, runtimeId: "synthetic-runtime", workspace, workspaceId: "synthetic-workspace", directory,
+      identity: { handle: "fixture", worktreeId: "synthetic-workspace", ptyId: "fixture-pty", incarnationId: "fixture-incarnation", paneKey: "fixture:pane" },
+      binding: { runId: "fixture-run", taskId: "fixture-task", dispatchId: "fixture-dispatch", handle: "fixture", attemptKey: "fixture-attempt" },
+      dispatchIncarnation: "fixture-incarnation", producerHash: "fixture-producer", phase: "normal-probe", role: "gemini", selection: incidentRoster.reviewers.gemini,
+      packetHash: sha256("immutable fixture"), packet: "immutable fixture", controlsHash: "fixture-controls", policyHash: "fixture-policy", deadline: Date.now()+5000, orca: "unused-fixture-orca",
+      recipe: {
+        protocol: "agy-stream", executable: process.execPath,
+        argv: [resolve("test/pilot/fixtures/agy-startup-provider.cjs"), behavior, directory, trace, "--agent", "council-packet"],
+        cwd: packetRoot, version: "synthetic", selection: incidentRoster.reviewers.gemini, expectedPermission: "request-review", sources: [],
+        facts: [{ name: "effective-input-gate", stage: "effective", observation: { state: "unknown", source: "fixture init", detail: "not qualification" }, enforcement: "real wrapper checks", observedAt: Date.now(), digest: "fixture" }],
+        agent: "council-packet", agentDefinition: { path: agentPath, sha256: sha256(agent) }, materializations: [{ path: agentPath, content: agent, sha256: sha256(agent) }],
+      },
+    };
+    const assignmentHash = sha256(JSON.stringify(assignment));
+    const input = () => writeFileSync(join(directory, "input.json"), JSON.stringify({ assignmentHash, requestId: "fixture-request" }));
+    if (behavior !== "post-ready-error") input();
+    else timer = setInterval(() => {
+      if (readFileSync(trace, "utf8").includes("startup-stop") && !existsSync(join(directory, "input.json"))) input();
+    }, 5);
+    const result = await runProviderSession(assignment, assignmentHash);
+    expect(result.process).toMatchObject({ closed: true, groupSettled: true, trackedDescendantsSettled: true, timersSettled: true });
+    return { result, trace: readFileSync(trace, "utf8"), prepared: JSON.parse(readFileSync(join(directory, "prepared.json"), "utf8")), inferenceExists: existsSync(join(directory, "inference-started.json")) };
+  } finally { if (timer) clearInterval(timer); rmSync(root, { recursive: true, force: true }); }
+}
+
+it.each(["missing-agent", "null-agent"])("rejects AGY %s identity before reserving or delivering input", async behavior => {
+  const session = await agyStartupSession(behavior);
+  expect(session.result).toMatchObject({ status: "failed", error: "PROVIDER_EFFECTIVE_CONTROLS_UNVERIFIED", calls: 0, process: { inputDelivered: false } });
+  expect(session.prepared.ready).toBe(false);
+  expect(session.trace).not.toContain("user-input");
+  expect(session.inferenceExists).toBe(false);
+}, 10000);
+
+it("accepts the exact AGY recipe agent with otherwise verified effective controls", async () => {
+  const session = await agyStartupSession("normal");
+  expect(session.result).toMatchObject({ status: "completed", calls: 1, error: null, process: { inputDelivered: true }, selectedAgent: { requested: "council-packet", observed: "council-packet" } });
+}, 10000);
+
+it.each(["wrong-agent", "captured-tools"])("keeps AGY %s initialization rejected with zero input", async behavior => {
+  const session = await agyStartupSession(behavior);
+  expect(session.result).toMatchObject({ status: "failed", error: "PROVIDER_EFFECTIVE_CONTROLS_UNVERIFIED", calls: 0, process: { inputDelivered: false } });
+  expect(session.trace).not.toContain("user-input");
+  expect(session.inferenceExists).toBe(false);
+}, 10000);
+
+it("blocks AGY input after a post-ready stream error was parsed and termination requested", async () => {
+  const session = await agyStartupSession("post-ready-error");
+  expect(session.prepared.ready).toBe(true);
+  expect(session.trace).toContain("post-ready-error\nstartup-stop");
+  expect(session.result).toMatchObject({ status: "failed", error: "PROVIDER_STREAM_EVENT_UNSUPPORTED", calls: 0, process: { inputDelivered: false } });
+  expect(session.trace).not.toContain("user-input");
+  expect(session.inferenceExists).toBe(false);
+}, 10000);

@@ -64,7 +64,7 @@ if(notifications.afterReadyEvents){
     }
   },5);
 }
-if (protocol === 'agy-stream' && behavior !== 'init-after-input') emit({event:'init',init:{model,cwd:process.cwd(),tools:behavior==='tools'?['run_command']:[],permission_mode:'request-review',...(behavior==='wrong-agent'?{agent:'foreign'}:{})}});
+if (protocol === 'agy-stream' && behavior !== 'init-after-input') emit({event:'init',init:{model,cwd:process.cwd(),tools:behavior==='tools'?['run_command']:[],permission_mode:'request-review',...(behavior==='wrong-agent'?{agent:'foreign'}:process.argv.includes('--agent')?{agent:process.argv[process.argv.indexOf('--agent')+1]}:{})}});
 const respond = text => {
   const packet=JSON.parse(text.slice(text.indexOf('\n')+1));
   if(behavior!=='no-turn-ack') { if(protocol==='agy-stream')emit({event:'step_update',step_update:{step_type:'user_input',state:'DONE',step_index:0,conversation_id:'synthetic-session'}}); if(protocol==='cursor-stream'){emit({type:'system',subtype:'init',model,cwd:process.cwd(),tools:[],session_id:'synthetic-session'});emit({type:'user',message:{content:'original turn accepted'}});} }

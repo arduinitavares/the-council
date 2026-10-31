@@ -138,7 +138,7 @@ it("does not accept unrelated termination reasons containing stop",async()=>{
 });
 
 for(const behavior of ["normal","wrong-agent"]){
-  it(`uses AGY four-field init with source-bound agent selection: ${behavior}`,async()=>{
+  it(`requires AGY init to expose its source-bound selected agent: ${behavior}`,async()=>{
     const h=await contextFixture(behavior);
     try{
       const {runProviderSession}=await load("provider-session");const {sha256}=await load("wrapper-contract");const directory=join(h.root,"agent-session");mkdirSync(directory);const route=h.evidence.routes.find(r=>r.role==="gemini")!;
@@ -149,7 +149,7 @@ for(const behavior of ["normal","wrong-agent"]){
       await wait(()=>existsSync(join(directory,"prepared.json")));
       if(behavior==="normal")writeFileSync(join(directory,"input.json"),JSON.stringify({assignmentHash:"assignment",requestId:"input"}));
       const report=await pending;
-      if(behavior==="normal"){expect(report.status).toBe("completed");expect(report.selectedAgent.observed).toBeNull();expect(report.selectedAgent.source).toContain("not exposed");}
+      if(behavior==="normal"){expect(report.status).toBe("completed");expect(report.selectedAgent.observed).toBe("council-packet");expect(report.selectedAgent.source).toBe("Provider init agent field");expect(report.calls).toBe(1);}
       else{expect(report.status).toBe("failed");expect(report.error).toBe("PROVIDER_EFFECTIVE_CONTROLS_UNVERIFIED");expect(report.calls).toBe(0);}
     }finally{await h.close();}
   },10000);

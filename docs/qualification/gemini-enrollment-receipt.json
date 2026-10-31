@@ -4,7 +4,7 @@
   "evidenceDateUtc": "2026-10-31",
   "executionHost": "local macOS",
   "baseline": "891453043619ce824cec618f0f9ae6a2d5dfbb24",
-  "codeAcceptance": "pending fresh independent task and whole-change reviews; coordinator-owned",
+  "codeAcceptance": "approved by coordinator after fresh Argon high task and native Astra max whole-change reviews",
   "operationalAcceptance": "open; no new runtime qualification",
   "productionChange": {
     "file": "src/pilot/provider-controls.ts",
@@ -240,8 +240,8 @@
     }
   },
   "reviewStatus": {
-    "freshCrossFamilyTaskReview": "pending; coordinator-owned",
-    "freshAstraWholeChangeReview": "pending; coordinator-owned",
+    "freshCrossFamilyTaskReview": "Argon high through Orca: spec PASS / quality Approved, zero Critical or Important, one Minor inventory coverage limit",
+    "freshAstraWholeChangeReview": "native Astra max: spec PASS / quality Approved, zero findings",
     "runtimeQualification": "pending; historical provider trials do not qualify this source artifact"
   },
   "remainingOperationalGates": [
@@ -484,5 +484,40 @@
       "softwareFreezeStillMatches": 279,
       "endToEndCouncilQualification": false
     }
+  },
+  "currentChangeReviews": {
+    "reviewedRevision": "c8d75a98b43429320888488986df5d27690703e0",
+    "argon": {
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "route": "owned Orca terminal / direct AGY read-only review",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 1,
+      "independentHashRecomputation": false
+    },
+    "astra": {
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "route": "native per explicit user request",
+      "scope": "whole current-plan change and callers",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 0,
+      "independentSoftwareHashRecomputation": true
+    },
+    "coordinatorDisposition": "Minor inventory coverage limit accepted; supplemental access index added after verdicts, original inventory retained. Source and test change approved; no fix wave required.",
+    "firstArgonAttempt": "invented nonexistent path; actual file does not exist error; no verdict; preserved and settled",
+    "freshArgonAttempt": "same model, permissions and source; literal verified paths; completed without tool errors",
+    "principalReviewInputsVerifiedByCoordinator": 28,
+    "softwareFilesStillMatch": 280,
+    "sourceOrTestEditsAfterFullSuite": false,
+    "newLiveCouncilRun": false,
+    "operationalQualification": "pending"
   }
 }

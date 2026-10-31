@@ -2,7 +2,7 @@
 
 Council supports the inspected **AGY 1.4.12 direct `agy-stream` acquisition** only. AGY 1.4.11 and unreviewed versions are unsupported regardless of `trustedWorkspaces` metadata. The AGY branch emits no `workspace-trust` fact; absent enrollment is never reported as verified trust. Required long capabilities must be declared with `--`; the captured current short aliases `-c`, `-i` and `-p` remain parseable. Single-dash long declarations no longer supply capabilities.
 
-This current-only change starts at `891453043619ce824cec618f0f9ae6a2d5dfbb24`. **Fresh independent task review and whole-change review are pending with the coordinator. Runtime qualification remains pending.** Historical approvals and provider trials below do not approve or operationally qualify this new source artifact. Its sanitized machine record is [gemini-enrollment-receipt.json](gemini-enrollment-receipt.json).
+This current-only change starts at `891453043619ce824cec618f0f9ae6a2d5dfbb24`. **Argon high through Orca and native Astra max approved this correction after coordinator verification. Runtime qualification remains pending.** Historical approvals and provider trials below do not approve or operationally qualify this new source artifact. Its sanitized machine record is [gemini-enrollment-receipt.json](gemini-enrollment-receipt.json).
 
 ## Current software verification
 
@@ -32,7 +32,15 @@ The full run had a 900-second bound, completed in 320.399 seconds wall time (320
 | `test/pilot/control-audit.test.ts` | `fbc66846ccf535ce9f90a33306718205966ef57a8be6faeb5dfc95ca3fd7f922` |
 | `test/pilot/native-host-fixture.ts` | `7526bb1c6065cdad0f8ba4c6ab18aecdd46b7aa6d791316f4c652ef88b115715` |
 
-Settings reads/fingerprints, inherited Deny, source/hook audit, model/effort/runtime identity, tool checks and error/refusal handling remain intact. Cursor, Codex and billing behavior are unchanged. No live provider launch, global or persistent configuration change, GUI action or helper was used. Hook/source closure and authenticated disposition, effective tool containment and the existing xAI controls/billing gates remain open. Rollback is the scoped current-only commit plus rebuild.
+Settings reads/fingerprints, inherited Deny, source/hook audit, model/effort/runtime identity, tool checks and error/refusal handling remain intact. Cursor, Codex and billing behavior are unchanged. Implementation and software verification launched no live providers or helpers and changed no global or persistent configuration. Independent code reviews used Argon through Orca and native Astra; no GUI action was used. Hook/source closure and authenticated disposition, effective tool containment and the existing xAI controls/billing gates remain open. Rollback is the scoped current-only commit plus rebuild.
+
+## Independent acceptance of the current-only correction
+
+Fresh Argon high through Orca returned **spec PASS / quality Approved** for the complete six-file change through `c8d75a98b43429320888488986df5d27690703e0`. Native Astra max independently reviewed the whole change and its callers with **spec PASS / quality Approved** and zero findings. Neither review found a Critical or Important issue. The coordinator verified their claims against source, logs and frozen artifacts.
+
+Argon's one Minor concerned auxiliary evidence omitted from the principal 28-file review inventory. Argon declined those reads and independent hash recomputation; the coordinator and Astra checked the manifests and all 280 software files. A supplemental access index now lists the auxiliary evidence while retaining the original review contract. No source or test fix was required.
+
+The first Argon attempt tried an invented path and received `file does not exist`, producing no verdict. A fresh attempt with the same model, permissions and source used literal verified paths and completed without tool errors. Both attempts and their settled lifecycle receipts remain private. Only review metadata changed after acceptance; the software snapshot still matches. These reviews approve the scoped correction and draft PR update, not full Council operation or issue closure.
 
 ## Historical enrollment follow-up
 

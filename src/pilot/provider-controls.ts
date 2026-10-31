@@ -21,18 +21,22 @@ function agyHelpFlags(text: string): Set<string> | undefined {
   const lines = text.trimEnd().split(/\r?\n/);
   if (lines.shift() !== "Usage of agy:") return;
   const flags = new Set<string>();
-  let subcommands = false, optionIndent = 0;
+  let subcommands = false, subcommandCount = 0, optionIndent = 0;
   for (const line of lines) {
     if (!line.trim()) continue;
     if (line === "Available subcommands:" && flags.size && !subcommands) { subcommands = true; continue; }
-    const option = line.match(/^([ \t]+)--?([a-zA-Z][\w-]*)(?:[ \t]+.*)?$/);
-    if (!subcommands && option) { flags.add(option[2]!); optionIndent = option[1]!.length; continue; }
-    if (subcommands && /^[ \t]+[a-z][\w-]*[ \t]{2,}\S/.test(line)) continue;
-    const description = line.match(/^([ \t]+)\S/);
+    // Pin the declaration indentation once; deeper wrapped prose may mention
+    // an option without declaring it. Legacy help can use a different width.
+    const option = line.match(/^( +)--?([a-zA-Z][\w-]*)(?:[ \t]+.*)?$/);
+    if (!subcommands && option && (!optionIndent || option[1]!.length === optionIndent)) {
+      optionIndent ||= option[1]!.length; flags.add(option[2]!); continue;
+    }
+    if (subcommands && /^[ \t]+[a-z][\w-]*[ \t]{2,}\S/.test(line)) { subcommandCount++; continue; }
+    const description = line.match(/^( +)\S/);
     if (!subcommands && flags.size && description && description[1]!.length > optionIndent) continue;
     return;
   }
-  return flags.size ? flags : undefined;
+  return flags.size && (!subcommands || subcommandCount > 0) ? flags : undefined;
 }
 /** Read-only mirror of the inspected exact Cursor version's normalization and
  * eligible-ancestor trust checks. It never creates or copies a trust marker. */

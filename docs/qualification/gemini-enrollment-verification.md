@@ -1,6 +1,6 @@
 # Gemini direct startup enrollment follow-up
 
-Council no longer requires exact global `trustedWorkspaces` enrollment metadata for the inspected AGY **1.4.12 direct `agy-stream` acquisition**. The inspector omits that inapplicable prerequisite; it does not report an absent entry as enrolled or trusted. Legacy 1.4.11 retains its enrollment gate, and unreviewed versions remain unsupported. Independent review of this source change is pending. Council operational qualification remains open.
+Council no longer requires exact global `trustedWorkspaces` enrollment metadata for the inspected AGY **1.4.12 direct `agy-stream` acquisition**. The inspector omits that inapplicable prerequisite; it does not report an absent entry as enrolled or trusted. Legacy 1.4.11 retains its enrollment gate, and unreviewed versions remain unsupported. Argon high through Orca approved the source change, and native Astra max approved the whole follow-up. Council operational qualification remains open.
 
 This follow-up starts at `31bae7cec0f5691ad52495a829f1968285b10797` and supplements the historical [startup verification](gemini-startup-verification.md). Its machine-readable record is [gemini-enrollment-receipt.json](gemini-enrollment-receipt.json). Evidence was collected on local macOS on 2026-10-31 UTC. Private paths, runtime identities, account data and configuration payloads are omitted.
 
@@ -49,6 +49,12 @@ Gemini now reports `CONTROLS_UNKNOWN` with only `startup-hooks-and-plugins` awai
 
 ## Remaining acceptance
 
-The coordinator accepted the corrected diagnosis after independent Argon review. Fresh independent review of the actual source change and the requested Astra review remain coordinator-owned and pending in this record. The post-fix Council result above confirms removal of the enrollment blocker while retaining the other gates. Hook/source closure and authenticated disposition, actual effective tool containment and the existing xAI controls/billing gates remain open. Software verification does not supply those runtime proofs.
+The coordinator accepted the corrected diagnosis after independent Argon review. Fresh Argon high through Orca returned **spec PASS / quality Approved** for the complete source, test and public-record change through `ffceaddf38dad9e7bcd89899c48a088ca0efce5a`. Native Astra max independently returned **spec PASS / quality Approved** for the whole follow-up. Neither found a Critical or Important source issue. The coordinator checked their findings against the code, captures and frozen artifacts.
+
+Astra found a duplicate path with a stale hash in the private review manifest. The coordinator retained the original and corrected the manifest to 17 unique absolute paths, all matching. Argon noted an optional stronger assertion for fact omission and an incomplete private RED category breakdown. The assertion is deferred; its companion bootstrap assertion already catches the reproduced defect. The category breakdown was corrected without changing source or tests. Argon also reported 40 inventory entries; the actual inventory contains 50, so that completeness claim was rejected. Argon did not independently recompute hashes; the coordinator and Astra verified the frozen files.
+
+The first Argon change-review attempt stopped after a file-tool error and produced no verdict. Its captured diagnostic did not establish a permission denial. A fresh attempt used the same model, permissions and source artifact with an exact file inventory and fuller error capture; it completed without tool errors. The failed attempt remains recorded privately.
+
+Only review metadata changed after acceptance. All 279 software files still match the full-suite snapshot. The post-fix Council result above confirms removal of the enrollment blocker while retaining the other gates. Hook/source closure and authenticated disposition, actual effective tool containment and the existing xAI controls/billing gates remain open. Software verification does not supply those runtime proofs. These reviews approve the scoped repair and draft PR update, not issue closure or end-to-end Council operation.
 
 Rollback is the scoped source commit plus rebuild. No persistent trust, permissions, settings or billing changes were made for this repair.

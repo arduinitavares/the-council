@@ -4,7 +4,7 @@
   "evidenceDateUtc": "2026-10-31",
   "executionHost": "local macOS",
   "baseline": "31bae7cec0f5691ad52495a829f1968285b10797",
-  "codeAcceptance": "pending independent change review",
+  "codeAcceptance": "approved by coordinator after fresh Argon high and native Astra max reviews",
   "operationalAcceptance": "open",
   "productionChange": {
     "file": "src/pilot/provider-controls.ts",
@@ -73,8 +73,8 @@
         "foreign trustedWorkspaces"
       ],
       "assertion": "bootstrap expected verified; actual missing",
-      "productionBuildHashesMatched": 201,
-      "baselineSourceSha256": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d"
+      "baselineSourceSha256": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d",
+      "baselineFrozenEntriesMatched": 201
     },
     "greenAcquisition": {
       "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
@@ -130,8 +130,8 @@
   },
   "reviewStatus": {
     "correctedDiagnosis": "approved by coordinator after Argon high review",
-    "freshCrossFamilyChangeReview": "pending; coordinator-owned",
-    "requestedAstraChangeReview": "pending; coordinator-owned",
+    "freshCrossFamilyChangeReview": "Argon high through Orca: spec PASS / quality Approved; coordinator verified findings",
+    "requestedAstraChangeReview": "native Astra max: whole-change spec PASS / quality Approved; coordinator verified findings",
     "postFixLiveCouncilRun": "completed; enrollment no longer blocks; hook audit and existing xAI controls/billing remain"
   },
   "remainingOperationalGates": [
@@ -185,5 +185,44 @@
     "cliGroupAndWrapperSettled": true,
     "ownedTerminalClosed": true,
     "fullCouncilAnswerOrJudgeComparison": false
+  },
+  "changeReviews": {
+    "reviewedRevision": "ffceaddf38dad9e7bcd89899c48a088ca0efce5a",
+    "argon": {
+      "route": "owned Orca terminal / direct AGY read-only review",
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 2,
+      "independentHashRecomputation": false,
+      "inventoryCompletenessClaim": "rejected: report says 40 entries; actual inventory has 50"
+    },
+    "astra": {
+      "route": "native, explicitly requested",
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "scope": "whole follow-up",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 1,
+      "independentFrozenHashRecomputation": true
+    },
+    "dispositions": {
+      "privateReviewManifest": "original retained; duplicate path and stale hash corrected; 17 canonical entries match",
+      "privateRedCategories": "original retained; six configuration entries added; total 201",
+      "optionalOmissionAssertion": "deferred; existing bootstrap assertion catches reproduced defect",
+      "falseEmptyToolClaims": "rejected against both 60-tool captures",
+      "firstArgonAttempt": "file-tool error; no verdict or established permission denial; preserved privately",
+      "freshArgonAttempt": "same model, permissions and source; exact inventory and fuller diagnostics; completed with no tool errors"
+    },
+    "sourceOrTestEditsAfterFullSuite": false,
+    "softwareFreezeStillMatches": 279,
+    "endToEndCouncilQualification": false
   }
 }

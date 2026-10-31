@@ -1,6 +1,6 @@
 # Gemini startup source repair verification
 
-> Historical record of the startup/parser repair below. The subsequent [AGY 1.4.12 direct enrollment follow-up](gemini-enrollment-verification.md) removes that version's metadata prerequisite while preserving the original observations here; independent review of the follow-up and Council operational qualification remain open.
+> Historical record of the startup/parser repair below. The subsequent [AGY 1.4.12 direct enrollment follow-up](gemini-enrollment-verification.md) removes that version's metadata prerequisite while preserving the original observations here. Argon high through Orca and native Astra max approved the follow-up; Council operational qualification remains open.
 
 The final AGY parser repair passes 52 acquisition tests, all 1,085 full-suite tests, typecheck and build. The initial reviews led to parser and provenance corrections. Scoped re-review of functional revision `c14a24c78c054d335202dcf77742d2eb72271fc8` by Argon high through Orca and native Astra at max effort approved those corrections with no new findings; the coordinator verified their claims against the actual diff, frozen evidence and executed parser counterexample. Gemini operational qualification remains open: Council still requires existing enrollment metadata, complete hook/source audit evidence, and a verified effective empty-tools boundary before input.
 

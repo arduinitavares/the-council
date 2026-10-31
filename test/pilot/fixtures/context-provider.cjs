@@ -45,9 +45,25 @@ function main() {
 const readline = require('node:readline');
 const protocol = process.argv[2] || 'agy-stream';
 const model = process.argv[3];
-const behavior = process.argv[4] || 'normal';
+let behavior = process.argv[4] || 'normal';
+const notifications = behavior.startsWith('codex-notification:') ? JSON.parse(behavior.slice('codex-notification:'.length)) : {};
+if(notifications.controlBehavior)behavior=notifications.controlBehavior;
 let hold=false;
+let startedThreadNotification;
 const emit = value => process.stdout.write(JSON.stringify(value)+'\n');
+if(notifications.afterReadyEvents){
+  // Keep the fake child alive briefly after stop so the input gate must check
+  // the stream failure itself instead of relying on an already-closed pipe.
+  process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),200));
+  const timer=setInterval(()=>{
+    const root=require('node:path').dirname(process.argv[5]);
+    if(require('node:fs').existsSync(require('node:path').join(root,'notification-session','prepared.json'))){
+      clearInterval(timer);
+      for(const event of notifications.afterReadyEvents)emit(event);
+      require('node:fs').appendFileSync(process.argv[5],'after-ready-event\n');
+    }
+  },5);
+}
 if (protocol === 'agy-stream' && behavior !== 'init-after-input') emit({event:'init',init:{model,cwd:process.cwd(),tools:behavior==='tools'?['run_command']:[],permission_mode:'request-review',...(behavior==='wrong-agent'?{agent:'foreign'}:{})}});
 const respond = text => {
   const packet=JSON.parse(text.slice(text.indexOf('\n')+1));
@@ -75,6 +91,18 @@ const respond = text => {
   if(behavior==='final-then-hang')setInterval(()=>{},1000);
 };
 const cursorInput=[];
+let inflightNotificationSent=false;
+process.stdin.on('data',chunk=>{
+  if(!inflightNotificationSent&&(notifications.inflightEvents||notifications.inflightThreadStarted)&&chunk.toString().includes('"method":"turn/start"')){
+    inflightNotificationSent=true;
+    // A large synthetic input and paused reader keep the parent's write
+    // callback pending while this event arrives over the independent stdout.
+    process.stdin.pause();
+    for(const event of notifications.inflightEvents??[])emit(event);
+    if(notifications.inflightThreadStarted)emit(startedThreadNotification);
+    setTimeout(()=>process.stdin.resume(),200);
+  }
+});
 readline.createInterface({input:process.stdin}).on('line',line=>{
   if(protocol==='agy-stream') {
     if(behavior==='init-after-input')emit({event:'init',init:{model,cwd:process.cwd(),tools:[],permission_mode:'request-review'}});
@@ -83,7 +111,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   else {
     const message=JSON.parse(line);
     if(process.argv[5]&&message.method)require('node:fs').appendFileSync(process.argv[5],message.method+'\n');
-    if(message.id===1)emit({id:1,result:{userAgent:'synthetic'}});
+    if(message.id===1){emit({id:1,result:{userAgent:'synthetic'}});for(const event of notifications.startupEvents??[])emit(event);}
     if(message.id===2){
       // cli/src/main.rs AppServer forwards root_config_overrides only;
       // interactive --model / --ask-for-approval selectors do not configure it.
@@ -115,8 +143,18 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       if(behavior==='object-instructions')instructionSources=[{path:instruction,sha256:'provider-cannot-attest-this'}];
       if(behavior==='missing-instructions')instructionSources=undefined;
       if(behavior==='drift-instructions')require('node:fs').writeFileSync(instruction,'changed after prelaunch fingerprint');
-      if(message.params.sandbox||message.params.permissions!=='council_packet'||message.params.modelProvider!=='openai')process.exit(8);emit({id:3,result:{thread:{id:'synthetic-session',cliVersion:'0.164.0',createdAt:0,updatedAt:0,cwd:process.cwd(),ephemeral:true,modelProvider:behavior==='wrong-thread-provider'?'foreign':behavior==='missing-thread-provider'?undefined:'openai',preview:'',projectId:null,sessionId:'synthetic-session',source:'appServer',status:{type:'idle'},turns:[]},model,modelProvider:behavior==='wrong-provider'?'foreign':behavior==='missing-provider'?undefined:'openai',sandbox:{type:'readOnly',networkAccess:false},approvalsReviewer:'user',reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources}});}
-    if(message.id===4){if(behavior!=='no-turn-ack')emit({id:4,result:{turn:{id:'synthetic-turn',status:'inProgress'}}});respond(message.params.input[0].text);}
+      if(message.params.sandbox||message.params.permissions!=='council_packet'||message.params.modelProvider!=='openai')process.exit(8);
+      const result={thread:{id:'synthetic-session',cliVersion:'0.164.0',createdAt:0,updatedAt:0,cwd:process.cwd(),ephemeral:true,modelProvider:behavior==='wrong-thread-provider'?'foreign':behavior==='missing-thread-provider'?undefined:'openai',preview:'',projectId:null,sessionId:'synthetic-session',source:'appServer',status:{type:'idle'},turns:[]},model,modelProvider:behavior==='wrong-provider'?'foreign':behavior==='missing-provider'?undefined:'openai',sandbox:{type:'readOnly',networkAccess:false},approvalsReviewer:'user',reasoningEffort:'max',cwd:process.cwd(),approvalPolicy:'never',activePermissionProfile:{id:behavior==='wrong-profile'?'foreign':'council_packet',extends:null},instructionSources};
+      const started={method:'thread/started',params:{thread:{...result.thread,...notifications.threadPatch}},...(notifications.threadStarted===true?{}:notifications.threadStarted)};
+      startedThreadNotification=started;
+      if(notifications.threadStartedBeforeResponse)emit(started);
+      emit({id:3,result});
+      // rust-v0.164.0 thread_processor.rs:1678-1711 sends the response, then
+      // thread/started with the same Thread snapshot (not params.threadId).
+      if(notifications.threadStarted)emit(started);
+      if(notifications.repeatThreadStarted)emit(started);
+    }
+    if(message.id===4){if(notifications.inputThreadStarted)emit(startedThreadNotification);for(const event of notifications.inputEvents??[])emit(event);if(behavior!=='no-turn-ack')emit({id:4,result:{turn:{id:'synthetic-turn',status:'inProgress'}}});respond(message.params.input[0].text);}
   }
 }).on('close',()=>{if(protocol==='cursor-stream')respond(cursorInput.join('\n'));if(!hold&&behavior!=='final-then-hang'&&behavior!=='hang')setImmediate(()=>process.exit(0));});
 }

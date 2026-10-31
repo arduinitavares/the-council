@@ -76,10 +76,21 @@
       ],
       "allOwnedNativeTasksSettled": true,
       "protectedConfigAndSourceUnchanged": true,
-      "watchdogExitCode": 1,
       "exactRuntimeTerminalClosed": true,
       "judgeAttempted": false,
-      "fullProviderQualification": false
+      "fullProviderQualification": false,
+      "harnessExitCode": 1,
+      "originalTerminalExitReceipt": {
+        "kind": "unknown",
+        "reason": "host_status_unavailable"
+      },
+      "terminalExitReconciliation": {
+        "ownedPidsAbsent": true,
+        "processGroupsSettled": true,
+        "watchdogAndHarnessStoppedMarkers": true,
+        "nativeTasksSettled": true,
+        "expectedIncarnationClose": true
+      }
     },
     {
       "attempt": 2,
@@ -109,10 +120,21 @@
       ],
       "allOwnedNativeTasksSettled": true,
       "protectedConfigAndSourceUnchanged": true,
-      "watchdogExitCode": 1,
       "exactRuntimeTerminalClosed": true,
       "judgeAttempted": false,
-      "fullProviderQualification": false
+      "fullProviderQualification": false,
+      "harnessExitCode": 1,
+      "originalTerminalExitReceipt": {
+        "kind": "unknown",
+        "reason": "host_status_unavailable"
+      },
+      "terminalExitReconciliation": {
+        "ownedPidsAbsent": true,
+        "processGroupsSettled": true,
+        "watchdogAndHarnessStoppedMarkers": true,
+        "nativeTasksSettled": true,
+        "expectedIncarnationClose": true
+      }
     },
     {
       "attempt": 3,
@@ -154,10 +176,21 @@
       ],
       "allOwnedNativeTasksSettled": true,
       "protectedConfigAndSourceUnchanged": true,
-      "watchdogExitCode": 1,
       "exactRuntimeTerminalClosed": true,
       "judgeAttempted": false,
-      "fullProviderQualification": false
+      "fullProviderQualification": false,
+      "harnessExitCode": 1,
+      "originalTerminalExitReceipt": {
+        "kind": "unknown",
+        "reason": "host_status_unavailable"
+      },
+      "terminalExitReconciliation": {
+        "ownedPidsAbsent": true,
+        "processGroupsSettled": true,
+        "watchdogAndHarnessStoppedMarkers": true,
+        "nativeTasksSettled": true,
+        "expectedIncarnationClose": true
+      }
     },
     {
       "attempt": 4,
@@ -364,10 +397,21 @@
       ],
       "allOwnedNativeTasksSettled": true,
       "protectedConfigAndSourceUnchanged": true,
-      "watchdogExitCode": 0,
       "exactRuntimeTerminalClosed": true,
       "judgeAttempted": true,
-      "fullProviderQualification": false
+      "fullProviderQualification": false,
+      "harnessExitCode": 0,
+      "originalTerminalExitReceipt": {
+        "kind": "unknown",
+        "reason": "host_status_unavailable"
+      },
+      "terminalExitReconciliation": {
+        "ownedPidsAbsent": true,
+        "processGroupsSettled": true,
+        "watchdogAndHarnessStoppedMarkers": true,
+        "nativeTasksSettled": true,
+        "expectedIncarnationClose": true
+      }
     }
   ],
   "reviews": {
@@ -383,7 +427,18 @@
       "important": 0,
       "draftPublication": "approved after recording the verdict",
       "coverage": "Production diff reviewed; test tail and raw verification/private-tool files left unread",
-      "verificationSupplement": "pending"
+      "verificationSupplement": {
+        "result": "VERIFIED within stated limits",
+        "critical": 0,
+        "important": 0,
+        "publication": "Approved after recording supplement and correcting harnessExitCode label",
+        "coverage": "Every supplied manifest file read in full, including test tail, original full-suite log/result, actual readiness/settlement and private diagnostic delta.",
+        "remainingLimits": [
+          "No independent review of git history proving later heads docs-only; coordinator verified it.",
+          "Pinned plan/source graph and original raw native receipts remain private coordinator-verified evidence.",
+          "Notification acceptance before cancellation and normal-input timing remain unqualified."
+        ]
+      }
     }
   },
   "limits": [
@@ -391,6 +446,7 @@
     "No input.json or inference-started.json was created in the real startup directories; no turn/start or question call was authorized.",
     "Runtime trace contains known methods, small fixed metadata and hashes; no raw config layers, instructions, endpoints or remote identity values are published.",
     "Existing production local result.json raw-stdout persistence is unchanged.",
-    "Broader post-input protocol compatibility, other provider gates and full provider/action qualification remain open."
+    "Broader post-input protocol compatibility, other provider gates and full provider/action qualification remain open.",
+    "harnessExitCode is the observed Node harness child exit, not a terminal/watchdog exit. Original terminal exit receipts remain unknown and are reconciled by positive process absence, stopped markers, native-task settlement and expected-incarnation closure."
   ]
 }

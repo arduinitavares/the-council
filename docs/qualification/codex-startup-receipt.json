@@ -376,7 +376,15 @@
     "route": "Orca/AGY ordinary plan session with sandbox and existing Deny rules",
     "taskFixRounds1to4": "All scoped Important findings addressed; no new Critical or Important breakage reported.",
     "firstTaskReview": "Needs fixes; forbidden ls blocked by existing command Deny, no command executed. That attempt was not clean acceptance.",
-    "wholeChange": "pending"
+    "wholeChange": {
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "draftPublication": "approved after recording the verdict",
+      "coverage": "Production diff reviewed; test tail and raw verification/private-tool files left unread",
+      "verificationSupplement": "pending"
+    }
   },
   "limits": [
     "Both real providers required SIGKILL after deliberate before-input cancellation; exit codes remain null. This is not graceful-cancellation qualification.",

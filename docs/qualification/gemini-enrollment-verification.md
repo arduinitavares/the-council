@@ -1,3 +1,46 @@
+# Gemini current route and historical enrollment evidence
+
+Council supports the inspected **AGY 1.4.12 direct `agy-stream` acquisition** only. AGY 1.4.11 and unreviewed versions are unsupported regardless of `trustedWorkspaces` metadata. The AGY branch emits no `workspace-trust` fact; absent enrollment is never reported as verified trust. Required long capabilities must be declared with `--`; the captured current short aliases `-c`, `-i` and `-p` remain parseable. Single-dash long declarations no longer supply capabilities.
+
+This current-only change starts at `891453043619ce824cec618f0f9ae6a2d5dfbb24`. **Fresh independent task review and whole-change review are pending with the coordinator. Runtime qualification remains pending.** Historical approvals and provider trials below do not approve or operationally qualify this new source artifact. Its sanitized machine record is [gemini-enrollment-receipt.json](gemini-enrollment-receipt.json).
+
+## Current software verification
+
+Before any implementation edit, four real acquisition regressions required rejection of old-version startup with absent, empty, foreign and exact enrollment. RED exited 1 because `provider-startup-source-contract` was `verified` rather than `unsupported`. The unchanged production source SHA-256 was `babd556d3a05439a4f5ce505ecda78805c1f72f6fa1bcb0faf844004eb2a8e0b`; all 280 software entries matched before and after RED. Only the regression test differed from the baseline. After the minimal version/enrollment removal, all four passed.
+
+A second RED, with only the version fix present and the parser still unchanged, failed all ten required-capability cases: a single-dash long declaration incorrectly verified the capability. The source SHA-256 was `97e3686c1bf3320b297c31c80f57cddb7d85942a787d0744f12493780acb873c`; all 280 entries again matched across the run. After narrowing the parser, the ten cases and captured current help passed. Active safety, help and hook fixtures now use 1.4.12; 1.4.11 remains negative unsupported coverage only.
+
+| Check | Actual result |
+| --- | --- |
+| Version RED / GREEN | Exit 1, 4 intended failures / exit 0, 4 passes |
+| Help RED / GREEN | Exit 1, 10 intended failures / exit 0, 11 passes |
+| Acquisition tests | Exit 0; 72 passes |
+| Provider-session, control-audit and fix5 regressions | Exit 0; 149 passes |
+| Native-fixture consumers: input-entry, RPC and discovery | Exit 0; 81 passes |
+| `npm run typecheck` | Exit 0 |
+| `npm run build` | Exit 0 |
+| Sole full `npm test -- --maxWorkers 2` | Exit 0; 1,105 passes across 66 files |
+
+The full run had a 900-second bound, completed in 320.399 seconds wall time (320.10 seconds reported by Vitest), and left no owned process group. No edits overlapped it. All **280/280 frozen files** matched before and after: 66 source, 129 build, 78 test, six configuration and one script file. A separate Node crypto rehash independently matched every entry. Documentation is outside this software freeze; only these current records changed afterward. Raw logs and receipts remain private.
+
+| Frozen artifact | SHA-256 |
+| --- | --- |
+| Full input manifest | `9d8633b0f7c25eeb7be8d83c799739f0af39e4e67471e13d1ff8cb1defd755f7` |
+| `src/pilot/provider-controls.ts` | `ff761fc05cfee422717cdc3c8f90535c2e86648ccbf98ee3a6e70a52fa1a088e` |
+| `dist/pilot/provider-controls.js` | `e67beb9c35a4c63598af78f49535cefd000d6c372fbe5a2d8a2cf45a946d199f` |
+| `test/pilot/provider-controls.test.ts` | `7082a02650a5a1e32260646cdacc59fc8e115b78957730b5bbc0c88e5a95e80a` |
+| `test/pilot/control-audit.test.ts` | `fbc66846ccf535ce9f90a33306718205966ef57a8be6faeb5dfc95ca3fd7f922` |
+| `test/pilot/native-host-fixture.ts` | `7526bb1c6065cdad0f8ba4c6ab18aecdd46b7aa6d791316f4c652ef88b115715` |
+
+Settings reads/fingerprints, inherited Deny, source/hook audit, model/effort/runtime identity, tool checks and error/refusal handling remain intact. Cursor, Codex and billing behavior are unchanged. No live provider launch, global or persistent configuration change, GUI action or helper was used. Hook/source closure and authenticated disposition, effective tool containment and the existing xAI controls/billing gates remain open. Rollback is the scoped current-only commit plus rebuild.
+
+## Historical enrollment follow-up
+
+The following record is preserved unchanged. Its 1.4.11 preservation statement, old software counts, frozen hashes, provider trials and review approvals describe the earlier enrollment change and are **historical, superseded evidence for the current-only change**.
+
+<details>
+<summary>Prior enrollment evidence and acceptance record</summary>
+
 # Gemini direct startup enrollment follow-up
 
 Council no longer requires exact global `trustedWorkspaces` enrollment metadata for the inspected AGY **1.4.12 direct `agy-stream` acquisition**. The inspector omits that inapplicable prerequisite; it does not report an absent entry as enrolled or trusted. Legacy 1.4.11 retains its enrollment gate, and unreviewed versions remain unsupported. Argon high through Orca approved the source change, and native Astra max approved the whole follow-up. Council operational qualification remains open.
@@ -58,3 +101,5 @@ The first Argon change-review attempt stopped after a file-tool error and produc
 Only review metadata changed after acceptance. All 279 software files still match the full-suite snapshot. The post-fix Council result above confirms removal of the enrollment blocker while retaining the other gates. Hook/source closure and authenticated disposition, actual effective tool containment and the existing xAI controls/billing gates remain open. Software verification does not supply those runtime proofs. These reviews approve the scoped repair and draft PR update, not issue closure or end-to-end Council operation.
 
 Rollback is the scoped source commit plus rebuild. No persistent trust, permissions, settings or billing changes were made for this repair.
+
+</details>

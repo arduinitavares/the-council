@@ -23,7 +23,7 @@ const path = require('node:path');
 const args = process.argv.slice(2), name = path.basename(process.argv[1]);
 const emit = result => console.log(JSON.stringify({ok:true,result,_meta:{runtimeId:'synthetic-runtime'}}));
 if (name !== 'orca') {
-  if (args[0] === '--version') console.log(name==='codex'?'codex-cli 0.164.0':name==='agy'?'1.4.11':'2026.10.22-27dcf5f');
+  if (args[0] === '--version') console.log(name==='codex'?'codex-cli 0.164.0':name==='agy'?'1.4.12':'2026.10.22-27dcf5f');
   else if (args[0] === 'models') console.log(name === 'agy' ? 'gemini-4-argon-high' : 'grok-4.7-xhigh');
   else if (name === 'agy' && args[1] === '/usage') console.log(JSON.stringify({command:{name:'usage',data:{groups:[{name:'Gemini Models',buckets:[{remaining_fraction:0.8}]}]}},num_turns:0,conversation_id:'',usage:{total_tokens:0}}));
   else process.exit(99);

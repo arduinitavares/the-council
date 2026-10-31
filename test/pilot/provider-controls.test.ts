@@ -8,7 +8,7 @@ import { auditHash } from "../../src/pilot/control-audit.js";
 import { incidentRoster } from "./fixtures.js";
 
 const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
-const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  -${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
+const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  --${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
 
 async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0, prepare?: (workspace: string, settingsFile: string) => void) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-contract-")));
@@ -19,7 +19,7 @@ async function withAgyControls(help: string, version: string, check: (result: Aw
     writeFileSync(join(root, ".agents/policies/model-policy.md"), "fixture policy");
     mkdirSync(join(root, ".gemini/antigravity-cli"), { recursive: true });
     const settingsFile = join(root, ".gemini/antigravity-cli/settings.json");
-    writeFileSync(settingsFile, JSON.stringify({ trustedWorkspaces: [join(workspace, ".council/native-packets")] }));
+    writeFileSync(settingsFile, "{}");
     prepare?.(workspace, settingsFile);
     const executable = join(root, "agy");
     writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});process.exitCode=${exitCode};`); chmodSync(executable, 0o700);
@@ -39,12 +39,23 @@ it("acquires successful recognizable AGY 1.4.12 stderr help without a version-on
 
 // Break caught: rejecting the actual successful 1.4.12 double-dash help and
 // subcommand section, despite every recipe option being publicly exposed.
-it("acquires the captured AGY 1.4.12 public help layout including subcommands", async () => {
+it("acquires captured AGY 1.4.12 help including -c, -i, -p aliases and subcommands", async () => {
   const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
   await withAgyControls(help, "1.4.12", result => {
     expect(result.bootstrap.state).toBe("verified");
     expect(result.recipe?.argv).toContain("--add-dir");
     expect(result.controls.state).toBe("unknown");
+  });
+});
+
+// Break caught: a legacy single-dash long declaration supplies a required
+// current capability even when the other declarations and short aliases match.
+it.each(agyFlags)("rejects legacy single-dash -%s as a required AGY 1.4.12 capability", async flag => {
+  const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8")
+    .replace(new RegExp(`^  --${flag}(?=[ \\t]|$)`, "m"), `  -${flag}`);
+  await withAgyControls(help, "1.4.12", result => {
+    expect(result.facts.find(fact => fact.name === "public-cli-capability-contract")?.observation.state).toBe("unsupported");
+    expect(result.bootstrap.state).not.toBe("verified");
   });
 });
 
@@ -74,8 +85,8 @@ it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label whi
     expect(JSON.parse(generated!.content).permissions.deny).toEqual(expect.arrayContaining(["existing-deny(*)", "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]));
     expect(result.recipe?.materializations?.every(item => !existsSync(item.path))).toBe(true);
     expect(result.controls.state).toBe("unknown");
-    expect(result.facts.filter(fact => fact.stage === "bootstrap" && fact.name !== "workspace-trust" && fact.observation.state !== "verified")).toEqual([]);
-    expect(result.facts.find(fact => fact.name === "workspace-trust")?.observation.state).not.toBe("verified");
+    expect(result.facts.filter(fact => fact.stage === "bootstrap" && fact.observation.state !== "verified")).toEqual([]);
+    expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
     expect(result.bootstrap.state).toBe("verified");
   }, 0, (_workspace, file) => {
     settingsFile = file;
@@ -85,12 +96,15 @@ it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label whi
   });
 });
 
-// Break caught: extending the tested 1.4.12 contract to untested legacy startup.
-it.each(absentAgyEnrollment)("keeps AGY 1.4.11 blocked with $label", async ({ enrollment }) => {
-  await withAgyControls(agyHelp(), "1.4.11", result => {
-    expect(result.facts.find(fact => fact.name === "workspace-trust")?.observation.state).toBe("missing");
-    expect(result.bootstrap.state).toBe("missing");
-  }, 0, (_workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify(enrollment)));
+// Break caught: enrollment metadata revives the removed 1.4.11 startup route.
+it.each([...absentAgyEnrollment, { label: "exact trustedWorkspaces", enrollment: null }])("rejects unsupported AGY 1.4.11 with $label", async ({ enrollment }) => {
+  const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
+  await withAgyControls(help, "1.4.11", result => {
+    expect(result.facts.find(fact => fact.name === "provider-startup-source-contract")?.observation.state).toBe("unsupported");
+    expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
+    expect(result.bootstrap.state).toBe("unsupported");
+    expect(result.controls.state).toBe("unknown");
+  }, 0, (workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify(enrollment ?? { trustedWorkspaces: [join(workspace, ".council/native-packets")] })));
 });
 
 // Break caught: treating unnecessary enrollment as permission to ignore
@@ -129,12 +143,14 @@ it("blocks an unreviewed future AGY startup-source contract despite complete rec
   await withAgyControls(agyHelp(), "9.9.9", result => {
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
     expect(result.recipe?.version).toBe("9.9.9");
+    expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
     expect(result.bootstrap.state).toBe("unsupported");
   });
 });
 
 it.each(agyFlags)("rejects an AGY launch contract missing the actual --%s recipe flag", async missing => {
-  await withAgyControls(agyHelp(agyFlags.filter(flag => flag !== missing)), "1.4.11", result => {
+  await withAgyControls(agyHelp(agyFlags.filter(flag => flag !== missing)), "1.4.12", result => {
+    expect(result.facts.find(fact => fact.name === "public-cli-capability-contract")?.observation.state).toBe("unsupported");
     expect(result.bootstrap.state).toBe("unsupported");
   });
 });
@@ -143,10 +159,10 @@ it.each(agyFlags)("rejects an AGY launch contract missing the actual --%s recipe
 // and incorrectly verifies the public recipe capability through the real API.
 it.each(agyFlags.flatMap(flag => [
   { flag, layout: "captured double-dash", captured: true },
-  { flag, layout: "legacy single-dash", captured: false },
+  { flag, layout: "generated double-dash", captured: false },
 ]))("does not acquire --$flag from continuation prose in $layout help", async ({ flag, captured }) => {
   const help = captured ? readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8") : agyHelp();
-  const withoutDeclaration = captured ? help.replace(new RegExp(`^  --?${flag}(?:[ \\t].*)?$`, "m"), "") : agyHelp(agyFlags.filter(value => value !== flag));
+  const withoutDeclaration = captured ? help.replace(new RegExp(`^  --${flag}(?:[ \\t].*)?$`, "m"), "") : agyHelp(agyFlags.filter(value => value !== flag));
   const continuation = `      --${flag} ${flag === "sandbox" ? "is unavailable" : "is mentioned only in this description"}`;
   const misleading = captured ? withoutDeclaration.replace("Available subcommands:", continuation+"\n\nAvailable subcommands:") : withoutDeclaration+continuation+"\n";
   await withAgyControls(misleading, "1.4.12", result => {
@@ -157,19 +173,19 @@ it.each(agyFlags.flatMap(flag => [
 
 // Break caught: unsupported declaration indentation is treated as valid help.
 it.each([
-  ["tab-indented", agyHelp().replace(/^  -/gm, "\t\t-")],
-  ["inconsistently shallower", agyHelp().replace("  -model string", " -model string")],
+  ["tab-indented", agyHelp().replace(/^  --/gm, "\t\t--")],
+  ["inconsistently shallower", agyHelp().replace("  --model string", " --model string")],
 ])("does not verify AGY capabilities from %s declarations", async (_description, help) => {
-  await withAgyControls(help!, "1.4.11", result => {
+  await withAgyControls(help!, "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "public-cli-capability-contract")?.observation.state).toBe("unsupported");
     expect(result.bootstrap.state).not.toBe("verified");
   });
 });
 
-// Break caught: a fixed width rejects consistent supported legacy declarations.
-it.each([1, 2, 4])("acquires legacy AGY declarations consistently indented by %i spaces", async indent => {
-  const help = agyHelp().replace(/^  -/gm, " ".repeat(indent)+"-");
-  await withAgyControls(help, "1.4.11", result => {
+// Break caught: a fixed width rejects consistently indented current declarations.
+it.each([1, 2, 4])("acquires current AGY declarations consistently indented by %i spaces", async indent => {
+  const help = agyHelp().replace(/^  --/gm, " ".repeat(indent)+"--");
+  await withAgyControls(help, "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "public-cli-capability-contract")?.observation.state).toBe("verified");
     expect(result.bootstrap.state).toBe("verified");
   });
@@ -177,7 +193,7 @@ it.each([1, 2, 4])("acquires legacy AGY declarations consistently indented by %i
 
 // Break caught: a subcommand section header alone is accepted as a complete section.
 it.each(["", "  \n\n"])("rejects an empty AGY subcommand section with trailing %j", async trailing => {
-  await withAgyControls(agyHelp()+"\nAvailable subcommands:\n"+trailing, "1.4.11", result => {
+  await withAgyControls(agyHelp()+"\nAvailable subcommands:\n"+trailing, "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("missing");
     expect(result.recipe).toBeUndefined();
   });
@@ -193,8 +209,8 @@ it("acquires captured AGY help without an optional subcommand section", async ()
 
 // Break caught: rejecting all option-shaped continuation prose breaks legitimate wrapping.
 it("preserves wrapped AGY descriptions when required declarations are present", async () => {
-  const help = agyHelp().replace("  -sandbox\n", "      --sandbox is also mentioned in this wrapped description\n  -sandbox\n");
-  await withAgyControls(help, "1.4.11", result => {
+  const help = agyHelp().replace("  --sandbox\n", "      --sandbox is also mentioned in this wrapped description\n  --sandbox\n");
+  await withAgyControls(help, "1.4.12", result => {
     expect(result.bootstrap.state).toBe("verified");
   });
 });
@@ -206,14 +222,14 @@ it.each([
   ["a usage heading without flag definitions", "Usage of agy:\n", 0],
   ["nonzero help", agyHelp(), 2],
 ])("does not acquire AGY command evidence from %s", async (_description, help, exitCode) => {
-  await withAgyControls(help as string, "1.4.11", result => {
+  await withAgyControls(help as string, "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("missing");
     expect(result.recipe).toBeUndefined();
   }, exitCode as number);
 });
 
 it("binds AGY discovery to the exact packet directory containing its source-bound agent", async () => {
-  await withAgyControls(agyHelp(), "1.4.11", (result, workspace) => {
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
     const packet = join(workspace, ".council/native-packets");
     expect(result.recipe?.argv).toEqual(expect.arrayContaining(["--add-dir", packet]));
     expect(result.recipe?.argv.filter(arg => arg === "--add-dir")).toHaveLength(1);
@@ -222,20 +238,22 @@ it("binds AGY discovery to the exact packet directory containing its source-boun
   });
 });
 
-it("acquires a reachable AGY recipe from its versioned stderr help and existing trust without changing global files", async () => {
+it("acquires an AGY 1.4.12 recipe while preserving settings and inherited Deny without enrollment", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "provider-controls-")));
   try {
     vi.stubEnv("HOME", root); vi.stubEnv("PATH", root+delimiter+process.env.PATH);
     const workspace = join(root,"project"); mkdirSync(workspace);
     mkdirSync(join(root,".gemini/antigravity-cli"),{recursive:true});
-    const settings = { trustedWorkspaces:[join(workspace,".council/native-packets")], permissions:{deny:["existing-deny(*)"]} };
+    const settings = { permissions:{deny:["existing-deny(*)"]} };
     writeFileSync(join(root,".gemini/antigravity-cli/settings.json"),JSON.stringify(settings));
     const executable=join(root,"agy");writeFileSync(executable,`#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(agyHelp())});`);chmodSync(executable,0o700);
-    const result=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.11",workspace,{state:"unknown",source:"existing access",detail:"unchanged"});
+    const result=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.12",workspace,{state:"unknown",source:"existing access",detail:"unchanged"});
     expect(result.bootstrap.state).toBe("verified");
     expect(result.recipe?.argv).toEqual(expect.arrayContaining(["--agent","council-packet","--settings"]));
     expect(result.recipe?.materializations?.find(item=>item.path.endsWith("session-settings.json"))?.content).toContain("existing-deny(*)");
     expect(result.controls.state).toBe("unknown");
+    expect(result.facts.find(fact=>fact.name==="workspace-trust")).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(root,".gemini/antigravity-cli/settings.json"),"utf8"))).toEqual(settings);
   } finally {vi.unstubAllEnvs();rmSync(root,{recursive:true,force:true});}
 });
 

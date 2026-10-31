@@ -26,10 +26,10 @@ function agyHelpFlags(text: string): Set<string> | undefined {
     if (!line.trim()) continue;
     if (line === "Available subcommands:" && flags.size && !subcommands) { subcommands = true; continue; }
     // Pin the declaration indentation once; deeper wrapped prose may mention
-    // an option without declaring it. Legacy help can use a different width.
-    const option = line.match(/^( +)--?([a-zA-Z][\w-]*)(?:[ \t]+.*)?$/);
+    // an option without declaring it. Only the inspected short aliases apply.
+    const option = line.match(/^( +)(?:--([a-zA-Z][\w-]*)|-([cip]))(?:[ \t]+.*)?$/);
     if (!subcommands && option && (!optionIndent || option[1]!.length === optionIndent)) {
-      optionIndent ||= option[1]!.length; flags.add(option[2]!); continue;
+      optionIndent ||= option[1]!.length; flags.add(option[2] ?? option[3]!); continue;
     }
     if (subcommands && /^[ \t]+[a-z][\w-]*[ \t]{2,}\S/.test(line)) { subcommandCount++; continue; }
     const description = line.match(/^( +)\S/);
@@ -163,18 +163,12 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     add("public-cli-capability-contract", missing.length ? "unsupported" : "verified", `installed AGY --help / ${version}`,
       missing.length ? `Required recipe flags not exposed: ${missing.map(flag => "--"+flag).join(", ")}` : `Required recipe flags exposed; help sha256=${sha256(help)}`,
       "Public launch syntax only; version, executable, sources and effective gates remain independently bound");
-    const sourceContract = /(?:^|\s)1\.4\.(?:11|12)(?:\s|$)/.test(version);
+    const sourceContract = /(?:^|\s)1\.4\.12(?:\s|$)/.test(version);
     add("provider-startup-source-contract", sourceContract ? "verified" : "unsupported", "Inspected AGY startup/source acquisition contract",
       sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
       "Unreviewed versions cannot inherit loader/hook-source qualification");
     const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
     const config = read(global);
-    // Inspected 1.4.12 direct stream startup does not require this enrollment
-    // metadata. Legacy and unreviewed versions retain their existing gate.
-    if (!/(?:^|\s)1\.4\.12(?:\s|$)/.test(version)) {
-      const trusted = Array.isArray(config?.trustedWorkspaces) && config.trustedWorkspaces.some((entry: unknown) => typeof entry === "string" && entry === cwd);
-      add("workspace-trust", trusted ? "verified" : "missing", "Council-required AGY trustedWorkspaces enrollment metadata", trusted ? "Exact packet workspace enrollment already recorded" : "Exact packet workspace enrollment not recorded; no enrollment change attempted", "Council enrollment prerequisite; not an observed AGY refusal");
-    }
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = true;
     for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(workspace, ".agents/plugins")]) if (existsSync(root)) {

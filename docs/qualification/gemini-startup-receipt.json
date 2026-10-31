@@ -507,5 +507,13 @@
     "coordinatorDisposition": "F1-F3 accepted after evidence checks; M1 deferred; bounded source repair accepted; draft publication only",
     "coordinatorExecutedParserCounterexampleBeforeAndAfter": true,
     "operationalAcceptance": "open"
+  },
+  "historicalEnrollmentFollowUp": {
+    "evidenceDateUtc": "2026-10-31",
+    "verification": "gemini-enrollment-verification.md",
+    "receipt": "gemini-enrollment-receipt.json",
+    "scope": "subsequent AGY 1.4.12 direct metadata prerequisite omission; original observations preserved",
+    "independentChangeReview": "pending",
+    "operationalAcceptance": "open"
   }
 }

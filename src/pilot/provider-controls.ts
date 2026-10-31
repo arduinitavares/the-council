@@ -169,8 +169,12 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
       "Unreviewed versions cannot inherit loader/hook-source qualification");
     const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
     const config = read(global);
-    const trusted = Array.isArray(config?.trustedWorkspaces) && config.trustedWorkspaces.some((entry: unknown) => typeof entry === "string" && entry === cwd);
-    add("workspace-trust", trusted ? "verified" : "missing", "Council-required AGY trustedWorkspaces enrollment metadata", trusted ? "Exact packet workspace enrollment already recorded" : "Exact packet workspace enrollment not recorded; no enrollment change attempted", "Council enrollment prerequisite; not an observed AGY refusal");
+    // Inspected 1.4.12 direct stream startup does not require this enrollment
+    // metadata. Legacy and unreviewed versions retain their existing gate.
+    if (!/(?:^|\s)1\.4\.12(?:\s|$)/.test(version)) {
+      const trusted = Array.isArray(config?.trustedWorkspaces) && config.trustedWorkspaces.some((entry: unknown) => typeof entry === "string" && entry === cwd);
+      add("workspace-trust", trusted ? "verified" : "missing", "Council-required AGY trustedWorkspaces enrollment metadata", trusted ? "Exact packet workspace enrollment already recorded" : "Exact packet workspace enrollment not recorded; no enrollment change attempted", "Council enrollment prerequisite; not an observed AGY refusal");
+    }
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = true;
     for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(workspace, ".agents/plugins")]) if (existsSync(root)) {

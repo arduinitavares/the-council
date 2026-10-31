@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync, statSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
@@ -9,7 +10,7 @@ import { incidentRoster } from "./fixtures.js";
 const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
 const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  -${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
 
-async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0) {
+async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0, prepare?: (workspace: string, settingsFile: string) => void) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-contract-")));
   try {
     vi.stubEnv("HOME", root); vi.stubEnv("PATH", root+delimiter+process.env.PATH);
@@ -17,7 +18,9 @@ async function withAgyControls(help: string, version: string, check: (result: Aw
     mkdirSync(join(root, ".agents/policies"), { recursive: true });
     writeFileSync(join(root, ".agents/policies/model-policy.md"), "fixture policy");
     mkdirSync(join(root, ".gemini/antigravity-cli"), { recursive: true });
-    writeFileSync(join(root, ".gemini/antigravity-cli/settings.json"), JSON.stringify({ trustedWorkspaces: [join(workspace, ".council/native-packets")] }));
+    const settingsFile = join(root, ".gemini/antigravity-cli/settings.json");
+    writeFileSync(settingsFile, JSON.stringify({ trustedWorkspaces: [join(workspace, ".council/native-packets")] }));
+    prepare?.(workspace, settingsFile);
     const executable = join(root, "agy");
     writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});process.exitCode=${exitCode};`); chmodSync(executable, 0o700);
     check(await inspectProviderControls(incidentRoster.reviewers.gemini, version, workspace, { state: "unknown", source: "fixture", detail: "not qualification" }), workspace);
@@ -42,6 +45,83 @@ it("acquires the captured AGY 1.4.12 public help layout including subcommands", 
     expect(result.bootstrap.state).toBe("verified");
     expect(result.recipe?.argv).toContain("--add-dir");
     expect(result.controls.state).toBe("unknown");
+  });
+});
+
+const absentAgyEnrollment = [
+  { label: "absent trustedWorkspaces", enrollment: {} },
+  { label: "empty trustedWorkspaces", enrollment: { trustedWorkspaces: [] } },
+  { label: "foreign trustedWorkspaces", enrollment: { trustedWorkspaces: ["/different-project/.council/native-packets"] } },
+];
+
+// Break caught: exact global enrollment blocks the inspected 1.4.12 direct
+// transport even though every other bootstrap source is valid.
+it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label while preserving settings and pending effective controls", async ({ enrollment }) => {
+  const settingsBytes = JSON.stringify({ ...enrollment, permissions: { deny: ["existing-deny(*)"] } });
+  const settingsDigest = createHash("sha256").update(settingsBytes).digest("hex");
+  let settingsFile = "";
+  let originalMetadata!: { mtimeNs: bigint; ctimeNs: bigint; ino: bigint };
+  const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
+  await withAgyControls(help, "1.4.12", result => {
+    expect(readFileSync(settingsFile, "utf8")).toBe(settingsBytes);
+    expect(statSync(settingsFile, { bigint: true })).toMatchObject(originalMetadata);
+    expect(result.recipe?.protocol).toBe("agy-stream");
+    expect(result.recipe?.sources.find(source => source.path === settingsFile)).toEqual({ path: settingsFile, kind: "file", sha256: settingsDigest });
+    expect(result.audit?.sources.find(source => source.path === settingsFile)?.sha256).toBe(settingsDigest);
+    expect(result.audit?.unavailable).toEqual([]);
+    const generated = result.recipe?.materializations?.find(item => item.path.endsWith("session-settings.json"));
+    expect(generated).toBeDefined();
+    expect(JSON.parse(generated!.content).permissions.deny).toEqual(expect.arrayContaining(["existing-deny(*)", "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]));
+    expect(result.recipe?.materializations?.every(item => !existsSync(item.path))).toBe(true);
+    expect(result.controls.state).toBe("unknown");
+    expect(result.facts.filter(fact => fact.stage === "bootstrap" && fact.name !== "workspace-trust" && fact.observation.state !== "verified")).toEqual([]);
+    expect(result.facts.find(fact => fact.name === "workspace-trust")?.observation.state).not.toBe("verified");
+    expect(result.bootstrap.state).toBe("verified");
+  }, 0, (_workspace, file) => {
+    settingsFile = file;
+    writeFileSync(file, settingsBytes);
+    const { mtimeNs, ctimeNs, ino } = statSync(file, { bigint: true });
+    originalMetadata = { mtimeNs, ctimeNs, ino };
+  });
+});
+
+// Break caught: extending the tested 1.4.12 contract to untested legacy startup.
+it.each(absentAgyEnrollment)("keeps AGY 1.4.11 blocked with $label", async ({ enrollment }) => {
+  await withAgyControls(agyHelp(), "1.4.11", result => {
+    expect(result.facts.find(fact => fact.name === "workspace-trust")?.observation.state).toBe("missing");
+    expect(result.bootstrap.state).toBe("missing");
+  }, 0, (_workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify(enrollment)));
+});
+
+// Break caught: treating unnecessary enrollment as permission to ignore
+// unavailable settings acquisition and its independent audit evidence.
+it.each(["malformed", "non-regular"])("keeps AGY 1.4.12 blocked on %s settings", async shape => {
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+    const settingsFile = join(workspace, "../.gemini/antigravity-cli/settings.json");
+    expect(result.facts.find(fact => fact.name === "configuration-readable")?.observation.state).toBe("unknown");
+    expect(result.audit?.unavailable).toContain("CONFIGURATION_UNREADABLE:"+settingsFile);
+    expect(result.bootstrap.state).not.toBe("verified");
+    expect(result.controls.state).toBe("unknown");
+  }, 0, (_workspace, settingsFile) => {
+    if (shape === "malformed") writeFileSync(settingsFile, "{invalid-json");
+    else { rmSync(settingsFile); mkdirSync(settingsFile); }
+  });
+});
+
+// Break caught: dropping the enrollment prerequisite also admits enabled hooks
+// whose effects have no authenticated coordinator disposition.
+it("keeps AGY 1.4.12 enabled hooks pending a source audit despite absent enrollment", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", result => {
+    const hooks = result.facts.find(fact => fact.name === "startup-hooks-and-plugins");
+    expect(hooks?.observation.state).toBe("unknown");
+    expect(hooks?.observation.detail).toMatch(/^AUDIT_DISPOSITION_PENDING:/);
+    expect(result.audit?.effects).toHaveLength(1);
+    expect(result.audit?.unavailable).toEqual([]);
+    expect(result.bootstrap.state).not.toBe("verified");
+    expect(result.controls.state).toBe("unknown");
+  }, 0, (_workspace, settingsFile) => {
+    writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: ["existing-deny(*)"] } }));
+    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ prompt: "fixture lifecycle effect requiring audit" }] } }));
   });
 });
 

@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "scope": "AGY 1.4.12 direct agy-stream enrollment metadata acquisition follow-up",
+  "evidenceDateUtc": "2026-10-31",
+  "executionHost": "local macOS",
+  "baseline": "31bae7cec0f5691ad52495a829f1968285b10797",
+  "codeAcceptance": "pending independent change review",
+  "operationalAcceptance": "open",
+  "productionChange": {
+    "file": "src/pilot/provider-controls.ts",
+    "transport": "agy-stream",
+    "inspectedVersion": "1.4.12",
+    "action": "omit inapplicable workspace-trust metadata prerequisite",
+    "absentEnrollmentReportedAsVerified": false,
+    "legacy1411EnrollmentGatePreserved": true,
+    "unreviewedVersionSourceGuardPreserved": true,
+    "settingsAcquisitionDigestsDenyAndHookAuditPreserved": true,
+    "effectiveRuntimeAndRefusalGatesChanged": false
+  },
+  "directResponseTrials": {
+    "model": "gemini-4-argon-high",
+    "requestedEffort": "high",
+    "backendEffort": "provider-managed; not exposed",
+    "permissionMode": "request-review",
+    "exactModelAgentAndPacketCwdObserved": true,
+    "trials": [
+      {
+        "case": "first direct response",
+        "profile": "original plus extra read_file(*) Deny",
+        "exactAcquiredRecipeArgv": false,
+        "enrolledBefore": false,
+        "enrolledAfter": false,
+        "substantiveAnswer": true,
+        "turns": 1,
+        "advertisedTools": 60,
+        "actualToolCalls": 0,
+        "providerExitCode": 0,
+        "stderrEmpty": true,
+        "protectedInputsUnchanged": true,
+        "remainingObservedProcessOrGroup": false
+      },
+      {
+        "case": "matched direct response",
+        "profile": "preexisting acquired recipe profile, byte-identical",
+        "exactAcquiredRecipeArgv": true,
+        "enrolledBefore": false,
+        "enrolledAfter": false,
+        "substantiveAnswer": true,
+        "turns": 1,
+        "advertisedTools": 60,
+        "actualToolCalls": 0,
+        "providerExitCode": 0,
+        "stderrEmpty": true,
+        "protectedInputsUnchanged": true,
+        "remainingObservedProcessOrGroup": false
+      }
+    ],
+    "originalPrivateToolCountClaims": "both corrected by coordinator against actual captures: 60 advertised, 0 used",
+    "effectiveEmptyToolsOrLoadedDefinitionEnforcementProven": false,
+    "nativeOrcaAgyLaunchQualified": false,
+    "councilQualification": false,
+    "otherVersionsQualified": false
+  },
+  "softwareChecks": {
+    "red": {
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "actualExitCode": 1,
+      "failed": 3,
+      "passed": 58,
+      "failures": ["absent trustedWorkspaces", "empty trustedWorkspaces", "foreign trustedWorkspaces"],
+      "assertion": "bootstrap expected verified; actual missing",
+      "productionBuildHashesMatched": 201,
+      "baselineSourceSha256": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d"
+    },
+    "greenAcquisition": {
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "actualExitCode": 0,
+      "passed": 61
+    },
+    "covering": {
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-session.test.ts test/pilot/control-audit.test.ts test/pilot/fix5-regressions.test.ts",
+      "actualExitCode": 0,
+      "passed": 149,
+      "testFiles": 3
+    },
+    "typecheck": { "command": "npm run typecheck", "actualExitCode": 0 },
+    "build": { "command": "npm run build", "actualExitCode": 0 },
+    "fullSuite": {
+      "command": "npm test -- --maxWorkers 2",
+      "attempts": 1,
+      "actualExitCode": 0,
+      "passed": 1094,
+      "testFiles": 66,
+      "timeoutSeconds": 900,
+      "timedOut": false,
+      "wallSeconds": 320.369,
+      "vitestSeconds": 320.06,
+      "editsDuringRun": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "ca5c6b9bd064fb1bd9ced6d3ec2ab3ed43f6fb46bfc7f7995c9a5aca3a686ec4"
+    }
+  },
+  "frozenManifest": {
+    "sha256": "7666e206122764c557d1362e84b89ae7ec0d466fbd50f9e91e4d9ff35d393f56",
+    "files": 279,
+    "counts": { "source": 66, "build": 129, "test": 78, "configuration": 5, "script": 1 },
+    "postRunVerification": "separate Node crypto rehash of Python-generated manifest",
+    "allHashesMatched": true,
+    "drift": 0,
+    "sourceSha256": "babd556d3a05439a4f5ce505ecda78805c1f72f6fa1bcb0faf844004eb2a8e0b",
+    "builtControlsSha256": "20eb91af87053a49136e4949dc5a14d3daad8af30f9aa0da47b878df9e241c20",
+    "testSha256": "28d7d4f67fd4edc39f4efc3ca367005bb6c4e9a707bcefb97e92b7bbd68fa676",
+    "publicDocumentationIncluded": false
+  },
+  "reviewStatus": {
+    "correctedDiagnosis": "approved by coordinator after Argon high review",
+    "freshCrossFamilyChangeReview": "pending; coordinator-owned",
+    "requestedAstraChangeReview": "pending; coordinator-owned",
+    "postFixLiveCouncilRun": "pending; coordinator-owned"
+  },
+  "remainingOperationalGates": [
+    "complete hook/source closure and authenticated audit disposition",
+    "actual effective main-agent tool containment before input",
+    "existing xAI controls and included-only billing proof",
+    "fresh actual Council qualification and live run"
+  ],
+  "rollback": "revert scoped source commit and rebuild",
+  "persistentTrustPermissionSettingsOrBillingChanges": false,
+  "workerLiveProviderLaunches": 0,
+  "workerDelegates": 0,
+  "publicEvidenceSanitized": true,
+  "rawEvidence": "retained privately"
+}

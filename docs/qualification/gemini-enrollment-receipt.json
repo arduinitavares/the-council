@@ -67,7 +67,11 @@
       "actualExitCode": 1,
       "failed": 3,
       "passed": 58,
-      "failures": ["absent trustedWorkspaces", "empty trustedWorkspaces", "foreign trustedWorkspaces"],
+      "failures": [
+        "absent trustedWorkspaces",
+        "empty trustedWorkspaces",
+        "foreign trustedWorkspaces"
+      ],
       "assertion": "bootstrap expected verified; actual missing",
       "productionBuildHashesMatched": 201,
       "baselineSourceSha256": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d"
@@ -83,8 +87,14 @@
       "passed": 149,
       "testFiles": 3
     },
-    "typecheck": { "command": "npm run typecheck", "actualExitCode": 0 },
-    "build": { "command": "npm run build", "actualExitCode": 0 },
+    "typecheck": {
+      "command": "npm run typecheck",
+      "actualExitCode": 0
+    },
+    "build": {
+      "command": "npm run build",
+      "actualExitCode": 0
+    },
     "fullSuite": {
       "command": "npm test -- --maxWorkers 2",
       "attempts": 1,
@@ -103,7 +113,13 @@
   "frozenManifest": {
     "sha256": "7666e206122764c557d1362e84b89ae7ec0d466fbd50f9e91e4d9ff35d393f56",
     "files": 279,
-    "counts": { "source": 66, "build": 129, "test": 78, "configuration": 5, "script": 1 },
+    "counts": {
+      "source": 66,
+      "build": 129,
+      "test": 78,
+      "configuration": 5,
+      "script": 1
+    },
     "postRunVerification": "separate Node crypto rehash of Python-generated manifest",
     "allHashesMatched": true,
     "drift": 0,
@@ -116,7 +132,7 @@
     "correctedDiagnosis": "approved by coordinator after Argon high review",
     "freshCrossFamilyChangeReview": "pending; coordinator-owned",
     "requestedAstraChangeReview": "pending; coordinator-owned",
-    "postFixLiveCouncilRun": "pending; coordinator-owned"
+    "postFixLiveCouncilRun": "completed; enrollment no longer blocks; hook audit and existing xAI controls/billing remain"
   },
   "remainingOperationalGates": [
     "complete hook/source closure and authenticated audit disposition",
@@ -129,5 +145,45 @@
   "workerLiveProviderLaunches": 0,
   "workerDelegates": 0,
   "publicEvidenceSanitized": true,
-  "rawEvidence": "retained privately"
+  "rawEvidence": "retained privately",
+  "redSnapshotComposition": {
+    "source": 66,
+    "build": 129,
+    "configuration": 6,
+    "total": 201
+  },
+  "postFixCouncilRun": {
+    "functionalRevision": "ccbd111a259dcc531097a743e4ec547244a3274f",
+    "question": "What is the best operating system in the world?",
+    "status": "prerequisites_not_verified",
+    "exitCode": 3,
+    "elapsedSeconds": 14.661,
+    "stderrEmpty": true,
+    "protectedInputsUnchanged": true,
+    "reviewerInitializations": 0,
+    "calls": {
+      "probes": 0,
+      "topic": 0
+    },
+    "gemini": {
+      "reason": "CONTROLS_UNKNOWN",
+      "enrollmentBootstrapBlockerPresent": false,
+      "nonverifiedBootstrapFacts": [
+        {
+          "name": "startup-hooks-and-plugins",
+          "state": "unknown",
+          "detailClass": "AUDIT_DISPOSITION_PENDING"
+        }
+      ]
+    },
+    "xaiReasons": [
+      "CONTROLS_MISSING",
+      "BILLING_MISSING"
+    ],
+    "effectiveInputCheckReached": false,
+    "persistedOutcomeMatchesStdout": true,
+    "cliGroupAndWrapperSettled": true,
+    "ownedTerminalClosed": true,
+    "fullCouncilAnswerOrJudgeComparison": false
+  }
 }

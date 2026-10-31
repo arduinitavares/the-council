@@ -21,7 +21,7 @@ The original private diagnosis report falsely described both tool advertisements
 
 Only `src/pilot/provider-controls.ts` changes production behavior. Within its direct AGY branch, version 1.4.12 omits the enrollment metadata fact. Global settings are still read and fingerprinted; malformed or unavailable sources remain blocking. Inherited Deny rules, generated settings/agent integrity, required help flags, source-version guards, hook inventories and authenticated audit disposition remain intact. Session model/agent/cwd/permission/tool checks and parsed error/refusal handling are unchanged.
 
-Before any production edit, real acquisition tests supplied readable settings with absent, empty and foreign-path enrollment. All other bootstrap sources were valid. All three cases failed because bootstrap was `missing` rather than `verified`; **58 protections/existing tests passed**. Settings bytes and change metadata, source digests, inherited Deny and unknown effective controls passed their assertions before the decisive failure. All **201 production/build hashes** matched the baseline across RED.
+Before any production edit, real acquisition tests supplied readable settings with absent, empty and foreign-path enrollment. All other bootstrap sources were valid. All three cases failed because bootstrap was `missing` rather than `verified`; **58 protections/existing tests passed**. Settings bytes and change metadata, source digests, inherited Deny and unknown effective controls passed their assertions before the decisive failure. All **201 frozen entries** (66 source, 129 build and six configuration files) matched the baseline across RED.
 
 | Check | Result |
 | --- | --- |
@@ -41,8 +41,14 @@ The full run had a 900-second bound and completed in 320.369 seconds wall time (
 | `dist/pilot/provider-controls.js` | `20eb91af87053a49136e4949dc5a14d3daad8af30f9aa0da47b878df9e241c20` |
 | `test/pilot/provider-controls.test.ts` | `28d7d4f67fd4edc39f4efc3ca367005bb6c4e9a707bcefb97e92b7bbd68fa676` |
 
+## Actual Council rerun after the repair
+
+A fresh native Council run of “What is the best operating system in the world?” at functional revision `ccbd111a259dcc531097a743e4ec547244a3274f` exited 3 after 14.661 seconds with `prerequisites_not_verified`, empty stderr and unchanged protected inputs. It initialized no reviewer and made zero probe/topic calls.
+
+Gemini now reports `CONTROLS_UNKNOWN` with only `startup-hooks-and-plugins` awaiting `AUDIT_DISPOSITION_PENDING`; exact enrollment is absent and no longer a bootstrap blocker. Existing xAI `CONTROLS_MISSING` and `BILLING_MISSING` remain. The effective empty-tools check was not reached in this Council run. Its persisted outcome matches CLI stdout, the CLI process group and wrapper settled, and the owned terminal was closed with its exact incarnation. No full Council answer or judge comparison is claimed.
+
 ## Remaining acceptance
 
-The coordinator accepted the corrected diagnosis after independent Argon review. Fresh independent review of the actual source change, the requested Astra review and the post-fix live Council run remain coordinator-owned and pending in this record. Hook/source closure and authenticated disposition, actual effective tool containment and the existing xAI controls/billing gates remain open. Software verification does not supply those runtime proofs.
+The coordinator accepted the corrected diagnosis after independent Argon review. Fresh independent review of the actual source change and the requested Astra review remain coordinator-owned and pending in this record. The post-fix Council result above confirms removal of the enrollment blocker while retaining the other gates. Hook/source closure and authenticated disposition, actual effective tool containment and the existing xAI controls/billing gates remain open. Software verification does not supply those runtime proofs.
 
 Rollback is the scoped source commit plus rebuild. No persistent trust, permissions, settings or billing changes were made for this repair.

@@ -10,6 +10,50 @@ import { incidentRoster } from "./fixtures.js";
 const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
 const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  --${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
 
+it("keeps ordinary non-Orca hooks in the generic pending effect audit", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", result => {
+    expect(result.audit?.unavailable).toEqual([]);
+    expect(result.audit?.effects.some(effect => effect.startsWith("startup-hook:"))).toBe(true);
+    expect(result.recipe).not.toHaveProperty("agyHookShell");
+    expect(result.controls.state).toBe("unknown");
+  }, 0, (_workspace, settingsFile) => {
+    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({hooks: {SessionStart: [{type: "command", command: "/bin/echo sanitized-lifecycle", timeout: 10}]}}));
+  });
+});
+
+it("retains the generic dynamic guard for an unrelated custom shell script", async () => {
+  let hook = "";
+  const bytes = "#!/bin/sh\n# inert dynamic dependency ORCA_ENDPOINT\nexit 0\n";
+  await withAgyControls(agyHelp(), "1.4.12", result => {
+    expect(result.audit?.unavailable).toContain(`HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${hook}:${createHash("sha256").update(bytes).digest("hex")}`);
+    expect(result.audit?.unavailable.some(reason => reason.startsWith("AGY_HOOK_"))).toBe(false);
+    expect(result.recipe).not.toHaveProperty("agyHookShell");
+  }, 0, (workspace, settingsFile) => {
+    hook = join(workspace, "custom.sh"); writeFileSync(hook, bytes, {mode: 0o700});
+    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({hooks: {SessionStart: [{type: "command", command: `/bin/sh '${hook}'`, timeout: 10}]}}));
+  });
+});
+
+// Break caught: name/path recognition alone suppresses the generic guard for
+// unsupported hook bytes or a fake provider. These identities must never acquire
+// the new known-hook policy, regardless of valid public help or command quoting.
+it.each(["raw", "quoted"])("retains dynamic closure for unsupported %s custom hook descriptors", async spelling => {
+  let hook = "";
+  const bytes = "#!/bin/sh\n# inert fixture: ORCA_ENDPOINT\nexit 0\n";
+  await withAgyControls(agyHelp(), "1.4.12", result => {
+    expect(result.audit?.unavailable).toContain(`HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${hook}:${createHash("sha256").update(bytes).digest("hex")}`);
+    expect(result.recipe).not.toHaveProperty("agyHookShell");
+    expect(result.bootstrap.state).not.toBe("verified");
+  }, 0, (workspace, settingsFile) => {
+    hook = join(workspace, "antigravity-hook.sh");
+    writeFileSync(hook, bytes, { mode: 0o755 });
+    const command = (spelling === "raw" ? hook : "'" + hook + "'") + " custom-extra-argument";
+    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({ hooks: { SessionStart: [
+      { type: "command", command, timeout: 10 },
+    ] } }));
+  });
+});
+
 async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0, prepare?: (workspace: string, settingsFile: string) => void) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-contract-")));
   try {

@@ -18,6 +18,20 @@ export function producerCodeHash(): string {
 export const observationSchema = z.strictObject({ state: z.enum(["verified", "unknown", "missing", "denied", "authentication_failed", "exhausted", "unavailable", "unsupported"]), source: z.string().min(1), detail: z.string() });
 export const controlFactSchema = z.strictObject({ name: z.string(), stage: z.enum(["bootstrap", "effective"]), observation: observationSchema, enforcement: z.string(), observedAt: z.number().int(), digest: z.string() });
 export type ControlFact = z.infer<typeof controlFactSchema>;
+const hookMetadataSchema = z.strictObject({ dev: z.number(), ino: z.number(), uid: z.number().int(), gid: z.number().int(), mode: z.number().int(), type: z.enum(["file", "directory", "symlink", "other"]) });
+const hookSourceSchema = z.strictObject({ path: z.string(), realpath: z.string(), entry: hookMetadataSchema, target: hookMetadataSchema, sha256: z.string().regex(/^[a-f0-9]{64}$/) });
+export const agyHookShellPolicySchema = z.strictObject({
+  version: z.literal(1), contract: z.literal("agy-orca-hook-v1"), route: z.literal("antigravity"),
+  workspace: z.string(), executionCwd: z.string(), executable: z.string(), providerVersion: z.string(), basePath: z.string(),
+  uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(), node: z.string(),
+  installed: z.string(), hookContent: z.string(), templateHash: z.string().regex(/^[a-f0-9]{64}$/),
+  descriptors: z.array(z.strictObject({ type: z.literal("command"), command: z.string(), timeout: z.literal(10) })).min(5),
+  identities: z.array(hookSourceSchema).min(10),
+  startupDirectories: z.array(z.strictObject({ path: z.string(), metadata: hookMetadataSchema, entries: z.array(z.string()) })),
+  absences: z.array(z.string()),
+  environment: z.strictObject({ PATH: z.literal("/usr/bin:/bin"), LANG: z.literal("C"), LC_ALL: z.literal("C"), DEVELOPER_DIR: z.literal("/Library/Developer/CommandLineTools"), PYTHONNOUSERSITE: z.literal("1"), PYTHONDONTWRITEBYTECODE: z.literal("1"), __CF_USER_TEXT_ENCODING: z.string().regex(/^0x[0-9A-F]+:0:0$/) }),
+});
+export type AgyHookShellPolicy = z.infer<typeof agyHookShellPolicySchema>;
 export const recipeSchema = z.strictObject({
   protocol: z.enum(["agy-stream", "codex-app-server", "cursor-stream"]),
   executable: z.string(), argv: z.array(z.string()), cwd: z.string(), version: z.string(),
@@ -27,9 +41,10 @@ export const recipeSchema = z.strictObject({
   facts: z.array(controlFactSchema),
   agent: z.string().optional(),
   agentDefinition: z.strictObject({path:z.string(),sha256:z.string()}).optional(),
-  materializations: z.array(z.strictObject({ path: z.string(), content: z.string(), sha256: z.string() })).optional(),
+  materializations: z.array(z.strictObject({ path: z.string(), content: z.string(), sha256: z.string(), mode: z.union([z.literal(0o400), z.literal(0o500), z.literal(0o600)]).optional() })).optional(),
+  agyHookShell: agyHookShellPolicySchema.optional(),
   codexPolicy: z.strictObject({ name: z.string(), filesystem: z.record(z.string(), z.enum(["read", "deny"])), featureKeys: z.array(z.string()) }).optional(),
-});
+}).refine(recipe => !recipe.agyHookShell || (recipe.protocol === "agy-stream" && recipe.selection.route === "antigravity"), "AGY_HOOK_PROTOCOL_MISMATCH");
 export type ProviderRecipe = z.infer<typeof recipeSchema>;
 export const identitySchema = z.strictObject({ handle: z.string().min(1), worktreeId: z.string().min(1), ptyId: z.string().min(1), incarnationId: z.string().min(1), paneKey: z.string().min(1) });
 export const bindingSchema = z.strictObject({ runId: z.string().min(1), taskId: z.string().min(1), dispatchId: z.string().min(1), handle: z.string().min(1), attemptKey: z.string().min(1) });

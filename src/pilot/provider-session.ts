@@ -1,11 +1,12 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync, accessSync, constants } from "node:fs";
 import { join, relative, dirname, isAbsolute } from "node:path";
 import { canonicalJson } from "../domain/hash.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { pilotPayloadSchemas, pilotResultEnvelopeSchema } from "./payload.js";
-import { readStrictFile, sha256, writeExclusive, type WrapperAssignment } from "./wrapper-contract.js";
+import { readStrictFile, sha256, writeExclusive, type WrapperAssignment, type ProviderRecipe } from "./wrapper-contract.js";
+import { instantiateAgyHookShellPolicy } from "./agy-hook-shell.js";
 import { currentSourceDigest } from "./control-audit.js";
 import { verifyCodexConfig, verifyCodexRequirements } from "./codex-controls.js";
 
@@ -28,21 +29,31 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     if (existsSync(segment) && (lstatSync(segment).isSymbolicLink() || realpathSync(segment) !== segment)) throw Error("PROVIDER_PACKET_ROOT_UNVERIFIED");
     mkdirSync(segment, { recursive: true, mode: 0o700 });
   }
-  for (const material of recipe.materializations ?? []) {
+  const materialize = (files: NonNullable<ProviderRecipe["materializations"]>) => { for (const material of files) {
     const target = relative(packetRoot, material.path);
     if (!target || target.startsWith("..") || isAbsolute(target) || sha256(material.content) !== material.sha256) throw Error("PROVIDER_PROFILE_SCOPE_INVALID");
     mkdirSync(dirname(material.path), { recursive: true, mode: 0o700 });
     if (realpathSync(dirname(material.path)) !== dirname(material.path)) throw Error("PROVIDER_PROFILE_SYMLINK");
     if (!existsSync(material.path)) {
-      try { writeFileSync(material.path, material.content, { mode: 0o600, flag: "wx" }); }
+      try { writeFileSync(material.path, material.content, { mode: material.mode ?? 0o600, flag: "wx" }); }
       catch(cause) { if((cause as NodeJS.ErrnoException).code!=="EEXIST")throw cause; }
     }
+    if (material.mode !== undefined) {
+      const s = lstatSync(material.path);
+      if (![0o400, 0o500, 0o600].includes(material.mode) || !s.isFile() || s.isSymbolicLink() || realpathSync(material.path) !== material.path || s.uid !== process.geteuid?.() || (s.mode & 0o7777) !== material.mode) throw Error("PROVIDER_PROFILE_CUSTODY_INVALID");
+      accessSync(material.path, constants.R_OK | (material.mode & 0o100 ? constants.X_OK : 0));
+    }
     if (sha256(readFileSync(material.path)) !== material.sha256) throw Error("PROVIDER_PROFILE_CONTENT_MISMATCH");
-  }
+  } };
+  materialize(recipe.materializations ?? []);
   if(recipe.agent && (!recipe.agentDefinition || sha256(readFileSync(recipe.agentDefinition.path)) !== recipe.agentDefinition.sha256 ||
       recipe.argv[recipe.argv.indexOf("--agent")+1]!==recipe.agent || !recipe.argv.includes("--agent"))) throw Error("PROVIDER_AGENT_DEFINITION_UNBOUND");
   const environmentKeys = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM", ...(a.selection.route === "codex" ? ["CODEX_HOME"] : a.selection.route === "cursor" ? ["CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "XDG_CONFIG_HOME"] : [])];
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && environmentKeys.includes(key)));
+  if (recipe.agyHookShell) {
+    if (recipe.protocol !== "agy-stream" || a.selection.route !== "antigravity" || recipe.selection.route !== "antigravity" || recipe.executable !== recipe.agyHookShell.executable || a.workspace !== recipe.agyHookShell.workspace || recipe.cwd !== recipe.agyHookShell.executionCwd) throw Error("PROVIDER_PROFILE_ROUTE_MISMATCH");
+    environment.PATH = instantiateAgyHookShellPolicy(recipe.agyHookShell, { packetRoot, directory: a.directory, assignmentHash }, materialize).launchPath;
+  }
   environment.AGY_CLI_DISABLE_AUTO_UPDATE = "true";
   const child = spawn(recipe.executable, recipe.argv, { cwd: recipe.cwd, env: environment, detached: true, shell: false, stdio: ["pipe", "pipe", "pipe"] });
   let closed = false, exitCode: number | null = null, signal: string | null = null;

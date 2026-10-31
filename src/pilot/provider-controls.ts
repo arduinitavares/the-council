@@ -11,6 +11,7 @@ import { acquiredAuditDisposition, adoptAuditSnapshot, currentSourceDigest, save
 import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
+import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -65,6 +66,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const unavailable: string[] = [];
   const effects: string[] = [];
   const ordering: string[] = [];
+  const hookDescriptors: unknown[] = [];
   const add = (name: string, state: Observation["state"], source: string, detail: string, enforcement: string, stage: "bootstrap" | "effective" = "bootstrap") => {
     facts.push(controlFactSchema.parse({ name, stage, observation: { state, source, detail }, enforcement, observedAt: Date.now(), digest: sha256(JSON.stringify({ source, detail })) }));
   };
@@ -124,6 +126,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     if (typeof value.command === "string" || typeof value.prompt === "string") {
       effects.push(`startup-hook:${sha256(canonicalJson(value))}`);
       if (typeof value.command === "string") {
+        hookDescriptors.push(value);
         const literals=value.command.match(/(?:~?\/[^\s"';|&()<>]+)|(?:["'][~\/][^"']+["'])/g) ?? [];
         let pinned=0;
         for(const literal of literals){
@@ -156,6 +159,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const argv: string[] = [];
   const materializations: { path: string; content: string; sha256: string }[] = [];
   let codexPolicy: ProviderRecipe["codexPolicy"];
+  let agyHookShell: ProviderRecipe["agyHookShell"];
   if (selection.route === "antigravity") {
     const exposed = agyHelpFlags(help);
     const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
@@ -180,6 +184,18 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     if(!inventoryKnown)unavailable.push("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
     const hooks = hookFiles.map(file => read(file)).filter(value=>value!==undefined);
     for(const hooksSource of hooks)hookEffects(hooksSource);
+    if (executable && agyHookShellApplicable(hookDescriptors, workspace)) {
+      const acquired = acquireAgyHookShellPolicy({ workspace, executable, version, descriptors: hookDescriptors, basePath: process.env.PATH ?? "" });
+      if (acquired.policy) {
+        agyHookShell = acquired.policy;
+        for (const source of acquired.sources) if (!sources.some(s => s.path === source.path && s.kind === source.kind)) sources.push(source);
+        effects.push(...acquired.effects);
+        // The policy recognizes the whole discovered referencing set, including
+        // duplicates. An extra custom descriptor prevents this discharge.
+        const known = `HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${agyHookShell.installed}:${sha256(agyHookShell.hookContent)}`;
+        for (let i = unavailable.length - 1; i >= 0; i--) if (unavailable[i] === known) unavailable.splice(i, 1);
+      } else unavailable.push(...acquired.unavailable);
+    }
     for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
     const enabledHook = (value: any): boolean => value && typeof value === "object" && (Array.isArray(value) ? value.some(enabledHook) : value.enabled === false ? false : typeof value.command === "string" || typeof value.prompt === "string" || typeof value.type === "string" || Object.values(value).some(enabledHook));
     add("startup-hooks-and-plugins", inventoryKnown && hooks.every(value => value !== undefined && !enabledHook(value)) ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${hooks.length} sources inventoried; enabled or unreadable hooks require source/effect audit within existing authority, not automatic renewed approval`, "SessionStart precedes inference; settings hooks={} is insufficient");
@@ -273,11 +289,12 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     executable, argv, cwd, version, selection: selectionSchema.parse(selection), expectedPermission: "request-review", sources, facts,
     ...(selection.route === "antigravity" ? { agent: "council-packet" } : {}), materializations };
   if (recipe && codexPolicy) recipe.codexPolicy = codexPolicy;
+  if (recipe && agyHookShell) recipe.agyHookShell = agyHookShell;
   if(recipe?.agent){const definition=materializations.find(item=>item.path.endsWith("/council-packet/agent.md"));if(definition)recipe.agentDefinition={path:definition.path,sha256:definition.sha256};}
   const audit: AuditSnapshot = { version:1,workspace:realpathSync(workspace),route:selection.route,providerVersion:version,
     contract: selection.route === "codex" ? "rust-v0.164.0" : selection.route === "antigravity" ? "agy-startup-source-v1" : "cursor-2026.10.22-27dcf5f",
     executable:executable??"unavailable",sources,ordering,effects:[...new Set(effects)],unavailable:[...new Set(unavailable)],
-    recipeHash:sha256(canonicalJson({argv,materializations,codexPolicy:codexPolicy??null})) };
+    recipeHash:sha256(canonicalJson({argv,materializations,codexPolicy:codexPolicy??null,...(agyHookShell ? { agyHookShell } : {})})) };
   const disposition=await acquiredAuditDisposition(audit,command);
   const auditedNames=new Set(["startup-and-platform-exceptions","startup-hooks-and-plugins","helper-and-startup-effect-enforcement"]);
   for(const fact of facts)if(auditedNames.has(fact.name)&&fact.observation.state!=="verified"){

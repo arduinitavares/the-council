@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
-if (args[0] === "--version") console.log("fixture-1");
+const version = args[0] === "--fixture-version" ? args.splice(0, 2)[1] : "fixture-1";
+if (args[0] === "--version") process.stdout.write(version);
 else if (args[0] === "skills")
   console.log(
     JSON.stringify({

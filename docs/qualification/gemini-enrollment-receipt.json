@@ -1,0 +1,523 @@
+{
+  "version": 2,
+  "scope": "AGY current 1.4.12 route only; legacy 1.4.11 startup and long single-dash help support removed",
+  "evidenceDateUtc": "2026-10-31",
+  "executionHost": "local macOS",
+  "baseline": "891453043619ce824cec618f0f9ae6a2d5dfbb24",
+  "codeAcceptance": "approved by coordinator after fresh Argon high task and native Astra max whole-change reviews",
+  "operationalAcceptance": "open; no new runtime qualification",
+  "productionChange": {
+    "file": "src/pilot/provider-controls.ts",
+    "transport": "agy-stream",
+    "inspectedVersion": "1.4.12",
+    "legacy1411Supported": false,
+    "enrollmentCanEnableLegacyRoute": false,
+    "agyWorkspaceTrustFactEmitted": false,
+    "absentEnrollmentReportedAsVerified": false,
+    "requiredLongDeclarationSyntax": "--name",
+    "recognizedShortAliases": [
+      "-c",
+      "-i",
+      "-p"
+    ],
+    "singleDashLongDeclarationsCanSupplyRequiredCapabilities": false,
+    "settingsAcquisitionDigestsInheritedDenyHookAuditAndContinuationProtectionsPreserved": true,
+    "effectiveRuntimeIdentityToolsErrorAndRefusalGatesChanged": false,
+    "cursorCodexAndBillingBehaviorChanged": false
+  },
+  "softwareChecks": {
+    "redVersion": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-controls.test.ts",
+        "-t",
+        "rejects unsupported AGY 1.4.11"
+      ],
+      "actualExitCode": 1,
+      "wallSeconds": 1.513,
+      "timeoutSeconds": 90,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "fd982553af98deefef8664f5e9ab3e4d7ce7c6c07c6e66d0c2d974d6410dd0c4",
+      "failed": 4,
+      "skipped": 58,
+      "assertion": "startup-source contract expected unsupported; actual verified",
+      "sourceSha256": "babd556d3a05439a4f5ce505ecda78805c1f72f6fa1bcb0faf844004eb2a8e0b",
+      "unchangedBaselineProduction": true,
+      "frozenEntriesUnchanged": 280
+    },
+    "greenVersion": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-controls.test.ts",
+        "-t",
+        "rejects unsupported AGY 1.4.11"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 1.287,
+      "timeoutSeconds": 90,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "afd33b68cfa5d573bdd694ecd030f644051b296620bafa3a1b7a6b477ac14f56",
+      "passed": 4
+    },
+    "redHelp": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-controls.test.ts",
+        "-t",
+        "rejects legacy single-dash"
+      ],
+      "actualExitCode": 1,
+      "wallSeconds": 4.115,
+      "timeoutSeconds": 90,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "019ef1ad42a0e38225f8bdf2fd446d9136169aaf46077f6dfd1f6a3555d49b3b",
+      "failed": 10,
+      "skipped": 62,
+      "assertion": "required long capability expected unsupported; actual verified",
+      "sourceSha256": "97e3686c1bf3320b297c31c80f57cddb7d85942a787d0744f12493780acb873c",
+      "context": "version-only fix present; parser unchanged",
+      "frozenEntriesUnchanged": 280
+    },
+    "greenHelp": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-controls.test.ts",
+        "-t",
+        "rejects legacy single-dash|captured AGY 1.4.12"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 2.673,
+      "timeoutSeconds": 90,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "e78cfd8307afc2cba56794065b0aa46017954b62221615879cecd60f3bb7c072",
+      "passed": 11
+    },
+    "greenAcquisition": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-controls.test.ts"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 23.004,
+      "timeoutSeconds": 120,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "470f68abe900e99e9f348a94202d6adfdf83b5cde96f5f47d7466f7c7926d6e4",
+      "passed": 72,
+      "testFiles": 1
+    },
+    "focusedSafety": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/provider-session.test.ts",
+        "test/pilot/control-audit.test.ts",
+        "test/pilot/fix5-regressions.test.ts"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 64.627,
+      "timeoutSeconds": 300,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "0dba761c1e794313a42cc43f7ef79281ffc4e3123011c411405b08b23e1d451d",
+      "passed": 149,
+      "testFiles": 3
+    },
+    "focusedNativeFixture": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2",
+        "test/pilot/input-entry.test.ts",
+        "test/pilot/rpc.test.ts",
+        "test/pilot/discovery.test.ts"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 15.186,
+      "timeoutSeconds": 180,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "4d3c36f0cb6887beecc8b7fce70f64b246d92dc473eb00d1189fe1d24efb6514",
+      "passed": 81,
+      "testFiles": 3
+    },
+    "typecheck": {
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 0.577,
+      "timeoutSeconds": 120,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "85458fb8c9a80de9d9968cc4a383741605f5c41eed67ac23b7a5e1532d9b505b"
+    },
+    "build": {
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 0.514,
+      "timeoutSeconds": 120,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "a77b25b76a9c2a765879731cb859779bc886ef39a8528571ff473af8d8ebd184"
+    },
+    "fullSuite": {
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--maxWorkers",
+        "2"
+      ],
+      "actualExitCode": 0,
+      "wallSeconds": 320.399,
+      "timeoutSeconds": 900,
+      "timedOut": false,
+      "ownedProcessGroupAbsentAfterExit": true,
+      "logSha256": "d9aae770f03f2db6b3189c395031ea5c159f7313fb7d3e21f419ce7b37642b2f",
+      "attempts": 1,
+      "passed": 1105,
+      "testFiles": 66,
+      "vitestSeconds": 320.1,
+      "editsDuringRun": false
+    }
+  },
+  "frozenManifest": {
+    "sha256": "9d8633b0f7c25eeb7be8d83c799739f0af39e4e67471e13d1ff8cb1defd755f7",
+    "files": 280,
+    "counts": {
+      "source": 66,
+      "build": 129,
+      "test": 78,
+      "script": 1,
+      "configuration": 6
+    },
+    "beforeAndAfterMatch": true,
+    "drift": 0,
+    "independentNodeRehashMatched": 280,
+    "publicDocumentationIncluded": false,
+    "hashes": {
+      "src/pilot/provider-controls.ts": "ff761fc05cfee422717cdc3c8f90535c2e86648ccbf98ee3a6e70a52fa1a088e",
+      "dist/pilot/provider-controls.js": "e67beb9c35a4c63598af78f49535cefd000d6c372fbe5a2d8a2cf45a946d199f",
+      "test/pilot/provider-controls.test.ts": "7082a02650a5a1e32260646cdacc59fc8e115b78957730b5bbc0c88e5a95e80a",
+      "test/pilot/control-audit.test.ts": "fbc66846ccf535ce9f90a33306718205966ef57a8be6faeb5dfc95ca3fd7f922",
+      "test/pilot/native-host-fixture.ts": "7526bb1c6065cdad0f8ba4c6ab18aecdd46b7aa6d791316f4c652ef88b115715"
+    }
+  },
+  "reviewStatus": {
+    "freshCrossFamilyTaskReview": "Argon high through Orca: spec PASS / quality Approved, zero Critical or Important, one Minor inventory coverage limit",
+    "freshAstraWholeChangeReview": "native Astra max: spec PASS / quality Approved, zero findings",
+    "runtimeQualification": "pending; historical provider trials do not qualify this source artifact"
+  },
+  "remainingOperationalGates": [
+    "complete hook/source closure and authenticated audit disposition",
+    "actual effective main-agent tool containment before input",
+    "existing xAI controls and included-only billing proof",
+    "fresh actual Council qualification and live run"
+  ],
+  "workerLiveProviderLaunches": 0,
+  "workerDelegates": 0,
+  "persistentTrustPermissionSettingsOrBillingChanges": false,
+  "rollback": "revert scoped current-only commit and rebuild",
+  "publicEvidenceSanitized": true,
+  "rawEvidence": "retained privately",
+  "historicalEvidenceStatus": "The following prior enrollment record is unchanged historical evidence; its legacy-preservation choice and approvals are superseded for the current-only source change.",
+  "historicalEnrollmentFollowUp": {
+    "version": 1,
+    "scope": "AGY 1.4.12 direct agy-stream enrollment metadata acquisition follow-up",
+    "evidenceDateUtc": "2026-10-31",
+    "executionHost": "local macOS",
+    "baseline": "31bae7cec0f5691ad52495a829f1968285b10797",
+    "codeAcceptance": "approved by coordinator after fresh Argon high and native Astra max reviews",
+    "operationalAcceptance": "open",
+    "productionChange": {
+      "file": "src/pilot/provider-controls.ts",
+      "transport": "agy-stream",
+      "inspectedVersion": "1.4.12",
+      "action": "omit inapplicable workspace-trust metadata prerequisite",
+      "absentEnrollmentReportedAsVerified": false,
+      "legacy1411EnrollmentGatePreserved": true,
+      "unreviewedVersionSourceGuardPreserved": true,
+      "settingsAcquisitionDigestsDenyAndHookAuditPreserved": true,
+      "effectiveRuntimeAndRefusalGatesChanged": false
+    },
+    "directResponseTrials": {
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "permissionMode": "request-review",
+      "exactModelAgentAndPacketCwdObserved": true,
+      "trials": [
+        {
+          "case": "first direct response",
+          "profile": "original plus extra read_file(*) Deny",
+          "exactAcquiredRecipeArgv": false,
+          "enrolledBefore": false,
+          "enrolledAfter": false,
+          "substantiveAnswer": true,
+          "turns": 1,
+          "advertisedTools": 60,
+          "actualToolCalls": 0,
+          "providerExitCode": 0,
+          "stderrEmpty": true,
+          "protectedInputsUnchanged": true,
+          "remainingObservedProcessOrGroup": false
+        },
+        {
+          "case": "matched direct response",
+          "profile": "preexisting acquired recipe profile, byte-identical",
+          "exactAcquiredRecipeArgv": true,
+          "enrolledBefore": false,
+          "enrolledAfter": false,
+          "substantiveAnswer": true,
+          "turns": 1,
+          "advertisedTools": 60,
+          "actualToolCalls": 0,
+          "providerExitCode": 0,
+          "stderrEmpty": true,
+          "protectedInputsUnchanged": true,
+          "remainingObservedProcessOrGroup": false
+        }
+      ],
+      "originalPrivateToolCountClaims": "both corrected by coordinator against actual captures: 60 advertised, 0 used",
+      "effectiveEmptyToolsOrLoadedDefinitionEnforcementProven": false,
+      "nativeOrcaAgyLaunchQualified": false,
+      "councilQualification": false,
+      "otherVersionsQualified": false
+    },
+    "softwareChecks": {
+      "red": {
+        "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+        "actualExitCode": 1,
+        "failed": 3,
+        "passed": 58,
+        "failures": [
+          "absent trustedWorkspaces",
+          "empty trustedWorkspaces",
+          "foreign trustedWorkspaces"
+        ],
+        "assertion": "bootstrap expected verified; actual missing",
+        "baselineSourceSha256": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d",
+        "baselineFrozenEntriesMatched": 201
+      },
+      "greenAcquisition": {
+        "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+        "actualExitCode": 0,
+        "passed": 61
+      },
+      "covering": {
+        "command": "npm test -- --maxWorkers 2 test/pilot/provider-session.test.ts test/pilot/control-audit.test.ts test/pilot/fix5-regressions.test.ts",
+        "actualExitCode": 0,
+        "passed": 149,
+        "testFiles": 3
+      },
+      "typecheck": {
+        "command": "npm run typecheck",
+        "actualExitCode": 0
+      },
+      "build": {
+        "command": "npm run build",
+        "actualExitCode": 0
+      },
+      "fullSuite": {
+        "command": "npm test -- --maxWorkers 2",
+        "attempts": 1,
+        "actualExitCode": 0,
+        "passed": 1094,
+        "testFiles": 66,
+        "timeoutSeconds": 900,
+        "timedOut": false,
+        "wallSeconds": 320.369,
+        "vitestSeconds": 320.06,
+        "editsDuringRun": false,
+        "ownedProcessGroupAbsentAfterExit": true,
+        "logSha256": "ca5c6b9bd064fb1bd9ced6d3ec2ab3ed43f6fb46bfc7f7995c9a5aca3a686ec4"
+      }
+    },
+    "frozenManifest": {
+      "sha256": "7666e206122764c557d1362e84b89ae7ec0d466fbd50f9e91e4d9ff35d393f56",
+      "files": 279,
+      "counts": {
+        "source": 66,
+        "build": 129,
+        "test": 78,
+        "configuration": 5,
+        "script": 1
+      },
+      "postRunVerification": "separate Node crypto rehash of Python-generated manifest",
+      "allHashesMatched": true,
+      "drift": 0,
+      "sourceSha256": "babd556d3a05439a4f5ce505ecda78805c1f72f6fa1bcb0faf844004eb2a8e0b",
+      "builtControlsSha256": "20eb91af87053a49136e4949dc5a14d3daad8af30f9aa0da47b878df9e241c20",
+      "testSha256": "28d7d4f67fd4edc39f4efc3ca367005bb6c4e9a707bcefb97e92b7bbd68fa676",
+      "publicDocumentationIncluded": false
+    },
+    "reviewStatus": {
+      "correctedDiagnosis": "approved by coordinator after Argon high review",
+      "freshCrossFamilyChangeReview": "Argon high through Orca: spec PASS / quality Approved; coordinator verified findings",
+      "requestedAstraChangeReview": "native Astra max: whole-change spec PASS / quality Approved; coordinator verified findings",
+      "postFixLiveCouncilRun": "completed; enrollment no longer blocks; hook audit and existing xAI controls/billing remain"
+    },
+    "remainingOperationalGates": [
+      "complete hook/source closure and authenticated audit disposition",
+      "actual effective main-agent tool containment before input",
+      "existing xAI controls and included-only billing proof",
+      "fresh actual Council qualification and live run"
+    ],
+    "rollback": "revert scoped source commit and rebuild",
+    "persistentTrustPermissionSettingsOrBillingChanges": false,
+    "workerLiveProviderLaunches": 0,
+    "workerDelegates": 0,
+    "publicEvidenceSanitized": true,
+    "rawEvidence": "retained privately",
+    "redSnapshotComposition": {
+      "source": 66,
+      "build": 129,
+      "configuration": 6,
+      "total": 201
+    },
+    "postFixCouncilRun": {
+      "functionalRevision": "ccbd111a259dcc531097a743e4ec547244a3274f",
+      "question": "What is the best operating system in the world?",
+      "status": "prerequisites_not_verified",
+      "exitCode": 3,
+      "elapsedSeconds": 14.661,
+      "stderrEmpty": true,
+      "protectedInputsUnchanged": true,
+      "reviewerInitializations": 0,
+      "calls": {
+        "probes": 0,
+        "topic": 0
+      },
+      "gemini": {
+        "reason": "CONTROLS_UNKNOWN",
+        "enrollmentBootstrapBlockerPresent": false,
+        "nonverifiedBootstrapFacts": [
+          {
+            "name": "startup-hooks-and-plugins",
+            "state": "unknown",
+            "detailClass": "AUDIT_DISPOSITION_PENDING"
+          }
+        ]
+      },
+      "xaiReasons": [
+        "CONTROLS_MISSING",
+        "BILLING_MISSING"
+      ],
+      "effectiveInputCheckReached": false,
+      "persistedOutcomeMatchesStdout": true,
+      "cliGroupAndWrapperSettled": true,
+      "ownedTerminalClosed": true,
+      "fullCouncilAnswerOrJudgeComparison": false
+    },
+    "changeReviews": {
+      "reviewedRevision": "ffceaddf38dad9e7bcd89899c48a088ca0efce5a",
+      "argon": {
+        "route": "owned Orca terminal / direct AGY read-only review",
+        "model": "gemini-4-argon-high",
+        "requestedEffort": "high",
+        "backendEffort": "provider-managed; not exposed",
+        "spec": "PASS",
+        "quality": "Approved",
+        "critical": 0,
+        "important": 0,
+        "minor": 2,
+        "independentHashRecomputation": false,
+        "inventoryCompletenessClaim": "rejected: report says 40 entries; actual inventory has 50"
+      },
+      "astra": {
+        "route": "native, explicitly requested",
+        "model": "gpt-6-astra",
+        "effort": "max",
+        "scope": "whole follow-up",
+        "spec": "PASS",
+        "quality": "Approved",
+        "critical": 0,
+        "important": 0,
+        "minor": 1,
+        "independentFrozenHashRecomputation": true
+      },
+      "dispositions": {
+        "privateReviewManifest": "original retained; duplicate path and stale hash corrected; 17 canonical entries match",
+        "privateRedCategories": "original retained; six configuration entries added; total 201",
+        "optionalOmissionAssertion": "deferred; existing bootstrap assertion catches reproduced defect",
+        "falseEmptyToolClaims": "rejected against both 60-tool captures",
+        "firstArgonAttempt": "file-tool error; no verdict or established permission denial; preserved privately",
+        "freshArgonAttempt": "same model, permissions and source; exact inventory and fuller diagnostics; completed with no tool errors"
+      },
+      "sourceOrTestEditsAfterFullSuite": false,
+      "softwareFreezeStillMatches": 279,
+      "endToEndCouncilQualification": false
+    }
+  },
+  "currentChangeReviews": {
+    "reviewedRevision": "c8d75a98b43429320888488986df5d27690703e0",
+    "argon": {
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "route": "owned Orca terminal / direct AGY read-only review",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 1,
+      "independentHashRecomputation": false
+    },
+    "astra": {
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "route": "native per explicit user request",
+      "scope": "whole current-plan change and callers",
+      "spec": "PASS",
+      "quality": "Approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 0,
+      "independentSoftwareHashRecomputation": true
+    },
+    "coordinatorDisposition": "Minor inventory coverage limit accepted; supplemental access index added after verdicts, original inventory retained. Source and test change approved; no fix wave required.",
+    "firstArgonAttempt": "invented nonexistent path; actual file does not exist error; no verdict; preserved and settled",
+    "freshArgonAttempt": "same model, permissions and source; literal verified paths; completed without tool errors",
+    "principalReviewInputsVerifiedByCoordinator": 28,
+    "softwareFilesStillMatch": 280,
+    "sourceOrTestEditsAfterFullSuite": false,
+    "newLiveCouncilRun": false,
+    "operationalQualification": "pending"
+  }
+}

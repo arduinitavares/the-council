@@ -2,7 +2,8 @@
 export type ReviewerSeat = 'openai' | 'gemini' | 'claude';
 export type WorkerRole = ReviewerSeat | 'judge';
 export type ProviderRoute = 'codex' | 'antigravity';
-export interface ModelSelection { route: ProviderRoute; model: string; effort: string }
+export type NativeProviderRoute = ProviderRoute | 'cursor';
+export interface ModelSelection<Route extends NativeProviderRoute = ProviderRoute> { route: Route; model: string; effort: string; effortEncoding?: 'native' | 'model' | undefined }
 export interface CouncilConfig { version: 1; reviewers: Record<ReviewerSeat, ModelSelection>; judge: ModelSelection }
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export interface ArtifactRef { kind: string; sha256: string; path: string; bytes: number }

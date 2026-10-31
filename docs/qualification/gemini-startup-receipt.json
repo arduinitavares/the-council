@@ -4,7 +4,7 @@
   "evidenceDateLocal": "2026-10-30",
   "executionHost": "local macOS",
   "baseline": "6b5378ef60fac4c302cd4422deb3258fd6a4ce2b",
-  "codeAcceptance": "software-checks-pass-independent-review-pending",
+  "codeAcceptance": "scoped-source-repair-reviewed",
   "operationalAcceptance": "open",
   "before": {
     "version": "1.4.12",
@@ -300,7 +300,7 @@
     "effective main-agent tool containment; captured60-tool init remains rejected",
     "authentic Council startup with every pre-input fact verified"
   ],
-  "independentChangeReviews": "initial revision: Astra spec FAIL / quality Needs fixes (one Important parser finding, one Minor); Argon spec PASS / quality Approved (three Minor findings); coordinator-owned scoped re-review of final fixes pending",
+  "independentChangeReviews": "Initial revision: Astra spec FAIL / quality Needs fixes (one Important parser finding, one Minor); Argon spec PASS / quality Approved (three Minor findings). Final scoped 3ad31cf..c14a24c re-review: Argon high through Orca and native Astra/max approved; F1-F3 addressed, M1 accurately deferred, no new Critical/Important/Minor findings. Coordinator verified actual diff, execution evidence and frozen hashes; operational acceptance remains open.",
   "workerProviderLaunches": 0,
   "workerDelegates": 0,
   "publicEvidenceSanitized": true,
@@ -482,5 +482,30 @@
     "operationalRankingItem3": "open; original enrollment, hook/source closure and main-agent containment gates remain",
     "newActualProviderLaunches": 0,
     "historicalVerificationEvidencePreserved": true
+  },
+  "finalScopedReview": {
+    "functionalRevision": "c14a24c78c054d335202dcf77742d2eb72271fc8",
+    "argon": {
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "route": "Orca custom terminal, read-only AGY",
+      "verdict": "approved",
+      "newFindings": 0,
+      "independentHashing": false,
+      "testsRun": false
+    },
+    "astra": {
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "route": "native, explicitly requested",
+      "verdict": "spec PASS / quality Approved",
+      "newFindings": 0,
+      "independentHashing": true,
+      "testsRun": false
+    },
+    "coordinatorDisposition": "F1-F3 accepted after evidence checks; M1 deferred; bounded source repair accepted; draft publication only",
+    "coordinatorExecutedParserCounterexampleBeforeAndAfter": true,
+    "operationalAcceptance": "open"
   }
 }

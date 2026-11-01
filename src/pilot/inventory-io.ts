@@ -56,7 +56,7 @@ function same(before: NodeIdentity, after: NodeIdentity, path: string): void {
   if (canonicalJson(before) !== canonicalJson(after)) throw new InventoryFault("INVENTORY_UNSTABLE", path);
 }
 
-/** Charge all inspected paths, including parents and listed children, once per budget. */
+/** Charge complete requests, inspected parents and listed children once per budget. */
 function chargePath(path: string, budget: InventoryBudget): void {
   if (budget.paths.size > MAX_PATHS || (!budget.paths.has(path) && budget.paths.size === MAX_PATHS)) {
     throw new InventoryFault("INVENTORY_PATH_LIMIT", path);
@@ -77,6 +77,9 @@ function inspectPath(input: string, budget: InventoryBudget):
   const root = parse(path).root;
   const parts = path.slice(root.length).split(sep).filter(Boolean);
   if (parts.length > MAX_ANCESTOR_LEVELS) throw new InventoryFault("INVENTORY_ANCESTOR_LIMIT", path);
+  // Account for the full request even when traversal stops at a missing ancestor.
+  // Refuse new identities at capacity before doing any filesystem work.
+  chargePath(path, budget);
   const components: Components = [];
   let current = root;
   for (let index = 0; index <= parts.length; index++) {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { canonicalJson } from "../../src/domain/hash.js";
 import { decodeStrictJson } from "../../src/workers/strict-json.js";
@@ -247,6 +247,54 @@ it("permits 1,000 distinct inspected paths and refuses path 1,001", () => {
   present(readInventoryFile(path, 3, accounting));
   unknown(readInventoryFile(join(root, "overflow"), 1, accounting));
   expect(accounting.paths.size).toBe(1000);
+});
+
+// F1: a shared missing ancestor must not hide distinct complete requested identities.
+it.each(["file", "json", "directory"])("bounds distinct absent %s targets beneath a shared missing ancestor", kind => {
+  const missing = join(root, "missing");
+  const unvisited = join(missing, "unvisited");
+  const accounting = budget();
+  const expectedPaths = new Set([missing]);
+  for (let parent = root;; parent = dirname(parent)) {
+    expectedPaths.add(parent);
+    if (dirname(parent) === parent) break;
+  }
+  const observe = (path: string) => kind === "file" ? readInventoryFile(path, 4, accounting)
+    : kind === "json" ? readInventoryJson(path, accounting) : listInventoryDirectory(path, accounting);
+  const lstat = fs.lstatSync;
+  let statCalls = 0, descendantProbes = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
+    statCalls++;
+    if (String(args[0]).startsWith(missing + "/")) descendantProbes++;
+    return Reflect.apply(lstat, fs, args);
+  });
+  let callsAtLimit: number | undefined;
+  let lastAccepted = "";
+  const first = join(unvisited, "requested-0");
+  for (let index = 0; index < 1001; index++) {
+    const path = join(unvisited, `requested-${index}`);
+    if (expectedPaths.size < 1000) {
+      expectedPaths.add(path);
+      const result = observe(path);
+      expect(result.state).toBe("absent");
+      if (result.state !== "absent") throw new Error("Expected verified absence");
+      expect(result.path).toBe(path);
+      expect(result.verifiedParents.at(-1)?.path).toBe(root);
+      lastAccepted = path;
+      if (expectedPaths.size === 1000) callsAtLimit = statCalls;
+    } else {
+      unknown(observe(path));
+      expect(statCalls).toBe(callsAtLimit);
+    }
+  }
+  expect(accounting.paths).toEqual(expectedPaths);
+  expect(accounting.paths.size).toBe(1000);
+  expect(accounting.paths.has(lastAccepted)).toBe(true);
+  expect(accounting.paths.has(unvisited)).toBe(false);
+  expect(descendantProbes).toBe(0);
+  // Reuse remains possible at the ceiling, without retaining rejected targets.
+  for (let index = 0; index < 3; index++) expect(observe(first).state).toBe("absent");
+  expect(accounting.paths).toEqual(expectedPaths);
 });
 
 // Breaks caught: following links, ENOTDIR-as-absence, blocking on nonregular leaves.

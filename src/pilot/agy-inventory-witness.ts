@@ -65,7 +65,7 @@ const recipeInputsSchema = z.strictObject({
 const coreSchema = z.strictObject({
   context: z.strictObject({
     requestingWorkspace: absolute, executionCwd: absolute, home: absolute,
-    rawHome: absolute.nullable(), repositoryBoundary: absolute.nullable(),
+    rawHome: z.string().nullable(), repositoryBoundary: absolute.nullable(),
     selectedAgent: z.string().nullable(), environmentInputs: environmentSchema,
   }),
   recipeInputs: recipeInputsSchema,
@@ -156,11 +156,12 @@ function validateCore(value: unknown): InventoryCore {
     context.environmentInputs.HOME === context.rawHome, "INVENTORY_CONTEXT_RECIPE_MISMATCH");
   requireValue((recipe.agent === null) === (recipe.agentDefinition === null), "INVENTORY_AGENT_DEFINITION_MISMATCH");
   const agents = recipe.argv.flatMap((arg, i) => arg === "--agent" ? [recipe.argv[i + 1]] : []);
+  requireValue(!recipe.argv.some(arg => arg.startsWith("--agent=")), "INVENTORY_AGENT_ARGV_MISMATCH");
   requireValue(recipe.agent === null ? agents.length === 0 : agents.length === 1 && agents[0] === recipe.agent, "INVENTORY_AGENT_ARGV_MISMATCH");
   for (const material of recipe.materializations) requireValue(sha256(material.content) === material.sha256, "INVENTORY_MATERIAL_DIGEST_MISMATCH");
   unique(recipe.materializations, item => item.path);
   const identities = [context.requestingWorkspace, context.executionCwd, context.home,
-    ...[context.rawHome, context.repositoryBoundary, recipe.agentDefinition?.path].filter((path): path is string => typeof path === "string"),
+    ...[context.repositoryBoundary, recipe.agentDefinition?.path].filter((path): path is string => typeof path === "string"),
     recipe.executable, recipe.cwd, loaderContract.executable.path,
     ...recipe.materializations.map(item => item.path), ...Object.keys(recipe.codexPolicy?.filesystem ?? {}),
     ...inventory.records.flatMap(item => [item.path, ...(item.enablementOrigin === null ? [] : [item.enablementOrigin]), ...item.problems.map(problem => problem.path)]),

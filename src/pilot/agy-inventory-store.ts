@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { isAbsolute, join, normalize, parse, sep } from "node:path";
 import type { AuditSource } from "./control-audit.js";
 import { sha256 } from "./wrapper-contract.js";
-import { readInventoryJson, type InventoryBudget, type InventoryRead, type ReadReceipt } from "./inventory-io.js";
+import { readInventoryJson, type InventoryBudget, type InventoryRead, type ReadReceipt, type InventoryFileBinding } from "./inventory-io.js";
 import { decodeAgyInventoryWitness, encodeAgyInventoryWitness, type EncodedWitness, type InventoryCore } from "./agy-inventory-witness.js";
 
 type DirectoryIdentity = { path: string; dev: number; ino: number; uid: number; gid: number; mode: number };
@@ -95,7 +95,7 @@ function unknown(path: string, error: unknown): InventoryRead<never> {
   return { state: "unknown", problems: [{ code: errno(error) ?? (error instanceof Error ? error.message : "INVENTORY_STORE_UNKNOWN"), path, edge: null }] };
 }
 
-export function readAgyInventoryWitness(workspace: string, fingerprint: string, budget: InventoryBudget):
+function acquireWitness(workspace: string, fingerprint: string, budget: InventoryBudget, retained?: InventoryFileBinding):
   InventoryRead<{ core: InventoryCore; encoded: EncodedWitness }> {
   let path = workspace;
   try {
@@ -105,10 +105,15 @@ export function readAgyInventoryWitness(workspace: string, fingerprint: string, 
     let initial: fs.Stats | undefined;
     try { initial = fs.lstatSync(path); fileCustody(initial); }
     catch (error) { if (errno(error) !== "ENOENT") throw error; }
+    if (retained) need(initial, "INVENTORY_STORE_FILE_CHANGED");
     verifyChain(base, chain);
-    const read = readInventoryJson(path, budget);
+    const binding = retained ?? { leaf: initial ?? null, components: [base, ...chain.filter(component => path.startsWith(component.path + sep))] };
+    const read = readInventoryJson(path, budget, binding);
     need(!initial || read.state !== "absent", "INVENTORY_STORE_FILE_CHANGED");
-    if (read.state !== "present") return read;
+    if (read.state !== "present") {
+      if (read.state === "absent") verifyChain(base, chain);
+      return read;
+    }
     receiptCustody(read.receipt);
     need(initial, "INVENTORY_STORE_FILE_CHANGED");
     sameFile(initial, read.receipt);
@@ -116,6 +121,7 @@ export function readAgyInventoryWitness(workspace: string, fingerprint: string, 
     fileCustody(linked); sameFile(linked, read.receipt);
     verifyChain(base, chain);
     const core = decodeAgyInventoryWitness(read.value.file.bytes);
+    need(core.context.requestingWorkspace === real, "INVENTORY_STORE_WORKSPACE_MISMATCH");
     const encoded = encodeAgyInventoryWitness(core);
     need(encoded.fingerprint === fingerprint && encoded.sha256 === read.value.file.sha256, "INVENTORY_STORE_IDENTITY_MISMATCH");
     const final = fs.lstatSync(path);
@@ -123,6 +129,11 @@ export function readAgyInventoryWitness(workspace: string, fingerprint: string, 
     verifyChain(base, chain);
     return { state: "present", value: { core, encoded }, receipt: read.receipt };
   } catch (error) { return unknown(path, error); }
+}
+
+export function readAgyInventoryWitness(workspace: string, fingerprint: string, budget: InventoryBudget):
+  InventoryRead<{ core: InventoryCore; encoded: EncodedWitness }> {
+  return acquireWitness(workspace, fingerprint, budget);
 }
 
 function intendedCopy(encoded: EncodedWitness): EncodedWitness {
@@ -134,8 +145,8 @@ function intendedCopy(encoded: EncodedWitness): EncodedWitness {
   need(canonical.fingerprint === intended.fingerprint && canonical.sha256 === intended.sha256, "INVENTORY_STORE_ENCODED_MISMATCH");
   return intended;
 }
-function equalExisting(workspace: string, intended: EncodedWitness): AuditSource {
-  const read = readAgyInventoryWitness(workspace, intended.fingerprint, freshBudget());
+function equalExisting(workspace: string, intended: EncodedWitness, retained?: InventoryFileBinding): AuditSource {
+  const read = acquireWitness(workspace, intended.fingerprint, freshBudget(), retained);
   need(read.state === "present", "INVENTORY_STORE_COLLISION");
   need(read.value.encoded.sha256 === intended.sha256 &&
     Buffer.from(read.value.encoded.bytes).equals(intended.bytes), "INVENTORY_STORE_COLLISION");
@@ -144,8 +155,10 @@ function equalExisting(workspace: string, intended: EncodedWitness): AuditSource
 
 export function persistAgyInventoryWitness(workspace: string, encoded: EncodedWitness): AuditSource {
   const intended = intendedCopy(encoded);
-  prepareAgyAuditDirectories(workspace);
-  const { real, base, chain } = checkedLayout(workspace), path = pathFor(real, intended.fingerprint);
+  const real = workspacePath(workspace);
+  need(decodeAgyInventoryWitness(intended.bytes).context.requestingWorkspace === real, "INVENTORY_STORE_WORKSPACE_MISMATCH");
+  prepareAgyAuditDirectories(real);
+  const { base, chain } = checkedLayout(real), path = pathFor(real, intended.fingerprint);
   verifyChain(base, chain);
   const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
   need(Number.isInteger(O_NOFOLLOW) && O_NOFOLLOW !== 0 && Number.isInteger(O_NONBLOCK) && O_NONBLOCK !== 0,
@@ -159,6 +172,7 @@ export function persistAgyInventoryWitness(workspace: string, encoded: EncodedWi
     verifyChain(base, chain);
     return source;
   }
+  let written: fs.Stats | undefined;
   try {
     fileCustody(fs.fstatSync(fd)); verifyChain(base, chain);
     let offset = 0;
@@ -169,14 +183,16 @@ export function persistAgyInventoryWitness(workspace: string, encoded: EncodedWi
       verifyChain(base, chain);
     }
     fs.fsyncSync(fd);
-    const written = fs.fstatSync(fd), linked = fs.lstatSync(path);
+    written = fs.fstatSync(fd);
+    const linked = fs.lstatSync(path);
     fileCustody(written); fileCustody(linked);
     need(written.dev === linked.dev && written.ino === linked.ino && written.size === intended.bytes.length,
       "INVENTORY_STORE_FILE_CHANGED");
     verifyChain(base, chain);
   } finally { fs.closeSync(fd); }
   // A failed write is intentionally left in place; only exact bounded readback succeeds.
-  const source = equalExisting(real, intended);
+  need(written, "INVENTORY_STORE_FILE_CHANGED");
+  const source = equalExisting(real, intended, { leaf: written, components: [base, ...chain.filter(component => path.startsWith(component.path + sep))] });
   verifyChain(base, chain);
   return source;
 }

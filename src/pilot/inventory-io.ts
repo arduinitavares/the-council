@@ -14,6 +14,11 @@ export type ReadReceipt = {
   path: string; before: NodeIdentity; after: NodeIdentity;
   components: readonly { path: string; identity: NodeIdentity }[];
 };
+/** Prior custody checked before payload reads; a null leaf pins an observed absence. */
+export type InventoryFileBinding = {
+  leaf: Readonly<Pick<NodeIdentity, "dev" | "ino" | "uid" | "gid" | "mode" | "size" | "mtimeMs" | "ctimeMs">> | null;
+  components: readonly { path: string; dev: number; ino: number; uid: number; gid: number; mode: number }[];
+};
 export type InventoryRead<T> =
   | { state: "present"; value: T; receipt: ReadReceipt }
   | { state: "absent"; path: string; verifiedParents: ReadReceipt["components"] }
@@ -112,9 +117,25 @@ function noFollowFlags(path: string, directory: boolean): number {
   return O_RDONLY | O_NOFOLLOW | O_NONBLOCK | (directory ? O_DIRECTORY : 0);
 }
 
+function boundFile(binding: InventoryFileBinding, stat: fs.Stats, components: Components, path: string): void {
+  const leafKeys = ["dev", "ino", "uid", "gid", "mode", "size", "mtimeMs", "ctimeMs"] as const;
+  const leaf = binding.leaf;
+  if (!leaf || !stat.isFile() || stat.nlink !== 1 || leafKeys.some(key => stat[key] !== leaf[key])) {
+    throw new InventoryFault("INVENTORY_BOUND_FILE_CHANGED", path);
+  }
+  const keys = ["dev", "ino", "uid", "gid", "mode"] as const;
+  for (const expected of binding.components) {
+    const observed = components.find(component => component.path === expected.path)?.identity;
+    if (!observed || keys.some(key => observed[key] !== expected[key])) {
+      throw new InventoryFault("INVENTORY_BOUND_COMPONENT_CHANGED", expected.path);
+    }
+  }
+}
+
 /** No fallback after a refusal. Checks detect in-inspection changes, not future races. */
 function observe<T>(input: string, budget: InventoryBudget, type: "file" | "directory",
-  read: (path: string, fd: number, components: Components) => T): InventoryRead<T> {
+  read: (path: string, fd: number, components: Components) => T,
+  binding?: InventoryFileBinding): InventoryRead<T> {
   try {
     const inspected = inspectPath(input, budget);
     if (inspected.state === "absent") return inspected;
@@ -127,9 +148,11 @@ function observe<T>(input: string, budget: InventoryBudget, type: "file" | "dire
     try {
       same(before, identity(fs.fstatSync(fd)), path);
       stableComponents(components);
+      if (binding) boundFile(binding, fs.fstatSync(fd), components, path);
       const value = read(path, fd, components);
-      const after = identity(fs.fstatSync(fd));
+      const finalStat = fs.fstatSync(fd), after = identity(finalStat);
       same(before, after, path);
+      if (binding) boundFile(binding, finalStat, components, path);
       stableComponents(components);
       return { state: "present", value, receipt: { path, before, after, components } };
     } finally { fs.closeSync(fd); }
@@ -137,7 +160,7 @@ function observe<T>(input: string, budget: InventoryBudget, type: "file" | "dire
 }
 
 function readFile(input: string, limit: number, budget: InventoryBudget,
-  onRead: (bytes: number) => void = () => {}): InventoryRead<BoundedFile> {
+  onRead: (bytes: number) => void = () => {}, binding?: InventoryFileBinding): InventoryRead<BoundedFile> {
   if (!Number.isSafeInteger(limit) || limit < 0 || limit >= Number.MAX_SAFE_INTEGER) {
     return failure(input, new InventoryFault("INVENTORY_BYTE_LIMIT_INVALID", input));
   }
@@ -155,7 +178,7 @@ function readFile(input: string, limit: number, budget: InventoryBudget,
     }
     const bytes = Buffer.concat(chunks, total);
     return { bytes, sha256: sha256(bytes) };
-  });
+  }, binding);
 }
 
 export function readInventoryFile(path: string, limit: number, budget: InventoryBudget): InventoryRead<BoundedFile> {
@@ -177,12 +200,14 @@ function guardJsonDepth(text: string, path: string): void {
   }
 }
 
-export function readInventoryJson(path: string, budget: InventoryBudget): InventoryRead<{ value: unknown; file: BoundedFile }> {
+export function readInventoryJson(path: string, budget: InventoryBudget,
+  binding?: InventoryFileBinding): InventoryRead<{ value: unknown; file: BoundedFile }> {
   if (!Number.isSafeInteger(budget.jsonBytes) || budget.jsonBytes < 0 || budget.jsonBytes > MAX_TOTAL_JSON_BYTES) {
     return failure(path, new InventoryFault("INVENTORY_TOTAL_JSON_LIMIT", path));
   }
   const limit = Math.min(MAX_JSON_BYTES, MAX_TOTAL_JSON_BYTES - budget.jsonBytes);
-  const result = readFile(path, limit, budget, count => { budget.jsonBytes += count; });
+  const expected = binding && { leaf: binding.leaf && { ...binding.leaf }, components: binding.components.map(component => ({ ...component })) };
+  const result = readFile(path, limit, budget, count => { budget.jsonBytes += count; }, expected);
   if (result.state !== "present") return result;
   try {
     const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.value.bytes);

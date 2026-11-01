@@ -42,6 +42,26 @@ function unknown(result: InventoryRead<unknown>) {
 beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "inventory-io-"))); });
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
+// T3-01 requires the actual acquisition boundary, before read/hash/parse.
+it("refuses a bound descriptor with multiple links before consuming JSON", () => {
+  const path = file("private.json", "{\"ok\":true}"); fs.chmodSync(path, 0o600);
+  const leaf = fs.lstatSync(path), parent = fs.lstatSync(root), fstat = fs.fstatSync;
+  vi.spyOn(fs, "fstatSync").mockImplementation(((fd: number) => {
+    const value = fstat(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { nlink: 2 });
+  }) as typeof fs.fstatSync);
+  const b = budget();
+  const read = readInventoryJson(path, b, { leaf, components: [{ path: root, dev: parent.dev, ino: parent.ino, uid: parent.uid, gid: parent.gid, mode: parent.mode }] });
+  unknown(read); expect(b.jsonBytes).toBe(0);
+});
+
+it("refuses an original component identity mismatch before consuming JSON", () => {
+  const path = file("private.json", "{\"ok\":true}"); fs.chmodSync(path, 0o600);
+  const leaf = fs.lstatSync(path), parent = fs.lstatSync(root), b = budget();
+  const read = readInventoryJson(path, b, { leaf, components: [{ path: root, dev: parent.dev, ino: parent.ino + 1, uid: parent.uid, gid: parent.gid, mode: parent.mode }] });
+  unknown(read); expect(b.jsonBytes).toBe(0);
+});
+
 // Breaks caught: string decoding/re-encoding, partial listings, and metadata-only membership.
 it("returns exact bytes and their digest with stable component and descriptor receipts", () => {
   const path = file("raw", new Uint8Array([0, 255, 10, 128]));

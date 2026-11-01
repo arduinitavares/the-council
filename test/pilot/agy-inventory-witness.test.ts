@@ -254,3 +254,36 @@ it.each(["loader", "source", "hook template", "hook identity"])("rejects a trail
   if (field === "hook identity") core.recipeInputs.agyHookShell!.identities[0]!.sha256 = invalidHash;
   expect(() => encodeAgyInventoryWitness(core)).toThrow();
 });
+
+// T3-04: raw environment spelling is data; canonical home is a separate identity.
+it.each(["", "relative/home", "/fixture//home", "/fixture/home/", "/" + "a/".repeat(129), null])("preserves raw HOME %j and binds its changed identity", raw => {
+  const core = fixture(), original = encodeAgyInventoryWitness(core).fingerprint, originalQ = bindAgyRecipeHash(core);
+  core.context.rawHome = raw; core.context.environmentInputs.HOME = raw;
+  const encoded = encodeAgyInventoryWitness(core), decoded = decodeAgyInventoryWitness(encoded.bytes);
+  expect(decoded.context.rawHome).toBe(raw); expect(decoded.context.environmentInputs.HOME).toBe(raw);
+  expect(decoded.context.home).toBe("/fixture/home");
+  expect(encoded.fingerprint).not.toBe(original); expect(bindAgyRecipeHash(core)).not.toBe(originalQ);
+});
+
+it("still rejects a disagreement between raw HOME and the captured HOME input", () => {
+  const core = fixture(); core.context.rawHome = "relative/home";
+  expect(() => encodeAgyInventoryWitness(core)).toThrow();
+});
+
+it.each(["--agent=other", "--agent=", "--agent=reviewer"].flatMap(flag => [[flag, true], [flag, false]] as const))("rejects inline syntax %s with selected=%s", (flag, selected) => {
+  const core = fixture();
+  if (selected) core.recipeInputs.argv.push(flag);
+  else {
+    core.recipeInputs.agent = null; core.recipeInputs.agentDefinition = null;
+    core.context.selectedAgent = null; core.recipeInputs.argv = [flag];
+  }
+  expect(() => encodeAgyInventoryWitness(core)).toThrow();
+});
+
+it("supports the exact separated agent builder and refuses duplicate or dangling flags", () => {
+  const core = fixture(); expect(decodeAgyInventoryWitness(encodeAgyInventoryWitness(core).bytes).recipeInputs.argv).toEqual(["--agent", "reviewer"]);
+  for (const argv of [["--agent", "reviewer", "--agent", "other"], ["--agent"]]) {
+    const invalid = fixture(); invalid.recipeInputs.argv = argv;
+    expect(() => encodeAgyInventoryWitness(invalid)).toThrow();
+  }
+});

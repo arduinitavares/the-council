@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { currentSourceDigest } from "../../src/pilot/control-audit.js";
 import { stableAgyRecipeInputs, encodeAgyInventoryWitness, type InventoryCore } from "../../src/pilot/agy-inventory-witness.js";
@@ -226,4 +226,102 @@ it("keeps original directory custody through the final equality readback", () =>
 it("refuses a fingerprint containing a trailing newline", () => {
   expect(readAgyInventoryWitness(workspace, "a".repeat(64) + "\n", budget()).state).toBe("unknown");
   expect(fs.existsSync(join(workspace, ".council"))).toBe(false);
+});
+
+// T3-01: a fresh self-consistent reader observation must not replace prior custody.
+it.each(["mode", "owner", "links", "leaf", "component"])("rejects a changed %s before payload acquisition", kind => {
+  const encoded = encodeAgyInventoryWitness(core()), source = persistAgyInventoryWitness(workspace, encoded);
+  const stat = fs.lstatSync, fstat = fs.fstatSync;
+  let seen = false, changed = false;
+  const foreign = (value: fs.Stats) => Object.assign(Object.create(Object.getPrototypeOf(value)), value, { uid: value.uid + 1 }) as fs.Stats;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, options?: fs.StatOptions) => {
+    const name = String(path);
+    if (name === source.path) seen = true;
+    const trigger = kind === "component" ? parse(workspace).root : workspace;
+    if (seen && !changed && name === trigger) {
+      changed = true;
+      if (kind === "mode") fs.chmodSync(source.path, 0o644);
+      else if (kind === "links") fs.linkSync(source.path, source.path + ".link");
+      else if (kind === "component") {
+        fs.renameSync(inventories(), inventories() + "-prior"); fs.mkdirSync(inventories(), { mode: 0o700 });
+        fs.writeFileSync(source.path, encoded.bytes, { mode: 0o600 });
+      } else { fs.renameSync(source.path, source.path + ".prior"); fs.writeFileSync(source.path, encoded.bytes, { mode: 0o600 }); }
+    }
+    const value = stat(path, options) as fs.Stats;
+    return kind === "owner" && changed && name === source.path ? foreign(value) : value;
+  }) as typeof fs.lstatSync);
+  vi.spyOn(fs, "fstatSync").mockImplementation(((fd: number) => {
+    const value = fstat(fd);
+    return kind === "owner" && changed && value.ino === stat(source.path).ino ? foreign(value) : value;
+  }) as typeof fs.fstatSync);
+  const b = budget(), read = readAgyInventoryWitness(workspace, encoded.fingerprint, b);
+  expect(changed).toBe(true); expect(read.state).toBe("unknown"); expect(b.jsonBytes).toBe(0);
+});
+
+it("rejects a foreign requesting workspace before creating any store directories", () => {
+  const foreign = core(); foreign.context.requestingWorkspace = join(workspace, "foreign");
+  expect(() => persistAgyInventoryWitness(workspace, encodeAgyInventoryWitness(foreign))).toThrow();
+  expect(fs.existsSync(join(workspace, ".council"))).toBe(false);
+});
+
+it("returns unknown for a valid witness relocated to another canonical workspace", () => {
+  const encoded = encodeAgyInventoryWitness(core()), source = persistAgyInventoryWitness(workspace, encoded);
+  const other = join(workspace, "other"); fs.mkdirSync(other); prepareAgyAuditDirectories(other);
+  const relocated = join(other, ".council/control-audits/inventories", encoded.fingerprint + ".json");
+  fs.writeFileSync(relocated, fs.readFileSync(source.path), { mode: 0o600 });
+  expect(currentSourceDigest({ path: relocated, kind: "file", sha256: encoded.sha256 })).toBe(encoded.sha256);
+  expect(readAgyInventoryWitness(other, encoded.fingerprint, budget()).state).toBe("unknown");
+});
+
+it("canonicalizes a supplied workspace alias while binding the real store", () => {
+  const alias = join(workspace, "alias"); fs.symlinkSync(workspace, alias);
+  const encoded = encodeAgyInventoryWitness(core()), source = persistAgyInventoryWitness(alias, encoded);
+  expect(source.path).toBe(join(inventories(), encoded.fingerprint + ".json"));
+  expect(readAgyInventoryWitness(alias, encoded.fingerprint, budget()).state).toBe("present");
+});
+
+it("rejects an equal-byte leaf replacement after closing the newly written inode", () => {
+  const encoded = encodeAgyInventoryWitness(core()), open = fs.openSync, close = fs.closeSync;
+  let created: number | undefined, replaced = false, oldInode: number | undefined, newInode: number | undefined;
+  vi.spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+    const fd = open(path, flags, mode);
+    if (typeof flags === "number" && (flags & fs.constants.O_EXCL)) created = fd;
+    return fd;
+  });
+  vi.spyOn(fs, "closeSync").mockImplementation(fd => {
+    close(fd);
+    if (fd === created && !replaced) {
+      replaced = true; const target = join(inventories(), encoded.fingerprint + ".json");
+      oldInode = fs.statSync(target).ino; fs.renameSync(target, target + ".prior");
+      fs.writeFileSync(target, encoded.bytes, { mode: 0o600 }); newInode = fs.statSync(target).ino;
+    }
+  });
+  expect(() => persistAgyInventoryWitness(workspace, encoded)).toThrow();
+  expect(replaced).toBe(true); expect(newInode).toEqual(expect.any(Number)); expect(newInode).not.toBe(oldInode);
+  expect(fs.readFileSync(join(inventories(), encoded.fingerprint + ".json"))).toEqual(Buffer.from(encoded.bytes));
+});
+
+it("keeps the existing full-budget absent-read refusal", () => {
+  const b = budget(); for (let i = 0; i < 1000; i++) b.paths.add("/already/" + i);
+  const read = readAgyInventoryWitness(workspace, "a".repeat(64), b);
+  expect(read.state).toBe("unknown");
+  if (read.state === "unknown") expect(read.problems[0]!.code).toBe("INVENTORY_PATH_LIMIT");
+});
+
+it.each(["private", "public", "linked"])("refuses a %s leaf that appears after the initial absence before reading it", kind => {
+  prepareAgyAuditDirectories(workspace);
+  const encoded = encodeAgyInventoryWitness(core()), target = join(inventories(), encoded.fingerprint + ".json"), stat = fs.lstatSync;
+  let absent = false, appeared = false;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, options?: fs.StatOptions) => {
+    const name = String(path);
+    if (name === target && !appeared) absent = true;
+    else if (name === workspace && absent && !appeared) {
+      appeared = true; fs.writeFileSync(target, encoded.bytes, { mode: kind === "public" ? 0o644 : 0o600 });
+      if (kind === "linked") fs.linkSync(target, target + ".link");
+    }
+    return stat(path, options);
+  }) as typeof fs.lstatSync);
+  const b = budget(), read = readAgyInventoryWitness(workspace, encoded.fingerprint, b);
+  expect(appeared).toBe(true); expect(read.state).toBe("unknown"); expect(b.jsonBytes).toBe(0);
+  expect(fs.readFileSync(target)).toEqual(Buffer.from(encoded.bytes));
 });

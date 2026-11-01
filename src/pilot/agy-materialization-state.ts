@@ -1,4 +1,4 @@
-import { basename, dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgyRecipeInputs } from "./agy-inventory-witness.js";
 import { sha256 } from "./wrapper-contract.js";
 import { listInventoryDirectory, readInventoryFile, readInventoryJson,
@@ -30,9 +30,9 @@ export function inspectAgyMaterializationState(workspace: string,
   };
   const unknown = (): StaticMaterializationState => ({ state: "unknown", problems, directoryObservations });
   const packet = join(workspace, ".council/native-packets");
-  const canonical = (path: string) => isAbsolute(path) && normalize(path) === path &&
+  const canonical = (path: string) => isAbsolute(path) && resolve(path) === path &&
     !path.includes("\0") && path.split(sep).filter(Boolean).length <= 128;
-  if (!canonical(workspace) || inputs.protocol !== "agy-stream" ||
+  if (!canonical(workspace) || inputs.protocol !== "agy-stream" || inputs.selection.route !== "antigravity" ||
       inputs.materializations.length !== 2 || inputs.cwd !== packet) {
     problem("MATERIALIZATION_RECIPE_INVALID", workspace); return unknown();
   }
@@ -55,19 +55,26 @@ export function inspectAgyMaterializationState(workspace: string,
   }
   if (problems.length) return unknown();
   materials.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const beneath = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
   const parents = new Set<string>();
   for (const material of materials) {
-    for (let path = dirname(material.path); ; path = dirname(path)) {
-      parents.add(path);
-      if (path === workspace) break;
+    let child = material.path, reachedWorkspace = false;
+    for (let depth = 0; depth < 128; depth++) {
+      const parent = dirname(child);
+      if (parent === child || !beneath(child, parent) || !beneath(parent, workspace)) {
+        problem("MATERIALIZATION_PARENT_INVALID", child); return unknown();
+      }
+      parents.add(parent);
+      if (parent === workspace) { reachedWorkspace = true; break; }
+      child = parent;
     }
+    if (!reachedWorkspace) { problem("MATERIALIZATION_PARENT_LIMIT", material.path); return unknown(); }
   }
   const owner = process.geteuid?.();
   if (owner === undefined) { problem("MATERIALIZATION_OWNER_UNAVAILABLE", workspace); return unknown(); }
   const receipts: ReadReceipt[] = [];
   const identities = new Map<string, NodeIdentity>(), missing = new Set<string>();
   const identityKeys = ["dev", "ino", "uid", "gid", "mode", "size", "mtimeMs", "ctimeMs", "type"] as const;
-  const beneath = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
   const remember = (path: string, identity: NodeIdentity) => {
     const previous = identities.get(path);
     if (previous && identityKeys.some(key => previous[key] !== identity[key])) {
@@ -103,6 +110,7 @@ export function inspectAgyMaterializationState(workspace: string,
     const observation = listInventoryDirectory(path, budget);
     directoryObservations.push({ path, observation });
     retain(observation);
+    if (path === workspace && observation.state === "absent") problem("MATERIALIZATION_WORKSPACE_ABSENT", workspace);
   }
   const files = new Map<string, InventoryRead<BoundedFile>>();
   let installed = 0;

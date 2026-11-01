@@ -1,25 +1,31 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse, sep } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgyRecipeInputs } from "../../src/pilot/agy-inventory-witness.js";
-import { inspectAgyMaterializationState } from "../../src/pilot/agy-materialization-state.js";
+import { inspectAgyMaterializationState, type StaticMaterializationState } from "../../src/pilot/agy-materialization-state.js";
 
 // Only syscall faults are doubled; listings, payloads and receipts remain real.
 vi.mock("node:fs", async importOriginal => {
   const actual = await importOriginal<typeof fs & { default: typeof fs }>();
   return { ...actual, default: { ...actual.default } };
 });
+// Bound only the path operation responsible for the historical synchronous loop.
+// Every unaltered call uses Node's real dirname, including the production walk.
+vi.mock("node:path", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:path")>();
+  return { ...actual, dirname: vi.fn(actual.dirname) };
+});
 let workspace: string;
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const budget = () => ({ paths: new Set<string>(), jsonBytes: 0 });
 const session = '{"allowNonWorkspaceAccess":false,"permissions":{"deny":["write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"]}}';
 const agent = "---\nname: council-packet\ntools: []\n---\nRead the supplied packet only.\n";
-function inputs(): AgyRecipeInputs {
-  const cwd = join(workspace, ".council/native-packets");
+function inputs(requestingWorkspace = workspace): AgyRecipeInputs {
+  const cwd = join(requestingWorkspace, ".council/native-packets");
   const agentPath = join(cwd, ".agents/agents/council-packet/agent.md");
-  return { protocol: "agy-stream", executable: join(workspace, "inert-agy"), argv: [], cwd,
+  return { protocol: "agy-stream", executable: join(requestingWorkspace, "inert-agy"), argv: [], cwd,
     version: "fixture", selection: { route: "antigravity", model: "fixture", effort: "high" },
     expectedPermission: "plan", agent: "council-packet",
     agentDefinition: { path: agentPath, sha256: digest(agent) },
@@ -265,4 +271,91 @@ it.each([false, true])("performs no writes, repairs, or creation for installed=%
   expect(result.state).toBe(installed ? "complete" : "absent");
   for (const write of writes) expect(write).not.toHaveBeenCalled();
   vi.restoreAllMocks();
+});
+
+// T4-01: without rejection/progress checks the real inspector exhausts this
+// scoped guard. A guard exception is an executed test failure, never a success.
+function boundedParentWalk(run: () => void, alter?: (path: string, real: typeof dirname) => string) {
+  const mocked = vi.mocked(dirname), real = mocked.getMockImplementation()!;
+  let calls = 0;
+  mocked.mockImplementation(path => {
+    if (++calls > 256) throw Error("TEST_PARENT_WALK_EXCEEDED_256_STEPS");
+    return alter ? alter(path, real) : real(path);
+  });
+  try { run(); } finally { mocked.mockImplementation(real); }
+}
+
+it("T4-01 rejects a non-root trailing-separator workspace before acquisition without looping", () => {
+  const recipe = inputs(), lstat = vi.spyOn(fs, "lstatSync");
+  let result: StaticMaterializationState | undefined;
+  expect(() => boundedParentWalk(() => {
+    result = inspectAgyMaterializationState(workspace + sep, recipe, budget());
+  })).not.toThrow();
+  expect(result).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it.each([0, 1])("T4-01 rejects a trailing separator on static material %i before acquisition", index => {
+  const recipe = inputs(); recipe.materializations[index]!.path += sep;
+  const lstat = vi.spyOn(fs, "lstatSync");
+  expect(() => boundedParentWalk(() => {
+    expect(inspect(recipe)).toMatchObject({ state: "unknown", directoryObservations: [] });
+  })).not.toThrow();
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it.each(["no-progress", "outside-workspace", "lateral"])("T4-01 bounds invalid parent ancestry: %s", kind => {
+  const recipe = inputs(), leaf = dirname(recipe.materializations[0]!.path), lstat = vi.spyOn(fs, "lstatSync");
+  let result: StaticMaterializationState | undefined;
+  expect(() => boundedParentWalk(() => { result = inspect(recipe); }, (path, real) => {
+    if (path !== leaf) return real(path);
+    return kind === "no-progress" ? path : kind === "outside-workspace" ? parse(path).root : join(workspace, "unrelated");
+  })).not.toThrow();
+  expect(result).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it("T4-01 preserves the legitimate filesystem-root spelling without accessing real root contents", () => {
+  const root = parse(workspace).root;
+  // Refuse at the first syscall; a valid root must reach acquisition, rather
+  // than be rejected as a noncanonical recipe. No real root listing occurs.
+  vi.spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike) => {
+    throw Object.assign(Error("controlled root observation"), { code: "EIO", path: String(path) });
+  }) as typeof fs.lstatSync);
+  const result = inspectAgyMaterializationState(root, inputs(root), budget());
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations).toHaveLength(8);
+  expect(result.directoryObservations[0]).toMatchObject({ path: root, observation: { state: "unknown" } });
+  if (result.state !== "unknown") throw Error("expected controlled IO refusal");
+  expect(result.problems.every(problem => problem.code === "EIO")).toBe(true);
+});
+
+it.each([false, true])("T4-ROUTE rejects agy-stream selecting codex before acquisition, installed=%s", installed => {
+  const recipe = installed ? install() : inputs();
+  recipe.selection = { route: "codex", model: "gpt-6.1-sol", effort: "max" };
+  const lstat = vi.spyOn(fs, "lstatSync");
+  expect(inspect(recipe)).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it("T4-WORKSPACE requires an existing requesting workspace while retaining all absent observations", () => {
+  const recipe = inputs(); fs.rmdirSync(workspace);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents(recipe));
+  for (const item of result.directoryObservations) {
+    expect(item.observation).toMatchObject({ state: "absent", path: item.path });
+    if (item.observation.state !== "absent") throw Error("expected verified absence");
+    expect(item.observation.verifiedParents.at(-1)?.path).toBe(dirname(workspace));
+  }
+  expect(fs.existsSync(workspace)).toBe(false);
+});
+
+it.each(["file", "symlink"])("T4-WORKSPACE rejects a requesting workspace that is a %s", kind => {
+  const path = join(workspace, "invalid-workspace");
+  if (kind === "file") fs.writeFileSync(path, "ordinary file");
+  else fs.symlinkSync(workspace, path);
+  const result = inspectAgyMaterializationState(path, inputs(path), budget());
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.find(item => item.path === path)?.observation.state).toBe("unknown");
 });

@@ -1,10 +1,28 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { dirname, join, parse, sep } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { AgyRecipeInputs } from "../../src/pilot/agy-inventory-witness.js";
 import { inspectAgyMaterializationState, type StaticMaterializationState } from "../../src/pilot/agy-materialization-state.js";
+
+const betweenObservations = vi.hoisted(() => ({
+  after: undefined as ((path: string) => void) | undefined, states: [] as string[],
+}));
+// Invoke real IO first; inject changes only after a complete observation returns.
+vi.mock("../../src/pilot/inventory-io.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/pilot/inventory-io.js")>();
+  const record = <T extends { state: string }>(path: string, result: T): T => {
+    betweenObservations.states.push(result.state);
+    betweenObservations.after?.(path);
+    return result;
+  };
+  return { ...actual,
+    listInventoryDirectory: (...args: Parameters<typeof actual.listInventoryDirectory>) => record(args[0], actual.listInventoryDirectory(...args)),
+    readInventoryFile: (...args: Parameters<typeof actual.readInventoryFile>) => record(args[0], actual.readInventoryFile(...args)),
+    readInventoryJson: (...args: Parameters<typeof actual.readInventoryJson>) => record(args[0], actual.readInventoryJson(...args)),
+  };
+});
 
 // Only syscall faults are doubled; listings, payloads and receipts remain real.
 vi.mock("node:fs", async importOriginal => {
@@ -17,7 +35,7 @@ vi.mock("node:path", async importOriginal => {
   const actual = await importOriginal<typeof import("node:path")>();
   return { ...actual, dirname: vi.fn(actual.dirname) };
 });
-let workspace: string;
+let workspace: string, fixtureRoot: string, fixtureContainer: string;
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const budget = () => ({ paths: new Set<string>(), jsonBytes: 0 });
 const session = '{"allowNonWorkspaceAccess":false,"permissions":{"deny":["write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"]}}';
@@ -49,8 +67,86 @@ function expectedParents(recipe = inputs()) {
     join(recipe.cwd, ".council-profiles", digest(session))].sort();
 }
 function inspect(recipe = inputs()) { return inspectAgyMaterializationState(workspace, recipe, budget()); }
-beforeEach(() => { workspace = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "task-4-materialization-"))); });
-afterEach(() => { vi.restoreAllMocks(); fs.rmSync(workspace, { recursive: true, force: true }); });
+// Per-file containers isolate fixture churn while files still run in parallel.
+const fixtureParent = fileURLToPath(new URL("./fixtures/agy-materialization-workspaces/", import.meta.url));
+beforeAll(() => { fixtureContainer = fs.realpathSync(fs.mkdtempSync(join(fixtureParent, "suite-"))); });
+afterAll(() => { fs.rmSync(fixtureContainer, { recursive: true, force: true }); });
+beforeEach(() => {
+  workspace = fixtureRoot = fs.mkdtempSync(join(fixtureContainer, "case-"));
+  betweenObservations.after = undefined; betweenObservations.states = [];
+});
+afterEach(() => { betweenObservations.after = undefined; vi.restoreAllMocks(); fs.rmSync(fixtureRoot, { recursive: true, force: true }); });
+
+// Breaks caught: comparing namespace timestamps strictly above workspace, or
+// weakening custody/full workspace identity to make unrelated noise acceptable.
+it("keeps the static set complete through unrelated sibling changes above workspace", () => {
+  workspace = join(fixtureRoot, "selected-workspace"); fs.mkdirSync(workspace, { mode: 0o700 });
+  const recipe = install(), selected = fs.lstatSync(workspace);
+  let changed = false;
+  betweenObservations.after = path => {
+    if (path === workspace && !changed) { changed = true; fs.writeFileSync(join(fixtureRoot, "unrelated-sibling"), "inert"); }
+  };
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(fs.lstatSync(workspace)).toMatchObject({ ino: selected.ino, size: selected.size, mtimeMs: selected.mtimeMs, ctimeMs: selected.ctimeMs });
+  expect(fs.readdirSync(workspace)).toEqual([".council"]);
+  for (const material of recipe.materializations) expect(fs.readFileSync(material.path, "utf8")).toBe(material.content);
+  expect(result.state).toBe("complete");
+  if (result.state === "unknown") throw Error(JSON.stringify(result.problems));
+  expect(result.receipts).toHaveLength(10);
+});
+
+it.each(["dev", "ino", "uid", "gid", "mode"] as const)("rejects ancestor %s drift between individually present observations", field => {
+  workspace = join(fixtureRoot, "selected-workspace"); fs.mkdirSync(workspace, { mode: 0o700 });
+  const recipe = install(), lstat = fs.lstatSync;
+  let changed = false;
+  betweenObservations.after = path => { if (path === workspace) changed = true; };
+  vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+    return changed && String(args[0]) === fixtureRoot
+      ? Object.assign(Object.create(stat), { [field]: stat[field] + 1 }) : stat;
+  }) as typeof fs.lstatSync);
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected custody drift refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: fixtureRoot, edge: null });
+});
+
+it.each(["workspace", "parent"])("retains full %s ctime identity across individually present observations", kind => {
+  const recipe = install(), target = kind === "workspace" ? workspace : recipe.cwd, lstat = fs.lstatSync;
+  let changed = false;
+  betweenObservations.after = path => { if (path === target) changed = true; };
+  vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+    return changed && String(args[0]) === target
+      ? Object.assign(Object.create(stat), { ctimeMs: stat.ctimeMs + 1 }) : stat;
+  }) as typeof fs.lstatSync);
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected selected ctime refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: target, edge: null });
+});
+
+it("rejects changed observed workspace membership between individually present observations", () => {
+  const recipe = install();
+  let changed = false;
+  betweenObservations.after = path => {
+    if (path === workspace && !changed) { changed = true; fs.writeFileSync(join(workspace, "ordinary-new"), "inert"); }
+  };
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.directoryObservations[0]?.observation).toMatchObject({ state: "present", value: { entries: [{ name: ".council", type: "directory" }] } });
+  expect(fs.readdirSync(workspace).sort()).toEqual([".council", "ordinary-new"]);
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected observed membership refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: workspace, edge: null });
+});
 
 // Breaks caught: conflating partial/absent/complete, omitted parents and invented identities.
 it("reports all absent with every exact missing directory and its verified parents", () => {

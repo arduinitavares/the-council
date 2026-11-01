@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../../src/domain/hash.js";
 import { decodeStrictJson } from "../../src/workers/strict-json.js";
 import {
@@ -17,7 +17,7 @@ vi.mock("node:fs", async importOriginal => {
   return { ...actual, default: { ...actual.default, get constants() { return actual.default.constants; } } };
 });
 
-let root: string;
+let root: string, fixtureContainer: string;
 const budget = (): InventoryBudget => ({ paths: new Set(), jsonBytes: 0 });
 const file = (name: string, bytes: string | Uint8Array = "abc") => {
   const path = join(root, name);
@@ -39,8 +39,289 @@ function unknown(result: InventoryRead<unknown>) {
     expect(problem.edge).toBeNull();
   }
 }
-beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "inventory-io-"))); });
+// Per-file containers isolate fixture churn while files still run in parallel.
+const fixtureParent = fileURLToPath(new URL("./fixtures/inventory-io-workspaces/", import.meta.url));
+beforeAll(() => { fixtureContainer = fs.realpathSync(fs.mkdtempSync(join(fixtureParent, "suite-"))); });
+afterAll(() => { fs.rmSync(fixtureContainer, { recursive: true, force: true }); });
+beforeEach(() => { root = fs.mkdtempSync(join(fixtureContainer, "case-")); });
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
+
+// Breaks caught: ancestor namespace timestamps masquerading as selected changes,
+// blanket identity relaxation, and stale absence returned without an edge recheck.
+describe("traversal custody and selected stability", () => {
+  it.each(["file", "json", "directory"])("keeps %s present through unrelated ancestor sibling creation", kind => {
+    const selected = join(root, "selected"); fs.mkdirSync(selected);
+    const target = file("selected/payload.json", '{"stable":true}');
+    const bytes = fs.readFileSync(target), leaf = fs.lstatSync(target), directory = fs.lstatSync(selected);
+    const fstat = fs.fstatSync;
+    let changed = false;
+    vi.spyOn(fs, "fstatSync").mockImplementation(((...args: Parameters<typeof fs.fstatSync>) => {
+      const stat = Reflect.apply(fstat, fs, args);
+      if (!changed) { changed = true; fs.writeFileSync(join(root, "unrelated-sibling"), "inert"); }
+      return stat;
+    }) as typeof fs.fstatSync);
+    const accounting = budget();
+    const result = kind === "directory" ? listInventoryDirectory(selected, accounting)
+      : kind === "json" ? readInventoryJson(target, accounting) : readInventoryFile(target, 100, accounting);
+    expect(changed).toBe(true);
+    expect(fs.readFileSync(target)).toEqual(bytes);
+    expect(fs.lstatSync(target)).toMatchObject({ ino: leaf.ino, size: leaf.size, mtimeMs: leaf.mtimeMs, ctimeMs: leaf.ctimeMs });
+    expect(fs.lstatSync(selected)).toMatchObject({ ino: directory.ino, mtimeMs: directory.mtimeMs, ctimeMs: directory.ctimeMs });
+    expect(fs.readdirSync(selected)).toEqual(["payload.json"]);
+    expect(result.state).toBe("present");
+    if (kind === "directory") expect(result).toMatchObject({ value: { entries: [{ name: "payload.json", type: "file" }] } });
+    else if (kind === "json") expect(result).toMatchObject({ value: { value: { stable: true }, file: { bytes } } });
+    else expect(result).toMatchObject({ value: { bytes } });
+  });
+
+  it.each(["dev", "ino", "uid", "gid", "mode", "type"] as const)("rejects traversal ancestor %s drift before payload reads", field => {
+    const target = file("payload.json", '{"stable":true}'), lstat = fs.lstatSync;
+    const read = vi.spyOn(fs, "readSync");
+    let calls = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+      if (String(args[0]) !== root || ++calls === 1) return stat;
+      const changed = Object.create(stat) as fs.Stats;
+      if (field === "type") Object.defineProperty(changed, "isDirectory", { value: () => false });
+      else Object.defineProperty(changed, field, { value: stat[field] + 1 });
+      return changed;
+    }) as typeof fs.lstatSync);
+    expect(readInventoryJson(target, budget())).toMatchObject({ state: "unknown",
+      problems: [{ code: "INVENTORY_UNSTABLE", path: root, edge: null }] });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each(["file", "json", "directory"])("retains selected %s ctime checks before payload acquisition", kind => {
+    const target = kind === "directory" ? root : file("payload.json", '{"stable":true}');
+    const lstat = fs.lstatSync, read = vi.spyOn(fs, "readSync"), opendir = vi.spyOn(fs, "opendirSync");
+    let calls = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+      if (String(args[0]) !== target || ++calls === 1) return stat;
+      return Object.assign(Object.create(stat), { ctimeMs: stat.ctimeMs + 1 });
+    }) as typeof fs.lstatSync);
+    const result = kind === "directory" ? listInventoryDirectory(target, budget())
+      : kind === "json" ? readInventoryJson(target, budget()) : readInventoryFile(target, 100, budget());
+    expect(result).toMatchObject({ state: "unknown", problems: [{ code: "INVENTORY_UNSTABLE", path: target, edge: null }] });
+    expect(read).not.toHaveBeenCalled(); expect(opendir).not.toHaveBeenCalled();
+  });
+
+  it.each(["file", "json", "directory"])("rejects an appeared missing edge for %s without consuming payload", kind => {
+    const edge = join(root, "missing"), lstat = fs.lstatSync;
+    // The directory case stops at a missing ancestor, not the requested leaf.
+    const target = kind === "directory" ? join(edge, "child") : edge;
+    const read = vi.spyOn(fs, "readSync"), open = vi.spyOn(fs, "openSync"), opendir = vi.spyOn(fs, "opendirSync");
+    let missing = false, appeared = false, edgeChecks = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) === edge) { edgeChecks++; missing = true; }
+      const stat = Reflect.apply(lstat, fs, args);
+      if (String(args[0]) === root && missing && !appeared) {
+        appeared = true;
+        if (kind === "directory") fs.mkdirSync(target, { recursive: true });
+        else fs.writeFileSync(edge, '{"mustStayUnread":true}');
+      }
+      return stat;
+    }) as typeof fs.lstatSync);
+    const accounting = budget();
+    const result = kind === "directory" ? listInventoryDirectory(target, accounting)
+      : kind === "json" ? readInventoryJson(target, accounting) : readInventoryFile(target, 100, accounting);
+    expect(appeared).toBe(true);
+    expect(result).toMatchObject({ state: "unknown", problems: [{ code: "INVENTORY_UNSTABLE", path: edge, edge: null }] });
+    expect(edgeChecks).toBe(2);
+    expect(read).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled(); expect(opendir).not.toHaveBeenCalled();
+    expect(accounting.jsonBytes).toBe(0);
+    expect(accounting.paths.has(target)).toBe(true);
+  });
+
+  it("keeps an exact missing edge absent through unrelated ancestor namespace noise", () => {
+    const selected = join(root, "selected"); fs.mkdirSync(selected);
+    const edge = join(selected, "missing"), target = join(edge, "unvisited"), lstat = fs.lstatSync;
+    let changed = false, edgeChecks = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) === edge) {
+        edgeChecks++;
+        if (!changed) { changed = true; fs.writeFileSync(join(root, "unrelated-sibling"), "inert"); }
+      }
+      return Reflect.apply(lstat, fs, args);
+    }) as typeof fs.lstatSync);
+    const accounting = budget();
+    expect(readInventoryFile(target, 10, accounting)).toMatchObject({ state: "absent", path: target });
+    expect(edgeChecks).toBe(2);
+    expect(accounting.paths.has(edge)).toBe(true);
+    expect(accounting.paths.has(target)).toBe(true);
+    expect(accounting.jsonBytes).toBe(0);
+  });
+
+  it("checks parent custody again after rechecking the exact missing edge", () => {
+    const edge = join(root, "missing"), lstat = fs.lstatSync, read = vi.spyOn(fs, "readSync");
+    let edgeChecks = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) === edge) edgeChecks++;
+      const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+      return String(args[0]) === root && edgeChecks === 2
+        ? Object.assign(Object.create(stat), { mode: stat.mode ^ 0o100 }) : stat;
+    }) as typeof fs.lstatSync);
+    expect(readInventoryJson(edge, budget())).toMatchObject({ state: "unknown",
+      problems: [{ code: "INVENTORY_UNSTABLE", path: root, edge: null }] });
+    expect(edgeChecks).toBe(2); expect(read).not.toHaveBeenCalled();
+  });
+
+  it("keeps an exact-edge recheck error unknown without retrying or reading payload", () => {
+    const edge = join(root, "missing"), lstat = fs.lstatSync, read = vi.spyOn(fs, "readSync");
+    let edgeChecks = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) === edge && ++edgeChecks === 2) throw Object.assign(Error("injected recheck IO error"), { code: "EIO", path: edge });
+      return Reflect.apply(lstat, fs, args);
+    }) as typeof fs.lstatSync);
+    expect(readInventoryJson(edge, budget())).toMatchObject({ state: "unknown", problems: [{ code: "EIO", path: edge, edge: null }] });
+    expect(edgeChecks).toBe(2); expect(read).not.toHaveBeenCalled();
+  });
+});
+
+describe("absence lookup namespace custody", () => {
+  it.each(["file", "json", "directory"])("keeps an existing %s unknown through repeated transient parent substitution", kind => {
+    const parent = join(root, "parent"), retained = join(root, "retained"), target = join(parent, "existing");
+    fs.mkdirSync(parent);
+    if (kind === "directory") fs.mkdirSync(target);
+    const payload = kind === "directory" ? join(target, "payload.json") : target;
+    fs.writeFileSync(payload, '{"stable":true}');
+    const lstat = fs.lstatSync, before = lstat(target);
+    const read = vi.spyOn(fs, "readSync"), open = vi.spyOn(fs, "openSync"), opendir = vi.spyOn(fs, "opendirSync");
+    let substitutions = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) !== target) return Reflect.apply(lstat, fs, args);
+      substitutions++; fs.renameSync(parent, retained); fs.mkdirSync(parent);
+      try { return Reflect.apply(lstat, fs, args); }
+      finally { fs.rmdirSync(parent); fs.renameSync(retained, parent); }
+    }) as typeof fs.lstatSync);
+    const accounting = budget();
+    const result = kind === "directory" ? listInventoryDirectory(target, accounting)
+      : kind === "json" ? readInventoryJson(target, accounting) : readInventoryFile(target, 100, accounting);
+    expect(substitutions).toBe(2);
+    const after = lstat(target);
+    for (const key of ["dev", "ino", "uid", "gid", "mode", "size", "mtimeMs", "ctimeMs"] as const) expect(after[key]).toBe(before[key]);
+    expect(result.state).toBe("unknown");
+    expect(read).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled(); expect(opendir).not.toHaveBeenCalled();
+    expect(accounting.jsonBytes).toBe(0);
+    expect(accounting.paths.has(target)).toBe(true);
+    expect(fs.readFileSync(payload, "utf8")).toBe('{"stable":true}');
+  });
+
+  it("refuses ambiguous parent namespace churn during the final bounded missing-edge lookup", () => {
+    const parent = join(root, "parent"); fs.mkdirSync(parent);
+    const target = join(parent, "missing"), lstat = fs.lstatSync;
+    const read = vi.spyOn(fs, "readSync"), open = vi.spyOn(fs, "openSync"), opendir = vi.spyOn(fs, "opendirSync");
+    let checks = 0;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) === target && ++checks === 2) fs.writeFileSync(join(parent, "unrelated"), "inert");
+      return Reflect.apply(lstat, fs, args);
+    }) as typeof fs.lstatSync);
+    const accounting = budget(), result = readInventoryJson(target, accounting);
+    expect(checks).toBe(2);
+    expect(result.state).toBe("unknown");
+    expect(read).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled(); expect(opendir).not.toHaveBeenCalled();
+    expect(accounting.jsonBytes).toBe(0);
+  });
+});
+
+// A held fd does not bind a separately opened named stream, or a child lstat.
+describe("directory stream namespace custody", () => {
+  it("refuses a stream opened through a transiently substituted traversal parent", () => {
+    const parent = join(root, "parent"), selected = join(parent, "selected");
+    const retained = join(root, "retained"), replacement = join(root, "replacement");
+    fs.mkdirSync(selected, { recursive: true }); file("parent/selected/original", "inert");
+    const before = fs.lstatSync(selected), opendir = fs.opendirSync;
+    let substituted = false, stream: fs.Dir | undefined, reads = 0;
+    vi.spyOn(fs, "opendirSync").mockImplementation(((...args: Parameters<typeof fs.opendirSync>) => {
+      if (String(args[0]) !== selected) return Reflect.apply(opendir, fs, args);
+      substituted = true;
+      fs.renameSync(parent, retained);
+      fs.mkdirSync(selected, { recursive: true }); file("parent/selected/substituted", "inert");
+      stream = Reflect.apply(opendir, fs, args);
+      const read = stream!.readSync.bind(stream);
+      vi.spyOn(stream!, "readSync").mockImplementation(() => { reads++; return read(); });
+      fs.renameSync(parent, replacement); fs.renameSync(retained, parent);
+      return stream;
+    }) as typeof fs.opendirSync);
+    const result = listInventoryDirectory(selected, budget()), after = fs.lstatSync(selected);
+    expect(substituted).toBe(true);
+    for (const key of ["dev", "ino", "uid", "gid", "mode", "size", "mtimeMs", "ctimeMs"] as const) expect(after[key]).toBe(before[key]);
+    expect(fs.readdirSync(selected)).toEqual(["original"]);
+    expect(result.state).toBe("unknown");
+    expect(reads).toBe(0);
+    expect(() => stream!.readSync()).toThrow();
+  });
+
+  it("refuses a substituted child type during the separate by-path fallback", () => {
+    const parent = join(root, "parent"), selected = join(parent, "selected"), child = join(selected, "slot");
+    const retained = join(root, "retained"), replacement = join(root, "replacement");
+    fs.mkdirSync(selected, { recursive: true }); file("parent/selected/slot", "inert");
+    const before = fs.lstatSync(selected), opendir = fs.opendirSync, lstat = fs.lstatSync;
+    let substituted = false;
+    vi.spyOn(fs, "opendirSync").mockImplementation(((...args: Parameters<typeof fs.opendirSync>) => {
+      const stream = Reflect.apply(opendir, fs, args), read = stream.readSync.bind(stream);
+      vi.spyOn(stream, "readSync").mockImplementation(() => {
+        const entry = read();
+        if (entry) {
+          vi.spyOn(entry, "isFile").mockReturnValue(false);
+          vi.spyOn(entry, "isDirectory").mockReturnValue(false);
+          vi.spyOn(entry, "isSymbolicLink").mockReturnValue(false);
+        }
+        return entry;
+      });
+      return stream;
+    }) as typeof fs.opendirSync);
+    vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      if (String(args[0]) !== child || substituted) return Reflect.apply(lstat, fs, args);
+      substituted = true; fs.renameSync(parent, retained);
+      fs.mkdirSync(child, { recursive: true });
+      const stat = Reflect.apply(lstat, fs, args);
+      fs.renameSync(parent, replacement); fs.renameSync(retained, parent);
+      return stat;
+    }) as typeof fs.lstatSync);
+    const result = listInventoryDirectory(selected, budget()), after = lstat(selected);
+    expect(substituted).toBe(true);
+    for (const key of ["dev", "ino", "size", "mtimeMs", "ctimeMs"] as const) expect(after[key]).toBe(before[key]);
+    expect(lstat(child).isFile()).toBe(true);
+    expect(result.state).toBe("unknown");
+  });
+
+  it("refuses ambiguous ancestor namespace churn during the by-path stream bridge", () => {
+    const selected = join(root, "selected"); fs.mkdirSync(selected); file("selected/original", "inert");
+    const opendir = fs.opendirSync;
+    let changed = false, stream: fs.Dir | undefined, reads = 0;
+    vi.spyOn(fs, "opendirSync").mockImplementation(((...args: Parameters<typeof fs.opendirSync>) => {
+      stream = Reflect.apply(opendir, fs, args);
+      const read = stream!.readSync.bind(stream);
+      vi.spyOn(stream!, "readSync").mockImplementation(() => { reads++; return read(); });
+      changed = true; file("unrelated-at-bridge", "inert");
+      return stream;
+    }) as typeof fs.opendirSync);
+    const result = listInventoryDirectory(selected, budget());
+    expect(changed).toBe(true);
+    expect(fs.readdirSync(selected)).toEqual(["original"]);
+    expect(result.state).toBe("unknown");
+    expect(reads).toBe(0);
+    expect(() => stream!.readSync()).toThrow();
+  });
+
+  it("keeps already acquired stream entries present through later unrelated ancestor churn", () => {
+    const selected = join(root, "selected"); fs.mkdirSync(selected); file("selected/original", "inert");
+    const opendir = fs.opendirSync;
+    let changed = false;
+    vi.spyOn(fs, "opendirSync").mockImplementation(((...args: Parameters<typeof fs.opendirSync>) => {
+      const stream = Reflect.apply(opendir, fs, args), read = stream.readSync.bind(stream);
+      vi.spyOn(stream, "readSync").mockImplementation(() => {
+        if (!changed) { changed = true; file("unrelated-after-bridge", "inert"); }
+        return read();
+      });
+      return stream;
+    }) as typeof fs.opendirSync);
+    expect(listInventoryDirectory(selected, budget())).toMatchObject({ state: "present",
+      value: { entries: [{ name: "original", type: "file" }] } });
+    expect(changed).toBe(true);
+  });
+});
 
 // T3-01 requires the actual acquisition boundary, before read/hash/parse.
 it("refuses a bound descriptor with multiple links before consuming JSON", () => {

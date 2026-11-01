@@ -75,9 +75,12 @@ export function inspectAgyMaterializationState(workspace: string,
   const receipts: ReadReceipt[] = [];
   const identities = new Map<string, NodeIdentity>(), missing = new Set<string>();
   const identityKeys = ["dev", "ino", "uid", "gid", "mode", "size", "mtimeMs", "ctimeMs", "type"] as const;
+  const custodyKeys = ["dev", "ino", "uid", "gid", "mode", "type"] as const;
   const remember = (path: string, identity: NodeIdentity) => {
     const previous = identities.get(path);
-    if (previous && identityKeys.some(key => previous[key] !== identity[key])) {
+    // Every observed workspace node retains full identity and membership checks.
+    const keys = beneath(path, workspace) ? identityKeys : custodyKeys;
+    if (previous && keys.some(key => previous[key] !== identity[key])) {
       problem("MATERIALIZATION_COMPONENT_CHANGED", path);
     }
     if (beneath(path, workspace) && identity.uid !== owner) problem("MATERIALIZATION_OWNER_INVALID", path);

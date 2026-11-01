@@ -61,6 +61,11 @@ function same(before: NodeIdentity, after: NodeIdentity, path: string): void {
   if (canonicalJson(before) !== canonicalJson(after)) throw new InventoryFault("INVENTORY_UNSTABLE", path);
 }
 
+function sameCustody(before: NodeIdentity, after: NodeIdentity, path: string): void {
+  const keys = ["dev", "ino", "uid", "gid", "mode", "type"] as const;
+  if (keys.some(key => before[key] !== after[key])) throw new InventoryFault("INVENTORY_UNSTABLE", path);
+}
+
 /** Charge complete requests, inspected parents and listed children once per budget. */
 function chargePath(path: string, budget: InventoryBudget): void {
   if (budget.paths.size > MAX_PATHS || (!budget.paths.has(path) && budget.paths.size === MAX_PATHS)) {
@@ -69,8 +74,13 @@ function chargePath(path: string, budget: InventoryBudget): void {
   budget.paths.add(path);
 }
 
-function stableComponents(components: ReadReceipt["components"]): void {
-  for (const component of components) same(component.identity, identity(fs.lstatSync(component.path)), component.path);
+function stableComponents(components: ReadReceipt["components"], selected: string | null): void {
+  for (const component of components) {
+    const current = identity(fs.lstatSync(component.path));
+    // Namespace timestamps describe membership only for the selected node.
+    const compare = component.path === selected ? same : sameCustody;
+    compare(component.identity, current, component.path);
+  }
 }
 
 function inspectPath(input: string, budget: InventoryBudget):
@@ -95,7 +105,24 @@ function inspectPath(input: string, budget: InventoryBudget):
     catch (error) {
       // Only traversal ENOENT, with a stable verified parent, proves absence.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || components.length === 0) throw error;
-      stableComponents(components);
+      stableComponents(components, null);
+      // The final named absence lookup needs the same conservative namespace
+      // bridge as a named stream: restored custody can conceal a substitution.
+      const absenceNamespace = components.map(component => ({
+        path: component.path, identity: identity(fs.lstatSync(component.path)),
+      }));
+      // Recheck the exact first missing edge, never a descendant or its payload.
+      let stillMissing = false;
+      try { fs.lstatSync(current); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        stillMissing = true;
+      }
+      for (const component of absenceNamespace) {
+        same(component.identity, identity(fs.lstatSync(component.path)), component.path);
+      }
+      stableComponents(components, null);
+      if (!stillMissing) throw new InventoryFault("INVENTORY_UNSTABLE", current);
       return { state: "absent", path, verifiedParents: components };
     }
     const entry = identity(stat);
@@ -143,17 +170,17 @@ function observe<T>(input: string, budget: InventoryBudget, type: "file" | "dire
     const before = components[components.length - 1]!.identity;
     if (before.type !== type) throw new InventoryFault("INVENTORY_NODE_TYPE", path);
     const flags = noFollowFlags(path, type === "directory");
-    stableComponents(components);
+    stableComponents(components, path);
     const fd = fs.openSync(path, flags);
     try {
       same(before, identity(fs.fstatSync(fd)), path);
-      stableComponents(components);
+      stableComponents(components, path);
       if (binding) boundFile(binding, fs.fstatSync(fd), components, path);
       const value = read(path, fd, components);
       const finalStat = fs.fstatSync(fd), after = identity(finalStat);
       same(before, after, path);
       if (binding) boundFile(binding, finalStat, components, path);
-      stableComponents(components);
+      stableComponents(components, path);
       return { state: "present", value, receipt: { path, before, after, components } };
     } finally { fs.closeSync(fd); }
   } catch (error) { return failure(input, error); }
@@ -221,10 +248,18 @@ export function readInventoryJson(path: string, budget: InventoryBudget,
 
 export function listInventoryDirectory(input: string, budget: InventoryBudget): InventoryRead<DirectoryListing> {
   return observe(input, budget, "directory", (path, _fd, components) => {
+    // Dir has no supported fd/fstat binding. Conservatively guard namespace
+    // metadata only across this separate by-path acquisition, before entries.
+    const streamNamespace = components.map(component => ({
+      path: component.path, identity: identity(fs.lstatSync(component.path)),
+    }));
     // Latin-1 preserves each filename byte until fatal UTF-8 decoding below.
     const directory = fs.opendirSync(path, { bufferSize: 1, encoding: "latin1" });
     try {
-      stableComponents(components);
+      for (const component of streamNamespace) {
+        same(component.identity, identity(fs.lstatSync(component.path)), component.path);
+      }
+      stableComponents(components, path);
       const entries: { name: string; type: NodeIdentity["type"] }[] = [];
       for (;;) {
         const entry = directory.readSync();
@@ -241,9 +276,16 @@ export function listInventoryDirectory(input: string, budget: InventoryBudget): 
         chargePath(child, budget);
         let type = nodeType(entry);
         if (type === "other") {
-          stableComponents(components);
+          stableComponents(components, path);
+          // An unknown dirent type requires another separate by-path lookup.
+          const childNamespace = components.map(component => ({
+            path: component.path, identity: identity(fs.lstatSync(component.path)),
+          }));
           type = nodeType(fs.lstatSync(child));
-          stableComponents(components);
+          for (const component of childNamespace) {
+            same(component.identity, identity(fs.lstatSync(component.path)), component.path);
+          }
+          stableComponents(components, path);
         }
         entries.push({ name, type });
       }

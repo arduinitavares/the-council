@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { join, delimiter, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
+import * as nativeValidation from "../../src/pilot/agy-native-hook-validation.js";
+import * as hookShell from "../../src/pilot/agy-hook-shell.js";
 import { auditHash } from "../../src/pilot/control-audit.js";
 import { incidentRoster } from "./fixtures.js";
 
@@ -80,51 +82,146 @@ it("builds an AGY recipe when the existing settings file is missing", async () =
   }, 0, (_workspace, settingsFile) => rmSync(settingsFile));
 });
 
-it("keeps ordinary non-Orca hooks in the generic pending effect audit", async () => {
-  await withAgyControls(agyHelp(), "1.4.12", result => {
-    expect(result.audit?.unavailable).toEqual([]);
-    expect(result.audit?.effects.some(effect => effect.startsWith("startup-hook:"))).toBe(true);
+// Break caught: disabled enablement bypasses native validation at acquisition.
+it("rejects an invalid SessionStart in a disabled native spec at acquisition", async () => {
+  const bytes = '{"off":{"enabled":false,"SessionStart":[{"command":""}]}}';
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+    const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+    expect(result.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(result.audit?.unavailable).toContain(`AGY_NATIVE_HOOK_VALIDATION_FAILED:${path}:/off/SessionStart/0`);
+    expect(result.audit?.effects).toEqual([]);
     expect(result.recipe).not.toHaveProperty("agyHookShell");
+    expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+  }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), bytes));
+});
+
+// Break caught: acquisition reserializes timeouts before native conformance.
+it("preserves native int32 lexical distinctions at acquisition", async () => {
+  for (const [token, valid] of [["1", true], ["1.0", false], ["1e0", false], ["-2147483648", true], ["2147483647", true], ["2147483648", false], ["-2147483649", false], ["0", true], ["-1", true]] as const) {
+    const bytes = `{"canonical":{"SessionStart":[{"command":"echo 1e0","timeout":${token},"unknown":1e0}]}}`;
+    await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(result.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(result.audit?.unavailable).toContain(valid ? `AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}` : `AGY_NATIVE_HOOK_VALIDATION_FAILED:${path}:/canonical/SessionStart/0/timeout`);
+      expect(result.audit?.effects).toEqual([]); expect(result.recipe).not.toHaveProperty("agyHookShell");
+    }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), bytes));
+  }
+}, 60000);
+
+it.each(['{}', '{"off":{"enabled":false}}'])("withholds loader membership for acquired metadata-only native source: %s", async bytes => {
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+    const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+    expect(result.audit?.effects).toEqual([]);
+    expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+  }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), bytes));
+});
+
+// Break caught: valid native parsing manufactures runtime activity or reads payloads.
+it("does not turn native parser validity into startup qualification", async () => {
+  const validated = vi.spyOn(nativeValidation, "validateAgyNativeHookSource");
+  const acquired = vi.spyOn(hookShell, "acquireAgyHookShellPolicy");
+  const reads: string[] = []; const read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => { reads.push(String(args[0])); return Reflect.apply(read, fs, args); }) as typeof fs.readFileSync);
+  const bytes = '{"canonical":{"SessionStart":[{"command":"./custom.sh"}]}}';
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(validated.mock.results).toHaveLength(1);
+      expect(validated.mock.results[0]?.value).toMatchObject({ state: "valid", occurrences: [{ handlerType: "command" }] });
+      expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+      expect(result.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(result.audit?.effects).toEqual([]); expect(acquired).not.toHaveBeenCalled();
+      expect(reads).not.toContain(join(workspace, "custom.sh"));
+      expect(result.recipe).not.toHaveProperty("agyHookShell");
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    }, 0, (workspace, settings) => { writeFileSync(join(settings, "../hooks.json"), bytes); writeFileSync(join(workspace, "custom.sh"), "inert"); });
+  } finally { vi.restoreAllMocks(); }
+});
+
+it("refuses duplicate native hook keys before validation", async () => {
+  const validated = vi.spyOn(nativeValidation, "validateAgyNativeHookSource");
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(result.audit?.unavailable).toContain(`INVENTORY_JSON_INVALID:${path}`);
+      expect(validated).not.toHaveBeenCalled(); expect(result.audit?.effects).toEqual([]);
+      expect(result.recipe).not.toHaveProperty("agyHookShell");
+      const detail = result.facts.find(f => f.name === "source-acquisition" && f.observation.source === path)?.observation.detail;
+      expect(JSON.parse(detail!)).toMatchObject({ code: "INVENTORY_JSON_INVALID", path, edge: null });
+    }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), '{"a":{"SessionStart":[],"SessionStart":[{"command":"echo"}]}}'));
+  } finally { vi.restoreAllMocks(); }
+});
+
+it("does not retain a valid sibling after native whole-source rejection", async () => {
+  const reads: string[] = [], read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => { reads.push(String(args[0])); return Reflect.apply(read, fs, args); }) as typeof fs.readFileSync);
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(result.audit?.unavailable).toContain(`AGY_NATIVE_HOOK_VALIDATION_FAILED:${path}:/bad/Stop/0`);
+      expect(result.audit?.effects).toEqual([]); expect(reads).not.toContain(join(workspace, "custom.sh"));
+      expect(result.recipe).not.toHaveProperty("agyHookShell");
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.detail).toContain("AGY_NATIVE_HOOK_VALIDATION_FAILED");
+    }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), '{"good":{"SessionStart":[{"command":"./custom.sh"}]},"bad":{"Stop":[{"command":""}]}}'));
+  } finally { vi.restoreAllMocks(); }
+});
+
+it("retains disabled native hook bytes without active dependency reads", async () => {
+  const first = '{"off":{"enabled":false,"Stop":[{"command":"./custom.sh"}]}}';
+  const second = '{"off":{"enabled":false,"Stop":[{"command":"./changed.sh"}]}}';
+  const reads: string[] = [], read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => { reads.push(String(args[0])); return Reflect.apply(read, fs, args); }) as typeof fs.readFileSync);
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", async (before, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(before.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(first).digest("hex"));
+      writeFileSync(path, second);
+      const after = await inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", workspace, { state: "unknown", source: "fixture", detail: "not qualification" });
+      expect(after.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(second).digest("hex"));
+      expect(auditHash(after.audit!)).not.toBe(auditHash(before.audit!));
+      for (const result of [before, after]) {
+        expect(result.audit?.effects).toEqual([]); expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+        expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+      }
+      expect(reads).not.toContain(join(workspace, "custom.sh")); expect(reads).not.toContain(join(workspace, "changed.sh"));
+    }, 0, (_workspace, settings) => writeFileSync(join(settings, "../hooks.json"), first));
+  } finally { vi.restoreAllMocks(); }
+});
+
+it("keeps ordinary non-Orca native hooks unavailable under unresolved activation", async () => {
+  const bytes = '{"canonical":{"SessionStart":[{"type":"command","command":"/bin/echo sanitized-lifecycle","timeout":10}]}}';
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+    const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+    expect(result.audit?.sources.find(source => source.path === path)?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(result.audit?.effects).toEqual([]); expect(result.recipe).not.toHaveProperty("agyHookShell");
     expect(result.controls.state).toBe("unknown");
-  }, 0, (_workspace, settingsFile) => {
-    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({hooks: {SessionStart: [{type: "command", command: "/bin/echo sanitized-lifecycle", timeout: 10}]}}));
-  });
+  }, 0, (_workspace, settingsFile) => writeFileSync(join(settingsFile, "../hooks.json"), bytes));
 });
 
-it("retains the generic dynamic guard for an unrelated custom shell script", async () => {
-  let hook = "";
-  const bytes = "#!/bin/sh\n# inert dynamic dependency ORCA_ENDPOINT\nexit 0\n";
-  await withAgyControls(agyHelp(), "1.4.12", result => {
-    expect(result.audit?.unavailable).toContain(`HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${hook}:${createHash("sha256").update(bytes).digest("hex")}`);
-    expect(result.audit?.unavailable.some(reason => reason.startsWith("AGY_HOOK_"))).toBe(false);
-    expect(result.recipe).not.toHaveProperty("agyHookShell");
-  }, 0, (workspace, settingsFile) => {
-    hook = join(workspace, "custom.sh"); writeFileSync(hook, bytes, {mode: 0o700});
-    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({hooks: {SessionStart: [{type: "command", command: `/bin/sh '${hook}'`, timeout: 10}]}}));
-  });
-});
-
-// Break caught: name/path recognition alone suppresses the generic guard for
-// unsupported hook bytes or a fake provider. These identities must never acquire
-// the new known-hook policy, regardless of valid public help or command quoting.
-it.each(["raw", "quoted"])("retains dynamic closure for unsupported %s custom hook descriptors", async spelling => {
-  let hook = "";
+it.each(["unrelated", "raw", "quoted"])("retains %s custom native hooks under unresolved activation without payload reads", async spelling => {
+  let hook = "", source = "";
   const bytes = "#!/bin/sh\n# inert fixture: ORCA_ENDPOINT\nexit 0\n";
-  await withAgyControls(agyHelp(), "1.4.12", result => {
-    expect(result.audit?.unavailable).toContain(`HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${hook}:${createHash("sha256").update(bytes).digest("hex")}`);
-    expect(result.recipe).not.toHaveProperty("agyHookShell");
-    expect(result.bootstrap.state).not.toBe("verified");
-  }, 0, (workspace, settingsFile) => {
-    hook = join(workspace, "antigravity-hook.sh");
-    writeFileSync(hook, bytes, { mode: 0o755 });
-    const command = (spelling === "raw" ? hook : "'" + hook + "'") + " custom-extra-argument";
-    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({ hooks: { SessionStart: [
-      { type: "command", command, timeout: 10 },
-    ] } }));
-  });
+  const reads: string[] = [], read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => { reads.push(String(args[0])); return Reflect.apply(read, fs, args); }) as typeof fs.readFileSync);
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+      const path = join(workspace, "../.gemini/antigravity-cli/hooks.json");
+      expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+      expect(result.audit?.sources.find(s => s.path === path)?.sha256).toBe(createHash("sha256").update(source).digest("hex"));
+      expect(reads).not.toContain(hook); expect(result.audit?.effects).toEqual([]);
+      expect(result.recipe).not.toHaveProperty("agyHookShell"); expect(result.bootstrap.state).not.toBe("verified");
+    }, 0, (workspace, settingsFile) => {
+      hook = join(workspace, spelling === "unrelated" ? "custom.sh" : "antigravity-hook.sh"); writeFileSync(hook, bytes, { mode: 0o755 });
+      const command = spelling === "unrelated" ? `/bin/sh '${hook}'` : (spelling === "raw" ? hook : "'" + hook + "'") + " custom-extra-argument";
+      source = JSON.stringify({ canonical: { SessionStart: [{ type: "command", command, timeout: 10 }] } });
+      writeFileSync(join(settingsFile, "../hooks.json"), source);
+    });
+  } finally { vi.restoreAllMocks(); }
 });
 
-async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void, exitCode = 0, prepare?: (workspace: string, settingsFile: string) => void) {
+async function withAgyControls(help: string, version: string, check: (result: Awaited<ReturnType<typeof inspectProviderControls>>, workspace: string) => void | Promise<void>, exitCode = 0, prepare?: (workspace: string, settingsFile: string) => void) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agy-contract-")));
   try {
     vi.stubEnv("HOME", root); vi.stubEnv("PATH", root+delimiter+process.env.PATH);
@@ -137,7 +234,7 @@ async function withAgyControls(help: string, version: string, check: (result: Aw
     prepare?.(workspace, settingsFile);
     const executable = join(root, "agy");
     writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});process.exitCode=${exitCode};`); chmodSync(executable, 0o700);
-    check(await inspectProviderControls(incidentRoster.reviewers.gemini, version, workspace, { state: "unknown", source: "fixture", detail: "not qualification" }), workspace);
+    await check(await inspectProviderControls(incidentRoster.reviewers.gemini, version, workspace, { state: "unknown", source: "fixture", detail: "not qualification" }), workspace);
   } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -536,18 +633,20 @@ it.each(["malformed", "non-regular"])("keeps AGY 1.4.12 blocked on %s settings",
 
 // Break caught: dropping the enrollment prerequisite also admits enabled hooks
 // whose effects have no authenticated coordinator disposition.
-it("keeps AGY 1.4.12 enabled hooks pending a source audit despite absent enrollment", async () => {
-  await withAgyControls(agyHelp(), "1.4.12", result => {
+it("keeps AGY 1.4.12 native hooks unavailable under unresolved activation despite absent enrollment", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
     const hooks = result.facts.find(fact => fact.name === "startup-hooks-and-plugins");
     expect(hooks?.observation.state).toBe("unknown");
-    expect(hooks?.observation.detail).toMatch(/^AUDIT_DISPOSITION_PENDING:/);
-    expect(result.audit?.effects).toHaveLength(1);
-    expect(result.audit?.unavailable).toEqual([]);
+    expect(hooks?.observation.detail).toContain("AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE");
+    expect(result.audit?.effects).toEqual([]);
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${join(workspace, "../.gemini/antigravity-cli/hooks.json")}`);
+    expect(result.recipe?.materializations?.some(m => m.content.includes("existing-deny(*)"))).toBe(true);
+    expect(readFileSync(join(workspace, "../.gemini/antigravity-cli/settings.json"), "utf8")).toBe('{"permissions":{"deny":["existing-deny(*)"]}}');
     expect(result.bootstrap.state).not.toBe("verified");
     expect(result.controls.state).toBe("unknown");
   }, 0, (_workspace, settingsFile) => {
     writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: ["existing-deny(*)"] } }));
-    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ prompt: "fixture lifecycle effect requiring audit" }] } }));
+    writeFileSync(join(settingsFile, "../hooks.json"), JSON.stringify({ canonical: { SessionStart: [{ type: "prompt", prompt: "fixture lifecycle effect requiring audit" }] } }));
   });
 });
 

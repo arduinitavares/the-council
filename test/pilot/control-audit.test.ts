@@ -29,12 +29,13 @@ async function preparedAgyAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
   const directory = join(h.root, ".gemini/antigravity-cli"); mkdirSync(directory, { recursive: true });
   const settings = join(directory, "settings.json"), hook = join(directory, "hooks.json");
   writeFileSync(settings, "{}");
-  writeFileSync(hook, JSON.stringify({ hooks: { SessionStart: [{ command: "/bin/echo sanitized-lifecycle" }] } }));
+  writeFileSync(hook, '{"canonical":{"SessionStart":[{"command":"/bin/echo sanitized-lifecycle"}]}}' );
   const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
   const executable = join(h.root, "agy");
   writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});`); chmodSync(executable, 0o700);
   const prepared = await prepareProviderAudit(incidentRoster.reviewers.gemini, "1.4.12", h.workspace);
-  expect(prepared.snapshot.unavailable).toEqual([]);
+  expect(prepared.snapshot.effects).toEqual([]);
+  expect(prepared.snapshot.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${hook}`);
   const guarded = prepared.snapshot.sources.filter(s => (s.kind ?? "file") === "file" && extname(s.path).toLowerCase() === ".json").map(s => s.path);
   expect(guarded.sort()).toEqual([settings, hook].sort());
   return { ...prepared, settings, hook, guarded };
@@ -45,6 +46,55 @@ async function completedAgyAudit(h: Awaited<ReturnType<typeof contextFixture>>) 
   const adopted = await adoptAuditSnapshot(h.workspace, prepared.hash, native.run, native.task, h.command);
   return { ...prepared, ...native, adopted };
 }
+
+async function preparedAgyAuthorityAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
+  const directory = join(h.root, "authority-inputs"); mkdirSync(directory);
+  const settings = join(directory, "settings.json"), hook = join(directory, "hooks.json");
+  writeFileSync(settings, '{"fixture":"settings"}'); writeFileSync(hook, '{"fixture":"hook-source"}');
+  const guarded = [settings, hook];
+  const saved = saveAuditSnapshot({ version: 1, workspace: h.workspace, route: "antigravity",
+    providerVersion: "fixture-native-authority-only", contract: "fixture-native-authority-only",
+    executable: "/fixture/agy", recipeHash: "fixture-native-authority-recipe",
+    sources: guarded.map(path => ({ path, kind: "file" as const, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") })),
+    ordering: guarded, effects: ["fixture-native-authority-effect"], unavailable: [] });
+  return { ...saved, settings, hook, guarded };
+}
+
+async function completedAgyAuthorityAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
+  const prepared = await preparedAgyAuthorityAudit(h), native = await approveAgySnapshot(h, prepared);
+  const adopted = await adoptAuditSnapshot(h.workspace, prepared.hash, native.run, native.task, h.command);
+  return { ...prepared, ...native, adopted };
+}
+
+// Break caught: authentic native authority cannot be reused or restored after drift.
+it("reuses a low-level authenticated AGY authority fixture", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAuthorityAudit(h), original = readFileSync(prepared.hook);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    writeFileSync(prepared.hook, '{"fixture":"changed"}');
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
+    writeFileSync(prepared.hook, original);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+  } finally { vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+// Break caught: an authentic disposition discharges an unsupported native model.
+it("cannot discharge native hook validation unknowns with a disposition", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await preparedAgyAudit(h);
+    const bytes = '{"canonical":{"SessionStart":[{"type":"prompt","prompt":"Review context","model":"future_model"}]}}';
+    writeFileSync(prepared.hook, bytes);
+    const actual = await prepareProviderAudit(incidentRoster.reviewers.gemini, "1.4.12", h.workspace);
+    expect(actual.snapshot.sources.find(source => source.path === prepared.hook)?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    const native = await approveAgySnapshot(h, actual);
+    await expect(adoptAuditSnapshot(h.workspace, actual.hash, native.run, native.task, h.command)).resolves.toMatchObject({ hash: actual.hash, providerQualification: "separate-required" });
+    expect((await acquiredAuditDisposition(actual.snapshot, h.command)).verified).toBe(false);
+    expect(actual.snapshot.unavailable).toContain(`AGY_NATIVE_HOOK_MODEL_UNAVAILABLE:${prepared.hook}:/canonical/SessionStart/0/model`);
+  } finally { vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
 
 function traceGuardedJson(paths: readonly string[], afterFileRead?: (path: string) => void,
   fault?: { beforeOpen?: (path: string) => void; afterRead?: (path: string, count: number) => void }) {
@@ -87,13 +137,10 @@ function traceGuardedJson(paths: readonly string[], afterFileRead?: (path: strin
 it("bounds AGY JSON revalidation with an existing authenticated disposition", async () => {
   const h = await contextFixture();
   try {
-    const prepared = await completedAgyAudit(h), nativeReads: string[] = [];
+    const prepared = await completedAgyAuthorityAudit(h), nativeReads: string[] = [];
     const command: Command = async (...args) => { nativeReads.push(args[0].slice(0, 2).join(" ")); return h.command(...args); };
     const trace = traceGuardedJson(prepared.guarded);
     expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(true);
-    const after = await inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", h.workspace, { state: "unknown", source: "test", detail: "no billing" }, command);
-    expect(auditHash(after.audit!)).toBe(prepared.hash);
-    expect(after.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
     expect(nativeReads).toEqual(expect.arrayContaining(["orchestration run-show", "worktree show", "orchestration dispatch-show", "orchestration task-list"]));
     trace.assertBounds();
     await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, command)).resolves.toMatchObject({ hash: prepared.hash });
@@ -105,6 +152,38 @@ it("bounds AGY JSON revalidation with an existing authenticated disposition", as
     expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(true);
     trace.assertBounds();
   } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+// Break caught: incomplete native sources skip guarded disposition revalidation.
+it("bounds incomplete native hook inspection with an existing authenticated disposition", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAudit(h), nativeReads: string[] = [];
+    const command: Command = async (...args) => { nativeReads.push(args[0].slice(0, 2).join(" ")); return h.command(...args); };
+    let dispositionReads = 0;
+    const trace = traceGuardedJson(prepared.guarded, path => { if (path === prepared.adopted.path) dispositionReads++; });
+    const after = await inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", h.workspace, { state: "unknown", source: "test", detail: "no billing" }, command);
+    expect(auditHash(after.audit!)).toBe(prepared.hash);
+    expect(dispositionReads).toBe(1);
+    expect(after.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${prepared.hook}`);
+    expect(after.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    expect(nativeReads).toEqual(expect.arrayContaining(["orchestration run-show", "worktree show", "orchestration dispatch-show", "orchestration task-list"]));
+    trace.assertBounds();
+    expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(false);
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+it("rejects low-level authenticated AGY JSON drift after successful reuse", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAuthorityAudit(h), original = readFileSync(prepared.settings);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    writeFileSync(prepared.settings, '{"fixture":"changed"}');
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
+    writeFileSync(prepared.settings, original);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+  } finally { vi.unstubAllEnvs(); await h.close(); }
 }, 30000);
 
 // Break caught: inspection trusts the hash acquired before disposition lookup
@@ -130,8 +209,9 @@ it("rejects guarded AGY JSON drift during matching-disposition inspection", asyn
     expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
     await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
     writeFileSync(prepared.settings, original);
-    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
-    expect((await inspect()).facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command)).resolves.toMatchObject({ hash: prepared.hash });
+    expect((await inspect()).facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
     trace.assertBounds();
   } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
 }, 30000);
@@ -141,7 +221,7 @@ it("rejects guarded AGY JSON drift during matching-disposition inspection", asyn
 it.each(["overflow", "malformed", "component-link", "leaf-link", "unreadable", "unstable"] as const)("rejects %s guarded AGY JSON without writing a disposition or falling back", async shape => {
   const h = await contextFixture();
   try {
-    const prepared = await completedAgyAudit(h), original = readFileSync(prepared.settings), reference = readFileSync(prepared.adopted.path);
+    const prepared = await completedAgyAuthorityAudit(h), original = readFileSync(prepared.settings), reference = readFileSync(prepared.adopted.path);
     let restore = () => writeFileSync(prepared.settings, original);
     let faultActive = false, changedThisOpen = false;
     const trace = traceGuardedJson(prepared.guarded, undefined, {
@@ -193,7 +273,7 @@ it.each(["overflow", "malformed", "component-link", "leaf-link", "unreadable", "
 it.each(["implicit", "explicit", "metadata", "absent", "missing-file", "file-and-metadata"] as const)("preserves %s AGY audit source semantics", async kind => {
   const h = await contextFixture();
   try {
-    const original = await preparedAgyAudit(h), path = join(h.workspace, "kind-control.JSON");
+    const original = await preparedAgyAuthorityAudit(h), path = join(h.workspace, "kind-control.JSON");
     const missing = kind === "absent" || kind === "missing-file";
     if (!missing) writeFileSync(path, kind === "metadata" ? "not JSON" : '{ "value": 1 }');
     const digest = missing ? null : createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -410,12 +490,12 @@ it("prepares actual versioned hook sources, adopts only matching native owner di
     mkdirSync(join(h.root,".agents/policies"),{recursive:true});const policy=join(h.root,".agents/policies/model-policy.md");writeFileSync(policy,policyTable);
     const settings=join(h.root,".gemini/antigravity-cli");mkdirSync(settings,{recursive:true});
     writeFileSync(join(settings,"settings.json"),"{}");
-    const hook=join(settings,"hooks.json");writeFileSync(hook,JSON.stringify({hooks:{SessionStart:[{command:"/bin/echo sanitized-lifecycle"}]}}));
+    const hook=join(settings,"hooks.json");writeFileSync(hook,'{"canonical":{"SessionStart":[{"command":"/bin/echo sanitized-lifecycle"}]}}' );
     const help=readFileSync(new URL("./fixtures/agy-1.4.12-help.txt",import.meta.url),"utf8");
     const exe=join(h.root,"agy");writeFileSync(exe,`#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});`);chmodSync(exe,0o700);
     const prepared=await prepareProviderAudit(incidentRoster.reviewers.gemini,"1.4.12",h.workspace);
     expect(prepared.snapshot.sources.find(s=>s.path===hook)?.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(prepared.snapshot.sources.some(s=>s.path===policy)).toBe(true);expect(prepared.snapshot.effects).toHaveLength(1);expect(prepared.snapshot.unavailable).toEqual([]);
+    expect(prepared.snapshot.sources.some(s=>s.path===policy)).toBe(true);expect(prepared.snapshot.effects).toEqual([]);expect(prepared.snapshot.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${hook}`);
     const before=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.12",h.workspace,{state:"unknown",source:"test",detail:"no billing"},h.command);
     expect(before.facts.find(f=>f.name==="workspace-trust")).toBeUndefined();
     expect(before.bootstrap.state).toBe("unknown");
@@ -433,15 +513,17 @@ it("prepares actual versioned hook sources, adopts only matching native owner di
     const adopted=await adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command);
     expect(adopted.providerQualification).toBe("separate-required");
     const after=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.12",h.workspace,{state:"unknown",source:"test",detail:"no billing"},h.command);
-    expect(after.bootstrap.state).toBe("verified");expect(after.controls.state).toBe("unknown");
+    expect(after.bootstrap.state).toBe("unknown");
+    expect((await acquiredAuditDisposition(prepared.snapshot,h.command)).verified).toBe(false);expect(after.controls.state).toBe("unknown");
     const state=JSON.parse(readFileSync(h.state,"utf8"));const result=JSON.parse(state.tasks[0].result);state.tasks[0].result=JSON.stringify({...result,reportedBy:"foreign"});writeFileSync(h.state,JSON.stringify(state));
     expect((await acquiredAuditDisposition(prepared.snapshot,h.command)).verified).toBe(false);
     state.tasks[0].result=JSON.stringify(result);writeFileSync(h.state,JSON.stringify(state));
-    writeFileSync(hook,JSON.stringify({hooks:{SessionStart:[{command:"/bin/echo changed"}]}}));
+    await expect(adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command)).resolves.toMatchObject({hash:prepared.hash});
+    writeFileSync(hook,'{"canonical":{"SessionStart":[{"command":"/bin/echo changed"}]}}' );
     await expect(adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
     const drift=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.12",h.workspace,{state:"unknown",source:"test",detail:"no billing"},h.command);
     expect(drift.bootstrap.state).toBe("unknown");
-    writeFileSync(hook,JSON.stringify({hooks:{SessionStart:[{command:"/bin/echo sanitized-lifecycle"}]}}));writeFileSync(policy,policyTable+"\nChanged governing authority.\n");
+    writeFileSync(hook,'{"canonical":{"SessionStart":[{"command":"/bin/echo sanitized-lifecycle"}]}}' );writeFileSync(policy,policyTable+"\nChanged governing authority.\n");
     await expect(adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
   }finally{vi.unstubAllEnvs();await h.close();}
 },30000);

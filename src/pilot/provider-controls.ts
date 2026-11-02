@@ -11,7 +11,7 @@ import { acquiredAuditDisposition, adoptAuditSnapshot, currentSourceDigest, save
 import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
-import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
+import { validateAgyNativeHookSource } from "./agy-native-hook-validation.js";
 import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
 import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile, type ReadReceipt } from "./inventory-io.js";
 
@@ -301,25 +301,24 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
         }
       } catch { inventoryKnown = false; }
     }
-    const hooks = hookFiles.map(file => read(file)).filter(value=>value!==undefined);
+    // Retain guarded bytes and their custody receipt with each complete source.
+    // These observations establish acquisition order, not effective loader order.
+    const hooks = hookFiles.map(path => {
+      ordering.push(path);
+      const acquisition = readAgyJson(path);
+      if (acquisition.state !== "present") return { path, acquisition };
+      const validation = validateAgyNativeHookSource({ path, file: acquisition.value.file });
+      if (validation.state === "valid") unavailable.push(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+      else for (const problem of validation.problems) unavailable.push(`${problem.code}:${problem.path}:${problem.pointer}`);
+      return { path, acquisition, validation };
+    });
     if (unavailable.length > inventoryFailuresBefore) inventoryKnown = false;
     if (!inventoryKnown) unavailable.push("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
-    for(const hooksSource of hooks)hookEffects(hooksSource);
-    if (executable && agyHookShellApplicable(hookDescriptors, workspace)) {
-      const acquired = acquireAgyHookShellPolicy({ workspace, executable, version, descriptors: hookDescriptors, basePath: process.env.PATH ?? "" });
-      if (acquired.policy) {
-        agyHookShell = acquired.policy;
-        for (const source of acquired.sources) if (!sources.some(s => s.path === source.path && s.kind === source.kind)) sources.push(source);
-        effects.push(...acquired.effects);
-        // The policy recognizes the whole discovered referencing set, including
-        // duplicates. An extra custom descriptor prevents this discharge.
-        const known = `HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${agyHookShell.installed}:${sha256(agyHookShell.hookContent)}`;
-        for (let i = unavailable.length - 1; i >= 0; i--) if (unavailable[i] === known) unavailable.splice(i, 1);
-      } else unavailable.push(...acquired.unavailable);
-    }
+    // No H1 source has qualified loader membership, activation or command bases.
+    // Conforming occurrences remain inert; the generic scanner is for other routes.
     for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
-    const enabledHook = (value: any): boolean => value && typeof value === "object" && (Array.isArray(value) ? value.some(enabledHook) : value.enabled === false ? false : typeof value.command === "string" || typeof value.prompt === "string" || typeof value.type === "string" || Object.values(value).some(enabledHook));
-    add("startup-hooks-and-plugins", inventoryKnown && hooks.every(value => value !== undefined && !enabledHook(value)) ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${hooks.length} sources inventoried; enabled or unreadable hooks require source/effect audit within existing authority, not automatic renewed approval`, "SessionStart precedes inference; settings hooks={} is insufficient");
+    const acquiredHooks = hooks.filter(source => source.acquisition.state === "present");
+    add("startup-hooks-and-plugins", inventoryKnown && acquiredHooks.length === 0 ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${acquiredHooks.length} acquired sources; native conformance does not establish loader membership or runtime activity`, "SessionStart precedes inference; settings hooks={} is insufficient");
     if (!settingsUnavailable) {
       try {
         agyRecipePlan = buildAgyRecipePlan({ selection, version, workspace, executable: executable ?? "unavailable", legacySettings: config, agyHookShell: agyHookShell ?? null });
@@ -427,7 +426,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const disposition=await acquiredAuditDisposition(audit,command);
   const auditedNames=new Set(["startup-and-platform-exceptions","startup-hooks-and-plugins","helper-and-startup-effect-enforcement"]);
   for(const fact of facts)if(auditedNames.has(fact.name)&&fact.observation.state!=="verified"){
-    fact.observation={state:disposition.verified?"verified":"unknown",source:"Source snapshot and authenticated coordinator disposition",detail:disposition.detail};
+    fact.observation={state:disposition.verified?"verified":"unknown",source:"Source snapshot and authenticated coordinator disposition",detail:selection.route === "antigravity" && audit.unavailable.length ? audit.unavailable.join("; ") : disposition.detail};
     fact.digest=auditHash(audit);
   }
   if(recipe&&selection.route==="codex")recipe.instructionSources=sources.filter(source=>source.kind!=="absent"&&/(?:AGENTS(?:\.override)?\.md|GEMINI\.md)$/.test(source.path)).map(source=>({path:source.path,sha256:source.sha256!}));

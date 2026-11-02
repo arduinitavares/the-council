@@ -54,30 +54,38 @@ it("acquires current-store metadata and command hooks alongside a separate works
     const manifest = join(plugin, "plugin.json");
     const hook = join(plugin, "hooks.json");
     const workspaceHook = join(workspace, ".agents/plugins/control/hooks.json");
+    const hookBytes = '{"installed":{"SessionStart":[{"type":"command","command":"/bin/echo inert-store-fixture"}]}}';
+    const workspaceHookBytes = '{"workspace":{"SessionStart":[{"type":"prompt","prompt":"inert workspace control","model":"inherit"}]}}';
     put(manifest, '{"name":"installed"}');
-    put(hook, '{"hooks":{"SessionStart":[{"type":"command","command":"/bin/echo inert-store-fixture"}]}}');
-    put(workspaceHook, '{"hooks":{"SessionStart":[{"type":"prompt","prompt":"inert workspace control"}]}}');
+    put(hook, hookBytes);
+    put(workspaceHook, workspaceHookBytes);
     const result = await inspect();
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
     expect(source(result, store).kind).toBe("metadata");
     expect(source(result, plugin).kind).toBe("metadata");
     expect(source(result, manifest).sha256).toBe(digest('{"name":"installed"}'));
-    expect(source(result, hook).sha256).toBe(digest(readFileSync(hook, "utf8")));
-    expect(source(result, workspaceHook).kind).toBe("file");
-    expect(result.audit?.effects.filter(effect => effect.startsWith("startup-hook:"))).toHaveLength(2);
-    expect(result.facts.find(fact => fact.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
-    expect(result.bootstrap.state).not.toBe("verified");
+    expect(source(result, hook)).toMatchObject({ path: hook, kind: "file", sha256: digest(hookBytes) });
+    expect(source(result, workspaceHook)).toMatchObject({ path: workspaceHook, kind: "file", sha256: digest(workspaceHookBytes) });
+    expect(result.audit?.effects).toEqual([]);
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${hook}`);
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${workspaceHook}`);
+    expect(result.recipe).not.toHaveProperty("agyHookShell");
+    expectUnavailable(result);
   });
 });
 
 it("retains recognized workspace hook acquisition without an installed store", async () => {
-  await withFixture(async ({ workspace, inspect }) => {
+  await withFixture(async ({ workspace, store, inspect }) => {
     const hook = join(workspace, ".agents/plugins/control/hooks.json");
-    put(hook, '{"hooks":{"SessionStart":[{"type":"prompt","prompt":"workspace control"}]}}');
+    const hookBytes = '{"workspace":{"SessionStart":[{"type":"prompt","prompt":"workspace control","model":"inherit"}]}}';
+    put(hook, hookBytes);
     const result = await inspect();
-    expect(source(result, hook).kind).toBe("file");
-    expect(result.audit?.effects).toHaveLength(1);
-    expect(result.facts.find(fact => fact.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    expect(source(result, store)).toMatchObject({ path: store, kind: "absent", sha256: null });
+    expect(source(result, hook)).toMatchObject({ path: hook, kind: "file", sha256: digest(hookBytes) });
+    expect(result.audit?.effects).toEqual([]);
+    expect(result.audit?.unavailable).toContain(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${hook}`);
+    expect(result.recipe).not.toHaveProperty("agyHookShell");
+    expectUnavailable(result);
   });
 });
 

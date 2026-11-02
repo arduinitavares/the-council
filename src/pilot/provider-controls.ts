@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, dirname, resolve, sep, extname } from "node:path";
 import { execFile } from "node:child_process";
@@ -13,7 +13,7 @@ import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
 import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
 import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
-import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile } from "./inventory-io.js";
+import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile, type ReadReceipt } from "./inventory-io.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -213,11 +213,63 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = !settingsUnavailable;
     const inventoryFailuresBefore = unavailable.length;
+    const directoryMetadata = (root: string, receipt?: ReadReceipt): AuditSource | InventoryProblem => {
+      const custody = ["dev", "ino", "uid", "gid", "mode"] as const;
+      const selected = [...custody, "size", "mtimeMs", "ctimeMs"] as const;
+      const fault = (code: string, path: string): never => { throw Object.assign(Error(code), { code, path }); };
+      try {
+        const parts = resolve(root).split(sep).filter(Boolean);
+        const observed: { path: string; stat: Stats; leaf: boolean }[] = [];
+        let current: string = sep;
+        for (let index = 0; index <= parts.length; index++) {
+          if (index) current = join(current, parts[index - 1]!);
+          const stat = lstatSync(current), leaf = index === parts.length;
+          if (!leaf && stat.isSymbolicLink()) fault("INVENTORY_SYMLINK", current);
+          if (!leaf && !stat.isDirectory()) fault("ENOTDIR", current);
+          // Only an exact leaf-link refusal may retain link metadata. No link
+          // target is opened, and unsafe parents stop before their descendants.
+          if (leaf && (receipt ? !stat.isDirectory() || stat.isSymbolicLink() : !stat.isSymbolicLink())) fault("INVENTORY_UNSTABLE", current);
+          if (receipt) {
+            const expected = receipt.components.find(component => component.path === current)?.identity;
+            if (!expected || (leaf ? selected : custody).some(key => stat[key] !== expected[key])) fault("INVENTORY_UNSTABLE", current);
+          }
+          observed.push({ path: current, stat, leaf });
+        }
+        for (const entry of observed) {
+          const after = lstatSync(entry.path);
+          if ((!entry.leaf && (!after.isDirectory() || after.isSymbolicLink())) ||
+              after.isSymbolicLink() !== entry.stat.isSymbolicLink() ||
+              (entry.leaf ? selected : custody).some(key => after[key] !== entry.stat[key])) fault("INVENTORY_UNSTABLE", entry.path);
+        }
+        const leaf = observed[observed.length - 1]!.stat;
+        // Bind the original metadata meaning to the enumerated generation,
+        // rather than fingerprinting a newer directory after its fd closes.
+        const stat = receipt?.after ?? leaf;
+        return { path: root, kind: "metadata", sha256: sha256(canonicalJson({ mode: stat.mode, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, symbolicLink: leaf.isSymbolicLink() })) };
+      } catch (cause) {
+        const error = cause as { code?: unknown; path?: unknown } | null;
+        return { code: typeof error?.code === "string" ? error.code : "INVENTORY_IO_UNKNOWN", path: typeof error?.path === "string" ? error.path : root, edge: null };
+      }
+    };
     const listAgyDirectory = (root: string) => {
       const result = listInventoryDirectory(root, inventoryBudget);
-      if (result.state === "unknown") inventoryProblems(result.problems);
+      if (result.state === "unknown") {
+        inventoryProblems(result.problems);
+        if (result.problems.some(problem => problem.code === "INVENTORY_SYMLINK" && problem.path === root)) {
+          const metadata = directoryMetadata(root);
+          if ("code" in metadata) inventoryProblems([metadata]);
+          else addAgySource(metadata);
+        }
+      }
       else if (result.state === "absent") addAgySource({ path: root, kind: "absent", sha256: null });
-      else track(root, "metadata");
+      else {
+        const metadata = directoryMetadata(root, result.receipt);
+        if ("code" in metadata) {
+          inventoryProblems([metadata]);
+          return { state: "unknown" as const, problems: [metadata] };
+        }
+        addAgySource(metadata);
+      }
       return result;
     };
     const candidateLeaves = ["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugin.json", ".claude-plugin/plugin.json", "gemini-extension.json"];

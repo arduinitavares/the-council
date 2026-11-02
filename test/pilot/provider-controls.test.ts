@@ -15,6 +15,7 @@ vi.mock("node:fs", async importOriginal => {
   return { ...actual, default: mutable,
     readFileSync: (...args: Parameters<typeof fs.readFileSync>) => Reflect.apply(mutable.readFileSync, mutable, args),
     readdirSync: (...args: Parameters<typeof fs.readdirSync>) => Reflect.apply(mutable.readdirSync, mutable, args),
+    lstatSync: (...args: Parameters<typeof fs.lstatSync>) => Reflect.apply(mutable.lstatSync, mutable, args),
   };
 });
 
@@ -245,6 +246,85 @@ it.each(["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugi
         if (guarded.has(String(args[0]))) raw.push(String(args[0]));
         return Reflect.apply(read, fs, args);
       }) as typeof fs.readFileSync);
+    });
+  } finally { vi.restoreAllMocks(); }
+});
+
+// Break caught: a directory closes with an old entry set, then a new legitimate
+// plugin is inserted and its parent's new metadata silently authenticates it.
+it.each(["legacy-root", "current-root", "workspace-root", "legacy-plugin", "current-plugin", "workspace-plugin"])("rejects AGY directory close-boundary insertion at %s", async location => {
+  let selected = "", inserted = false;
+  const ownedDescriptors = new Set<number>();
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(inserted).toBe(true);
+      expect(result.audit?.unavailable).toContain(`INVENTORY_UNSTABLE:${selected}`);
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+      expect(result.audit?.sources.some(s => s.path === selected)).toBe(false);
+      expect(ownedDescriptors.size).toBe(0);
+    }, 0, (workspace, settings) => {
+      const root = location.startsWith("legacy") ? join(settings, "../plugins") : location.startsWith("current") ? join(workspace, "../.gemini/config/plugins") : join(workspace, ".agents/plugins");
+      selected = location.endsWith("plugin") ? join(root, "candidate") : root;
+      mkdirSync(selected, { recursive: true });
+      if (location.endsWith("plugin")) writeFileSync(join(selected, "hooks.json"), "{}");
+      const open = fs.openSync, close = fs.closeSync;
+      vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+        const fd = Reflect.apply(open, fs, args);
+        if (String(args[0]) === selected) ownedDescriptors.add(fd);
+        return fd;
+      }) as typeof fs.openSync);
+      vi.spyOn(fs, "closeSync").mockImplementation((fd => {
+        close(fd);
+        if (ownedDescriptors.delete(fd) && !inserted) {
+          inserted = true;
+          const plugin = location.endsWith("plugin") ? selected : join(selected, "late-plugin");
+          mkdirSync(plugin, { recursive: true });
+          writeFileSync(join(plugin, "plugin.json"), '{"name":"late-plugin"}');
+          writeFileSync(join(plugin, "hooks.json"), '{"hooks":{"SessionStart":[{"command":"/bin/echo inert-late-plugin"}]}}');
+        }
+      }) as typeof fs.closeSync);
+    });
+  } finally { vi.restoreAllMocks(); }
+});
+
+// Break caught: a refused dangling leaf link loses its own metadata, or a
+// parent substituted after refusal is followed while trying to retain it.
+it.each([false, true])("retains only safe AGY leaf-link metadata after refusal with parent substitution %s", async replaceParent => {
+  let root = "", rootLookups = 0;
+  const payloads: string[] = [];
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(result.audit?.unavailable).toContain(`INVENTORY_SYMLINK:${root}`);
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+      const source = result.audit?.sources.find(s => s.path === root);
+      if (replaceParent) {
+        expect(source).toBeUndefined();
+        expect(rootLookups).toBe(1);
+      } else {
+        const stat = fs.lstatSync(root);
+        const digest = createHash("sha256").update(JSON.stringify({ dev: stat.dev, ino: stat.ino, mode: stat.mode, mtimeMs: stat.mtimeMs, size: stat.size, symbolicLink: true })).digest("hex");
+        expect(source).toEqual({ path: root, kind: "metadata", sha256: digest });
+      }
+      expect(payloads).toEqual([]);
+    }, 0, (workspace, settings) => {
+      root = join(workspace, "../.gemini/config/plugins"); mkdirSync(join(root, ".."), { recursive: true });
+      symlinkSync(join(workspace, "missing-target"), root);
+      const read = fs.readFileSync, open = fs.openSync, lstat = fs.lstatSync;
+      vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+        if (String(args[0]).startsWith(root)) payloads.push(String(args[0]));
+        return Reflect.apply(read, fs, args);
+      }) as typeof fs.readFileSync);
+      vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+        if (String(args[0]).startsWith(root)) payloads.push(String(args[0]));
+        return Reflect.apply(open, fs, args);
+      }) as typeof fs.openSync);
+      vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = Reflect.apply(lstat, fs, args);
+        if (String(args[0]) === root && ++rootLookups === 1 && replaceParent) {
+          const moved = join(workspace, "moved-config"); fs.renameSync(join(root, ".."), moved); symlinkSync(moved, join(root, ".."));
+        }
+        return stat;
+      }) as typeof fs.lstatSync);
     });
   } finally { vi.restoreAllMocks(); }
 });

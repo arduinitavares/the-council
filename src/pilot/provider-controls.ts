@@ -12,6 +12,7 @@ import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
 import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
+import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -160,6 +161,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const materializations: { path: string; content: string; sha256: string }[] = [];
   let codexPolicy: ProviderRecipe["codexPolicy"];
   let agyHookShell: ProviderRecipe["agyHookShell"];
+  let agyRecipePlan: ReturnType<typeof buildAgyRecipePlan> | undefined;
   if (selection.route === "antigravity") {
     const exposed = agyHelpFlags(help);
     const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
@@ -172,7 +174,9 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
       sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
       "Unreviewed versions cannot inherit loader/hook-source qualification");
     const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
+    const settingsFailuresBefore = unavailable.length;
     const config = read(global);
+    const settingsUnavailable = unavailable.length > settingsFailuresBefore;
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = true;
     const inventoryFailuresBefore = unavailable.length;
@@ -252,14 +256,22 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
     const enabledHook = (value: any): boolean => value && typeof value === "object" && (Array.isArray(value) ? value.some(enabledHook) : value.enabled === false ? false : typeof value.command === "string" || typeof value.prompt === "string" || typeof value.type === "string" || Object.values(value).some(enabledHook));
     add("startup-hooks-and-plugins", inventoryKnown && hooks.every(value => value !== undefined && !enabledHook(value)) ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${hooks.length} sources inventoried; enabled or unreadable hooks require source/effect audit within existing authority, not automatic renewed approval`, "SessionStart precedes inference; settings hooks={} is insufficient");
-    const agent = "---\nname: council-packet\ndescription: Supplied-packet Council reader with no tools or helpers.\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nRead the supplied packet only and return its strict bound JSON envelope.\n";
-    const session = JSON.stringify({ allowNonWorkspaceAccess: false, permissions: { ...(config?.permissions ?? {}), deny: [...new Set([...(config?.permissions?.deny ?? []), "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"])] } });
-    materializations.push({ path: join(cwd, ".agents/agents/council-packet/agent.md"), content: agent, sha256: sha256(agent) }, { path: join(cwd, ".council-profiles", sha256(session), "session-settings.json"), content: session, sha256: sha256(session) });
+    if (!settingsUnavailable) {
+      try {
+        agyRecipePlan = buildAgyRecipePlan({ selection, version, workspace, executable: executable ?? "unavailable", legacySettings: config, agyHookShell: agyHookShell ?? null });
+        materializations.push(...agyRecipePlan.materializations);
+        argv.push(...agyRecipePlan.argv);
+      } catch (cause) {
+        if (!(cause instanceof AgyRecipeSettingsError)) throw cause;
+        unavailable.push(cause.message);
+        add("agy-recipe-settings", "unknown", global, cause.message, "No recipe from malformed controlling settings");
+      }
+    }
     const collisionSources = [join(homedir(), ".gemini/config/agents/council-packet.md"), join(homedir(), ".gemini/config/agents/council-packet/agent.md")];
     for(const file of collisionSources)track(file);const collision=collisionSources.some(existsSync);
-    add("custom-agent-definition", collision ? "missing" : "verified", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : sha256(agent), "Definition metadata only; verify actual selected agent and empty init.tools before input");
+    const agentHash = agyRecipePlan?.agentDefinition?.sha256;
+    add("custom-agent-definition", collision ? "missing" : agentHash ? "verified" : "unknown", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : agentHash ?? "AGY recipe settings unavailable", "Definition metadata only; verify actual selected agent and empty init.tools before input");
     add("effective-input-gate", "unknown", "AGY stream-json init", "Require init before user input, exact model/agent/cwd/permission and empty tools", "Wrapper withholds stdin until effective checks pass", "effective");
-    argv.push("--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--add-dir", cwd, "--mode", "plan", "--sandbox", "--settings", join(cwd, ".council-profiles", sha256(session), "session-settings.json"), "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s");
   } else if (selection.route === "codex") {
     const configurations: any[] = [];
     const codexHome = nonblankRoot(process.env.CODEX_HOME) ?? join(homedir(),".codex");
@@ -338,7 +350,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   // Sources and their digests are acquired even when enforcement is unavailable.
   // A future supported recipe must satisfy the same fact conjunction; no flag
   // or input file can mark the current missing controls verified.
-  if (executable && help) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
+  if (executable && help && (selection.route !== "antigravity" || agyRecipePlan)) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
     executable, argv, cwd, version, selection: selectionSchema.parse(selection), expectedPermission: "request-review", sources, facts,
     ...(selection.route === "antigravity" ? { agent: "council-packet" } : {}), materializations };
   if (recipe && codexPolicy) recipe.codexPolicy = codexPolicy;

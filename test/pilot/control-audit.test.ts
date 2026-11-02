@@ -517,6 +517,7 @@ it("prepares actual versioned hook sources, adopts only matching native owner di
     expect((await acquiredAuditDisposition(prepared.snapshot,h.command)).verified).toBe(false);expect(after.controls.state).toBe("unknown");
     const state=JSON.parse(readFileSync(h.state,"utf8"));const result=JSON.parse(state.tasks[0].result);state.tasks[0].result=JSON.stringify({...result,reportedBy:"foreign"});writeFileSync(h.state,JSON.stringify(state));
     expect((await acquiredAuditDisposition(prepared.snapshot,h.command)).verified).toBe(false);
+    await expect(adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command)).rejects.toThrow(/^AUDIT_NATIVE_DISPOSITION_UNVERIFIED$/);
     state.tasks[0].result=JSON.stringify(result);writeFileSync(h.state,JSON.stringify(state));
     await expect(adoptProviderAudit(h.workspace,prepared.hash,run,task,h.command)).resolves.toMatchObject({hash:prepared.hash});
     writeFileSync(hook,'{"canonical":{"SessionStart":[{"command":"/bin/echo changed"}]}}' );

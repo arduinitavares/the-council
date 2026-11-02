@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, dirname, resolve, sep } from "node:path";
+import { delimiter, join, dirname, resolve, sep, extname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parse as parseToml } from "smol-toml";
@@ -13,6 +13,7 @@ import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
 import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
 import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
+import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile } from "./inventory-io.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -68,6 +69,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const effects: string[] = [];
   const ordering: string[] = [];
   const hookDescriptors: unknown[] = [];
+  const inventoryBudget: InventoryBudget = { paths: new Set<string>(), jsonBytes: 0 };
   const add = (name: string, state: Observation["state"], source: string, detail: string, enforcement: string, stage: "bootstrap" | "effective" = "bootstrap") => {
     facts.push(controlFactSchema.parse({ name, stage, observation: { state, source, detail }, enforcement, observedAt: Date.now(), digest: sha256(JSON.stringify({ source, detail })) }));
   };
@@ -96,12 +98,43 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     }
     add("installed-command-contract", "verified", `${name} --help / ${version}`, sha256(help), "Installed public CLI parameters, not effective configuration");
   } catch { add("installed-command-contract", "missing", `${name} --help`, "Bounded non-inference command evidence unavailable", "No initialization"); }
+  const inventoryProblems = (problems: readonly InventoryProblem[]) => {
+    for (const problem of problems) {
+      unavailable.push(`${problem.code}:${problem.path}`);
+      add("source-acquisition", "unknown", problem.path, canonicalJson(problem), "No inferred source absence or digest");
+    }
+  };
+  const addAgySource = (source: AuditSource) => {
+    if (!sources.some(existing => existing.path === source.path && existing.kind === source.kind)) sources.push(source);
+  };
+  const readAgyJson = (file: string): InventoryRead<{ value: unknown; file: BoundedFile }> => {
+    const result = readInventoryJson(file, inventoryBudget);
+    if (result.state === "present") addAgySource({ path: file, kind: "file", sha256: result.value.file.sha256 });
+    else if (result.state === "absent") addAgySource({ path: file, kind: "absent", sha256: null });
+    else inventoryProblems(result.problems);
+    return result;
+  };
   const track = (file: string, kind: "file" | "metadata" = "file") => {
-    if (sources.some(source => source.path === file)) return;
-    try { const source: AuditSource = { path: file, kind: existsSync(file) ? kind : "absent", sha256: null }; source.sha256 = currentSourceDigest(source); sources.push(source); }
+    if (selection.route === "antigravity" && kind === "file" && extname(file).toLowerCase() === ".json") { readAgyJson(file); return; }
+    if (selection.route !== "antigravity" && sources.some(source => source.path === file)) return;
+    try {
+      const source: AuditSource = { path: file, kind: existsSync(file) ? kind : "absent", sha256: null };
+      if (selection.route === "antigravity" && sources.some(existing => existing.path === file && existing.kind === source.kind)) return;
+      source.sha256 = currentSourceDigest(source); sources.push(source);
+    }
     catch { unavailable.push(`SOURCE_METADATA_OR_DIGEST_UNAVAILABLE:${file}`); add("source-acquisition", "unknown", file, "Source metadata/digest unavailable", "No inferred source absence"); }
   };
   const read = (file: string): any => {
+    if (selection.route === "antigravity") {
+      ordering.push(file);
+      const result = readAgyJson(file);
+      if (result.state === "present") return result.value.value;
+      if (result.state === "unknown") {
+        unavailable.push(`CONFIGURATION_UNREADABLE:${file}`);
+        add("configuration-readable", "unknown", file, "Configuration is unavailable or malformed", "No initialization");
+      }
+      return undefined;
+    }
     track(file); ordering.push(file);
     if (!existsSync(file)) return undefined;
     try { return readStrictFile(file, 1024*1024); }
@@ -178,61 +211,39 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     const config = read(global);
     const settingsUnavailable = unavailable.length > settingsFailuresBefore;
     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
-    let inventoryKnown = true;
+    let inventoryKnown = !settingsUnavailable;
     const inventoryFailuresBefore = unavailable.length;
-    // Validate components before track() can hash bytes. existsSync alone would
-    // hide dangling links, and a leaf lstat alone would follow directory links.
-    const pluginPathStat = (file: string, allowLeafLink = false) => {
-      const parts = resolve(file).split(sep).filter(Boolean);
-      let current: string = sep;
-      for (const [index, part] of parts.entries()) {
-        current = join(current, part);
-        let stat;
-        try { stat = lstatSync(current); }
-        catch (cause) { if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw cause; }
-        if ((stat.isSymbolicLink() && !(allowLeafLink && index === parts.length - 1)) || (index < parts.length - 1 && !stat.isDirectory())) throw Error("AGY_PLUGIN_PATH_UNVERIFIED");
-        if (index === parts.length - 1) return stat;
-      }
-      return lstatSync(sep);
+    const listAgyDirectory = (root: string) => {
+      const result = listInventoryDirectory(root, inventoryBudget);
+      if (result.state === "unknown") inventoryProblems(result.problems);
+      else if (result.state === "absent") addAgySource({ path: root, kind: "absent", sha256: null });
+      else track(root, "metadata");
+      return result;
     };
     const candidateLeaves = ["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugin.json", ".claude-plugin/plugin.json", "gemini-extension.json"];
     for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(homedir(), ".gemini/config/plugins"), join(workspace, ".agents/plugins")]) {
       try {
-        const rootStat = pluginPathStat(root, true);
-        // lstat distinguishes a dangling root link from absence. Fingerprint its
-        // metadata without following it; reject it before directory acquisition.
-        const rootSource: AuditSource = { path: root, kind: rootStat ? "metadata" : "absent", sha256: null };
-        rootSource.sha256 = currentSourceDigest(rootSource);
-        sources.push(rootSource); // Includes absence, so later appearance drifts.
-        if (!rootStat) continue;
-        if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw Error("AGY_PLUGIN_ROOT_NOT_DIRECTORY");
-        const entries = readdirSync(root, { withFileTypes: true });
-        if (entries.length > 100) throw Error("AGY_PLUGIN_INVENTORY_LIMIT");
-        for (const entry of entries) {
-          if (entry.isSymbolicLink()) { inventoryKnown = false; continue; }
-          if (!entry.isDirectory()) continue;
+        const listing = listAgyDirectory(root);
+        if (listing.state === "absent") continue;
+        if (listing.state === "unknown") { inventoryKnown = false; continue; }
+        for (const entry of listing.value.entries) {
+          if (entry.type === "symlink") { listAgyDirectory(join(root, entry.name)); inventoryKnown = false; continue; }
+          if (entry.type !== "directory") continue;
           const plugin = join(root, entry.name);
           try {
-            if (!pluginPathStat(plugin)?.isDirectory()) throw Error("AGY_PLUGIN_DIRECTORY_UNAVAILABLE");
-            track(plugin, "metadata");
+            if (listAgyDirectory(plugin).state !== "present") { inventoryKnown = false; continue; }
             let hasMetadata = false;
             for (const leaf of candidateLeaves) {
               const file = join(plugin, leaf);
-              const stat = pluginPathStat(file);
-              if (stat) {
-                if (!stat.isFile() || stat.size > 1024 * 1024) throw Error("AGY_PLUGIN_METADATA_UNREADABLE");
-                readStrictFile(file, 1024 * 1024);
-                hasMetadata = true;
-              }
-              track(file);
+              const result = readAgyJson(file);
+              if (result.state === "present") hasMetadata = true;
+              else if (result.state === "unknown") inventoryKnown = false;
             }
             const hook = join(plugin, "hooks.json");
-            const hookStat = pluginPathStat(hook);
-            if (hookStat && (!hookStat.isFile() || hookStat.size > 1024 * 1024)) throw Error("AGY_PLUGIN_HOOK_UNREADABLE");
             hookFiles.push(hook);
             // Fingerprints select no manifest and establish no enablement rule.
             // Hookless candidates and unresolved metadata cannot qualify startup.
-            if (hasMetadata || !hookStat) inventoryKnown = false;
+            if (hasMetadata || !existsSync(hook)) inventoryKnown = false;
           } catch { inventoryKnown = false; }
         }
       } catch { inventoryKnown = false; }

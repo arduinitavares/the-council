@@ -1,11 +1,22 @@
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync, statSync, existsSync } from "node:fs";
+import fs, { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync, statSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
 import { auditHash } from "../../src/pilot/control-audit.js";
 import { incidentRoster } from "./fixtures.js";
+
+// Keep named payload reads and the inventory reader's default fs observable
+// through the same fixture-local instrumentation. All other calls stay real.
+vi.mock("node:fs", async importOriginal => {
+  const actual = await importOriginal<typeof fs & { default: typeof fs }>();
+  const mutable = { ...actual.default };
+  return { ...actual, default: mutable,
+    readFileSync: (...args: Parameters<typeof fs.readFileSync>) => Reflect.apply(mutable.readFileSync, mutable, args),
+    readdirSync: (...args: Parameters<typeof fs.readdirSync>) => Reflect.apply(mutable.readdirSync, mutable, args),
+  };
+});
 
 const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
 const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  --${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
@@ -128,6 +139,115 @@ async function withAgyControls(help: string, version: string, check: (result: Aw
     check(await inspectProviderControls(incidentRoster.reviewers.gemini, version, workspace, { state: "unknown", source: "fixture", detail: "not qualification" }), workspace);
   } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
 }
+
+// Break caught: AGY hashes/loads JSON or enumerates an entire root before its
+// refusal bound, and an acquisition failure can masquerade as empty settings.
+it("bounds AGY inventory reads before digest or parse", async () => {
+  for (const shape of ["limit", "overflow", "directory"] as const) {
+    const raw: string[] = [];
+    try {
+      await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+        const settings = join(workspace, "../.gemini/antigravity-cli/settings.json");
+        expect(raw).toEqual([]);
+        if (shape === "limit") {
+          expect(result.recipe?.protocol).toBe("agy-stream");
+          expect(result.audit?.unavailable).toEqual([]);
+          expect(result.audit?.sources.find(s => s.path === settings)).toMatchObject({ kind: "file", sha256: createHash("sha256").update("{}"+" ".repeat(1048574)).digest("hex") });
+        } else {
+          const refused = shape === "overflow" ? settings : join(workspace, "../.gemini/antigravity-cli/plugins");
+          expect(result.audit?.unavailable).toContain(`${shape === "overflow" ? "INVENTORY_BYTE_LIMIT" : "INVENTORY_DIRECTORY_LIMIT"}:${refused}`);
+          expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+          if (shape === "overflow") {
+            expect(result.recipe).toBeUndefined();
+            expect(result.audit?.sources.some(s => s.path === settings && s.kind === "file")).toBe(false);
+          }
+        }
+      }, 0, (workspace, settings) => {
+        writeFileSync(settings, "{}"+" ".repeat(shape === "overflow" ? 1048575 : shape === "limit" ? 1048574 : 0));
+        const root = join(workspace, "../.gemini/antigravity-cli/plugins");
+        if (shape === "directory") { mkdirSync(root); for (let n = 0; n < 101; n++) mkdirSync(join(root, String(n))); }
+        const read = fs.readFileSync, list = fs.readdirSync;
+        vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+          if (String(args[0]) === settings) raw.push(settings);
+          return Reflect.apply(read, fs, args);
+        }) as typeof fs.readFileSync);
+        vi.spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+          if (String(args[0]) === root) raw.push(root);
+          return Reflect.apply(list, fs, args);
+        }) as typeof fs.readdirSync);
+      });
+    } finally { vi.restoreAllMocks(); }
+  }
+});
+
+// Break caught: rejected settings gain a digest/default recipe, or link and
+// unstable custody failures lose the exact failing source path.
+it.each(["malformed", "duplicate", "utf8", "component-link", "leaf-link", "unstable"] as const)("refuses %s AGY controlling input without an empty-settings recipe", async shape => {
+  let refused = "";
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(result.recipe).toBeUndefined();
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+      expect(result.audit?.unavailable).toContain(`${shape.includes("link") ? "INVENTORY_SYMLINK" : shape === "unstable" ? "INVENTORY_UNSTABLE" : "INVENTORY_JSON_INVALID"}:${refused}`);
+      expect(result.audit?.sources.some(s => s.path === refused && s.kind === "file")).toBe(false);
+    }, 0, (workspace, settings) => {
+      refused = settings;
+      if (shape === "malformed") writeFileSync(settings, "{");
+      if (shape === "duplicate") writeFileSync(settings, '{"permissions":{},"permissions":{}}');
+      if (shape === "utf8") writeFileSync(settings, Buffer.from([0x7b, 0xff, 0x7d]));
+      if (shape === "leaf-link") { const target = join(workspace, "inert.json"); writeFileSync(target, "{}"); rmSync(settings); symlinkSync(target, settings); }
+      if (shape === "component-link") {
+        const directory = join(settings, ".."), target = join(workspace, "inert-settings");
+        fs.renameSync(directory, target); symlinkSync(target, directory); refused = directory;
+      }
+      if (shape === "unstable") {
+        const open = fs.openSync, read = fs.readSync;
+        let guarded = -1, changed = false;
+        vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => { const fd = Reflect.apply(open, fs, args); if (String(args[0]) === settings) guarded = fd; return fd; }) as typeof fs.openSync);
+        vi.spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+          const count = Reflect.apply(read, fs, args);
+          if (args[0] === guarded && !changed) { changed = true; writeFileSync(settings, '{"changed":true}'); }
+          return count;
+        }) as typeof fs.readSync);
+      }
+    });
+  } finally { vi.restoreAllMocks(); }
+});
+
+// Break caught: a current hook/manifest acquisition path bypasses guarded JSON,
+// canonicalizes its digest, or substitutes a listing hash for metadata.
+it.each(["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugin.json", ".claude-plugin/plugin.json", "gemini-extension.json"])("bounds the current AGY %s manifest and hook producer paths", async leaf => {
+  const raw: string[] = [], guarded = new Set<string>();
+  const bytes = '{ "name": "fixture" }\n';
+  let manifest = "", hook = "", root = "", plugin = "";
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(raw).toEqual([]);
+      for (const path of guarded) expect(result.audit?.sources.find(s => s.path === path && s.kind === "file")?.sha256).toBe(createHash("sha256").update(path === manifest ? bytes : "{}").digest("hex"));
+      expect(result.audit?.sources.filter(s => s.path === manifest)).toHaveLength(1);
+      expect(result.audit?.sources.some(s => s.path === hook && s.kind === "file")).toBe(true);
+      for (const path of [root, plugin]) {
+        const stat = fs.lstatSync(path);
+        const digest = createHash("sha256").update(JSON.stringify({ dev: stat.dev, ino: stat.ino, mode: stat.mode, mtimeMs: stat.mtimeMs, size: stat.size, symbolicLink: false })).digest("hex");
+        expect(result.audit?.sources.find(s => s.path === path)).toEqual({ path, kind: "metadata", sha256: digest });
+      }
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    }, 0, (workspace, settings) => {
+      root = join(workspace, "../.gemini/antigravity-cli/plugins"); plugin = join(root, "fixture");
+      manifest = join(plugin, leaf); mkdirSync(join(manifest, ".."), { recursive: true }); writeFileSync(manifest, bytes);
+      hook = join(plugin, "hooks.json"); writeFileSync(hook, "{}");
+      const home = join(workspace, "..");
+      const ordinaryHooks = [join(home, ".gemini/antigravity-cli/hooks.json"), join(home, ".gemini/config/hooks.json"), join(home, ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
+      for (const path of ordinaryHooks) { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, "{}"); }
+      for (const path of [settings, ...ordinaryHooks, manifest, hook]) guarded.add(path);
+      const read = fs.readFileSync;
+      vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+        if (guarded.has(String(args[0]))) raw.push(String(args[0]));
+        return Reflect.apply(read, fs, args);
+      }) as typeof fs.readFileSync);
+    });
+  } finally { vi.restoreAllMocks(); }
+});
 
 it("acquires successful recognizable AGY 1.4.12 stderr help without a version-only refusal", async () => {
   await withAgyControls(agyHelp(), "1.4.12", result => {

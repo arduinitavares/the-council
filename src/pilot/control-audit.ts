@@ -1,10 +1,11 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, extname } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../domain/hash.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { readStrictFile, sha256, writeExclusive } from "./wrapper-contract.js";
 import type { Command } from "./orca-driver.js";
+import { readInventoryJson, type InventoryBudget, type InventoryProblem } from "./inventory-io.js";
 
 export const auditSourceSchema = z.strictObject({ path: z.string(), sha256: z.string().nullable(), kind: z.enum(["file", "metadata", "absent"]).optional() });
 export type AuditSource = z.infer<typeof auditSourceSchema>;
@@ -24,6 +25,31 @@ export const auditSnapshotSchema = z.strictObject({
   ordering: z.array(z.string()), effects: z.array(z.string()), unavailable: z.array(z.string()), recipeHash: z.string(),
 });
 export type AuditSnapshot = z.infer<typeof auditSnapshotSchema>;
+type AuditSourceCheck =
+  | { state: "unchanged" }
+  | { state: "drift"; source: AuditSource; actual: string | null }
+  | { state: "unknown"; problems: readonly InventoryProblem[] };
+
+function validateAuditSources(snapshot: Pick<AuditSnapshot, "route" | "sources">): AuditSourceCheck {
+  const budget: InventoryBudget = { paths: new Set<string>(), jsonBytes: 0 };
+  const problems: InventoryProblem[] = [];
+  let drift: Extract<AuditSourceCheck, { state: "drift" }> | undefined;
+  for (const source of snapshot.sources) {
+    try {
+      let actual: string | null;
+      if (snapshot.route === "antigravity" && (source.kind ?? "file") === "file" && extname(source.path).toLowerCase() === ".json") {
+        const result = readInventoryJson(source.path, budget);
+        if (result.state === "unknown") { problems.push(...result.problems); continue; }
+        actual = result.state === "present" ? result.value.file.sha256 : null;
+      } else actual = currentSourceDigest(source);
+      if (actual !== source.sha256 && !drift) drift = { state: "drift", source, actual };
+    } catch (cause) {
+      const code = (cause as { code?: unknown } | null)?.code;
+      problems.push({ code: typeof code === "string" ? code : "AUDIT_SOURCE_ACQUISITION_UNAVAILABLE", path: source.path, edge: null });
+    }
+  }
+  return problems.length ? { state: "unknown", problems } : drift ?? { state: "unchanged" };
+}
 export const auditHash = (snapshot: AuditSnapshot) => sha256(canonicalJson(auditSnapshotSchema.parse(snapshot)));
 function directory(workspace: string, leaf: string) {
   let current = realpathSync(workspace);
@@ -94,7 +120,10 @@ async function nativeDisposition(snapshot: AuditSnapshot, runId: string, taskId:
 export async function adoptAuditSnapshot(workspace: string, hash: string, runId: string, taskId: string, command: Command) {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("AUDIT_HASH_INVALID");
   const snapshot = auditSnapshotSchema.parse(readStrictFile(join(workspace, ".council/control-audits/snapshots", hash+".json")));
-  if (snapshot.workspace !== realpathSync(workspace) || auditHash(snapshot) !== hash || snapshot.sources.some(source => currentSourceDigest(source) !== source.sha256)) throw Error("AUDIT_SOURCE_DRIFT");
+  if (snapshot.workspace !== realpathSync(workspace) || auditHash(snapshot) !== hash) throw Error("AUDIT_SOURCE_DRIFT");
+  const sources = validateAuditSources(snapshot);
+  if (sources.state === "unknown") throw Error(`AUDIT_SOURCE_VALIDATION_UNAVAILABLE:${canonicalJson(sources.problems)}`);
+  if (sources.state === "drift") throw Error("AUDIT_SOURCE_DRIFT");
   const verified = await nativeDisposition(snapshot, runId, taskId, command);
   const file = join(directory(workspace,"dispositions"),hash+".json");
   if (!existsSync(file)) writeExclusive(file, verified.reference);
@@ -108,7 +137,7 @@ export async function acquiredAuditDisposition(snapshot: AuditSnapshot, command?
   if (!command) return { verified: false, detail: "AUDIT_NATIVE_AUTHORITY_READER_UNAVAILABLE" };
   try {
     const reference = referenceSchema.parse(readStrictFile(file));
-    if (reference.snapshotHash !== hash || snapshot.sources.some(source => currentSourceDigest(source) !== source.sha256)) throw Error("AUDIT_SOURCE_DRIFT");
+    if (reference.snapshotHash !== hash || validateAuditSources(snapshot).state !== "unchanged") throw Error("AUDIT_SOURCE_DRIFT");
     const native = await nativeDisposition(snapshot, reference.runId, reference.taskId, command, reference.identity);
     if (canonicalJson(native.reference) !== canonicalJson(reference)) throw Error("AUDIT_NATIVE_REFERENCE_CHANGED");
     const pending = snapshot.effects.filter(effect => !native.approvedEffects.includes(effect));

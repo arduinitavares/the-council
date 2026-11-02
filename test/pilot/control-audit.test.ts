@@ -1,12 +1,226 @@
 import { it, expect, vi } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
-import { join, delimiter } from "node:path";
+import fs, { mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
+import { join, delimiter, extname } from "node:path";
 import { prepareProviderAudit, adoptProviderAudit, inspectProviderControls } from "../../dist/pilot/provider-controls.js";
 import { acquiredAuditDisposition, adoptAuditSnapshot, auditHash, saveAuditSnapshot } from "../../dist/pilot/control-audit.js";
 import { createHash } from "node:crypto";
 import type { Command } from "../../src/pilot/orca-driver.js";
 import { incidentRoster, policyTable } from "./fixtures.js";
 import { contextFixture } from "./context-fixture.js";
+
+vi.mock("node:fs", async importOriginal => {
+  const actual = await importOriginal<typeof fs & { default: typeof fs }>();
+  const mutable = { ...actual.default };
+  return { ...actual, default: mutable, readFileSync: (...args: Parameters<typeof fs.readFileSync>) => Reflect.apply(mutable.readFileSync, mutable, args) };
+});
+
+async function approveAgySnapshot(h: Awaited<ReturnType<typeof contextFixture>>, prepared: ReturnType<typeof saveAuditSnapshot>) {
+  const run = (await h.command(["orchestration", "run-create", "--objective", "bounded source audit", "--json"], h.workspace, 5000)).run.id;
+  const task = (await h.command(["orchestration", "task-create", "--run", run, "--spec", `Council control audit sha256=${prepared.hash}`, "--json"], h.workspace, 5000)).task.id;
+  const dispatch = (await h.command(["orchestration", "dispatch", "--run", run, "--task", task, "--to", "fixture-coordinator", "--json"], h.workspace, 5000)).dispatch.id;
+  await h.command(["orchestration", "send", "--run", run, "--from", "fixture-coordinator", "--type", "worker_done", "--task-id", task, "--dispatch-id", dispatch, "--outcome", "succeeded", "--body", JSON.stringify({ kind: "council-control-audit", snapshotHash: prepared.hash, approvedEffects: prepared.snapshot.effects }), "--json"], h.workspace, 5000);
+  return { run, task };
+}
+
+async function preparedAgyAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
+  vi.stubEnv("HOME", h.root); vi.stubEnv("PATH", h.root+delimiter+process.env.PATH);
+  mkdirSync(join(h.root, ".agents/policies"), { recursive: true });
+  writeFileSync(join(h.root, ".agents/policies/model-policy.md"), policyTable);
+  const directory = join(h.root, ".gemini/antigravity-cli"); mkdirSync(directory, { recursive: true });
+  const settings = join(directory, "settings.json"), hook = join(directory, "hooks.json");
+  writeFileSync(settings, "{}");
+  writeFileSync(hook, JSON.stringify({ hooks: { SessionStart: [{ command: "/bin/echo sanitized-lifecycle" }] } }));
+  const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
+  const executable = join(h.root, "agy");
+  writeFileSync(executable, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(help)});`); chmodSync(executable, 0o700);
+  const prepared = await prepareProviderAudit(incidentRoster.reviewers.gemini, "1.4.12", h.workspace);
+  expect(prepared.snapshot.unavailable).toEqual([]);
+  const guarded = prepared.snapshot.sources.filter(s => (s.kind ?? "file") === "file" && extname(s.path).toLowerCase() === ".json").map(s => s.path);
+  expect(guarded.sort()).toEqual([settings, hook].sort());
+  return { ...prepared, settings, hook, guarded };
+}
+
+async function completedAgyAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
+  const prepared = await preparedAgyAudit(h), native = await approveAgySnapshot(h, prepared);
+  const adopted = await adoptAuditSnapshot(h.workspace, prepared.hash, native.run, native.task, h.command);
+  return { ...prepared, ...native, adopted };
+}
+
+function traceGuardedJson(paths: readonly string[], afterFileRead?: (path: string) => void,
+  fault?: { beforeOpen?: (path: string) => void; afterRead?: (path: string, count: number) => void }) {
+  const guarded = new Set(paths), unboundedGuardedPaths: string[] = [];
+  const guardedOpens: { path: string; bytesRead: number; maxRequest: number }[] = [];
+  const descriptors = new Map<number, typeof guardedOpens[number]>();
+  const readFile = fs.readFileSync, open = fs.openSync, read = fs.readSync, close = fs.closeSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    const path = String(args[0]);
+    if (guarded.has(path)) unboundedGuardedPaths.push(path);
+    const result = Reflect.apply(readFile, fs, args);
+    afterFileRead?.(path);
+    return result;
+  }) as typeof fs.readFileSync);
+  vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    const path = String(args[0]);
+    fault?.beforeOpen?.(path);
+    const fd = Reflect.apply(open, fs, args);
+    if (guarded.has(path)) { const record = { path, bytesRead: 0, maxRequest: 0 }; guardedOpens.push(record); descriptors.set(fd, record); }
+    return fd;
+  }) as typeof fs.openSync);
+  vi.spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const record = descriptors.get(args[0]);
+    if (record) record.maxRequest = Math.max(record.maxRequest, Number(Reflect.get(args, 3)));
+    const count = Reflect.apply(read, fs, args);
+    if (record) { record.bytesRead += count; fault?.afterRead?.(record.path, count); }
+    return count;
+  }) as typeof fs.readSync);
+  vi.spyOn(fs, "closeSync").mockImplementation((fd => { descriptors.delete(fd); return close(fd); }) as typeof fs.closeSync);
+  return { unboundedGuardedPaths, guardedOpens, assertBounds() {
+    expect(unboundedGuardedPaths).toEqual([]);
+    expect(guardedOpens.length).toBeGreaterThan(0);
+    for (const record of guardedOpens) { expect(record.bytesRead).toBeLessThanOrEqual(1048577); expect(record.maxRequest).toBeLessThanOrEqual(65536); }
+    expect(descriptors.size).toBe(0);
+  } };
+}
+
+// Break caught: a matching authenticated disposition falls through raw digest
+// reads on inspection/reuse/adoption, or bounded reads skip native authority.
+it("bounds AGY JSON revalidation with an existing authenticated disposition", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAudit(h), nativeReads: string[] = [];
+    const command: Command = async (...args) => { nativeReads.push(args[0].slice(0, 2).join(" ")); return h.command(...args); };
+    const trace = traceGuardedJson(prepared.guarded);
+    expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(true);
+    const after = await inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", h.workspace, { state: "unknown", source: "test", detail: "no billing" }, command);
+    expect(auditHash(after.audit!)).toBe(prepared.hash);
+    expect(after.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
+    expect(nativeReads).toEqual(expect.arrayContaining(["orchestration run-show", "worktree show", "orchestration dispatch-show", "orchestration task-list"]));
+    trace.assertBounds();
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, command)).resolves.toMatchObject({ hash: prepared.hash });
+    trace.assertBounds();
+    const state = JSON.parse(readFileSync(h.state, "utf8")), original = state.tasks[0].result;
+    state.tasks[0].result = JSON.stringify({ ...JSON.parse(original), reportedBy: "foreign" }); writeFileSync(h.state, JSON.stringify(state));
+    expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(false);
+    state.tasks[0].result = original; writeFileSync(h.state, JSON.stringify(state));
+    expect((await acquiredAuditDisposition(prepared.snapshot, command)).verified).toBe(true);
+    trace.assertBounds();
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+// Break caught: inspection trusts the hash acquired before disposition lookup
+// instead of re-reading current source bytes on that matching-disposition path.
+it("rejects guarded AGY JSON drift during matching-disposition inspection", async () => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAudit(h), original = readFileSync(prepared.settings);
+    let armed = true;
+    const dispositionReads: string[] = [];
+    const trace = traceGuardedJson(prepared.guarded, path => {
+      if (path === prepared.adopted.path) {
+        dispositionReads.push(path);
+        if (armed) { armed = false; writeFileSync(prepared.settings, '{"changed":true}'); }
+      }
+    });
+    const inspect = () => inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", h.workspace, { state: "unknown", source: "test", detail: "no billing" }, h.command);
+    const drift = await inspect();
+    expect(dispositionReads).toEqual([prepared.adopted.path]);
+    expect(auditHash(drift.audit!)).toBe(prepared.hash);
+    expect(trace.guardedOpens.filter(record => record.path === prepared.settings).length).toBeGreaterThanOrEqual(2);
+    expect(drift.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
+    writeFileSync(prepared.settings, original);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    expect((await inspect()).facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
+    trace.assertBounds();
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+// Break caught: a guarded refusal falls back to raw reads, gains an approval
+// record, or poisons later valid reuse through a cached success/failure.
+it.each(["overflow", "malformed", "component-link", "leaf-link", "unreadable", "unstable"] as const)("rejects %s guarded AGY JSON without writing a disposition or falling back", async shape => {
+  const h = await contextFixture();
+  try {
+    const prepared = await completedAgyAudit(h), original = readFileSync(prepared.settings), reference = readFileSync(prepared.adopted.path);
+    let restore = () => writeFileSync(prepared.settings, original);
+    let faultActive = false, changedThisOpen = false;
+    const trace = traceGuardedJson(prepared.guarded, undefined, {
+      beforeOpen(path) {
+        if (path !== prepared.settings) return;
+        changedThisOpen = false;
+        if (faultActive && shape === "unreadable") throw Object.assign(Error("fixture unreadable input"), { code: "EACCES", path });
+      },
+      afterRead(path, count) {
+        if (faultActive && shape === "unstable" && path === prepared.settings && count > 0 && !changedThisOpen) {
+          changedThisOpen = true; writeFileSync(prepared.settings, "{}"+" ".repeat(fs.statSync(prepared.settings).size));
+        }
+      },
+    });
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    faultActive = true;
+    if (shape === "overflow") writeFileSync(prepared.settings, "{}"+" ".repeat(1048575));
+    if (shape === "malformed") writeFileSync(prepared.settings, "{");
+    if (shape === "component-link") {
+      const directory = join(prepared.settings, ".."), moved = join(h.root, "inert-settings");
+      fs.renameSync(directory, moved); fs.symlinkSync(moved, directory);
+      restore = () => { fs.unlinkSync(directory); fs.renameSync(moved, directory); };
+    }
+    if (shape === "leaf-link") {
+      const target = join(h.root, "inert.json"); writeFileSync(target, "{}"); fs.unlinkSync(prepared.settings); fs.symlinkSync(target, prepared.settings);
+      restore = () => { fs.unlinkSync(prepared.settings); writeFileSync(prepared.settings, original); };
+    }
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    fs.unlinkSync(prepared.adopted.path);
+    let rejection: unknown;
+    try { await adoptAuditSnapshot(h.workspace, prepared.hash, prepared.run, prepared.task, h.command); } catch (cause) { rejection = cause; }
+    expect(rejection).toBeInstanceOf(Error);
+    const diagnostic = (rejection as Error).message;
+    expect(diagnostic).toMatch(/^AUDIT_SOURCE_VALIDATION_UNAVAILABLE:/);
+    expect(JSON.parse(diagnostic.slice(diagnostic.indexOf(":")+1))).toContainEqual({
+      code: shape === "overflow" ? "INVENTORY_BYTE_LIMIT" : shape === "malformed" ? "INVENTORY_JSON_INVALID" : shape.includes("link") ? "INVENTORY_SYMLINK" : shape === "unreadable" ? "EACCES" : "INVENTORY_UNSTABLE",
+      path: shape === "component-link" ? join(prepared.settings, "..") : prepared.settings, edge: null,
+    });
+    expect(fs.existsSync(prepared.adopted.path)).toBe(false);
+    trace.assertBounds();
+    faultActive = false; restore(); writeFileSync(prepared.adopted.path, reference);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    trace.assertBounds();
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
+
+// Break caught: source checks collapse (path,kind), canonicalize JSON bytes,
+// parse metadata-only JSON, or lose null/appeared-absence semantics.
+it.each(["implicit", "explicit", "metadata", "absent", "missing-file", "file-and-metadata"] as const)("preserves %s AGY audit source semantics", async kind => {
+  const h = await contextFixture();
+  try {
+    const original = await preparedAgyAudit(h), path = join(h.workspace, "kind-control.JSON");
+    const missing = kind === "absent" || kind === "missing-file";
+    if (!missing) writeFileSync(path, kind === "metadata" ? "not JSON" : '{ "value": 1 }');
+    const digest = missing ? null : createHash("sha256").update(readFileSync(path)).digest("hex");
+    const stat = missing ? null : fs.lstatSync(path);
+    const metadata = stat && createHash("sha256").update(JSON.stringify({ dev: stat.dev, ino: stat.ino, mode: stat.mode, mtimeMs: stat.mtimeMs, size: stat.size, symbolicLink: false })).digest("hex");
+    const source = kind === "metadata" ? { path, kind: "metadata" as const, sha256: metadata }
+      : kind === "absent" ? { path, kind: "absent" as const, sha256: null }
+      : kind === "explicit" || kind === "file-and-metadata" ? { path, kind: "file" as const, sha256: digest } : { path, sha256: digest };
+    const prepared = saveAuditSnapshot({ ...original.snapshot, sources: [...original.snapshot.sources, source, ...(kind === "file-and-metadata" ? [{ path, kind: "metadata" as const, sha256: metadata }] : [])] });
+    const native = await approveAgySnapshot(h, prepared);
+    await adoptAuditSnapshot(h.workspace, prepared.hash, native.run, native.task, h.command);
+    const trace = traceGuardedJson([...original.guarded, ...(kind === "metadata" || kind === "absent" ? [] : [path])]);
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    trace.assertBounds();
+    if (kind === "file-and-metadata") {
+      fs.chmodSync(path, (stat!.mode & 0o777) ^ 0o100);
+      expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+      fs.chmodSync(path, stat!.mode & 0o777);
+      expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(true);
+    }
+    if (kind === "metadata") fs.chmodSync(path, (stat!.mode & 0o777) ^ 0o100);
+    else writeFileSync(path, '{"value":1}'); // Same JSON value, different original bytes.
+    expect((await acquiredAuditDisposition(prepared.snapshot, h.command)).verified).toBe(false);
+    await expect(adoptAuditSnapshot(h.workspace, prepared.hash, native.run, native.task, h.command)).rejects.toThrow("AUDIT_SOURCE_DRIFT");
+    trace.assertBounds();
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.close(); }
+}, 30000);
 
 async function completedAudit(h: Awaited<ReturnType<typeof contextFixture>>) {
   const source = join(h.workspace, "audit-source.txt");

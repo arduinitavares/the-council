@@ -12,7 +12,9 @@ import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
 import { validateAgyNativeHookSource } from "./agy-native-hook-validation.js";
-import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
+import type { AgyRecipeInputs } from "./agy-inventory-witness.js";
+import { reconstructCurrentAgyInputs } from "./agy-startup-inventory.js";
+import { selectAgySourceRules } from "./agy-loader-contract.js";
 import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile, type ReadReceipt } from "./inventory-io.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
@@ -74,12 +76,16 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     facts.push(controlFactSchema.parse({ name, stage, observation: { state, source, detail }, enforcement, observedAt: Date.now(), digest: sha256(JSON.stringify({ source, detail })) }));
   };
   const name = { codex: "codex", antigravity: "agy", cursor: "cursor-agent" }[selection.route];
+  const currentAgy = selection.route === "antigravity" ? reconstructCurrentAgyInputs({ selection, version, workspace }, inventoryBudget) : null;
+  const agyContext = currentAgy?.state === "present" ? currentAgy.value.context : currentAgy?.context;
+  const agyExecutable = currentAgy?.state === "present" ? currentAgy.value.executable : currentAgy?.executable;
+  const inspectionHome = currentAgy ? agyContext?.home : homedir();
   if (selection.route !== "antigravity") {
     const supportedVersion = selection.route === "codex" ? /(?:^|\s)0\.164\.0(?:\s|$)/.test(version) : /2026\.10\.22-27dcf5f/.test(version);
     add("provider-version-contract", supportedVersion ? "verified" : "unsupported", "Installed exact provider version", supportedVersion ? version : "No current scoped control contract for this exposed version", "No inherited stale qualification");
   }
-  let executable: string | undefined;
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+  let executable: string | undefined = agyExecutable?.path;
+  if (selection.route !== "antigravity") for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     const candidate = join(directory, name);
     if (existsSync(candidate)) { executable = realpathSync(candidate); break; }
   }
@@ -184,33 +190,49 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     }
     for (const nested of Object.values(value)) if (typeof nested === "object") hookEffects(nested);
   };
-  const canonicalPolicy=join(homedir(),".agents/policies/model-policy.md");
-  track(canonicalPolicy);
-  if(!existsSync(canonicalPolicy))unavailable.push("EXECUTION_HOST_CANONICAL_POLICY_UNAVAILABLE");
-  if(executable)track(executable);
+  const canonicalPolicy=inspectionHome === undefined ? undefined : join(inspectionHome,".agents/policies/model-policy.md");
+  if(canonicalPolicy)track(canonicalPolicy);
+  if(!canonicalPolicy || !existsSync(canonicalPolicy))unavailable.push("EXECUTION_HOST_CANONICAL_POLICY_UNAVAILABLE");
+  if(agyExecutable)addAgySource({path:agyExecutable.path,kind:"file",sha256:agyExecutable.sha256});
+  else if(executable)track(executable);
   let recipe: ProviderRecipe | undefined;
   const cwd = join(workspace, ".council/native-packets");
   const argv: string[] = [];
   const materializations: { path: string; content: string; sha256: string }[] = [];
   let codexPolicy: ProviderRecipe["codexPolicy"];
   let agyHookShell: ProviderRecipe["agyHookShell"];
-  let agyRecipePlan: ReturnType<typeof buildAgyRecipePlan> | undefined;
-  if (selection.route === "antigravity") {
+  const agyRecipePlan: AgyRecipeInputs | undefined = currentAgy?.state === "present" ? currentAgy.value.recipeInputs : undefined;
+  if (selection.route === "antigravity" && currentAgy && agyContext) {
+    const home = agyContext.home;
     const exposed = agyHelpFlags(help);
     const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
     const missing = required.filter(flag => !exposed?.has(flag));
     add("public-cli-capability-contract", missing.length ? "unsupported" : "verified", `installed AGY --help / ${version}`,
       missing.length ? `Required recipe flags not exposed: ${missing.map(flag => "--"+flag).join(", ")}` : `Required recipe flags exposed; help sha256=${sha256(help)}`,
       "Public launch syntax only; version, executable, sources and effective gates remain independently bound");
-    const sourceContract = /(?:^|\s)1\.4\.12(?:\s|$)/.test(version);
-    add("provider-startup-source-contract", sourceContract ? "verified" : "unsupported", "Inspected AGY startup/source acquisition contract",
-      sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
-      "Unreviewed versions cannot inherit loader/hook-source qualification");
-    const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
-    const settingsFailuresBefore = unavailable.length;
-    const config = read(global);
-    const settingsUnavailable = unavailable.length > settingsFailuresBefore;
-    const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
+    const sourceSelection = agyExecutable ? selectAgySourceRules({ path: agyExecutable.path, sha256: agyExecutable.sha256 }) : null;
+    if (sourceSelection?.state === "unknown") unavailable.push(`${sourceSelection.problem.code}:${sourceSelection.problem.path}`);
+    else if (sourceSelection?.state === "pinned-subset") unavailable.push("AGY_SOURCE_GRAPH_UNQUALIFIED");
+    add("provider-startup-source-contract", "unknown", "Acquired AGY executable source-subset identity",
+      sourceSelection?.state === "pinned-subset" ? `${sourceSelection.ruleSet}: conditional source subset matched; complete graph, runner dispatch, activity and native authority remain unresolved`
+        : sourceSelection?.state === "unknown" ? canonicalJson(sourceSelection.problem) : "Guarded executable identity unavailable",
+      "Executable identity selects only reviewed source rules; no version-derived startup qualification");
+    const global = join(home, ".gemini/antigravity-cli/settings.json");
+    for (const source of currentAgy.sources) addAgySource(source);
+    ordering.push(...currentAgy.ordering);
+    if (currentAgy.state === "unknown") {
+      inventoryProblems(currentAgy.problems.filter(problem => !problem.code.startsWith("AGY_RECIPE_SETTINGS_INVALID:")));
+      for (const problem of currentAgy.problems.filter(problem => problem.code.startsWith("AGY_RECIPE_SETTINGS_INVALID:"))) {
+        unavailable.push(problem.code);
+        add("agy-recipe-settings", "unknown", global, problem.code, "No recipe from malformed controlling settings");
+      }
+    }
+    const settingsUnavailable = !currentAgy.sources.some(source => source.path === global);
+    if (settingsUnavailable) {
+      unavailable.push(`CONFIGURATION_UNREADABLE:${global}`);
+      add("configuration-readable", "unknown", global, "Configuration is unavailable or malformed", "No initialization");
+    }
+    const hookFiles = [join(home, ".gemini/antigravity-cli/hooks.json"), join(home, ".gemini/config/hooks.json"), join(home, ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
     let inventoryKnown = !settingsUnavailable;
     const inventoryFailuresBefore = unavailable.length;
     const directoryMetadata = (root: string, receipt?: ReadReceipt): AuditSource | InventoryProblem => {
@@ -274,7 +296,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
       return result;
     };
     const candidateLeaves = ["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugin.json", ".claude-plugin/plugin.json", "gemini-extension.json"];
-    for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(homedir(), ".gemini/config/plugins"), join(workspace, ".agents/plugins")]) {
+    for (const root of [join(home, ".gemini/antigravity-cli/plugins"), join(home, ".gemini/config/plugins"), join(workspace, ".agents/plugins")]) {
       try {
         const listing = listAgyDirectory(root);
         if (listing.state === "absent") continue;
@@ -316,25 +338,21 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     if (!inventoryKnown) unavailable.push("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
     // No H1 source has qualified loader membership, activation or command bases.
     // Conforming occurrences remain inert; the generic scanner is for other routes.
-    for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
+    for(const instruction of [join(home,".gemini/GEMINI.md"),join(home,".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
     const acquiredHooks = hooks.filter(source => source.acquisition.state === "present");
-    add("startup-hooks-and-plugins", inventoryKnown && acquiredHooks.length === 0 ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${acquiredHooks.length} acquired sources; native conformance does not establish loader membership or runtime activity`, "SessionStart precedes inference; settings hooks={} is insufficient");
-    if (!settingsUnavailable) {
-      try {
-        agyRecipePlan = buildAgyRecipePlan({ selection, version, workspace, executable: executable ?? "unavailable", legacySettings: config, agyHookShell: agyHookShell ?? null });
-        materializations.push(...agyRecipePlan.materializations);
-        argv.push(...agyRecipePlan.argv);
-      } catch (cause) {
-        if (!(cause instanceof AgyRecipeSettingsError)) throw cause;
-        unavailable.push(cause.message);
-        add("agy-recipe-settings", "unknown", global, cause.message, "No recipe from malformed controlling settings");
-      }
+    add("startup-hooks-and-plugins", "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${acquiredHooks.length} acquired sources; native conformance does not establish loader membership or runtime activity`, "SessionStart precedes inference; settings hooks={} is insufficient");
+    if (agyRecipePlan) {
+      materializations.push(...agyRecipePlan.materializations);
+      argv.push(...agyRecipePlan.argv);
     }
-    const collisionSources = [join(homedir(), ".gemini/config/agents/council-packet.md"), join(homedir(), ".gemini/config/agents/council-packet/agent.md")];
+    const collisionSources = [join(home, ".gemini/config/agents/council-packet.md"), join(home, ".gemini/config/agents/council-packet/agent.md")];
     for(const file of collisionSources)track(file);const collision=collisionSources.some(existsSync);
     const agentHash = agyRecipePlan?.agentDefinition?.sha256;
     add("custom-agent-definition", collision ? "missing" : agentHash ? "verified" : "unknown", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : agentHash ?? "AGY recipe settings unavailable", "Definition metadata only; verify actual selected agent and empty init.tools before input");
     add("effective-input-gate", "unknown", "AGY stream-json init", "Require init before user input, exact model/agent/cwd/permission and empty tools", "Wrapper withholds stdin until effective checks pass", "effective");
+  } else if (selection.route === "antigravity") {
+    if (currentAgy?.state === "unknown") inventoryProblems(currentAgy.problems);
+    add("provider-startup-source-contract", "unknown", "Current AGY context", "Current home/context unavailable", "No inferred startup source qualification");
   } else if (selection.route === "codex") {
     const configurations: any[] = [];
     const codexHome = nonblankRoot(process.env.CODEX_HOME) ?? join(homedir(),".codex");

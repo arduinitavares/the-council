@@ -7,6 +7,8 @@ import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
 import * as nativeValidation from "../../src/pilot/agy-native-hook-validation.js";
 import * as hookShell from "../../src/pilot/agy-hook-shell.js";
 import { auditHash } from "../../src/pilot/control-audit.js";
+import * as auditSources from "../../src/pilot/control-audit.js";
+import * as inventoryIo from "../../src/pilot/inventory-io.js";
 import { incidentRoster } from "./fixtures.js";
 
 // Keep named payload reads and the inventory reader's default fs observable
@@ -23,6 +25,99 @@ vi.mock("node:fs", async importOriginal => {
 
 const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
 const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  --${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
+
+// Positive acquisition controls name the only unresolved bootstrap gates and
+// the exact identity diagnostic; extra acquisition/syntax failures cannot pass.
+function expectOnlyUnreviewedAgySource(result: Awaited<ReturnType<typeof inspectProviderControls>>, additionalUnavailable: string[] = []) {
+  const executable = result.audit!.executable;
+  expect(result.audit?.unavailable).toEqual([...additionalUnavailable, `AGY_SOURCE_CONTRACT_UNREVIEWED:${executable}`]);
+  const source = result.facts.find(f => f.name === "provider-startup-source-contract")!;
+  expect(source.observation.state).toBe("unknown");
+  expect(JSON.parse(source.observation.detail)).toEqual({ code: "AGY_SOURCE_CONTRACT_UNREVIEWED", path: executable, edge: null });
+  expect(result.facts.filter(f => f.stage === "bootstrap" && f.observation.state !== "verified").map(f => f.name)).toEqual(["provider-startup-source-contract", "startup-hooks-and-plugins"]);
+  expect(result.bootstrap.state).toBe("unknown");
+}
+
+// Break caught: a version string qualifies an unreviewed executable, or an
+// unknown source identity erases safely acquired settings and recipe bytes.
+it("retains acquired AGY inputs when source selection is unknown", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
+    const executable = join(workspace, "../agy");
+    const settings = join(workspace, "../.gemini/antigravity-cli/settings.json");
+    expect(result.recipe?.protocol).toBe("agy-stream");
+    expect(result.recipe?.materializations).toHaveLength(2);
+    expect(result.audit?.sources).toContainEqual({ path: executable, kind: "file", sha256: createHash("sha256").update(readFileSync(executable)).digest("hex") });
+    expect(result.audit?.sources).toContainEqual({ path: settings, kind: "file", sha256: createHash("sha256").update("{}").digest("hex") });
+    expect.soft(result.facts.find(f => f.name === "provider-startup-source-contract")?.observation.state).toBe("unknown");
+    expect.soft(result.audit?.unavailable).toContain(`AGY_SOURCE_CONTRACT_UNREVIEWED:${executable}`);
+    expect.soft(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    expect(result.audit?.unavailable).not.toContain("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
+    expect(result.audit?.effects).toEqual([]);
+    expect.soft(result.bootstrap.state).not.toBe("verified");
+    expect(result.controls.state).toBe("unknown");
+  });
+});
+
+// Break caught: private subset selection bypasses current acquisition, uses
+// stale settings/recipe bytes, or manufactures complete startup qualification.
+it("uses current generated session bytes through the actual producer with isolated source subset selection", async () => {
+  await withAgyControls(agyHelp(), "1.4.12", async (_initial, workspace) => {
+    vi.resetModules();
+    vi.doMock("../../src/pilot/agy-loader-contract.js", () => ({
+      selectAgySourceRules: (executable: { path: string; sha256: string }) => ({ state: "pinned-subset", ruleSet: "agy-34423fc9-source-subset-v1", executable }),
+    }));
+    try {
+      const producer = await import("../../src/pilot/provider-controls.js");
+      const inspect = () => producer.inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", workspace, { state: "unknown", source: "fixture", detail: "source subset mechanics only" });
+      const before = await inspect();
+      const settings = join(workspace, "../.gemini/antigravity-cli/settings.json");
+      writeFileSync(settings, '{"permissions":{"deny":["fixture-secret(*)"],"ask":["read_file(private)"]}}');
+      const after = await inspect();
+      const beforeSession = before.recipe?.materializations?.[1], afterSession = after.recipe?.materializations?.[1];
+      expect(beforeSession?.content).toBe('{"allowNonWorkspaceAccess":false,"permissions":{"deny":["write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"]}}');
+      expect(afterSession?.content).toBe('{"allowNonWorkspaceAccess":false,"permissions":{"deny":["fixture-secret(*)","write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"],"ask":["read_file(private)"]}}');
+      expect(afterSession?.path).not.toBe(beforeSession?.path);
+      expect(after.recipe?.argv).toContain(afterSession?.path);
+      for (const result of [before, after]) {
+        expect(result.facts.find(f => f.name === "provider-startup-source-contract")?.observation).toMatchObject({ state: "unknown", detail: expect.stringContaining("agy-34423fc9-source-subset-v1") });
+        expect(result.audit?.unavailable).toEqual(["AGY_SOURCE_GRAPH_UNQUALIFIED"]);
+        expect(result.audit?.effects).toEqual([]);
+        expect(result.bootstrap.state).toBe("unknown");
+      }
+    } finally { vi.doUnmock("../../src/pilot/agy-loader-contract.js"); vi.resetModules(); }
+    const restored = await inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", workspace, { state: "unknown", source: "fixture", detail: "unsubstituted selector restored" });
+    expect(restored.audit?.unavailable).toEqual([`AGY_SOURCE_CONTRACT_UNREVIEWED:${join(workspace, "../agy")}`]);
+  });
+});
+
+// Break caught: producer integration re-reads an executable through the old
+// unbounded digest path, reads settings twice, or ignores the shared budget.
+it("acquires the producer executable and settings once through guarded readers", async () => {
+  let executable = "", settings = "", settingsOpens = 0;
+  const fileRead = vi.spyOn(inventoryIo, "readInventoryFile");
+  const sourceDigest = auditSources.currentSourceDigest, payloadRead = fs.readFileSync, open = fs.openSync;
+  vi.spyOn(auditSources, "currentSourceDigest").mockImplementation(source => {
+    if (source.path === executable) throw Error("fixture forbids unguarded executable digest");
+    return sourceDigest(source);
+  });
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    if (String(args[0]) === executable) throw Error("fixture forbids unbounded executable payload");
+    return Reflect.apply(payloadRead, fs, args);
+  }) as typeof fs.readFileSync);
+  vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) === settings) settingsOpens++;
+    return Reflect.apply(open, fs, args);
+  }) as typeof fs.openSync);
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(result.recipe?.protocol).toBe("agy-stream");
+      expect(result.audit?.sources).toContainEqual({ path: executable, kind: "file", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(fileRead).toHaveBeenCalledExactlyOnceWith(executable, 268435456, expect.objectContaining({ jsonBytes: 2, paths: expect.any(Set) }));
+      expect(settingsOpens).toBe(1);
+      expect(result.audit?.unavailable).toEqual([`AGY_SOURCE_CONTRACT_UNREVIEWED:${executable}`]);
+    }, 0, (workspace, settingsFile) => { executable = join(workspace, "../agy"); settings = settingsFile; });
+  } finally { vi.restoreAllMocks(); }
+});
 
 // Break caught: extraction changes the launch contract, permission merge order,
 // generated bytes, or their content-addressed materialization identities.
@@ -42,7 +137,7 @@ it("preserves the existing AGY recipe bytes for valid controlling settings", asy
         "--mode", "plan", "--sandbox", "--settings", sessionPath, "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s"],
       materializations: [{ path: agentPath, content: agent, sha256: agentHash }, { path: sessionPath, content: session, sha256: sessionHash }],
     });
-    expect(result.audit?.unavailable).toEqual([]);
+    expectOnlyUnreviewedAgySource(result);
     expect(result.controls.state).toBe("unknown");
   }, 0, (_workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify({
     allowNonWorkspaceAccess: true, permissions: { allow: ["read_file(*)"], deny: ["existing-deny(*)", "command(*)", "existing-deny(*)"], ask: ["read_file(private)"] },
@@ -77,7 +172,7 @@ it("builds an AGY recipe when the existing settings file is missing", async () =
     const settingsFile = join(workspace, "../.gemini/antigravity-cli/settings.json");
     expect(result.recipe?.protocol).toBe("agy-stream");
     expect(result.audit?.sources.find(source => source.path === settingsFile)).toEqual({ path: settingsFile, kind: "absent", sha256: null });
-    expect(result.audit?.unavailable).toEqual([]);
+    expectOnlyUnreviewedAgySource(result);
     expect(result.controls.state).toBe("unknown");
   }, 0, (_workspace, settingsFile) => rmSync(settingsFile));
 });
@@ -249,7 +344,7 @@ it("bounds AGY inventory reads before digest or parse", async () => {
         expect(raw).toEqual([]);
         if (shape === "limit") {
           expect(result.recipe?.protocol).toBe("agy-stream");
-          expect(result.audit?.unavailable).toEqual([]);
+          expectOnlyUnreviewedAgySource(result);
           expect(result.audit?.sources.find(s => s.path === settings)).toMatchObject({ kind: "file", sha256: createHash("sha256").update("{}"+" ".repeat(1048574)).digest("hex") });
         } else {
           const refused = shape === "overflow" ? settings : join(workspace, "../.gemini/antigravity-cli/plugins");
@@ -494,8 +589,7 @@ it.each(["drive", "unc"].flatMap(namespace => ["directory", "leaf-link", "parent
     if (shape === "directory" || shape === "leaf-link") expect(retained, JSON.stringify(result.audit?.unavailable)).toEqual({ path: selected, kind: "metadata", sha256: expectedDigest });
     else expect(retained).toBeUndefined();
     if (shape === "directory") {
-      expect(result.audit?.unavailable).toEqual([]);
-      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
+      expectOnlyUnreviewedAgySource(result);
     } else {
       expect(result.audit?.unavailable).toContain(`${shape === "mutation" ? "INVENTORY_UNSTABLE" : "INVENTORY_SYMLINK"}:${shape === "parent-link" ? parent : selected}`);
       expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
@@ -538,7 +632,7 @@ it("retains the AGY absent-root diagnostic after ancestor namespace mutation", a
 it("acquires successful recognizable AGY 1.4.12 stderr help without a version-only refusal", async () => {
   await withAgyControls(agyHelp(), "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result);
     expect(result.recipe?.version).toBe("1.4.12");
     expect(result.controls.state).toBe("unknown");
     expect(result.audit?.providerVersion).toBe("1.4.12");
@@ -550,7 +644,7 @@ it("acquires successful recognizable AGY 1.4.12 stderr help without a version-on
 it("acquires captured AGY 1.4.12 help including -c, -i, -p aliases and subcommands", async () => {
   const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
   await withAgyControls(help, "1.4.12", result => {
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result);
     expect(result.recipe?.argv).toContain("--add-dir");
     expect(result.controls.state).toBe("unknown");
   });
@@ -573,9 +667,9 @@ const absentAgyEnrollment = [
   { label: "foreign trustedWorkspaces", enrollment: { trustedWorkspaces: ["/different-project/.council/native-packets"] } },
 ];
 
-// Break caught: exact global enrollment blocks the inspected 1.4.12 direct
-// transport even though every other bootstrap source is valid.
-it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label while preserving settings and pending effective controls", async ({ enrollment }) => {
+// Break caught: enrollment metadata blocks recipe acquisition or changes
+// controlling bytes, even though source identity remains independently unknown.
+it.each(absentAgyEnrollment)("acquires an AGY recipe with $label while preserving settings and source identity unknown", async ({ enrollment }) => {
   const settingsBytes = JSON.stringify({ ...enrollment, permissions: { deny: ["existing-deny(*)"] } });
   const settingsDigest = createHash("sha256").update(settingsBytes).digest("hex");
   let settingsFile = "";
@@ -587,15 +681,13 @@ it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label whi
     expect(result.recipe?.protocol).toBe("agy-stream");
     expect(result.recipe?.sources.find(source => source.path === settingsFile)).toEqual({ path: settingsFile, kind: "file", sha256: settingsDigest });
     expect(result.audit?.sources.find(source => source.path === settingsFile)?.sha256).toBe(settingsDigest);
-    expect(result.audit?.unavailable).toEqual([]);
+    expectOnlyUnreviewedAgySource(result);
     const generated = result.recipe?.materializations?.find(item => item.path.endsWith("session-settings.json"));
     expect(generated).toBeDefined();
     expect(JSON.parse(generated!.content).permissions.deny).toEqual(expect.arrayContaining(["existing-deny(*)", "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]));
     expect(result.recipe?.materializations?.every(item => !existsSync(item.path))).toBe(true);
     expect(result.controls.state).toBe("unknown");
-    expect(result.facts.filter(fact => fact.stage === "bootstrap" && fact.observation.state !== "verified")).toEqual([]);
     expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
-    expect(result.bootstrap.state).toBe("verified");
   }, 0, (_workspace, file) => {
     settingsFile = file;
     writeFileSync(file, settingsBytes);
@@ -604,13 +696,13 @@ it.each(absentAgyEnrollment)("acquires AGY 1.4.12 direct startup with $label whi
   });
 });
 
-// Break caught: enrollment metadata revives the removed 1.4.11 startup route.
-it.each([...absentAgyEnrollment, { label: "exact trustedWorkspaces", enrollment: null }])("rejects unsupported AGY 1.4.11 with $label", async ({ enrollment }) => {
+// Break caught: version/enrollment metadata qualifies an unreviewed identity.
+it.each([...absentAgyEnrollment, { label: "exact trustedWorkspaces", enrollment: null }])("keeps an unreviewed AGY 1.4.11 executable unqualified with $label", async ({ enrollment }) => {
   const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8");
   await withAgyControls(help, "1.4.11", result => {
-    expect(result.facts.find(fact => fact.name === "provider-startup-source-contract")?.observation.state).toBe("unsupported");
+    expectOnlyUnreviewedAgySource(result);
+    expect(result.recipe?.version).toBe("1.4.11");
     expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
-    expect(result.bootstrap.state).toBe("unsupported");
     expect(result.controls.state).toBe("unknown");
   }, 0, (workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify(enrollment ?? { trustedWorkspaces: [join(workspace, ".council/native-packets")] })));
 });
@@ -655,7 +747,7 @@ it("blocks an unreviewed future AGY startup-source contract despite complete rec
     expect(result.facts.find(fact => fact.name === "installed-command-contract")?.observation.state).toBe("verified");
     expect(result.recipe?.version).toBe("9.9.9");
     expect(result.facts.find(fact => fact.name === "workspace-trust")).toBeUndefined();
-    expect(result.bootstrap.state).toBe("unsupported");
+    expectOnlyUnreviewedAgySource(result);
   });
 });
 
@@ -698,7 +790,7 @@ it.each([1, 2, 4])("acquires current AGY declarations consistently indented by %
   const help = agyHelp().replace(/^  --/gm, " ".repeat(indent)+"--");
   await withAgyControls(help, "1.4.12", result => {
     expect(result.facts.find(fact => fact.name === "public-cli-capability-contract")?.observation.state).toBe("verified");
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result);
   });
 });
 
@@ -714,7 +806,7 @@ it.each(["", "  \n\n"])("rejects an empty AGY subcommand section with trailing %
 it("acquires captured AGY help without an optional subcommand section", async () => {
   const help = readFileSync(new URL("./fixtures/agy-1.4.12-help.txt", import.meta.url), "utf8").split("Available subcommands:")[0]!;
   await withAgyControls(help, "1.4.12", result => {
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result);
   });
 });
 
@@ -722,7 +814,7 @@ it("acquires captured AGY help without an optional subcommand section", async ()
 it("preserves wrapped AGY descriptions when required declarations are present", async () => {
   const help = agyHelp().replace("  --sandbox\n", "      --sandbox is also mentioned in this wrapped description\n  --sandbox\n");
   await withAgyControls(help, "1.4.12", result => {
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result);
   });
 });
 
@@ -759,7 +851,7 @@ it("acquires an AGY 1.4.12 recipe while preserving settings and inherited Deny w
     writeFileSync(join(root,".gemini/antigravity-cli/settings.json"),JSON.stringify(settings));
     const executable=join(root,"agy");writeFileSync(executable,`#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(agyHelp())});`);chmodSync(executable,0o700);
     const result=await inspectProviderControls(incidentRoster.reviewers.gemini,"1.4.12",workspace,{state:"unknown",source:"existing access",detail:"unchanged"});
-    expect(result.bootstrap.state).toBe("verified");
+    expectOnlyUnreviewedAgySource(result, ["EXECUTION_HOST_CANONICAL_POLICY_UNAVAILABLE"]);
     expect(result.recipe?.argv).toEqual(expect.arrayContaining(["--agent","council-packet","--settings"]));
     expect(result.recipe?.materializations?.find(item=>item.path.endsWith("session-settings.json"))?.content).toContain("existing-deny(*)");
     expect(result.controls.state).toBe("unknown");

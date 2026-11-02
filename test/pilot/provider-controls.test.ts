@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import fs, { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync, statSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, delimiter } from "node:path";
+import { join, delimiter, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import { inspectProviderControls } from "../../src/pilot/provider-controls.js";
 import { auditHash } from "../../src/pilot/control-audit.js";
@@ -324,6 +324,115 @@ it.each([false, true])("retains only safe AGY leaf-link metadata after refusal w
           const moved = join(workspace, "moved-config"); fs.renameSync(join(root, ".."), moved); symlinkSync(moved, join(root, ".."));
         }
         return stat;
+      }) as typeof fs.lstatSync);
+    });
+  } finally { vi.restoreAllMocks(); }
+});
+
+// Break caught: metadata traversal starts at a bare separator rather than the
+// drive/UNC root used by the real bounded reader, rejecting valid observations.
+// This is a path-semantics fixture, not Windows OS/runtime qualification.
+it.each(["drive", "unc"].flatMap(namespace => ["directory", "leaf-link", "parent-link", "mutation"].map(shape => ({ namespace, shape }))))("preserves win32 AGY metadata for $namespace $shape", async ({ namespace, shape }) => {
+  const native = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const physical = realpathSync(mkdtempSync(join(tmpdir(), "agy-win32-semantics-")));
+  const namespaceRoot = namespace === "drive" ? "C:\\" : "\\\\server\\share\\";
+  const home = namespaceRoot+"work", workspace = home+"\\project";
+  const selected = workspace+"\\.agents\\plugins", parent = workspace+"\\.agents";
+  const physicalSelected = join(physical, "work/project/.agents/plugins");
+  const lookupPaths: string[] = [], payloadPaths: string[] = [], selectedFds = new Set<number>();
+  let mutated = false;
+  const put = (relative: string, bytes: string) => { const path = join(physical, relative); native.mkdirSync(join(path, ".."), { recursive: true }); native.writeFileSync(path, bytes); };
+  const mapped = (input: any): any => {
+    if (typeof input !== "string") return input;
+    if (win32.parse(input).root.toLowerCase() !== namespaceRoot.toLowerCase()) throw Object.assign(Error("outside declared win32 fixture namespace"), { code: "ENOENT", path: input });
+    return join(physical, ...win32.relative(namespaceRoot, input).split("\\").filter(Boolean));
+  };
+  try {
+    put("work/.agents/policies/model-policy.md", "inert fixture policy");
+    put("work/.gemini/antigravity-cli/settings.json", "{}");
+    put("work/bin/agy", "inert help-only executable fixture");
+    native.mkdirSync(join(physical, "work/project/.agents"), { recursive: true });
+    if (shape === "leaf-link") native.symlinkSync(join(physical, "missing-target"), physicalSelected);
+    else if (shape === "parent-link") {
+      native.rmdirSync(join(physical, "work/project/.agents"));
+      native.mkdirSync(join(physical, "outside/plugins"), { recursive: true });
+      native.symlinkSync(join(physical, "outside"), join(physical, "work/project/.agents"));
+    } else native.mkdirSync(physicalSelected);
+    const observed = shape === "parent-link" ? null : native.lstatSync(physicalSelected);
+    const expectedDigest = observed && createHash("sha256").update(JSON.stringify({ dev: observed.dev, ino: observed.ino, mode: observed.mode, mtimeMs: observed.mtimeMs, size: observed.size, symbolicLink: shape === "leaf-link" })).digest("hex");
+    const filesystem = { ...native,
+      existsSync: (input: any) => { try { return native.existsSync(mapped(input)); } catch { return false; } },
+      lstatSync: (input: any, ...args: any[]) => { lookupPaths.push(String(input)); return Reflect.apply(native.lstatSync, native, [mapped(input), ...args]); },
+      realpathSync: (input: any) => { native.realpathSync(mapped(input)); return win32.resolve(input); },
+      readFileSync: (input: any, ...args: any[]) => { payloadPaths.push(String(input)); return Reflect.apply(native.readFileSync, native, [mapped(input), ...args]); },
+      openSync: (input: any, ...args: any[]) => {
+        const fd = Reflect.apply(native.openSync, native, [mapped(input), ...args]);
+        if (input === selected) selectedFds.add(fd);
+        return fd;
+      },
+      opendirSync: (input: any, ...args: any[]) => Reflect.apply(native.opendirSync, native, [mapped(input), ...args]),
+      closeSync: (fd: number) => {
+        native.closeSync(fd);
+        if (selectedFds.delete(fd) && shape === "mutation" && !mutated) { mutated = true; native.writeFileSync(join(physicalSelected, "late.json"), "{}"); }
+      },
+    };
+    // Native descriptors and bytes stay real; only virtual path lookup and the
+    // external help query are mapped. The production inventory reader runs.
+    const execute = () => { throw Error("only the declared help query is allowed"); };
+    Object.defineProperty(execute, Symbol.for("nodejs.util.promisify.custom"), { value: async (_file: string, argv: string[]) => {
+      expect(argv).toEqual(["--help"]); return { stdout: "", stderr: agyHelp() };
+    } });
+    const child = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const os = await vi.importActual<typeof import("node:os")>("node:os");
+    vi.doMock("node:path", () => ({ ...win32, default: win32 }));
+    vi.doMock("node:fs", () => ({ ...filesystem, default: filesystem }));
+    vi.doMock("node:os", () => ({ ...os, homedir: () => home }));
+    vi.doMock("node:child_process", () => ({ ...child, execFile: execute }));
+    vi.stubEnv("PATH", home+"\\bin");
+    vi.resetModules();
+    const producer = await import("../../src/pilot/provider-controls.js");
+    const result = await producer.inspectProviderControls(incidentRoster.reviewers.gemini, "1.4.12", workspace, { state: "unknown", source: "fixture", detail: "No Windows runtime qualification" });
+    expect(result.facts.find(f => f.name === "installed-command-contract")?.observation.state).toBe("verified");
+    const retained = result.audit?.sources.find(s => s.path === selected);
+    if (shape === "directory" || shape === "leaf-link") expect(retained, JSON.stringify(result.audit?.unavailable)).toEqual({ path: selected, kind: "metadata", sha256: expectedDigest });
+    else expect(retained).toBeUndefined();
+    if (shape === "directory") {
+      expect(result.audit?.unavailable).toEqual([]);
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("verified");
+    } else {
+      expect(result.audit?.unavailable).toContain(`${shape === "mutation" ? "INVENTORY_UNSTABLE" : "INVENTORY_SYMLINK"}:${shape === "parent-link" ? parent : selected}`);
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+    }
+    if (shape === "mutation") expect(mutated).toBe(true);
+    if (shape === "parent-link") expect(lookupPaths).not.toContain(selected);
+    expect(lookupPaths).not.toContain("\\");
+    expect(payloadPaths.filter(path => path.startsWith(selected))).toEqual([]);
+    expect(selectedFds.size).toBe(0);
+  } finally {
+    for (const module of ["node:path", "node:fs", "node:os", "node:child_process"]) vi.doUnmock(module);
+    vi.resetModules(); vi.unstubAllEnvs(); rmSync(physical, { recursive: true, force: true });
+  }
+});
+
+// Break caught: a refused absence observation is converted into an absent
+// source despite an ancestor namespace change in the reader's bridge.
+it("retains the AGY absent-root diagnostic after ancestor namespace mutation", async () => {
+  let selected = "", home = "", lookups = 0;
+  try {
+    await withAgyControls(agyHelp(), "1.4.12", result => {
+      expect(lookups).toBeGreaterThanOrEqual(2);
+      expect(result.audit?.sources.some(s => s.path === selected)).toBe(false);
+      expect(result.audit?.unavailable).toContain(`INVENTORY_UNSTABLE:${home}`);
+      expect(result.facts.find(f => f.name === "startup-hooks-and-plugins")?.observation.state).toBe("unknown");
+      // Deliberate bounded diagnostic for the coordinator's changing full-run
+      // failure investigation. It does not establish that run's root cause.
+      process.stdout.write("controlled AGY absent-root observation "+JSON.stringify({ path: selected, unavailable: result.audit?.unavailable })+"\n");
+    }, 0, (workspace, settings) => {
+      home = join(workspace, ".."); selected = join(workspace, ".agents/plugins"); mkdirSync(join(selected, ".."));
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+        if (String(args[0]) === selected && ++lookups === 2) writeFileSync(join(home, "unrelated-owned-sibling"), "inert");
+        return Reflect.apply(lstat, fs, args);
       }) as typeof fs.lstatSync);
     });
   } finally { vi.restoreAllMocks(); }

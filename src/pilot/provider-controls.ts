@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, dirname, resolve, sep, extname } from "node:path";
+import { delimiter, join, dirname, resolve, sep, extname, parse } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parse as parseToml } from "smol-toml";
@@ -218,9 +218,10 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
       const selected = [...custody, "size", "mtimeMs", "ctimeMs"] as const;
       const fault = (code: string, path: string): never => { throw Object.assign(Error(code), { code, path }); };
       try {
-        const parts = resolve(root).split(sep).filter(Boolean);
+        const resolved = resolve(root), traversalRoot = parse(resolved).root;
+        const parts = resolved.slice(traversalRoot.length).split(sep).filter(Boolean);
         const observed: { path: string; stat: Stats; leaf: boolean }[] = [];
-        let current: string = sep;
+        let current: string = traversalRoot;
         for (let index = 0; index <= parts.length; index++) {
           if (index) current = join(current, parts[index - 1]!);
           const stat = lstatSync(current), leaf = index === parts.length;

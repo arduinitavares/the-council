@@ -1,22 +1,27 @@
 import { canonicalJson } from "../domain/hash.js";
+import { projectDiagnostic } from "./diagnostics.js";
 import type { Observation } from "./types.js";
 
+const nativeSources = new Set([
+  "Orca accounts.list(refreshUsage=true)", "accounts.list", "native boundary", "native run-create", "native source read",
+  "Orca accounts.list(refreshUsage=true) rateLimits.codex", "Orca accounts.list(refreshUsage=true) rateLimits.cursor",
+]);
+
 export function readFailure(source: string, error: unknown): Observation {
-  const rawCode = (error as any)?.code ?? (error as any)?.response?.error?.code;
-  const code = String(rawCode ?? error).toLowerCase();
-  const state = /authentication|unauthorized|not.authenticated|\b401\b/.test(code)
-    ? "authentication_failed" : /denied|forbidden|\b403\b/.test(code) ? "denied"
+  const diagnostic = projectDiagnostic(error, { origin: "native-read", phase: "native-read" });
+  // Preserve source-state classification in memory, without coercing arbitrary
+  // objects or copying their text into the persisted diagnostic.
+  let code = "";
+  try {
+    const value = (error as any)?.code ?? (error as any)?.response?.error?.code ?? (error instanceof Error ? error.message : error);
+    if (typeof value === "string") code = value.toLowerCase();
+    else if (typeof value === "number") code = String(value);
+  } catch { /* Unreadable native properties leave the observation missing. */ }
+  const state = /authentication|unauthorized|not.authenticated|\b401\b|^http_401$/.test(code)
+    ? "authentication_failed" : /denied|forbidden|\b403\b|^http_403$/.test(code) ? "denied"
     : /exhausted|quota.exceeded/.test(code) ? "exhausted"
     : /unsupported/.test(code) ? "unsupported" : "missing";
-  const diagnosticClass = /timeout|timed.out|etimedout/.test(code) ? "timeout"
-    : /econnreset|econnrefused|epipe|enotfound|transport|connection/.test(code) ? "transport"
-    : state === "authentication_failed" ? "authentication" : state === "denied" ? "denial"
-    : rawCode !== undefined ? "rpc" : "unclassified";
-  // Only known protocol codes survive. Messages and arbitrary provider strings
-  // may contain account identifiers, so they are used for classification only.
-  const safeCode = typeof rawCode === "number" && Number.isSafeInteger(rawCode) ? rawCode
-    : typeof rawCode === "string" && /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|TIMEOUT|REQUEST_TIMEOUT|runtime_timeout|runtime_unavailable|invalid_runtime_response|permission_denied|forbidden|method_not_found|unauthorized|unsupported|quota_exceeded|stable_pane_required|run_required|terminal_handle_stale|operation_unknown|incompatible_runtime)$/i.test(rawCode) ? rawCode : null;
-  return { state, source, detail: canonicalJson({ reason: "NATIVE_SOURCE_READ_FAILED", diagnostic: { class: diagnosticClass, code: safeCode } }) };
+  return { state, source: nativeSources.has(source) ? source : "native source read", detail: canonicalJson(diagnostic) };
 }
 
 /** Project only quota fields from the registered account snapshot. Never store

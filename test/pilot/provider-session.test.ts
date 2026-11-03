@@ -34,9 +34,9 @@ for (const behavior of ["normal", "normal-judge", "normal-instructions", "duplic
       expect(result.process.closed).toBe(true);expect(result.process.groupSettled).toBe(true);expect(result.process.trackedDescendantsSettled).toBe(true);
       expect(result.process.timersSettled).toBe(true);
       if(behavior==="normal"||behavior==="normal-judge"||behavior==="normal-instructions") {
-        expect(result.init.modelProvider).toBe("openai");
+        expect(result.init).toMatchObject({ state: "verified", protocol: "codex-app-server", modelProvider: "openai", tools: { state: "unknown" } });
         expect(result.error).toBeNull();expect(result.status).toBe("completed");expect(result.calls).toBe(1);
-        if(behavior==="normal-instructions")expect(result.init.instructionSources).toEqual([join(recipe.cwd,"AGENTS.md")]);
+        if(behavior==="normal-instructions")expect(result.init).toHaveProperty("instructionSources",[join(recipe.cwd,"AGENTS.md")]);
         expect(requests).toEqual(["initialize","initialized","config/read","includeLayers:true","configRequirements/read","permissionProfile/list","thread/start","turn/start"]);
       } else {
         expect(result.status).toBe("failed");expect(result.calls).toBe(0);expect(result.process.inputDelivered).toBe(false);
@@ -130,7 +130,7 @@ function expectStartupReady(session: Awaited<ReturnType<typeof notificationSessi
   expect(session.result).toMatchObject({ status: "failed", error: "PROVIDER_INITIALIZATION_CANCELLED", calls: 0, process: { inputDelivered: false } });
   expect(session.prepared).toMatchObject({
     assignmentHash: session.assignmentHash, ready: true, initializations: 1,
-    init: { model: session.selection.model, modelProvider: "openai", reasoningEffort: "max", cwd: session.cwd, activePermissionProfile: { id: "council_packet", extends: null }, instructionSources: [] },
+    init: { state: "verified", protocol: "codex-app-server", model: session.selection.model, modelProvider: "openai", reasoningEffort: "max", cwd: session.cwd, activePermissionProfile: { id: "council_packet", extends: null }, instructionSources: [], tools: { state: "unknown" } },
   });
   expect(session.requests).toEqual(["initialize", "initialized", "config/read", "includeLayers:true", "configRequirements/read", "permissionProfile/list", "thread/start"]);
   expect(session.inputExists || session.inferenceExists).toBe(false);

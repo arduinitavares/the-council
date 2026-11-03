@@ -21,7 +21,13 @@ it("runs E4 through the shipped composition, actual wrapper processes and statef
     expect(result.proofs).toHaveLength(4);
     expect(result.proofs.every(p => p.schemaVersion === 2)).toBe(true);
     expect([...h.terminals.values()].every(t => t.closed)).toBe(true);
-    for (const proof of result.proofs) expect(await verifyNativeProof(proof, h.command)).toBe(true);
+    for (const proof of result.proofs) {
+      expect(await verifyNativeProof(proof, h.command)).toBe(true);
+      const report = JSON.parse(readFileSync(proof.normal.context!.directory+"/result.json", "utf8"));
+      expect(report).toMatchObject({ version: 2, diagnostic: { version: 1, inputDelivery: "acknowledged" } });
+      expect(report).not.toHaveProperty("stdout");
+      expect(report).not.toHaveProperty("stderr");
+    }
     const reused = await runPilot({ ...request, deadline: Date.now()+120000, maxProbeCalls: 0, proofs: result.proofs }, make());
     expect(reused.status).toBe("consensus");
     expect(reused.calls).toEqual({ probes: 0, topic: 10 });

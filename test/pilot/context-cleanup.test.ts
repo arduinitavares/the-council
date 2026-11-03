@@ -195,7 +195,8 @@ it("records positive no-provider work facts in the pre-spawn fallback", async ()
     h.evidence.routes.find(route => route.role === "gemini")!.recipe!.sources.push({ path: source, kind: "file", sha256: "0".repeat(64) });
     const { driver, a, assignment, closes } = await launchContext(h, "pre-spawn-fallback");
     const report = await awaitWrapperReport(h, a);
-    expect(report.version).toBe(1);
+    expect(report.version).toBe(2);
+    expect(report.diagnostic).toMatchObject({ version: 1, code: "PROVIDER_CONTROL_SOURCE_DRIFT", inputDelivery: "not_attempted" });
     expect(report.error).toBe("PROVIDER_CONTROL_SOURCE_DRIFT");
     expect(report.calls).toBe(0);
     expect(report.process).toMatchObject({ providerStarted: false, parsingSettled: true, processScansSettled: true });

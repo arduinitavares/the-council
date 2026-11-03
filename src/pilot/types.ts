@@ -1,4 +1,5 @@
 import type { ModelSelection, PilotConfig, Role } from "./config.js";
+import type { DiagnosticCode, DiagnosticSummary } from "./diagnostics.js";
 import type { ScopedLaunchPlan } from "./scoped-launch.js";
 import type { ContextProof, ControlFact, ProviderRecipe } from "./wrapper-contract.js";
 export type Phase =
@@ -81,9 +82,9 @@ export interface StopAcknowledgement {
   kind?: "wrapper-control" | undefined;
 }
 export type CancellationResult =
-  | { state: "settled"; stop: StopAcknowledgement }
-  | { state: "settled_unacknowledged"; error?: string | undefined }
-  | { state: "unknown" };
+  | { state: "settled"; stop: StopAcknowledgement; diagnostic?: DiagnosticSummary | undefined }
+  | { state: "settled_unacknowledged"; error?: DiagnosticCode | undefined; diagnostic?: DiagnosticSummary | undefined }
+  | { state: "unknown"; diagnostic?: DiagnosticSummary | undefined };
 export interface Binding {
   runId: string;
   taskId: string;
@@ -100,8 +101,9 @@ export interface Attempt {
   launchVerified: boolean;
   context?: { directory: string; assignmentHash: string } | undefined;
   inferenceStarted?: boolean | null | undefined;
-  initializations?: number | undefined;
-  controlError?: string | undefined;
+  initializations?: number | null | undefined;
+  controlError?: DiagnosticCode | undefined;
+  diagnostic?: DiagnosticSummary | undefined;
 }
 export interface Result {
   binding: Binding;

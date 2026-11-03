@@ -4,13 +4,14 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson, hashArtifact } from "../domain/hash.js";
 import { mutationRequestId } from "./mutation-id.js";
 import { pilotPayloadSchemas, pilotResultEnvelopeSchema } from "./payload.js";
-import { assignmentSchema, identitySchema, readStrictFile, sha256, writeExclusive, producerCodeHash, type ContextProof, type WrapperAssignment } from "./wrapper-contract.js";
+import { assignmentSchema, identitySchema, readStrictFile, readPreparedReport, providerReportSchema, PROVIDER_REPORT_VERSION, sha256, writeExclusive, producerCodeHash, type ContextProof, type WrapperAssignment } from "./wrapper-contract.js";
 import type { Command } from "./orca-driver.js";
 import type { ScopedRpc } from "./rpc.js";
 import type { Attempt, CancellationResult, NativeEvidence, Phase, PilotRequest, Result } from "./types.js";
 import type { Role } from "./config.js";
 import type { QualificationProof } from "./types.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
+import { diagnosticError, PilotDiagnosticError, type DiagnosticPhase } from "./diagnostics.js";
 
 export interface ContextWrapperPort {
   configure?(evidence: NativeEvidence): void;
@@ -37,16 +38,23 @@ export function wrapperIntent(assignment: Omit<WrapperAssignment, "binding" | "d
     controlsHash: assignment.controlsHash, policyHash: assignment.policyHash, recipe: assignment.recipe,
     directory: assignment.directory, deadline: assignment.deadline, producerHash: assignment.producerHash };
 }
+function readProviderReport(file: string) {
+  const value = readStrictFile(file);
+  if (value?.version !== PROVIDER_REPORT_VERSION) throw Error("WRAPPER_DIAGNOSTIC_VERSION_UNSUPPORTED");
+  const parsed = providerReportSchema.safeParse(value);
+  if (!parsed.success) throw Error("WRAPPER_RESULT_UNBOUND");
+  return parsed.data;
+}
 export async function verifyContextResult(assignment: WrapperAssignment, command: Command) {
   const file = join(assignment.directory, "result.json");
   const bytes = readFileSync(file);
-  const report = readStrictFile(file);
-  if (report.version !== 1 || canonicalJson(report.binding) !== canonicalJson(assignment.binding) ||
+  const report = readProviderReport(file);
+  if (canonicalJson(report.binding) !== canonicalJson(assignment.binding) ||
       report.assignmentHash !== sha256(readFileSync(join(assignment.directory, "assignment.json"))) ||
       report.packetHash !== assignment.packetHash || report.controlsHash !== assignment.controlsHash ||
       report.process?.closed !== true || report.process?.groupSettled !== true || report.process?.trackedDescendantsSettled !== true ||
       report.process?.parsingSettled !== true || report.process?.processScansSettled !== true ||
-      report.process?.timersSettled !== true || !Number.isSafeInteger(report.wrapperPid)) throw Error("WRAPPER_RESULT_UNBOUND");
+      report.process?.timersSettled !== true || typeof report.wrapperPid !== "number" || !Number.isSafeInteger(report.wrapperPid)) throw Error("WRAPPER_RESULT_UNBOUND");
   const shown = await command(["orchestration", "dispatch-show", "--task", assignment.binding.taskId, "--json"], assignment.workspace, 5000);
   const d = shown.dispatch;
   if (d?.id !== assignment.binding.dispatchId || (d.taskId ?? d.task_id) !== assignment.binding.taskId ||
@@ -113,6 +121,16 @@ export class ContextWrapperTransport implements ContextWrapperPort {
     private readonly orca: string, private readonly record: (event: unknown) => void, private readonly now = Date.now) {}
   configure(evidence: NativeEvidence) { this.evidence = evidence; }
   async launch(run: string, request: PilotRequest, role: Role, phase: Phase, packet: string, key: string): Promise<Attempt> {
+    try { return await this.launchOwned(run, request, role, phase, packet, key); }
+    catch (cause) { throw diagnosticError(cause, { origin: "context-driver", phase: "initialization" }); }
+  }
+  private failLaunch(a: Attempt, cause: unknown, phase: DiagnosticPhase): Attempt {
+    const error = diagnosticError(cause, { origin: "context-driver", phase,
+      inputDelivery: a.inferenceStarted === true ? "acknowledged" : a.inferenceStarted === false ? "not_attempted" : "unknown" });
+    a.controlError = error.diagnostic.code; a.diagnostic = error.diagnostic;
+    return a;
+  }
+  private async launchOwned(run: string, request: PilotRequest, role: Role, phase: Phase, packet: string, key: string): Promise<Attempt> {
     const e = this.evidence;
     const route = e?.routes.find(entry => entry.role === role);
     if (!e || route?.bootstrap?.state !== "verified" || !route.recipe || route.recipe.facts.some(f => f.stage === "bootstrap" && f.observation.state !== "verified"))
@@ -156,38 +174,45 @@ export class ContextWrapperTransport implements ContextWrapperPort {
     const assignment = assignmentSchema.parse({ ...base, binding, dispatchIncarnation: d.processIncarnation ?? d.process_incarnation });
     writeExclusive(join(directory, "assignment.json"), assignment);
     const assignmentHash = sha256(readFileSync(join(directory, "assignment.json")));
-    const attempt: Attempt = { binding, role, phase, selection, packetHash, launchVerified: false, context: { directory, assignmentHash }, inferenceStarted: false, initializations: 0 };
+    const attempt: Attempt = { binding, role, phase, selection, packetHash, launchVerified: false, context: { directory, assignmentHash }, inferenceStarted: false, initializations: null };
     this.owned.set(binding.dispatchId, { assignment, assignmentHash, closeAttempted: false, proof: null });
     this.record({ event: "wrapper-native-bound", attempt, identity });
-    while (this.now() < deadline) {
-      if (existsSync(join(directory, "prepared.json"))) {
-        const prepared = readStrictFile(join(directory, "prepared.json"));
-        attempt.initializations = prepared.initializations;
-        if (prepared.assignmentHash !== assignmentHash || prepared.ready !== true) { attempt.controlError = prepared.error ?? "WRAPPER_EFFECTIVE_CONTROLS_UNVERIFIED"; return attempt; }
-        attempt.inferenceStarted = null;
-        attempt.controlError = "WRAPPER_INPUT_ACK_UNKNOWN";
-        try { writeExclusive(join(directory, "input.json"), { assignmentHash, requestId: mutationRequestId(`input:${key}`) }); }
-        catch { attempt.controlError = "WRAPPER_INPUT_MUTATION_UNKNOWN"; return attempt; }
-        while (this.now() < deadline) {
-          if (existsSync(join(directory, "inference-started.json"))) {
-            const started = readStrictFile(join(directory, "inference-started.json"));
-            if (started.assignmentHash !== assignmentHash || started.calls !== 1) throw Error("WRAPPER_INPUT_ACK_UNBOUND");
-            attempt.inferenceStarted = true; attempt.launchVerified = true; delete attempt.controlError; return attempt;
+    try {
+      while (this.now() < deadline) {
+        if (existsSync(join(directory, "prepared.json"))) {
+          const prepared = readPreparedReport(join(directory, "prepared.json"), assignmentHash);
+          attempt.initializations = prepared.initializations;
+          if (!prepared.ready) {
+            attempt.controlError = prepared.error ?? "WRAPPER_EFFECTIVE_CONTROLS_UNVERIFIED";
+            attempt.diagnostic = prepared.diagnostic;
+            return attempt;
           }
-          if (existsSync(join(directory, "result.json"))) {
-            const observed = readStrictFile(join(directory, "result.json"));
-            attempt.inferenceStarted = observed.calls === 0 ? false : observed.calls === 1 ? true : null;
-            attempt.controlError = "WRAPPER_INPUT_DELIVERY_UNVERIFIED"; return attempt;
+          attempt.inferenceStarted = null;
+          this.failLaunch(attempt, Error("WRAPPER_INPUT_ACK_UNKNOWN"), "input");
+          try { writeExclusive(join(directory, "input.json"), { assignmentHash, requestId: mutationRequestId(`input:${key}`) }); }
+          catch { return this.failLaunch(attempt, Error("WRAPPER_INPUT_MUTATION_UNKNOWN"), "input"); }
+          while (this.now() < deadline) {
+            if (existsSync(join(directory, "inference-started.json"))) {
+              const started = readStrictFile(join(directory, "inference-started.json"));
+              if (started.assignmentHash !== assignmentHash || started.calls !== 1) throw Error("WRAPPER_INPUT_ACK_UNBOUND");
+              attempt.inferenceStarted = true; attempt.launchVerified = true;
+              delete attempt.controlError; delete attempt.diagnostic; return attempt;
+            }
+            if (existsSync(join(directory, "result.json"))) {
+              const { report } = await verifyContextResult(assignment, this.command);
+              attempt.inferenceStarted = report.calls === 0 ? false : report.calls === 1 ? true : null;
+              return this.failLaunch(attempt, report.status === "failed" ? new PilotDiagnosticError(report.diagnostic) : Error("WRAPPER_INPUT_DELIVERY_UNVERIFIED"), "input");
+            }
+            await pause(20);
           }
-          await pause(20);
+          return attempt;
         }
-        return attempt;
+        await pause(20);
       }
-      await pause(20);
+      return this.failLaunch(attempt, Error("WRAPPER_INITIALIZATION_DEADLINE"), "initialization");
+    } catch (cause) {
+      return this.failLaunch(attempt, cause, attempt.inferenceStarted === false ? "initialization" : "input");
     }
-    attempt.controlError = "WRAPPER_INITIALIZATION_DEADLINE";
-    attempt.initializations = existsSync(join(directory, "initialization-started.json")) ? 1 : 0;
-    return attempt;
   }
   private get(a: Attempt) {
     const owned = this.owned.get(a.binding.dispatchId);
@@ -195,40 +220,53 @@ export class ContextWrapperTransport implements ContextWrapperPort {
     return owned;
   }
   async observe(a: Attempt, deadline: number): Promise<Result> {
-    const { assignment } = this.get(a);
-    while (this.now() < deadline) {
-      try {
-        const verified = await verifyContextResult(assignment, this.command);
-        if (verified.report.status !== "completed" || verified.report.calls !== 1) throw Error("WRAPPER_PROVIDER_FAILED");
-        const value = pilotResultEnvelopeSchema.parse(verified.report.result);
-        if (canonicalJson(value.binding) !== canonicalJson(a.binding) || value.packetHash !== a.packetHash || value.role !== a.role || value.phase !== a.phase ||
-            canonicalJson(value.selection) !== canonicalJson(a.selection) || !pilotPayloadSchemas[a.phase].safeParse(value.payload).success) throw Error("WRAPPER_RESULT_BINDING_MISMATCH");
-        return { ...value, settlement: "unknown", source: "native Task.result bound host artifact", sourceIdentity: verified.completionMessageId, provider: a.selection.route };
-      } catch (error) {
-        if (existsSync(join(assignment.directory, "result.json")) && existsSync(join(assignment.directory, "completion-native.json"))) throw error;
+    try {
+      const { assignment } = this.get(a);
+      while (this.now() < deadline) {
+        try {
+          const verified = await verifyContextResult(assignment, this.command);
+          if (verified.report.status === "failed") throw new PilotDiagnosticError(verified.report.diagnostic);
+          if (verified.report.status !== "completed" || verified.report.calls !== 1) throw Error("WRAPPER_PROVIDER_FAILED");
+          const value = pilotResultEnvelopeSchema.parse(verified.report.result);
+          if (canonicalJson(value.binding) !== canonicalJson(a.binding) || value.packetHash !== a.packetHash || value.role !== a.role || value.phase !== a.phase ||
+              canonicalJson(value.selection) !== canonicalJson(a.selection) || !pilotPayloadSchemas[a.phase].safeParse(value.payload).success) throw Error("WRAPPER_RESULT_BINDING_MISMATCH");
+          return { ...value, settlement: "unknown", source: "native Task.result bound host artifact", sourceIdentity: verified.completionMessageId, provider: a.selection.route };
+        } catch (error) {
+          if (existsSync(join(assignment.directory, "result.json")) && existsSync(join(assignment.directory, "completion-native.json"))) throw error;
+        }
+        await pause(20);
       }
-      await pause(20);
+      throw Error("WRAPPER_RESULT_DEADLINE");
+    } catch (cause) {
+      throw diagnosticError(cause, { origin: "context-driver", phase: "validation" });
     }
-    throw Error("WRAPPER_RESULT_DEADLINE");
   }
   async cancel(a: Attempt, deadline: number, mode?: "absolute-cleanup"): Promise<CancellationResult> {
-    const { assignment } = this.get(a);
-    const until = mode === "absolute-cleanup" ? deadline : Math.max(Math.min(deadline, this.now()+120000), this.now()+30000);
-    if (until <= this.now()) return { state: "unknown" };
-    const file = join(assignment.directory, "cancel.json");
-    const requestId = mutationRequestId(`wrapper-stop:${canonicalJson(a.binding)}`);
-    if (!existsSync(file)) writeExclusive(file, { requestId, binding: a.binding, deadline: until });
-    while (this.now() < until) {
-      try {
-        const verified = await verifyContextResult(assignment, this.command);
-        const cancel = verified.report.cancellation;
-        return verified.report.status === "cancelled" && cancel?.requestId === requestId && cancel?.acknowledged === true && canonicalJson(cancel.binding) === canonicalJson(a.binding)
-          ? { state: "settled", stop: { dispatchId: a.binding.dispatchId, requestId, state: "stopped", kind: "wrapper-control" } }
-          : { state: "settled_unacknowledged", ...(verified.report.error ? { error: verified.report.error as string } : {}) };
-      } catch { /* Observe the same owned attempt; never resend a provider stop. */ }
-      await pause(20);
+    let diagnostic = diagnosticError(Error("CANCELLATION_SETTLEMENT_UNKNOWN"), { origin: "context-driver", phase: "cancellation" }).diagnostic;
+    try {
+      const { assignment } = this.get(a);
+      const until = mode === "absolute-cleanup" ? deadline : Math.max(Math.min(deadline, this.now()+120000), this.now()+30000);
+      if (until <= this.now()) return { state: "unknown", diagnostic };
+      const file = join(assignment.directory, "cancel.json");
+      const requestId = mutationRequestId(`wrapper-stop:${canonicalJson(a.binding)}`);
+      if (!existsSync(file)) writeExclusive(file, { requestId, binding: a.binding, deadline: until });
+      while (this.now() < until) {
+        try {
+          const verified = await verifyContextResult(assignment, this.command);
+          const cancel = verified.report.cancellation;
+          return verified.report.status === "cancelled" && cancel?.requestId === requestId && cancel?.acknowledged === true && canonicalJson(cancel.binding) === canonicalJson(a.binding)
+            ? { state: "settled", stop: { dispatchId: a.binding.dispatchId, requestId, state: "stopped", kind: "wrapper-control" }, diagnostic: verified.report.diagnostic }
+            : { state: "settled_unacknowledged", ...(verified.report.error ? { error: verified.report.error } : {}), diagnostic: verified.report.diagnostic };
+        } catch (cause) {
+          diagnostic = diagnosticError(cause, { origin: "context-driver", phase: "cancellation" }).diagnostic;
+          // Observe the same owned attempt; never resend a provider stop.
+        }
+        await pause(20);
+      }
+    } catch (cause) {
+      diagnostic = diagnosticError(cause, { origin: "context-driver", phase: "cancellation" }).diagnostic;
     }
-    return { state: "unknown" };
+    return { state: "unknown", diagnostic };
   }
   async release(a: Attempt, deadline = this.now()+30000): Promise<boolean> {
     const owned = this.get(a);
@@ -239,7 +277,7 @@ export class ContextWrapperTransport implements ContextWrapperPort {
       try {
         const verified = await verifyContextResult(assignment, this.command);
         let exited = false;
-        try { process.kill(verified.report.wrapperPid, 0); } catch (error) { exited = (error as NodeJS.ErrnoException).code === "ESRCH"; }
+        try { process.kill(verified.report.wrapperPid!, 0); } catch (error) { exited = (error as NodeJS.ErrnoException).code === "ESRCH"; }
         if (!exited) { await pause(20); continue; }
         const rpc = this.rpc(assignment.runtimeId);
         const shown = (await rpc.callScoped("terminal.show", { terminal: assignment.identity.handle })).terminal;

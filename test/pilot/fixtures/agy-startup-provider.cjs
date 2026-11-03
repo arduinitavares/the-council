@@ -26,12 +26,50 @@ const init = {
   tools: behavior === "captured-tools" ? capturedTools : [],
   ...(behavior === "missing-agent" ? {} : { agent: behavior === "null-agent" ? null : behavior === "wrong-agent" ? "foreign" : "council-packet" }),
 };
+const resistant = behavior.startsWith("resistant-");
 process.on("SIGTERM", () => {
   record("startup-stop");
   // Keep the pipe open long enough to expose input after a known parser failure.
-  setTimeout(() => process.exit(0), 200);
+  if (!resistant) setTimeout(() => process.exit(0), 200);
 });
-emit({ event: "init", conversation_id: "synthetic-agy-session", init });
+if (resistant || behavior === "close-before-input") {
+  const owner = JSON.parse(fs.readFileSync(path.join(directory, "fixture-owner.json"), "utf8"));
+  let descendant;
+  if (resistant) {
+    descendant = require("node:child_process").spawn(process.execPath, ["-e", `
+      const fs = require('node:fs');
+      process.on('SIGTERM', () => fs.appendFileSync(${JSON.stringify(trace)}, 'descendant-stop\\n'));
+      fs.writeFileSync(${JSON.stringify(path.join(directory, "descendant-ready"))}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `], { stdio: ["ignore", "inherit", "inherit"] });
+  }
+  fs.writeFileSync(path.join(directory, "fixture-manifest.json"), JSON.stringify({
+    assignmentHash: owner.assignmentHash, nonce: owner.nonce, parentPid: owner.parentPid,
+    providerPid: process.pid, descendantPid: descendant?.pid ?? null, group: process.pid,
+  }));
+  let started = false, prepared = false;
+  const commands = new Set();
+  setInterval(() => {
+    if (!started && (!resistant || fs.existsSync(path.join(directory, "descendant-ready")))) {
+      started = true;
+      emit({ event: "init", conversation_id: "synthetic-agy-session", init });
+    }
+    if (!prepared && fs.existsSync(path.join(directory, "prepared.json"))) {
+      prepared = true;
+      if (behavior === "close-before-input") process.exit(0);
+      if (behavior === "resistant-post-ready-error") emit({ event: "unexpected-startup-event" });
+    }
+    for (const command of ["error", "stderr", "overflow", "invalid-utf8"]) {
+      if (commands.has(command) || !fs.existsSync(path.join(directory, "command-"+command))) continue;
+      commands.add(command);
+      if (command === "error") emit({ event: "unexpected-startup-event" });
+      if (command === "stderr") process.stderr.write("synthetic stderr failure\n");
+      if (command === "overflow") process.stdout.write(Buffer.alloc(1_048_577, 120));
+      if (command === "invalid-utf8") process.stdout.write(Buffer.from([0xff]));
+      record("command-"+command);
+    }
+  }, 5);
+} else emit({ event: "init", conversation_id: "synthetic-agy-session", init });
 if (behavior === "post-ready-error") {
   const timer = setInterval(() => {
     const prepared = path.join(directory, "prepared.json");

@@ -36,12 +36,14 @@ export async function runHostWrapper(directory: string, orca: string, runtimeId:
     writeExclusive(join(directory, "prepared.json"), { assignmentHash, ready: false, initializations: 0, error });
     const beforeSpawn = ["PROVIDER_BOOTSTRAP_UNVERIFIED", "PROVIDER_CONTROL_SOURCE_DRIFT", "PROVIDER_PREINPUT_CONTROL_UNSUPPORTED", "PROVIDER_PACKET_ROOT_MISMATCH", "PROVIDER_PACKET_ROOT_UNVERIFIED", "PROVIDER_PROFILE_SCOPE_INVALID", "PROVIDER_PROFILE_SYMLINK", "PROVIDER_PROFILE_CONTENT_MISMATCH"].includes(error);
     report = { version: 1, binding: a.binding, assignmentHash, packetHash: a.packetHash, controlsHash: a.controlsHash, status: "failed", calls: beforeSpawn ? 0 : null, initializations: beforeSpawn ? 0 : null, error,
-      process: { providerStarted: beforeSpawn ? false : null, closed: beforeSpawn, groupSettled: beforeSpawn, trackedDescendantsSettled: beforeSpawn, timersSettled: beforeSpawn, inputDelivered: false } };
+      process: { providerStarted: beforeSpawn ? false : null, closed: beforeSpawn, groupSettled: beforeSpawn, trackedDescendantsSettled: beforeSpawn,
+        parsingSettled: beforeSpawn, processScansSettled: beforeSpawn, timersSettled: beforeSpawn, inputDelivered: false } };
   }
   report.wrapperPid = process.pid;
   writeExclusive(join(directory, "result.json"), report);
   const digest = sha256(readFileSync(join(directory, "result.json")));
-  const ok = ["completed", "cancelled"].includes(report.status) && report.process.closed && report.process.groupSettled && report.process.trackedDescendantsSettled && report.process.timersSettled;
+  const ok = ["completed", "cancelled"].includes(report.status) && report.process.closed && report.process.groupSettled && report.process.trackedDescendantsSettled &&
+    report.process.parsingSettled === true && report.process.processScansSettled === true && report.process.timersSettled;
   const body = `The host wrapper collected ${report.status === "cancelled" ? "the bound active-turn cancellation acknowledgement" : "the bound provider outcome"}. Artifact sha256=${digest} records original provider exit, input and cleanup evidence. The coordinator must independently verify wrapper exit and exact terminal closure.`;
   const requestId = mutationRequestId(`completion:${canonicalJson(a.binding)}`);
   writeExclusive(join(directory, "completion-reserved.json"), { requestId, binding: a.binding, digest });

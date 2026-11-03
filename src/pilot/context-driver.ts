@@ -45,6 +45,7 @@ export async function verifyContextResult(assignment: WrapperAssignment, command
       report.assignmentHash !== sha256(readFileSync(join(assignment.directory, "assignment.json"))) ||
       report.packetHash !== assignment.packetHash || report.controlsHash !== assignment.controlsHash ||
       report.process?.closed !== true || report.process?.groupSettled !== true || report.process?.trackedDescendantsSettled !== true ||
+      report.process?.parsingSettled !== true || report.process?.processScansSettled !== true ||
       report.process?.timersSettled !== true || !Number.isSafeInteger(report.wrapperPid)) throw Error("WRAPPER_RESULT_UNBOUND");
   const shown = await command(["orchestration", "dispatch-show", "--task", assignment.binding.taskId, "--json"], assignment.workspace, 5000);
   const d = shown.dispatch;

@@ -9,6 +9,8 @@ import { QualificationCache } from "../../src/pilot/qualification-cache.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { recordCleanupArtifact } from "./provider-cleanup-fixture.js";
 
 const now = 1_800_000_000_000;
 const evidence: NativeEvidence = {
@@ -68,6 +70,29 @@ const request: PilotRequest = {
   workerTimeoutMs: 1000,
   proofs: [],
 };
+
+it.each([[false, 0], [null, 1], [true, 1]] as const)("refunds only a proven no-input launch (inferenceStarted=%s)", async (inferenceStarted, expectedCalls) => {
+  const h = harness();
+  const launch = h.driver.launch.bind(h.driver);
+  const launchSpy = vi.spyOn(h.driver, "launch").mockImplementation(async (...args) => {
+    const attempt = await launch(...args);
+    return { ...attempt, launchVerified: false, controlError: "PROVIDER_STREAM_EVENT_UNSUPPORTED", inferenceStarted };
+  });
+  try {
+    const out = await runPilot(request, h.driver, () => now);
+    recordCleanupArtifact(`task3-workflow-${randomUUID()}.json`, { test: "refunds only a proven no-input launch", inferenceStarted,
+      expectedCalls, outcome: out, commands: h.calls, fixture: "real runPilot/driver, offline native command boundary; no provider processes" });
+    expect(out.calls).toEqual({ probes: expectedCalls, topic: 0 });
+    expect(out.proofs).toEqual([]);
+    expect(out.status).toBe("failed");
+    expect(out.error).toBe("PROVIDER_STREAM_EVENT_UNSUPPORTED");
+    expect(out.unresolved).toEqual([]);
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(h.calls.filter(c => c.argv[1] === "worker-start")).toHaveLength(1);
+    expect(h.calls.filter(c => c.argv[1] === "worker-stop")).toHaveLength(1);
+    expect(h.calls.filter(c => c.argv[1] === "worker-release")).toHaveLength(1);
+  } finally { launchSpy.mockRestore(); }
+});
 
 it("uses cleanup grace after workflow expiry without launching another inference", async () => {
   const h = harness();

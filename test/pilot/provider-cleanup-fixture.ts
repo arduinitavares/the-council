@@ -10,8 +10,16 @@ import { incidentRoster } from "./fixtures.js";
 
 export type CleanupMode = "resistant-post-ready-error" | "resistant-ready" | "resistant-sequence" | "close-before-input";
 export type SessionReport = Awaited<ReturnType<typeof runProviderSession>>;
-const artifacts = resolve(".superpowers/sdd/2026-11-01-council-preinput-cleanup/task-1-resumed-20261103/fixtures");
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+// Only an explicit per-command opt-in persists fixture evidence. Ordinary test
+// runs use their temporary fixture directories without touching historical SDD work.
+export function recordCleanupArtifact(name: string, value: unknown) {
+  const artifacts = process.env.COUNCIL_TEST_ARTIFACTS;
+  if (!artifacts) return;
+  mkdirSync(artifacts, { recursive: true });
+  writeFileSync(join(artifacts, name), JSON.stringify(value, null, 2), { flag: "wx" });
+}
 
 export function fixtureAssignment(root: string, lifetimeMs: number): WrapperAssignment {
   const workspace = join(root, "project"), directory = join(root, "session");
@@ -95,11 +103,10 @@ export async function cleanupFixture(mode: CleanupMode, lifetimeMs: number) {
       } catch (cause) { failure = cause; }
       finally {
         nowSpy.mockRestore(); killSpy.mockRestore();
-        mkdirSync(artifacts, { recursive: true });
-        writeFileSync(join(artifacts, nonce+".json"), JSON.stringify({ mode, lifetimeMs, assignmentHash, nonce, parentPid: process.pid,
+        recordCleanupArtifact(nonce+".json", { mode, lifetimeMs, assignmentHash, nonce, parentPid: process.pid,
           watchdogPid: watchdog.pid, watchdogClosed, watchdogCode, watchdog: watchdogReport(), manifest: existsSync(join(directory, "fixture-manifest.json")) ? manifest() : null,
           trace: h.trace(), signals, report: report ? { status: report.status, error: report.error, calls: report.calls, cancellation: report.cancellation, process: report.process } : null,
-          rejected: String(rejected ?? ""), failure: String(failure ?? "") }, null, 2));
+          rejected: String(rejected ?? ""), failure: String(failure ?? "") });
         if (!failure) rmSync(root, { recursive: true });
       }
       if (failure) throw failure;

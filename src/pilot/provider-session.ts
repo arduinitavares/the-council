@@ -1,5 +1,4 @@
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync, accessSync, constants } from "node:fs";
 import { join, relative, dirname, isAbsolute } from "node:path";
 import { canonicalJson } from "../domain/hash.js";
@@ -9,6 +8,7 @@ import { readStrictFile, sha256, writeExclusive, type WrapperAssignment, type Pr
 import { instantiateAgyHookShellPolicy } from "./agy-hook-shell.js";
 import { currentSourceDigest } from "./control-audit.js";
 import { verifyCodexConfig, verifyCodexRequirements } from "./codex-controls.js";
+import { startProviderProcessScan, waitForProviderWork, type OwnedProviderScan } from "./provider-cleanup.js";
 
 /** Only the host wrapper owns process signals and control files. Provider
  * children receive subscription authentication through their normal home, but
@@ -64,8 +64,9 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
   let inputRequestId: string | undefined;
   let configAccepted = false, requirementsAccepted = false, profileAllowed = false, threadRequested = false;
   let startupThread: string | undefined, startupThreadNotified = false;
+  let callbacksSealed = false;
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const markFinal = () => { turnFinal = true; writeExclusive(join(a.directory, "turn-final.json"), { assignmentHash, at: Date.now() }); };
+  const markFinal = () => { if (callbacksSealed || error) return; turnFinal = true; writeExclusive(join(a.directory, "turn-final.json"), { assignmentHash, at: Date.now() }); };
   const seen = new Set<number>();
   let escaped = false, processScanKnown = true;
   let cleanupBound = a.deadline+30000;
@@ -100,6 +101,7 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     init = observed; initialized = true; ready = true;
   };
   const line = async (text: string) => {
+    if (callbacksSealed || error) return;
     const event: any = decodeStrictJson(text);
     if (recipe.protocol === "agy-stream") {
       if (event.event === "init") completeInit(event.init);
@@ -191,12 +193,29 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
       else throw Error("PROVIDER_STREAM_EVENT_UNSUPPORTED");
     }
   };
-  let parsing = Promise.resolve();
+  let parsing = Promise.resolve(), parsingPending = 0, parsingExpired = false;
+  const observeParsing = async (deadline: () => number, poll: () => void) => {
+    const outcome = await waitForProviderWork("parsing", parsing, deadline, poll, timers);
+    if (outcome.state === "deadline") parsingExpired = true;
+    if (outcome.state === "rejected") recordFailure(outcome.reason instanceof Error ? outcome.reason.message : "PROVIDER_FAILURE");
+    return outcome.state === "settled";
+  };
   const drainPreInputParsing = async () => {
     let tail: Promise<void>;
-    do { tail = parsing; await tail; assertPreInputOpen(); } while (tail !== parsing);
+    do {
+      tail = parsing;
+      if (!await observeParsing(() => a.deadline, assertPreInputOpen)) throw Error("PROVIDER_INPUT_DEADLINE");
+      assertPreInputOpen();
+    } while (tail !== parsing);
   };
-  child.stdout.on("data", (bytes: Buffer) => {
+  const queueLine = (text: string) => {
+    parsingPending++;
+    parsing = parsing.then(() => line(text)).catch(cause => {
+      if (!callbacksSealed) recordFailure(cause instanceof Error ? cause.message : "PROVIDER_FAILURE");
+    }).then(() => { parsingPending--; });
+  };
+  const onStdout = (bytes: Buffer) => {
+    if (callbacksSealed) return;
     size += bytes.length;
     if (size > 1024*1024) { recordFailure("PROVIDER_OUTPUT_OVERFLOW"); return; }
     try { const text = decoder.decode(bytes, { stream: true }); stdout += text; pending += text; }
@@ -204,20 +223,45 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     let index: number;
     while ((index = pending.indexOf("\n")) >= 0) {
       const current = pending.slice(0, index); pending = pending.slice(index+1);
-      if (current.trim()) parsing = parsing.then(() => line(current)).catch(cause => { recordFailure(cause.message); });
+      if (current.trim()) queueLine(current);
     }
-  });
-  child.stderr.on("data", (bytes: Buffer) => { size += bytes.length; stderr += bytes.toString("utf8").slice(0, 4096); if (stderr.trim()) recordFailure("PROVIDER_STDERR_UNCLASSIFIED"); if (size > 1024*1024) recordFailure("PROVIDER_OUTPUT_OVERFLOW"); });
+  };
+  const onStderr = (bytes: Buffer) => { if (callbacksSealed) return; size += bytes.length; stderr += bytes.toString("utf8").slice(0, 4096); if (stderr.trim()) recordFailure("PROVIDER_STDERR_UNCLASSIFIED"); if (size > 1024*1024) recordFailure("PROVIDER_OUTPUT_OVERFLOW"); };
+  child.stdout.on("data", onStdout);
+  child.stderr.on("data", onStderr);
   child.stdin.on("error", () => { recordFailure("PROVIDER_INPUT_CLOSED"); });
   child.on("error", () => { recordFailure("PROVIDER_PROCESS_START_FAILED"); });
   child.once("close", (code, why) => { closed = true; exitCode = code; signal = why; });
-  const scan = async () => {
-    if (!child.pid) { processScanKnown = false; return; }
-    try {
-      const rows = (await promisify(execFile)("ps", ["-axo", "pid=,ppid=,pgid="], { timeout: 2000, maxBuffer: 1024*1024 })).stdout.trim().split("\n").map(row => row.trim().split(/\s+/).map(Number));
-      const tree = new Set([child.pid, ...seen]);
-      for (let pass = 0; pass < 10; pass++) for (const [pid, ppid, pgid] of rows) if (pid && ppid && tree.has(ppid)) { tree.add(pid); seen.add(pid); if (pgid !== child.pid) escaped = true; }
-    } catch { processScanKnown = false; }
+  let ownedScan: { handle: OwnedProviderScan; work: Promise<void> } | undefined;
+  const scan = async (deadline: () => number, poll: () => void) => {
+    poll();
+    if (!child.pid) { processScanKnown = false; return false; }
+    if (!ownedScan) {
+      if (Date.now() >= deadline()) { processScanKnown = false; return false; }
+      const handle = startProviderProcessScan(deadline());
+      const work = handle.result.then(stdout => {
+        if (!callbacksSealed) {
+          const rows = stdout.trim().split("\n").map(row => row.trim().split(/\s+/).map(Number));
+          const tree = new Set([child.pid!, ...seen]);
+          for (let pass = 0; pass < 10; pass++) for (const [pid, ppid, pgid] of rows) if (pid && ppid && tree.has(ppid)) { tree.add(pid); seen.add(pid); if (pgid !== child.pid) escaped = true; }
+        }
+      }).catch(() => { processScanKnown = false; });
+      ownedScan = { handle, work };
+    }
+    const current = ownedScan;
+    const outcome = await waitForProviderWork("scan", current.work, deadline, poll, timers);
+    // Callback completion and stdio closure are separate facts. Retain ownership
+    // through both, without leaving a synthetic completion promise or poll behind.
+    while (outcome.state === "settled" && !current.handle.settled()) {
+      poll();
+      const remaining = deadline()-Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(20, remaining));
+    }
+    const settled = outcome.state === "settled" && current.handle.settled();
+    if (!settled) processScanKnown = false;
+    if (settled) ownedScan = undefined;
+    return settled;
   };
   try {
     writeExclusive(join(a.directory, "initialization-started.json"), { assignmentHash, pid: child.pid ?? null, initializations: 1 });
@@ -227,7 +271,7 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     while (!closed && !ready && !error && Date.now() < initializationDeadline) {
       observePreInputCancellation();
       if (error) throw Error(error);
-      await parsing;
+      if (!await observeParsing(() => initializationDeadline, assertPreInputOpen)) throw Error("PROVIDER_PREINPUT_INIT_UNAVAILABLE");
       if (nextConfig) {
         nextConfig = false; await send({ method: "initialized", params: {} });
         await send({ id: 2, method: "config/read", params: { cwd: recipe.cwd, includeLayers: true } });
@@ -245,7 +289,7 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     // These facts are implemented by this protocol's public pre-input checks;
     // unrelated unknown capabilities can never be resolved by initialization.
     if (recipe.protocol === "codex-app-server" && (!configAccepted || !requirementsAccepted || !profileAllowed || !threadId)) throw Error("PROVIDER_PREINPUT_CONTROL_UNVERIFIED");
-    await scan();
+    if (!await scan(() => initializationDeadline, assertPreInputOpen)) throw Error("PROVIDER_PREINPUT_INIT_UNAVAILABLE");
     if (escaped || !processScanKnown) throw Error("PROVIDER_DESCENDANT_CONTROL_UNVERIFIED");
     writeExclusive(join(a.directory, "prepared.json"), { assignmentHash, ready: true, initializations: 1, init: init ?? null });
     const inputFile = join(a.directory, "input.json");
@@ -276,8 +320,8 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     }
     inputDelivered = true;
     writeExclusive(join(a.directory, "inference-started.json"), { assignmentHash, calls: 1, requestId: input.requestId });
-    while (!closed && !error && Date.now() < a.deadline) {
-      await parsing;
+    const pollInference = () => {
+      if (error) throw Error(error);
       const cancelFile = join(a.directory, "cancel.json");
       if (!cancellation && existsSync(cancelFile)) {
         const request = readStrictFile(cancelFile);
@@ -286,7 +330,10 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
         cleanupBound = Math.min(cleanupBound, request.deadline);
         if (!closed && !turnFinal && !!activeTurn && !error && !stderr.trim()) { cancellation = { requestId: request.requestId, binding: a.binding, acknowledged: true, activeTurn, at: Date.now() }; writeExclusive(join(a.directory, "cancel-ack.json"), cancellation); stop(); }
       }
-      await scan();
+    };
+    while (!closed && !error && Date.now() < a.deadline) {
+      if (!await observeParsing(() => Math.min(a.deadline, cleanupBound), pollInference)) break;
+      if (!await scan(() => Math.min(a.deadline, cleanupBound), pollInference)) break;
       if (escaped || !processScanKnown) throw Error("PROVIDER_DESCENDANT_CONTROL_UNVERIFIED");
       if (cancellation) break;
       if (turnFinal) break;
@@ -295,20 +342,61 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     if (!closed && !cancellation && Date.now() >= a.deadline) throw Error("PROVIDER_INFERENCE_DEADLINE");
   } catch (cause) { recordFailure(cause instanceof Error ? cause.message : "PROVIDER_FAILURE"); }
   // One finite cleanup interval; it starts no additional provider or input.
-  const cleanupDeadline = Math.min(cleanupBound, Date.now()+30000);
+  const cleanupStartedAt = Date.now();
+  let cleanupDeadline = Math.min(cleanupBound, cleanupStartedAt+30000);
   let killed = false;
-  while ((!closed || groupState() === "live") && Date.now() < cleanupDeadline) {
-    if (!closed && Date.now() > cleanupDeadline-29000) stop();
-    if (stopRequested && !killed && Date.now() > cleanupDeadline-28000) { killed = true; if (child.pid) try { process.kill(-child.pid, "SIGKILL"); } catch {} }
-    await scan(); await sleep(20);
+  const observeCleanupCancellation = () => {
+    const file = join(a.directory, "cancel.json");
+    if (!existsSync(file)) return;
+    try {
+      const request = readStrictFile(file);
+      if (canonicalJson(request.binding) !== canonicalJson(a.binding) || !Number.isSafeInteger(request.deadline)) throw Error("PROVIDER_CANCEL_UNBOUND");
+      cleanupBound = Math.min(cleanupBound, request.deadline);
+      cleanupDeadline = Math.min(cleanupDeadline, cleanupBound);
+    } catch { recordFailure("PROVIDER_CANCEL_UNBOUND"); }
+  };
+  const pollCleanup = () => {
+    observeCleanupCancellation();
+    const termEligibleAt = Math.max(cleanupStartedAt, cleanupDeadline-29_000);
+    const killEligibleAt = Math.max(cleanupStartedAt, cleanupDeadline-28_000);
+    if (!closed && Date.now() >= termEligibleAt) stop();
+    if (stopRequested && !killed && Date.now() >= killEligibleAt) {
+      killed = true; if (child.pid) try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    }
+  };
+  pollCleanup();
+  // Resume the same owned scan after an interrupted startup/inference wait.
+  // Polling keeps stop eligibility and a later cancellation effective while it runs.
+  while (Date.now() < cleanupDeadline) {
+    if (!parsingExpired) await observeParsing(() => cleanupDeadline, pollCleanup);
+    pollCleanup();
+    if (Date.now() >= cleanupDeadline) break;
+    if (!await scan(() => cleanupDeadline, pollCleanup)) break;
+    if (closed && groupState() !== "live") break;
+    await sleep(Math.min(20, Math.max(0, cleanupDeadline-Date.now())));
   }
-  await parsing;
-  try { pending += decoder.decode(); if (pending.trim()) await line(pending); } catch (cause) { recordFailure(cause instanceof Error ? cause.message : "PROVIDER_TRUNCATED_FINAL"); }
-  const trackedDescendantsSettled = processScanKnown && [...seen].every(pid => { try { process.kill(pid, 0); return false; } catch (cause) { return (cause as NodeJS.ErrnoException).code === "ESRCH"; } });
+  if (!error) {
+    try {
+      // A closed stream may have queued more lines since the last parser barrier.
+      if (!await observeParsing(() => cleanupDeadline, pollCleanup)) recordFailure("PROVIDER_PROCESS_SETTLEMENT_UNVERIFIED");
+      if (!error) {
+        pending += decoder.decode();
+        if (pending.trim()) { queueLine(pending); pending = ""; }
+        if (!await observeParsing(() => cleanupDeadline, pollCleanup)) recordFailure("PROVIDER_PROCESS_SETTLEMENT_UNVERIFIED");
+      }
+    } catch (cause) { recordFailure(cause instanceof Error ? cause.message : "PROVIDER_TRUNCATED_FINAL"); }
+  }
+  // No queued or late callback may reopen input or persist a final receipt.
+  callbacksSealed = true;
+  child.stdout.off("data", onStdout); child.stderr.off("data", onStderr);
+  const processScansSettled = !ownedScan || ownedScan.handle.settled();
+  if (!processScansSettled) { processScanKnown = false; ownedScan!.handle.stop(); }
+  const parsingSettled = !parsingExpired && parsingPending === 0;
+  const trackedDescendantsSettled = processScanKnown && processScansSettled && [...seen].every(pid => { try { process.kill(pid, 0); return false; } catch (cause) { return (cause as NodeJS.ErrnoException).code === "ESRCH"; } });
   const processReceipt = { pid: child.pid ?? null, exitCode, signal, closed, groupSettled: groupState() === "exited", trackedDescendantsSettled, escapedDescendantObserved: escaped,
-    timersSettled: timers.size === 0, inputDelivered, stopRequested, descendantEvidence: "observed process tree plus process group; prequalified no-escape controls required" };
+    parsingSettled, processScansSettled, timersSettled: timers.size === 0, inputDelivered, stopRequested, descendantEvidence: "observed process tree plus process group; prequalified no-escape controls required" };
   if (!closed) { child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref(); }
-  if (!closed || !processReceipt.groupSettled || !trackedDescendantsSettled || escaped || timers.size) recordFailure("PROVIDER_PROCESS_SETTLEMENT_UNVERIFIED");
+  if (!closed || !processReceipt.groupSettled || !trackedDescendantsSettled || !parsingSettled || !processScansSettled || escaped || timers.size) recordFailure("PROVIDER_PROCESS_SETTLEMENT_UNVERIFIED");
   if (stderr.trim()) recordFailure("PROVIDER_STDERR_UNCLASSIFIED");
   let result: unknown;
   if (!cancellation && !error) {

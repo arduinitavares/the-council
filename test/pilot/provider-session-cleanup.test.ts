@@ -10,7 +10,7 @@ import { runProviderSession } from "../../src/pilot/provider-session.js";
 import * as contract from "../../src/pilot/wrapper-contract.js";
 import { codexKernel } from "../../src/pilot/codex-controls.js";
 import { incidentRoster } from "./fixtures.js";
-import { cleanupFixture, fixtureAssignment } from "./provider-cleanup-fixture.js";
+import { cleanupFixture, fixtureAssignment, recordCleanupArtifact } from "./provider-cleanup-fixture.js";
 
 vi.mock("node:child_process", async importOriginal => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -42,13 +42,11 @@ async function killed(h: Fixture) {
   try {
     expect(h.signals.filter(s => s.signal === "SIGKILL"), "owned cleanup must escalate before the open input deadline").toHaveLength(1);
   } catch (cause) {
-    const artifacts = resolve(".superpowers/sdd/2026-11-01-council-preinput-cleanup/task-1-resumed-20261103");
-    mkdirSync(artifacts, { recursive: true });
-    writeFileSync(join(artifacts, "behavioral-red-"+h.assignmentHash+".json"), JSON.stringify({
+    recordCleanupArtifact("behavioral-red-"+h.assignmentHash+".json", {
       at: new Date().toISOString(), clock: Date.now(), deadline: h.assignment.deadline, assignmentHash: h.assignmentHash,
       assertion: String(cause), signals: h.signals, inputExists: existsSync(join(h.directory, "input.json")),
       cancelExists: existsSync(join(h.directory, "cancel.json")), watchdogFiredBeforeTeardown: h.watchdogFired(),
-    }, null, 2));
+    });
     throw cause;
   }
 }
@@ -160,7 +158,10 @@ it("honors a pre-input cancellation bound without reserving a call", async () =>
 
 const { codexCliLayer } = createRequire(import.meta.url)("./fixtures/context-provider.cjs");
 
-async function deterministicSession(protocol: "agy-stream" | "codex-app-server" | "cursor-stream", writeFailure = false, errorDuringWrite = false) {
+async function deterministicSession(protocol: "agy-stream" | "codex-app-server" | "cursor-stream", writeFailure = false, errorDuringWrite = false,
+  inputFault?: "before-expiry" | "at-expiry" | "non-ENOENT") {
+  let clock = Date.now();
+  const nowSpy = inputFault ? vi.spyOn(Date, "now").mockImplementation(() => clock) : undefined;
   const root = realpathSync(mkdtempSync(join(tmpdir(), "council-ordered-input-")));
   const a = fixtureAssignment(root, 60_000);
   const selection = protocol === "codex-app-server" ? incidentRoster.reviewers.openai : protocol === "cursor-stream" ? incidentRoster.reviewers.xai : incidentRoster.reviewers.gemini;
@@ -214,20 +215,32 @@ async function deterministicSession(protocol: "agy-stream" | "codex-app-server" 
   const realExec = vi.mocked(childProcesses.execFile).getMockImplementation()!;
   const realRead = vi.mocked(contract.readStrictFile).getMockImplementation()!;
   vi.mocked(childProcesses.spawn).mockImplementation((..._args: any[]) => {
-    if (protocol === "agy-stream") setImmediate(() => emit(writeFailure ? [initialized] : [initialized, unsupported]));
+    if (protocol === "agy-stream") setImmediate(() => emit(writeFailure || inputFault ? [initialized] : [initialized, unsupported]));
     return fakeChild as unknown as childProcesses.ChildProcess;
   });
   vi.mocked(childProcesses.execFile).mockImplementation(((...args: any[]) => {
     const callback = args.at(-1);
-    const respond = () => callback(null, closed ? "" : `${pid} ${process.pid} ${pid}\n`, "");
+    const scanChild = new EventEmitter();
+    const respond = () => { callback(null, closed ? "" : `${pid} ${process.pid} ${pid}\n`, ""); scanChild.emit("close", 0, null); };
     if (protocol === "cursor-stream" && !pendingScan) {
       pendingScan = respond;
       // Real I/O turn; terminal bytes queue while the readiness process scan is outstanding.
       setImmediate(() => { emit([initialized, unsupported]); respond(); });
     } else setImmediate(respond);
-    return new EventEmitter();
+    return scanChild;
   }) as typeof childProcesses.execFile);
-  vi.mocked(contract.readStrictFile).mockImplementation((file, limit) => { openedFiles.push(file); return realRead(file, limit); });
+  let inputFaultInjected = false;
+  vi.mocked(contract.readStrictFile).mockImplementation((file, limit) => {
+    openedFiles.push(file);
+    if (file === inputFile && inputFault && !inputFaultInjected) {
+      inputFaultInjected = true;
+      if (inputFault === "at-expiry") clock = a.deadline;
+      if (inputFault === "before-expiry") emit([unsupported]);
+      throw Object.assign(Error(inputFault === "non-ENOENT" ? "SYNTHETIC_INPUT_READ_FAILURE" : "synthetic disappeared input"),
+        { code: inputFault === "non-ENOENT" ? "EIO" : "ENOENT" });
+    }
+    return realRead(file, limit);
+  });
   const originalKill = process.kill.bind(process);
   const killSpy = vi.spyOn(process, "kill").mockImplementation((target, signal = "SIGTERM") => {
     if (target !== -pid && target !== pid) return originalKill(target, signal);
@@ -239,7 +252,7 @@ async function deterministicSession(protocol: "agy-stream" | "codex-app-server" 
     const result = await runProviderSession(a, assignmentHash);
     return { result, requests, openedFiles, inputFile, inputWrites, inferenceExists: existsSync(join(a.directory, "inference-started.json")) };
   } finally {
-    stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); killSpy.mockRestore();
+    stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); killSpy.mockRestore(); nowSpy?.mockRestore();
     vi.mocked(childProcesses.spawn).mockImplementation(realSpawn);
     vi.mocked(childProcesses.execFile).mockImplementation(realExec);
     vi.mocked(contract.readStrictFile).mockImplementation(realRead);
@@ -255,6 +268,20 @@ it.each(["agy-stream", "codex-app-server", "cursor-stream"] as const)("drains qu
   expect(h.requests).not.toContain("turn/start");
   expect(h.inputWrites).toBe(0);
   expect(h.inferenceExists).toBe(false);
+}, 10_000);
+
+// A disappearing file must re-enter the terminal guard instead of granting input.
+it.each([
+  ["before-expiry", "PROVIDER_STREAM_EVENT_UNSUPPORTED"],
+  ["at-expiry", "PROVIDER_INPUT_DEADLINE"],
+  ["non-ENOENT", "SYNTHETIC_INPUT_READ_FAILURE"],
+] as const)("guards a disappearing or failed input read (%s)", async (fault, error) => {
+  const h = await deterministicSession("agy-stream", false, false, fault);
+  expect(h.openedFiles.filter(file => file === h.inputFile)).toHaveLength(1);
+  expect(h.result).toMatchObject({ status: "failed", error, calls: 0, cancellation: null,
+    process: { inputDelivered: false, closed: true, groupSettled: true, timersSettled: true } });
+  expect(h.inputWrites).toBe(0); expect(h.inferenceExists).toBe(false);
+  expect(h.requests).not.toContain("turn/start");
 }, 10_000);
 
 // Break caught: a failed write callback may not refund an already attempted mutation or claim delivery.

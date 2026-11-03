@@ -145,3 +145,12 @@ export function factsObservation(facts: readonly ControlFact[], stage: "bootstra
   const failed = relevant.find(f => ["denied", "authentication_failed", "exhausted"].includes(f.observation.state)) ?? relevant.find(f => f.observation.state !== "verified");
   return { state: failed?.observation.state ?? (relevant.length ? "verified" : "missing"), source: "provider-specific control sources", detail: canonicalJson(relevant.map(f => ({ name: f.name, ...f.observation, enforcement: f.enforcement, digest: f.digest }))) } as z.infer<typeof observationSchema>;
 }
+
+/** Validate the artifact's version before inspecting its diagnostic contract. */
+export function readPreparedReport(file: string, assignmentHash: string): PreparedReport {
+  const value = readStrictFile(file);
+  if (value?.version !== PREPARED_REPORT_VERSION) throw Error("WRAPPER_DIAGNOSTIC_VERSION_UNSUPPORTED");
+  const prepared = preparedReportSchema.safeParse(value);
+  if (!prepared.success || prepared.data.assignmentHash !== assignmentHash) throw Error("WRAPPER_RESULT_UNBOUND");
+  return prepared.data;
+}

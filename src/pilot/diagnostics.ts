@@ -211,3 +211,12 @@ export function diagnosticError(cause: unknown, context: DiagnosticContext): Pil
   catch { /* Optional identity access cannot discard a validated diagnostic. */ }
   return new PilotDiagnosticError(diagnostic, mutationRequestId);
 }
+
+/** Lifecycle provenance is attached only by the session's pre-spawn boundary. */
+export class ProviderSessionFailure extends PilotDiagnosticError {
+  readonly providerState: "not_started" | "unknown";
+  constructor(diagnostic: DiagnosticSummary, providerState: "not_started" | "unknown") {
+    super(diagnostic);
+    this.providerState = providerState;
+  }
+}

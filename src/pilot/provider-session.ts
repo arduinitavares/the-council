@@ -10,7 +10,7 @@ import { instantiateAgyHookShellPolicy } from "./agy-hook-shell.js";
 import { currentSourceDigest } from "./control-audit.js";
 import { verifyCodexConfig, verifyCodexRequirements } from "./codex-controls.js";
 import { startProviderProcessScan, waitForProviderWork, type OwnedProviderScan } from "./provider-cleanup.js";
-import { addDiagnosticCount, DIAGNOSTIC_COUNTER_MAX, DIAGNOSTIC_SIGNALS, fitDiagnosticSummary, projectDiagnostic,
+import { addDiagnosticCount, DIAGNOSTIC_COUNTER_MAX, DIAGNOSTIC_SIGNALS, fitDiagnosticSummary, projectDiagnostic, ProviderSessionFailure,
   type DiagnosticCode, type DiagnosticPhase, type DiagnosticSummary, type DiagnosticSignal } from "./diagnostics.js";
 
 /** Only the host wrapper owns process signals and control files. Provider
@@ -20,44 +20,50 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const sleep = (ms: number) => new Promise<void>(resolve => { const timer = setTimeout(() => { timers.delete(timer); resolve(); }, ms); timers.add(timer); });
   const recipe = a.recipe;
-  if (recipe.facts.some(f => f.stage === "bootstrap" && f.observation.state !== "verified")) throw Error("PROVIDER_BOOTSTRAP_UNVERIFIED");
-  for (const source of recipe.sources) if (currentSourceDigest(source) !== source.sha256) throw Error("PROVIDER_CONTROL_SOURCE_DRIFT");
-  const initializedFacts = new Set(recipe.protocol === "codex-app-server"
-    ? ["pre-input-effective-config", "all-tool-effects-and-packet-read-boundary"] : recipe.protocol === "agy-stream" ? ["effective-input-gate"] : []);
-  if (recipe.facts.some(f => f.stage === "effective" && f.observation.state !== "verified" &&
-      !(f.observation.state === "unknown" && initializedFacts.has(f.name)))) throw Error("PROVIDER_PREINPUT_CONTROL_UNVERIFIED");
-  const packetRoot = join(a.workspace, ".council/native-packets");
-  if (recipe.cwd !== packetRoot) throw Error("PROVIDER_PACKET_ROOT_MISMATCH");
-  for (const segment of [join(a.workspace, ".council"), packetRoot]) {
-    if (existsSync(segment) && (lstatSync(segment).isSymbolicLink() || realpathSync(segment) !== segment)) throw Error("PROVIDER_PACKET_ROOT_UNVERIFIED");
-    mkdirSync(segment, { recursive: true, mode: 0o700 });
-  }
-  const materialize = (files: NonNullable<ProviderRecipe["materializations"]>) => { for (const material of files) {
-    const target = relative(packetRoot, material.path);
-    if (!target || target.startsWith("..") || isAbsolute(target) || sha256(material.content) !== material.sha256) throw Error("PROVIDER_PROFILE_SCOPE_INVALID");
-    mkdirSync(dirname(material.path), { recursive: true, mode: 0o700 });
-    if (realpathSync(dirname(material.path)) !== dirname(material.path)) throw Error("PROVIDER_PROFILE_SYMLINK");
-    if (!existsSync(material.path)) {
-      try { writeFileSync(material.path, material.content, { mode: material.mode ?? 0o600, flag: "wx" }); }
-      catch(cause) { if((cause as NodeJS.ErrnoException).code!=="EEXIST")throw cause; }
+  let environment: NodeJS.ProcessEnv;
+  try {
+    if (recipe.facts.some(f => f.stage === "bootstrap" && f.observation.state !== "verified")) throw Error("PROVIDER_BOOTSTRAP_UNVERIFIED");
+    for (const source of recipe.sources) if (currentSourceDigest(source) !== source.sha256) throw Error("PROVIDER_CONTROL_SOURCE_DRIFT");
+    const initializedFacts = new Set(recipe.protocol === "codex-app-server"
+      ? ["pre-input-effective-config", "all-tool-effects-and-packet-read-boundary"] : recipe.protocol === "agy-stream" ? ["effective-input-gate"] : []);
+    if (recipe.facts.some(f => f.stage === "effective" && f.observation.state !== "verified" &&
+        !(f.observation.state === "unknown" && initializedFacts.has(f.name)))) throw Error("PROVIDER_PREINPUT_CONTROL_UNVERIFIED");
+    const packetRoot = join(a.workspace, ".council/native-packets");
+    if (recipe.cwd !== packetRoot) throw Error("PROVIDER_PACKET_ROOT_MISMATCH");
+    for (const segment of [join(a.workspace, ".council"), packetRoot]) {
+      if (existsSync(segment) && (lstatSync(segment).isSymbolicLink() || realpathSync(segment) !== segment)) throw Error("PROVIDER_PACKET_ROOT_UNVERIFIED");
+      mkdirSync(segment, { recursive: true, mode: 0o700 });
     }
-    if (material.mode !== undefined) {
-      const s = lstatSync(material.path);
-      if (![0o400, 0o500, 0o600].includes(material.mode) || !s.isFile() || s.isSymbolicLink() || realpathSync(material.path) !== material.path || s.uid !== process.geteuid?.() || (s.mode & 0o7777) !== material.mode) throw Error("PROVIDER_PROFILE_CUSTODY_INVALID");
-      accessSync(material.path, constants.R_OK | (material.mode & 0o100 ? constants.X_OK : 0));
+    const materialize = (files: NonNullable<ProviderRecipe["materializations"]>) => { for (const material of files) {
+      const target = relative(packetRoot, material.path);
+      if (!target || target.startsWith("..") || isAbsolute(target) || sha256(material.content) !== material.sha256) throw Error("PROVIDER_PROFILE_SCOPE_INVALID");
+      mkdirSync(dirname(material.path), { recursive: true, mode: 0o700 });
+      if (realpathSync(dirname(material.path)) !== dirname(material.path)) throw Error("PROVIDER_PROFILE_SYMLINK");
+      if (!existsSync(material.path)) {
+        try { writeFileSync(material.path, material.content, { mode: material.mode ?? 0o600, flag: "wx" }); }
+        catch(cause) { if((cause as NodeJS.ErrnoException).code!=="EEXIST")throw cause; }
+      }
+      if (material.mode !== undefined) {
+        const s = lstatSync(material.path);
+        if (![0o400, 0o500, 0o600].includes(material.mode) || !s.isFile() || s.isSymbolicLink() || realpathSync(material.path) !== material.path || s.uid !== process.geteuid?.() || (s.mode & 0o7777) !== material.mode) throw Error("PROVIDER_PROFILE_CUSTODY_INVALID");
+        accessSync(material.path, constants.R_OK | (material.mode & 0o100 ? constants.X_OK : 0));
+      }
+      if (sha256(readFileSync(material.path)) !== material.sha256) throw Error("PROVIDER_PROFILE_CONTENT_MISMATCH");
+    } };
+    materialize(recipe.materializations ?? []);
+    if(recipe.agent && (!recipe.agentDefinition || sha256(readFileSync(recipe.agentDefinition.path)) !== recipe.agentDefinition.sha256 ||
+        recipe.argv[recipe.argv.indexOf("--agent")+1]!==recipe.agent || !recipe.argv.includes("--agent"))) throw Error("PROVIDER_AGENT_DEFINITION_UNBOUND");
+    const environmentKeys = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM", ...(a.selection.route === "codex" ? ["CODEX_HOME"] : a.selection.route === "cursor" ? ["CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "XDG_CONFIG_HOME"] : [])];
+    environment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && environmentKeys.includes(key)));
+    if (recipe.agyHookShell) {
+      if (recipe.protocol !== "agy-stream" || a.selection.route !== "antigravity" || recipe.selection.route !== "antigravity" || recipe.executable !== recipe.agyHookShell.executable || a.workspace !== recipe.agyHookShell.workspace || recipe.cwd !== recipe.agyHookShell.executionCwd) throw Error("PROVIDER_PROFILE_ROUTE_MISMATCH");
+      environment.PATH = instantiateAgyHookShellPolicy(recipe.agyHookShell, { packetRoot, directory: a.directory, assignmentHash }, materialize).launchPath;
     }
-    if (sha256(readFileSync(material.path)) !== material.sha256) throw Error("PROVIDER_PROFILE_CONTENT_MISMATCH");
-  } };
-  materialize(recipe.materializations ?? []);
-  if(recipe.agent && (!recipe.agentDefinition || sha256(readFileSync(recipe.agentDefinition.path)) !== recipe.agentDefinition.sha256 ||
-      recipe.argv[recipe.argv.indexOf("--agent")+1]!==recipe.agent || !recipe.argv.includes("--agent"))) throw Error("PROVIDER_AGENT_DEFINITION_UNBOUND");
-  const environmentKeys = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM", ...(a.selection.route === "codex" ? ["CODEX_HOME"] : a.selection.route === "cursor" ? ["CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "XDG_CONFIG_HOME"] : [])];
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && environmentKeys.includes(key)));
-  if (recipe.agyHookShell) {
-    if (recipe.protocol !== "agy-stream" || a.selection.route !== "antigravity" || recipe.selection.route !== "antigravity" || recipe.executable !== recipe.agyHookShell.executable || a.workspace !== recipe.agyHookShell.workspace || recipe.cwd !== recipe.agyHookShell.executionCwd) throw Error("PROVIDER_PROFILE_ROUTE_MISMATCH");
-    environment.PATH = instantiateAgyHookShellPolicy(recipe.agyHookShell, { packetRoot, directory: a.directory, assignmentHash }, materialize).launchPath;
+    environment.AGY_CLI_DISABLE_AUTO_UPDATE = "true";
+  } catch (cause) {
+    throw new ProviderSessionFailure(projectDiagnostic(cause, { origin: "provider", phase: "bootstrap", inputDelivery: "not_attempted" },
+      { exit: { state: "not_started", code: null, signal: null, signalState: "none" } }), "not_started");
   }
-  environment.AGY_CLI_DISABLE_AUTO_UPDATE = "true";
   const child = spawn(recipe.executable, recipe.argv, { cwd: recipe.cwd, env: environment, detached: true, shell: false, stdio: ["pipe", "pipe", "pipe"] });
   let closed = false, exitCode: number | null = null, signal: string | null = null;
   let inputDelivered = false, calls: 0 | 1 = 0, error: DiagnosticCode | undefined, initialized = false, final: any, turnFinal = false;

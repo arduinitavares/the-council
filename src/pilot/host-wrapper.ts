@@ -3,11 +3,25 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../domain/hash.js";
-import { assignmentSchema, readStrictFile, sha256, writeExclusive, producerCodeHash } from "./wrapper-contract.js";
+import { assignmentSchema, readStrictFile, sha256, writeExclusive, producerCodeHash, readPreparedReport, preparedReportSchema, providerReportSchema,
+  projectProviderInitialization, PREPARED_REPORT_VERSION, PROVIDER_REPORT_VERSION, type ProviderReport } from "./wrapper-contract.js";
 import { wrapperIntent } from "./context-driver.js";
 import { nativeCommand } from "./native-command.js";
 import { mutationRequestId } from "./mutation-id.js";
 import { runProviderSession } from "./provider-session.js";
+import { projectDiagnostic, diagnosticError, fitDiagnosticSummary, parseDiagnosticSummary, ProviderSessionFailure, type DiagnosticSummary } from "./diagnostics.js";
+
+/** Only a readable, validated session carrier can prove that spawn was never reached. */
+function providerNotStarted(cause: unknown, diagnostic: DiagnosticSummary): boolean {
+  try {
+    if (!(cause instanceof ProviderSessionFailure)) return false;
+    const state = Object.getOwnPropertyDescriptor(cause, "providerState");
+    const carried = Object.getOwnPropertyDescriptor(cause, "diagnostic");
+    return state?.value === "not_started" && !!carried && "value" in carried &&
+      canonicalJson(parseDiagnosticSummary(carried.value)) === canonicalJson(diagnostic);
+  } catch { return false; }
+}
+
 
 /** Actual shipped entry. It starts no provider while waiting for native
  * assignment, and never obtains caller authority from a copied --from value. */
@@ -29,15 +43,37 @@ export async function runHostWrapper(directory: string, orca: string, runtimeId:
       (d.processIncarnation ?? d.process_incarnation) !== a.dispatchIncarnation || d.status !== "dispatched") throw Error("WRAPPER_NATIVE_DISPATCH_UNVERIFIED");
   const tasks = await command(["orchestration", "task-list", "--run", a.binding.runId, "--json"], a.workspace, 5000);
   if (!tasks.tasks?.some((task: any) => task.id === a.binding.taskId && task.spec === `Council wrapper intent sha256=${sha256(canonicalJson(wrapperIntent(a)))}`)) throw Error("WRAPPER_NATIVE_INTENT_UNVERIFIED");
-  let report: any;
+  let report: ProviderReport;
   try { report = await runProviderSession(a, assignmentHash); }
   catch (cause) {
-    const error = cause instanceof Error ? cause.message : "WRAPPER_PROVIDER_INITIALIZATION_FAILED";
-    writeExclusive(join(directory, "prepared.json"), { assignmentHash, ready: false, initializations: 0, error });
-    const beforeSpawn = ["PROVIDER_BOOTSTRAP_UNVERIFIED", "PROVIDER_CONTROL_SOURCE_DRIFT", "PROVIDER_PREINPUT_CONTROL_UNSUPPORTED", "PROVIDER_PACKET_ROOT_MISMATCH", "PROVIDER_PACKET_ROOT_UNVERIFIED", "PROVIDER_PROFILE_SCOPE_INVALID", "PROVIDER_PROFILE_SYMLINK", "PROVIDER_PROFILE_CONTENT_MISMATCH"].includes(error);
-    report = { version: 1, binding: a.binding, assignmentHash, packetHash: a.packetHash, controlsHash: a.controlsHash, status: "failed", calls: beforeSpawn ? 0 : null, initializations: beforeSpawn ? 0 : null, error,
-      process: { providerStarted: beforeSpawn ? false : null, closed: beforeSpawn, groupSettled: beforeSpawn, trackedDescendantsSettled: beforeSpawn,
-        parsingSettled: beforeSpawn, processScansSettled: beforeSpawn, timersSettled: beforeSpawn, inputDelivered: false } };
+    let diagnostic = projectDiagnostic(cause, { origin: "host-wrapper", phase: "initialization" });
+    const beforeSpawn = providerNotStarted(cause, diagnostic);
+    const initializations = beforeSpawn ? 0 : null;
+    const init = projectProviderInitialization(undefined, a);
+    const preparedFile = join(directory, "prepared.json");
+    try {
+      writeExclusive(preparedFile, preparedReportSchema.parse({ version: PREPARED_REPORT_VERSION, assignmentHash,
+        ready: false, initializations, error: diagnostic.code, diagnostic, init }));
+    } catch (creationFailure) {
+      let existing = false;
+      try { existing = (creationFailure as NodeJS.ErrnoException)?.code === "EEXIST"; } catch {}
+      if (!existing) throw diagnosticError(creationFailure, { origin: "host-wrapper", phase: "persistence" });
+      try { readPreparedReport(preparedFile, assignmentHash); }
+      catch {
+        // Historical or unbound readiness is evidence: keep its bytes untouched.
+        diagnostic = fitDiagnosticSummary({ ...diagnostic, details: [...diagnostic.details,
+          { origin: "host-wrapper", phase: "validation", code: "WRAPPER_RESULT_UNBOUND" }] });
+      }
+    }
+    report = providerReportSchema.parse({ version: PROVIDER_REPORT_VERSION, binding: a.binding, assignmentHash,
+      packetHash: a.packetHash, controlsHash: a.controlsHash, status: "failed", calls: beforeSpawn ? 0 : null,
+      initializations, error: diagnostic.code, diagnostic, init, result: null, conversationId: null, cancellation: null,
+      selectedAgent: { requested: a.recipe.agent ?? null, observed: null, source: "Source-bound argv/definition; init agent identity not exposed" },
+      process: { pid: null, providerStarted: beforeSpawn ? false : null, exitCode: null, signal: null,
+        closed: beforeSpawn, groupSettled: beforeSpawn, trackedDescendantsSettled: beforeSpawn,
+        escapedDescendantObserved: beforeSpawn ? false : null, parsingSettled: beforeSpawn,
+        processScansSettled: beforeSpawn, timersSettled: beforeSpawn, inputDelivered: beforeSpawn ? false : null,
+        stopRequested: beforeSpawn ? false : null, descendantEvidence: null } });
   }
   report.wrapperPid = process.pid;
   writeExclusive(join(directory, "result.json"), report);
@@ -57,5 +93,5 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
   const values = new Map<string, string>();
   for (let i = 2; i < process.argv.length; i += 2) values.set(process.argv[i]!, process.argv[i+1]!);
   runHostWrapper(values.get("--directory")!, values.get("--orca")!, values.get("--runtime")!, Number(values.get("--deadline")))
-    .catch(error => { console.error(error instanceof Error ? error.message : "WRAPPER_FAILED"); process.exitCode = 1; });
+    .catch(cause => { console.error(projectDiagnostic(cause, { origin: "host-wrapper", phase: "bootstrap" }).code); process.exitCode = 1; });
 }

@@ -188,13 +188,41 @@ it.each(["launch", "observe", "cancel", "release"] as const)("preserves a valida
   });
 });
 
-it("preserves safe rejection-before-mutation classification and its durable launch reservation", async () => {
+it.each([
+  {
+    name: "an unverified plain native-code object",
+    cause: () => ({ code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE" }),
+    event: "launch-unknown", code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE",
+  },
+  {
+    name: "the existing exact Error/message control",
+    cause: () => Error("NATIVE_PACKET_ARGUMENT_TOO_LARGE"),
+    event: "launch-rejected-before-mutation", code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE",
+  },
+  {
+    name: "a hostile Error message getter",
+    cause: () => Object.defineProperty(Error(), "message", { get() { throw Error(canary); } }),
+    event: "launch-unknown", code: "DIAGNOSTIC_UNKNOWN",
+  },
+  {
+    name: "a hostile native-code getter",
+    cause: () => ({ get code() { throw Error(canary); } }),
+    event: "launch-unknown", code: "DIAGNOSTIC_UNKNOWN",
+  },
+])("keeps launch provenance separate from projected diagnostics for $name", async control => {
   await withJournal(async journal => {
-    const driver = journal.wrap(fakeDriver({ launch: async () => { throw Error("NATIVE_PACKET_ARGUMENT_TOO_LARGE"); } }));
-    await expect(launch(driver)).rejects.toMatchObject({ message: "NATIVE_PACKET_ARGUMENT_TOO_LARGE" });
+    const driver = journal.wrap(fakeDriver({ launch: async () => { throw control.cause(); } }));
+    const error = await launch(driver).catch(cause => cause);
+    expect(error).toBeInstanceOf(PilotDiagnosticError);
+    expect(error.message).toBe(control.code);
+    expect(parseDiagnosticSummary(error.diagnostic)).toMatchObject({ version: 1, code: control.code });
+    expect(error.cause).toBeUndefined();
     const events = records(journal);
     expect(events.at(-2).event).toMatchObject({ event: "attempt-reserved", runId: "native-run", role: "openai", phase: "review", key: "attempt-5" });
-    expect(events.at(-1).event).toMatchObject({ event: "launch-rejected-before-mutation", mutationRequestId: events.at(-2).event.mutationRequestId });
+    expect(events.at(-1).event).toMatchObject({ event: control.event, mutationRequestId: events.at(-2).event.mutationRequestId,
+      diagnostic: error.diagnostic });
+    expect(journalBytes(journal)).not.toContain(canary);
+    expect(JSON.stringify(error)).not.toContain(canary);
   });
 });
 

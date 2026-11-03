@@ -251,8 +251,11 @@ export class PilotJournal {
         let a:Attempt;
         try { a = await driver.launch(runId, r, role, phase, packet, key); }
         catch(error) {
+          let beforeMutation = false;
+          try {
+            beforeMutation = error instanceof Error && error.message === "NATIVE_PACKET_ARGUMENT_TOO_LARGE";
+          } catch { /* Unreadable error fields leave the mutation outcome unknown. */ }
           const safe = diagnosticError(error, { origin: "journal", phase: "initialization" });
-          const beforeMutation = safe.diagnostic.code === "NATIVE_PACKET_ARGUMENT_TOO_LARGE";
           this.append({ event: beforeMutation ? "launch-rejected-before-mutation" : "launch-unknown",
             runId, role, phase, key, mutationRequestId: mutationRequestId(key), diagnostic: safe.diagnostic });
           throw safe;

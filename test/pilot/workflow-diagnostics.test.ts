@@ -485,3 +485,134 @@ it("makes the actual pre-worker-start envelope bound a no-mutation carrier", asy
     expect(mutations).toBe(0);
   });
 });
+
+describe("fix round 1 cancellation precedence and direct phases", () => {
+  for (const path of ["execute", "finally"] as const) for (const releaseFailure of ["false", "throw"] as const) {
+    it(`${path} keeps first cancellation before ${releaseFailure} release`, async () => {
+      await withJournal(async (h, journal) => {
+        const target = path === "execute" ? "dispatch-2" : "dispatch-1";
+        const primary = projectDiagnostic("PROVIDER_STDERR_UNCLASSIFIED",
+          { origin: "provider", phase: "inference", inputDelivery: "acknowledged" },
+          { exit: { state: "observed", code: 7, signal: null, signalState: "none" } });
+        const cancellation = projectDiagnostic("PROVIDER_INITIALIZATION_CANCELLED",
+          { origin: "provider", phase: "cancellation", inputDelivery: "attempted_unacknowledged" },
+          { exit: { state: "observed", code: null, signal: "SIGTERM", signalState: "observed" } });
+        if (path === "finally") h.driver.observe = async () => { throw new PilotDiagnosticError(primary); };
+        h.driver.cancel = async a => {
+          h.cancelled.push(a.binding.dispatchId);
+          return { state: "settled_unacknowledged", error: canary as never, diagnostic: cancellation };
+        };
+        h.driver.release = async a => {
+          h.released.push(a.binding.dispatchId);
+          if (a.binding.dispatchId !== target) return true;
+          if (releaseFailure === "throw") throw Error(canary);
+          return false;
+        };
+        const out = await runPilot(h.request, journal.wrap(h.driver), () => now);
+        const first = path === "execute" ? cancellation : primary;
+        expect(out).toMatchObject({ version: 2, status: "failed", error: first.code,
+          calls: { probes: path === "execute" ? 2 : 1, topic: 0 }, proofs: [], unresolved: [target] });
+        expect(out.diagnostic).toMatchObject({ origin: first.origin, phase: first.phase, inputDelivery: first.inputDelivery, exit: first.exit });
+        const details = out.diagnostic!.details;
+        expect(details).toHaveLength(path === "execute" ? 1 : 2);
+        if (path === "finally") expect(details[0]).toEqual({ origin: "provider", phase: "cancellation", code: cancellation.code });
+        expect(details.at(-1)).toEqual({ origin: releaseFailure === "throw" ? "journal" : "workflow", phase: "cleanup",
+          code: releaseFailure === "throw" ? "DIAGNOSTIC_UNKNOWN" : "RELEASE_UNKNOWN" });
+        expect(h.cancelled.filter(id => id === target)).toHaveLength(1);
+        expect(h.released.filter(id => id === target)).toHaveLength(1);
+        expect(h.launched).toHaveLength(path === "execute" ? 2 : 1);
+        expect(JSON.stringify(out) + journalText(journal)).not.toContain(canary);
+      });
+    });
+  }
+
+  it.each(["unknown", "throw", "unacknowledged"] as const)("uses cancellation phase for a direct %s cancellation", async kind => {
+    await withJournal(async h => {
+      h.driver.cancel = async a => {
+        h.cancelled.push(a.binding.dispatchId);
+        if (kind === "throw") throw Error(canary);
+        return kind === "unknown" ? { state: "unknown" } : { state: "settled_unacknowledged", error: "CANCELLATION_UNACKNOWLEDGED" };
+      };
+      const out = await runPilot(h.request, h.driver, () => now);
+      expect(out.diagnostic).toMatchObject({ origin: "workflow", phase: "cancellation", inputDelivery: "unknown",
+        code: kind === "throw" ? "DIAGNOSTIC_UNKNOWN" : kind === "unknown" ? "CANCELLATION_SETTLEMENT_UNKNOWN" : "CANCELLATION_UNACKNOWLEDGED" });
+      expect(out.status).toBe("failed");
+      expect(out.calls).toEqual({ probes: 2, topic: 0 });
+      expect(out.proofs).toEqual([]);
+      expect(h.cancelled).toEqual(["dispatch-2"]);
+      expect(h.released.filter(id => id === "dispatch-2")).toHaveLength(kind === "unacknowledged" ? 1 : 0);
+      expect(JSON.stringify(out)).not.toContain(canary);
+    });
+  });
+
+  for (const path of ["normal-result", "cancel-probe"] as const) {
+    it.each(["false", "throw"] as const)(`uses cleanup phase for direct ${path} %s release`, async kind => {
+      await withJournal(async h => {
+        const target = path === "normal-result" ? "dispatch-1" : "dispatch-2";
+        h.driver.release = async a => {
+          h.released.push(a.binding.dispatchId);
+          if (a.binding.dispatchId !== target) return true;
+          if (kind === "throw") throw Error(canary);
+          return false;
+        };
+        const out = await runPilot(h.request, h.driver, () => now);
+        expect(out.diagnostic).toMatchObject({ origin: "workflow", phase: "cleanup", inputDelivery: "unknown",
+          code: kind === "throw" ? "DIAGNOSTIC_UNKNOWN" : "RELEASE_UNKNOWN" });
+        expect(out.status).toBe("failed");
+        expect(out.unresolved).toEqual([target]);
+        expect(out.calls).toEqual({ probes: path === "normal-result" ? 1 : 2, topic: 0 });
+        expect(out.proofs).toEqual([]);
+        expect(h.released.filter(id => id === target)).toHaveLength(1);
+        expect(h.cancelled.filter(id => id === target)).toHaveLength(path === "cancel-probe" ? 1 : 0);
+        if (path === "normal-result") expect(out.results[0]!.settlement).toBe("unknown");
+        expect(JSON.stringify(out)).not.toContain(canary);
+      });
+    });
+  }
+
+  it.each(["unknown", "throw", "unacknowledged"] as const)("keeps direct finally %s cancellation as a finite cancellation detail", async kind => {
+    await withJournal(async h => {
+      h.driver.observe = async () => { throw new PilotDiagnosticError(projectDiagnostic("PROVIDER_STDERR_UNCLASSIFIED",
+        { origin: "provider", phase: "inference", inputDelivery: "unknown" })); };
+      h.driver.cancel = async a => {
+        h.cancelled.push(a.binding.dispatchId);
+        if (kind === "throw") throw Error(canary);
+        return kind === "unknown" ? { state: "unknown" } : { state: "settled_unacknowledged", error: "CANCELLATION_UNACKNOWLEDGED" };
+      };
+      h.driver.release = async a => { h.released.push(a.binding.dispatchId); return false; };
+      const out = await runPilot(h.request, h.driver, () => now);
+      expect(out.diagnostic).toMatchObject({ code: "PROVIDER_STDERR_UNCLASSIFIED", phase: "inference", inputDelivery: "unknown" });
+      expect(out.diagnostic!.details[0]).toEqual({ origin: "workflow", phase: "cancellation",
+        code: kind === "throw" ? "DIAGNOSTIC_UNKNOWN" : kind === "unknown" ? "CANCELLATION_SETTLEMENT_UNKNOWN" : "CANCELLATION_UNACKNOWLEDGED" });
+      if (kind === "unacknowledged") expect(out.diagnostic!.details[1]).toEqual({ origin: "workflow", phase: "cleanup", code: "RELEASE_UNKNOWN" });
+      expect(out.unresolved).toEqual(["dispatch-1"]);
+      expect(out.calls).toEqual({ probes: 1, topic: 0 });
+      expect(out.proofs).toEqual([]);
+      expect(h.cancelled).toEqual(["dispatch-1"]);
+      expect(h.released).toHaveLength(kind === "unacknowledged" ? 1 : 0);
+      expect(JSON.stringify(out)).not.toContain(canary);
+    });
+  });
+});
+
+
+it.each(["false", "throw"] as const)("fix round 1 keeps the direct finally %s release phase after observe failure", async kind => {
+  await withJournal(async h => {
+    h.driver.observe = async () => { throw new PilotDiagnosticError(projectDiagnostic("PROVIDER_STDERR_UNCLASSIFIED",
+      { origin: "provider", phase: "inference", inputDelivery: "unknown" })); };
+    h.driver.release = async a => {
+      h.released.push(a.binding.dispatchId);
+      if (kind === "throw") throw Error(canary);
+      return false;
+    };
+    const out = await runPilot(h.request, h.driver, () => now);
+    expect(out.diagnostic).toMatchObject({ origin: "provider", phase: "inference", code: "PROVIDER_STDERR_UNCLASSIFIED", inputDelivery: "unknown" });
+    expect(out.diagnostic!.details).toEqual([{ origin: "workflow", phase: "cleanup", code: kind === "throw" ? "DIAGNOSTIC_UNKNOWN" : "RELEASE_UNKNOWN" }]);
+    expect(out.unresolved).toEqual(["dispatch-1"]);
+    expect(out.calls).toEqual({ probes: 1, topic: 0 });
+    expect(out.proofs).toEqual([]);
+    expect(h.cancelled).toEqual(["dispatch-1"]);
+    expect(h.released).toEqual(["dispatch-1"]);
+    expect(JSON.stringify(out)).not.toContain(canary);
+  });
+});

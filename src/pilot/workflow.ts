@@ -5,11 +5,12 @@ import type { Role } from "./config.js";
 import { classify, proofKey } from "./preflight.js";
 import { CLEANUP_GRACE_MS, assertNativePacketBounds } from "./orca-driver.js";
 import {pilotPayloadSchemas} from "./payload.js";
-import { PilotDiagnosticError, fitDiagnosticSummary, projectDiagnostic,
+import { PilotDiagnosticError, addDiagnosticCount, DIAGNOSTIC_COUNTER_MAX, fitDiagnosticSummary, projectDiagnostic,
   type DiagnosticCode, type DiagnosticPhase, type DiagnosticSummary } from "./diagnostics.js";
 
 import type {
   Attempt,
+  CancellationResult,
   Blocker,
   NativeEvidence,
   Phase,
@@ -73,20 +74,30 @@ export async function runPilot(
     try { return projectDiagnostic(cause, { origin: "workflow", phase }); }
     catch { return projectDiagnostic("DIAGNOSTIC_SUMMARY_INVALID", { origin: "workflow", phase }); }
   };
+  const retainFailure = (first: DiagnosticSummary, next: DiagnosticSummary): DiagnosticSummary => {
+    try {
+      return fitDiagnosticSummary({ ...first,
+        details: [...first.details, { origin: next.origin, phase: next.phase, code: next.code }, ...next.details] });
+    } catch {
+      // Keep the checked first core and explicitly omit optional details on failure.
+      const omitted = first.details.length + next.details.length + 1;
+      return fitDiagnosticSummary({ ...first, details: [], truncated: true, omissions: { ...first.omissions,
+        details: addDiagnosticCount(first.omissions.details, omitted),
+        countersSaturated: first.omissions.countersSaturated || omitted > DIAGNOSTIC_COUNTER_MAX - first.omissions.details } });
+    }
+  };
   const rememberFailure = (cause: unknown, phase: DiagnosticPhase) => {
     const next = failure(cause, phase);
-    if (!out.diagnostic) {
-      out.diagnostic = next;
-      out.error = next.code;
-    } else {
-      try {
-        out.diagnostic = fitDiagnosticSummary({ ...out.diagnostic,
-          details: [...out.diagnostic.details, { origin: next.origin, phase: next.phase, code: next.code }] });
-      } catch {
-        // Projection failure remains a failure; it cannot create a successful outcome.
-        out.status = "failed";
-      }
+    out.diagnostic = out.diagnostic ? retainFailure(out.diagnostic, next) : next;
+    out.error = out.diagnostic.code;
+  };
+  const cancellationFailure = (cancellation: CancellationResult): DiagnosticSummary => {
+    if (cancellation.diagnostic) {
+      try { return new PilotDiagnosticError(cancellation.diagnostic).diagnostic; }
+      catch { return failure("DIAGNOSTIC_SUMMARY_INVALID", "cancellation"); }
     }
+    return failure(cancellation.state === "settled_unacknowledged"
+      ? cancellation.error ?? "CANCELLATION_UNACKNOWLEDGED" : "CANCELLATION_SETTLEMENT_UNKNOWN", "cancellation");
   };
   const attemptFailure = (a: Attempt, fallback: DiagnosticCode, phase: DiagnosticPhase) => {
     if (a.diagnostic) {
@@ -201,22 +212,23 @@ export async function runPilot(
         cancelAttempted.add(id);
         let cancellation;
         try { cancellation = await driver.cancel(a, inferenceDeadline); }
-        catch (cause) { unresolved(id); throw cause; }
+        catch (cause) { unresolved(id); throw new PilotDiagnosticError(failure(cause, "cancellation")); }
         if (cancellation.state !== "settled" && cancellation.state !== "settled_unacknowledged") {
           unresolved(id);
-          throw cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
-            : Error("CANCELLATION_SETTLEMENT_UNKNOWN");
+          throw new PilotDiagnosticError(cancellationFailure(cancellation));
         }
+        const cancellationDiagnostic = cancellation.state === "settled_unacknowledged" ? cancellationFailure(cancellation) : undefined;
         settled.add(id);
         releaseAttempted.add(id);
         try {
           if ((await driver.release(a)) !== true) { unresolved(id); throw Error("RELEASE_UNKNOWN"); }
           released.add(id);
-        } catch (cause) { unresolved(id); throw cause; }
-        if (cancellation.state !== "settled") {
-          throw cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
-            : new PilotDiagnosticError(failure(cancellation.error ?? "CANCELLATION_UNACKNOWLEDGED", "cancellation"));
+        } catch (cause) {
+          unresolved(id);
+          const releaseDiagnostic = failure(cause, "cleanup");
+          throw new PilotDiagnosticError(cancellationDiagnostic ? retainFailure(cancellationDiagnostic, releaseDiagnostic) : releaseDiagnostic);
         }
+        if (cancellation.state === "settled_unacknowledged") throw new PilotDiagnosticError(cancellationDiagnostic!);
         acknowledgedStops.set(id, cancellation.stop);
         return null;
       }
@@ -256,7 +268,10 @@ export async function runPilot(
       try {
         if ((await driver.release(a)) !== true) { unresolved(a.binding.dispatchId); throw Error("RELEASE_UNKNOWN"); }
         released.add(a.binding.dispatchId);
-      } catch (cause) { unresolved(a.binding.dispatchId); throw cause; }
+      } catch (cause) {
+        unresolved(a.binding.dispatchId);
+        throw new PilotDiagnosticError(failure(cause, "cleanup"));
+      }
       result.settlement = "settled";
       return result;
     };
@@ -384,10 +399,11 @@ export async function runPilot(
           const cancellation = await driver.cancel(a, cleanupDeadline, "absolute-cleanup");
           if (cancellation.state !== "settled" && cancellation.state !== "settled_unacknowledged") {
             unresolved(id);
-            rememberFailure(cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
-              : "CANCELLATION_SETTLEMENT_UNKNOWN", "cancellation");
+            rememberFailure(new PilotDiagnosticError(cancellationFailure(cancellation)), "cancellation");
             continue;
           }
+          if (cancellation.state === "settled_unacknowledged")
+            rememberFailure(new PilotDiagnosticError(cancellationFailure(cancellation)), "cancellation");
           settled.add(id);
         } catch (cause) {
           unresolved(id); rememberFailure(cause, "cancellation"); continue;

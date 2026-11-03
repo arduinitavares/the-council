@@ -94,6 +94,14 @@ import type { ScopedRpc } from "../../src/pilot/rpc.js";
 type NativeInput = Parameters<typeof createNativePilotDriver>[0];
 const offline = vi.hoisted(() => ({
   active: false,
+  ioFault: "",
+  foreignFile: "",
+  pathByFd: new Map<number, string>(),
+  creations: [] as { file: string; flags: string; mode: number; inode: number }[],
+  openAttempts: [] as string[],
+  writeAttempts: [] as string[],
+  renameAttempts: [] as string[],
+  unlinks: [] as string[],
   outcome: undefined as PilotOutcome | undefined,
   command: undefined as Command | undefined,
   evidence: undefined as NativeEvidence | undefined,
@@ -147,13 +155,48 @@ vi.mock("../../dist/pilot/composition.js", async original => {
 });
 vi.mock("node:fs", async original => {
   const actual = await original<typeof import("node:fs")>();
+  const isOutcome = (file: string) => /\/outcome(?:-[0-9a-f-]+\.tmp|\.json)$/.test(file);
+  const foreign = (file: string) => {
+    if (!offline.foreignFile) {
+      actual.writeFileSync(file, "owned-fixture-foreign-file", { mode: 0o600, flag: "wx" });
+      offline.foreignFile = file;
+    }
+  };
   return { ...actual,
-    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-      actual.writeFileSync(...args);
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
       const file = String(args[0]);
-      if (offline.active && /\/outcome(?:-[0-9a-f-]+\.tmp|\.json)$/.test(file)) {
+      if (offline.active && isOutcome(file)) {
+        offline.openAttempts.push(file);
+        if (offline.ioFault === "temp-existing" && file.endsWith(".tmp")) foreign(file);
+      }
+      const fd = actual.openSync(...args);
+      if (offline.active && isOutcome(file)) {
+        offline.pathByFd.set(fd, file);
+        const stat = actual.fstatSync(fd);
+        offline.creations.push({ file, flags: String(args[1]), mode: stat.mode & 0o777, inode: stat.ino });
+      }
+      return fd;
+    },
+    closeSync: (...args: Parameters<typeof actual.closeSync>) => {
+      actual.closeSync(...args);
+      offline.pathByFd.delete(args[0]);
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const file = typeof args[0] === "number" ? offline.pathByFd.get(args[0]) ?? String(args[0]) : String(args[0]);
+      const capture = offline.active && isOutcome(file);
+      if (capture) {
+        offline.writeAttempts.push(file);
+        if (offline.ioFault === "initial-existing" && file.endsWith("/outcome.json")) foreign(file);
+        if (offline.ioFault === "temp-existing" && file.endsWith(".tmp")) foreign(file);
+        if ((offline.ioFault === "initial-before" && file.endsWith("/outcome.json")) ||
+            (offline.ioFault === "temp-before" && file.endsWith(".tmp"))) throw Error("diag-exception-10-write-before");
+      }
+      actual.writeFileSync(...args);
+      if (capture) {
         const stat = actual.statSync(file);
         offline.writes.push({ file, text: actual.readFileSync(file, "utf8"), mode: stat.mode & 0o777, inode: stat.ino });
+        if ((offline.ioFault === "initial-after" && file.endsWith("/outcome.json")) ||
+            (offline.ioFault === "temp-after" && file.endsWith(".tmp"))) throw Error("diag-exception-10-write-after");
       }
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => {
@@ -161,9 +204,30 @@ vi.mock("node:fs", async original => {
       const before = capture ? actual.readFileSync(args[1], "utf8") : "";
       const temporary = capture ? actual.readFileSync(args[0], "utf8") : "";
       const stat = capture ? actual.statSync(args[0]) : undefined;
+      if (capture) {
+        offline.renameAttempts.push(String(args[0]));
+        if (offline.ioFault === "rename-replaced") {
+          actual.unlinkSync(args[0]);
+          foreign(String(args[0]));
+        }
+        if (["rename", "rename-replaced", "unlink", "cleanup-hostile"].includes(offline.ioFault))
+          throw Error("diag-exception-10-rename");
+      }
       actual.renameSync(...args);
       if (capture) offline.replacements.push({ before, temporary, after: actual.readFileSync(args[1], "utf8"),
         mode: actual.statSync(args[1]).mode & 0o777, inode: actual.statSync(args[1]).ino, temporaryInode: stat!.ino });
+    },
+    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
+      if (offline.active && offline.ioFault === "cleanup-hostile" && String(args[0]).endsWith(".tmp"))
+        throw Object.defineProperty(Error("diag-exception-10-stat"), "code", { get() { throw Error("diag-exception-10-getter"); } });
+      return actual.lstatSync(...args);
+    },
+    unlinkSync: (...args: Parameters<typeof actual.unlinkSync>) => {
+      if (offline.active && String(args[0]).endsWith(".tmp")) {
+        offline.unlinks.push(String(args[0]));
+        if (offline.ioFault === "unlink") throw Error("diag-exception-10-unlink");
+      }
+      actual.unlinkSync(...args);
     },
   };
 });
@@ -171,6 +235,9 @@ afterEach(() => {
   offline.active = false; offline.outcome = undefined; offline.command = undefined; offline.evidence = undefined;
   offline.rpc = undefined; offline.factory = undefined;
   offline.writes.length = 0; offline.replacements.length = 0;
+  offline.ioFault = ""; offline.foreignFile = ""; offline.pathByFd.clear();
+  offline.creations.length = 0; offline.openAttempts.length = 0;
+  offline.writeAttempts.length = 0; offline.renameAttempts.length = 0; offline.unlinks.length = 0;
   vi.restoreAllMocks();
 });
 
@@ -430,19 +497,28 @@ describe("actual direct CLI persistence", () => {
       const fitted = fitDiagnosticSummary(candidate);
       offline.factory = () => ({ ...f.h.driver, inspect: async () => { throw new PilotDiagnosticError(fitted); } });
       const close = QualificationCache.prototype.close;
-      vi.spyOn(QualificationCache.prototype, "close").mockImplementation(function(this: QualificationCache) { close.call(this); throw new PilotDiagnosticError(fitted); });
+      vi.spyOn(QualificationCache.prototype, "close").mockImplementation(function(this: QualificationCache) { close.call(this); throw new PilotDiagnosticError(projectDiagnostic("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { origin: "cli", phase: "persistence" })); });
+      const closeJournal = PilotJournal.prototype.close;
+      vi.spyOn(PilotJournal.prototype, "close").mockImplementation(function(this: PilotJournal) { closeJournal.call(this); throw new PilotDiagnosticError(projectDiagnostic("NATIVE_PERSISTENCE_OR_CLOSE_FAILED", { origin: "cli", phase: "persistence" })); });
       await f.invoke();
       const output = JSON.parse(f.printed()), savedText = readFileSync(output.record, "utf8");
       expect(offline.writes).toHaveLength(2);
-      const texts = [offline.writes[0]!.text, offline.writes[1]!.text, savedText, f.printed()];
+      const initial = assertRecorded(offline.writes[0]!.text);
+      expect(initial).toHaveLength(1);
+      if (target <= 4096) expect(initial[0]!.length).toBe(target);
+      else expect(JSON.parse(initial[0]!.toString())).toMatchObject({ truncated: true, omissions: { details: 1 } });
+      expect(JSON.parse(initial[0]!.toString())).toEqual(fitted);
+      const texts = [offline.writes[1]!.text, savedText, f.printed()];
       for (const text of texts) {
         const spans = assertRecorded(text);
         expect(spans).toHaveLength(1);
-        if (target <= 4096) expect(spans[0]!.length).toBe(target);
-        else {
-          expect(JSON.parse(spans[0]!.toString())).toMatchObject({ truncated: true, omissions: { details: 1 } });
-        }
-        expect(JSON.parse(spans[0]!.toString())).toEqual(fitted);
+        const merged = JSON.parse(spans[0]!.toString());
+        expect(merged).toMatchObject({ origin: fitted.origin, phase: fitted.phase, code: fitted.code,
+          exit: fitted.exit, inputDelivery: fitted.inputDelivery, counters: fitted.counters, truncated: true });
+        expect(merged.omissions.details).toBe(fitted.omissions.details + (target <= 4096 ? 2 : 1));
+        expect(merged.details).toEqual(target <= 4096 ? fitted.details : [...fitted.details,
+          { origin: "cli", phase: "persistence", code: "QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED" }]);
+        expect(merged).toEqual(output.diagnostic);
       }
       expect(output.status).toBe("failed");
       expect(output.error).toBe("PROVIDER_STDERR_UNCLASSIFIED");
@@ -550,12 +626,14 @@ it.each(["exit", "signal"] as const)("retains acknowledged-input failed observe 
       expect(diagnostic).toMatchObject({ origin: "provider", phase: "inference", code: "PROVIDER_STDERR_UNCLASSIFIED",
         inputDelivery: "acknowledged", exit: { state: "observed", code: termination === "exit" ? 7 : null,
           signal: termination === "signal" ? "SIGTERM" : null, signalState: termination === "signal" ? "observed" : "none" } });
+      const afterCleanup = { ...diagnostic, details: [...diagnostic.details,
+        { origin: diagnostic.origin, phase: diagnostic.phase, code: diagnostic.code }] };
       expect(outcome).toMatchObject({ version: 2, status: "failed", calls: { probes: 1, topic: 0 },
-        error: "PROVIDER_STDERR_UNCLASSIFIED", diagnostic, proofs: [], unresolved: [], pendingMutations: [] });
+        error: "PROVIDER_STDERR_UNCLASSIFIED", diagnostic: afterCleanup, proofs: [], unresolved: [], pendingMutations: [] });
       const directory = attempt!.context!.directory;
       const report = JSON.parse(readFileSync(join(directory, "result.json"), "utf8"));
       expect(report.diagnostic).toEqual(diagnostic);
-      expect(outcome.diagnostic).toEqual(report.diagnostic);
+      expect(outcome.diagnostic).toEqual(afterCleanup);
       expect(report).toMatchObject({ calls: 1, result: null, process: { inputDelivered: true, closed: true, groupSettled: true,
         trackedDescendantsSettled: true, parsingSettled: true, processScansSettled: true, timersSettled: true } });
       const journalPath = throughCli ? join(h.workspace, ".council/native", input.runId) : journal!.path;
@@ -563,6 +641,7 @@ it.each(["exit", "signal"] as const)("retains acknowledged-input failed observe 
       expect(eventsText).not.toMatch(/diag-stderr|diag-exception/);
       const events = eventsText.trim().split("\n").map(line => JSON.parse(line).event);
       expect(events.find(event => event.event === "observation-unknown")?.diagnostic).toEqual(diagnostic);
+      expect(events.find(event => event.event === "cancel-observed")?.result.diagnostic).toEqual(diagnostic);
       expect(events.filter(event => event.event === "attempt-reserved")).toHaveLength(1);
       expect(events.filter(event => event.event === "cancel-reserved")).toHaveLength(1);
       expect(events.filter(event => event.event === "release-reserved")).toHaveLength(1);
@@ -619,3 +698,87 @@ it("imports the shipped CLI without running it and preserves a direct symlinked 
     expect(existsSync(join(workspace, ".council"))).toBe(false);
   } finally { rmSync(workspace, { recursive: true }); }
 }, 5000);
+
+describe("fix round 1 CLI persistence failures", () => {
+  it.each(["unknown", "finite"] as const)("retains independent identical %s cache and close failures", async kind => {
+    await withCli(async f => {
+      const closeCache = QualificationCache.prototype.close, closeJournal = PilotJournal.prototype.close;
+      const make = (label: string) => kind === "finite" ? new PilotDiagnosticError(projectDiagnostic(
+        "QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { origin: "cli", phase: "persistence" })) : Error("diag-exception-10-" + label);
+      vi.spyOn(QualificationCache.prototype, "write").mockImplementation(() => { throw make("cache-write"); });
+      vi.spyOn(QualificationCache.prototype, "close").mockImplementation(function(this: QualificationCache) { closeCache.call(this); throw make("cache-close"); });
+      vi.spyOn(PilotJournal.prototype, "close").mockImplementation(function(this: PilotJournal) { closeJournal.call(this); throw make("journal-close"); });
+      await f.invoke();
+      const output = JSON.parse(f.printed());
+      const code = kind === "finite" ? "QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED" : "DIAGNOSTIC_UNKNOWN";
+      expect(output).toMatchObject({ version: 2, status: "failed", error: code, calls: { probes: 8, topic: 10 } });
+      expect(output.diagnostic.details).toEqual(Array(2).fill({ origin: "cli", phase: "persistence", code }));
+      expect(JSON.parse(readFileSync(output.record, "utf8")).diagnostic).toEqual(output.diagnostic);
+      expect(f.printed()).not.toContain("diag-exception-10");
+      expect(process.exitCode).toBe(4);
+      expect(offline.pathByFd.size).toBe(0);
+    });
+  });
+
+  it.each(["initial-before", "initial-after", "initial-existing"] as const)("preserves a known outcome after %s persistence failure", async fault => {
+    await withCli(async f => {
+      offline.ioFault = fault;
+      await expect(f.invoke()).resolves.toBeUndefined();
+      const output = JSON.parse(f.printed());
+      expect(output).toMatchObject({ version: 2, status: "failed", error: "DIAGNOSTIC_UNKNOWN", record: null,
+        calls: { probes: 8, topic: 10 }, diagnostic: { origin: "cli", phase: "persistence" } });
+      expect(output.results).toEqual(offline.outcome!.results);
+      expect(output.results).toHaveLength(14);
+      expect(output.results.filter((r: any) => r.phase === "review").map((r: any) => r.payload))
+        .toEqual(Array(3).fill({ assessment: f.h.assessment, objections: [] }));
+      const file = join(f.workspace, ".council/native", String(f.input.runId), "outcome.json");
+      if (fault === "initial-before") expect(existsSync(file)).toBe(false);
+      if (fault === "initial-after") expect(readFileSync(file, "utf8")).toBe(offline.writes[0]!.text);
+      if (fault === "initial-existing") expect(readFileSync(file, "utf8")).toBe("owned-fixture-foreign-file");
+      expect(offline.writeAttempts).toEqual([file]);
+      expect(offline.renameAttempts).toEqual([]);
+      expect(offline.unlinks).toEqual([]);
+      expect(offline.pathByFd.size).toBe(0);
+      expect(f.printed()).not.toContain("diag-exception-10");
+      expect(existsSync(join(f.workspace, ".council/native", String(f.input.runId), "events.jsonl"))).toBe(true);
+      expect(process.exitCode).toBe(4);
+    });
+  });
+
+  it.each(["temp-before", "temp-after", "rename", "temp-existing", "rename-replaced", "unlink", "cleanup-hostile"] as const)(
+    "preserves initial bytes and truthful record availability after %s failure", async fault => {
+      await withCli(async f => {
+        offline.ioFault = fault;
+        const close = QualificationCache.prototype.close;
+        vi.spyOn(QualificationCache.prototype, "close").mockImplementation(function(this: QualificationCache) {
+          close.call(this);
+          throw new PilotDiagnosticError(projectDiagnostic("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { origin: "cli", phase: "persistence" }));
+        });
+        await expect(f.invoke()).resolves.toBeUndefined();
+        const output = JSON.parse(f.printed()), initial = offline.writes[0]!;
+        expect(output).toMatchObject({ version: 2, status: "failed", record: null,
+          error: "QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", calls: { probes: 8, topic: 10 } });
+        expect(output.results).toEqual(JSON.parse(initial.text).results);
+        expect(output.diagnostic.details.map((d: any) => d.code)).toContain("DIAGNOSTIC_UNKNOWN");
+        expect(output.diagnostic.details).toHaveLength(["unlink", "cleanup-hostile"].includes(fault) ? 2 : 1);
+        expect(readFileSync(initial.file, "utf8")).toBe(initial.text);
+        expect(statSync(initial.file).ino).toBe(initial.inode);
+        expect(JSON.parse(initial.text).status).toBe("consensus");
+        expect(offline.pathByFd.size).toBe(0);
+        expect(offline.replacements).toEqual([]);
+        if (fault === "temp-existing" || fault === "rename-replaced") {
+          expect(readFileSync(offline.foreignFile, "utf8")).toBe("owned-fixture-foreign-file");
+          expect(offline.unlinks).toEqual([]);
+        } else {
+          const creation = offline.creations.find(c => c.file.endsWith(".tmp"))!;
+          expect(creation).toMatchObject({ flags: "wx", mode: 0o600 });
+          expect(offline.unlinks).toEqual(fault === "cleanup-hostile" ? [] : [creation.file]);
+          expect(existsSync(creation.file)).toBe(["unlink", "cleanup-hostile"].includes(fault));
+        }
+        expect(offline.renameAttempts).toHaveLength(["rename", "rename-replaced", "unlink", "cleanup-hostile"].includes(fault) ? 1 : 0);
+        expect(f.printed()).not.toContain("diag-exception-10");
+        expect(process.exitCode).toBe(4);
+        assertRecorded(f.printed());
+      });
+    });
+});

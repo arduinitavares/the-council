@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync, renameSync, openSync, fstatSync, lstatSync, closeSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { canonicalJson } from "../domain/hash.js";
-import { PilotDiagnosticError, fitDiagnosticSummary, projectDiagnostic, type DiagnosticSummary } from "./diagnostics.js";
+import { PilotDiagnosticError, addDiagnosticCount, DIAGNOSTIC_COUNTER_MAX, fitDiagnosticSummary, projectDiagnostic, type DiagnosticSummary } from "./diagnostics.js";
 import { OrcaClient } from "../orca/client.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { freezeConfig, loadPilotConfig } from "./config.js";
@@ -56,9 +56,15 @@ function cliDiagnostic(cause: unknown, phase: "validation" | "persistence"): Dia
   catch { return projectDiagnostic("DIAGNOSTIC_SUMMARY_INVALID", { origin: "cli", phase }); }
 }
 function retainDiagnostic(first: DiagnosticSummary, next: DiagnosticSummary): DiagnosticSummary {
-  if (canonicalJson(first) === canonicalJson(next)) return first;
-  return fitDiagnosticSummary({ ...first,
-    details: [...first.details, { origin: next.origin, phase: next.phase, code: next.code }, ...next.details] });
+  try {
+    return fitDiagnosticSummary({ ...first,
+      details: [...first.details, { origin: next.origin, phase: next.phase, code: next.code }, ...next.details] });
+  } catch {
+    const omitted = first.details.length + next.details.length + 1;
+    return fitDiagnosticSummary({ ...first, details: [], truncated: true, omissions: { ...first.omissions,
+      details: addDiagnosticCount(first.omissions.details, omitted),
+      countersSaturated: first.omissions.countersSaturated || omitted > DIAGNOSTIC_COUNTER_MAX - first.omissions.details } });
+  }
 }
 async function executeNativeCli(args: string[]): Promise<void> {
   if(args[0]==="audit"){await auditCommand(args.slice(1));return;}
@@ -192,17 +198,54 @@ async function executeNativeCli(args: string[]): Promise<void> {
     try { cache?.close(); } catch (error) { recordFailure(error); }
     try { journal?.close(); } catch (error) { recordFailure(error); }
   }
-  if (!outcome || !record) throw new PilotDiagnosticError(finalDiagnostic ?? cliDiagnostic("NATIVE_OUTCOME_NOT_RECORDED", "persistence"));
-  if (finalDiagnostic) {
+  if (!outcome) throw new PilotDiagnosticError(finalDiagnostic ?? cliDiagnostic("NATIVE_OUTCOME_NOT_RECORDED", "persistence"));
+  const operationalDiagnostic = outcome.diagnostic;
+  const failOutcome = () => {
     outcome.status = "failed";
-    // Preserve the first operational diagnostic, including its delivery and exit facts.
-    outcome.diagnostic = outcome.diagnostic ? retainDiagnostic(outcome.diagnostic, finalDiagnostic) : finalDiagnostic;
+    // Rebuild from the operational failure so each persistence occurrence is counted once.
+    outcome.diagnostic = operationalDiagnostic ? retainDiagnostic(operationalDiagnostic, finalDiagnostic!) : finalDiagnostic!;
     outcome.error = outcome.diagnostic.code;
-    const temporary = resolve(dirname(record), `outcome-${randomUUID()}.tmp`);
-    writeFileSync(temporary, canonicalJson(outcome)+"\n", { mode: 0o600, flag: "wx" });
-    renameSync(temporary, record);
+  };
+  if (finalDiagnostic) {
+    failOutcome();
+    if (record) {
+      const target = record;
+      // The initial snapshot is not a finalized failure record until replacement succeeds.
+      record = undefined;
+      const temporary = resolve(dirname(target), `outcome-${randomUUID()}.tmp`);
+      let fd: number | undefined;
+      let identity: { dev: number; ino: number } | undefined;
+      let published = false;
+      try {
+        fd = openSync(temporary, "wx", 0o600);
+        const stat = fstatSync(fd);
+        identity = { dev: stat.dev, ino: stat.ino };
+        writeFileSync(fd, canonicalJson(outcome) + "\n");
+        renameSync(temporary, target);
+        published = true;
+        record = target;
+      } catch (cause) {
+        recordFailure(cause);
+      } finally {
+        if (fd !== undefined) {
+          if (!published && identity) {
+            try {
+              const stat = lstatSync(temporary);
+              // Keep the fd open through cleanup to retain the exclusively created inode.
+              if (stat.isFile() && stat.dev === identity.dev && stat.ino === identity.ino) unlinkSync(temporary);
+            } catch (cause) {
+              let missing = false;
+              try { missing = (cause as NodeJS.ErrnoException)?.code === "ENOENT"; } catch { /* Unreadable evidence is not absence. */ }
+              if (!missing) recordFailure(cause);
+            }
+          }
+          try { closeSync(fd); } catch (cause) { record = undefined; recordFailure(cause); }
+        }
+      }
+      failOutcome();
+    }
   }
-  console.log(canonicalJson({ ...outcome, record }));
+  console.log(canonicalJson({ ...outcome, record: record ?? null }));
   if (outcome.status === "prerequisites_not_verified") process.exitCode = 3;
   else if (outcome.status === "invalid_request") process.exitCode = 2;
   else if (outcome.status === "failed") process.exitCode = 4;

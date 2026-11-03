@@ -11,7 +11,7 @@ import type { Attempt, CancellationResult, NativeEvidence, Phase, PilotRequest, 
 import type { Role } from "./config.js";
 import type { QualificationProof } from "./types.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
-import { diagnosticError, PilotDiagnosticError, type DiagnosticPhase } from "./diagnostics.js";
+import { diagnosticError, PilotDiagnosticError, projectDiagnostic, type DiagnosticPhase } from "./diagnostics.js";
 
 export interface ContextWrapperPort {
   configure?(evidence: NativeEvidence): void;
@@ -146,7 +146,7 @@ export class ContextWrapperTransport implements ContextWrapperPort {
       presentation: "background", clientMutationId: operationId,
       envToDelete: ["ORCA_AGENT_SESSION_ID", "ORCA_AGENT_SESSION_SPAWN_TOKEN", "ORCA_SESSION_ID"] });
     const handle = created.terminal?.handle ?? created.handle;
-    if (typeof handle !== "string") throw Error(`WRAPPER_TERMINAL_OUTCOME_UNKNOWN:${operationId}`);
+    if (typeof handle !== "string") throw new PilotDiagnosticError(projectDiagnostic("WRAPPER_TERMINAL_OUTCOME_UNKNOWN", { origin: "native-driver", phase: "initialization" }), operationId);
     this.record({ event: "wrapper-terminal-observed", operationId, handle, directory });
     const terminal = (await rpc.callScoped("terminal.show", { terminal: handle })).terminal;
     const identity = identitySchema.parse({ handle, worktreeId: terminal?.worktreeId, ptyId: terminal?.ptyId, incarnationId: terminal?.incarnationId,

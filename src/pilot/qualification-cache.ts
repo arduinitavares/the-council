@@ -16,6 +16,7 @@ import {
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { diagnosticError } from "./diagnostics.js";
 import { canonicalJson } from "../domain/hash.js";
 import { selectionSchema } from "./config.js";
 import { scopedLaunchPlanSchema } from "./scoped-launch.js";
@@ -114,7 +115,7 @@ export class QualificationCache {
       root = join(root, part);
       if (existsSync(root)) {
         if (lstatSync(root).isSymbolicLink() || realpathSync(root) !== root)
-          throw Error("QUALIFICATION_CACHE_SYMLINK");
+          throw diagnosticError("QUALIFICATION_CACHE_SYMLINK", { origin: "cli", phase: "persistence" });
       } else mkdirSync(root, { mode: 0o700 });
     }
     this.directory = root;
@@ -131,7 +132,7 @@ export class QualificationCache {
         0o600,
       );
     } catch {
-      throw Error("QUALIFICATION_CACHE_BUSY_RECONCILE");
+      throw diagnosticError("QUALIFICATION_CACHE_BUSY_RECONCILE", { origin: "cli", phase: "persistence" });
     }
     try {
       writeSync(fd, this.token);
@@ -143,13 +144,13 @@ export class QualificationCache {
   read(): QualificationProof[] {
     if (!existsSync(this.file)) return [];
     if (lstatSync(this.file).isSymbolicLink())
-      throw Error("QUALIFICATION_CACHE_SYMLINK");
+      throw diagnosticError("QUALIFICATION_CACHE_SYMLINK", { origin: "cli", phase: "persistence" });
     try {
       const bytes = readFileSync(this.file);
       if (bytes.length > 1024 * 1024) throw Error("size");
       return cacheSchema.parse(decodeStrictJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes))).proofs;
     } catch {
-      throw Error("QUALIFICATION_CACHE_CORRUPT");
+      throw diagnosticError("QUALIFICATION_CACHE_CORRUPT", { origin: "cli", phase: "persistence" });
     }
   }
   async matching(
@@ -168,12 +169,12 @@ export class QualificationCache {
     );
     for (const p of matches)
       if (!(await verify(p)))
-        throw Error("QUALIFICATION_CACHE_NATIVE_EVIDENCE_UNVERIFIED");
+        throw diagnosticError("QUALIFICATION_CACHE_NATIVE_EVIDENCE_UNVERIFIED", { origin: "cli", phase: "persistence" });
     return matches;
   }
   write(proofs: readonly QualificationProof[], now = Date.now()): void {
     this.assertLockOwned();
-    if (!Number.isSafeInteger(now)) throw Error("QUALIFICATION_CACHE_CLOCK_INVALID");
+    if (!Number.isSafeInteger(now)) throw diagnosticError("QUALIFICATION_CACHE_CLOCK_INVALID", { origin: "cli", phase: "persistence" });
     const incoming = cacheSchema.parse({ version: 1, proofs }).proofs;
     // The exclusive writer lock covers read/merge/atomic replace. Keep proofs
     // from other policies/configurations and prefer the freshest identical key.
@@ -208,10 +209,10 @@ export class QualificationCache {
   private assertLockOwned(): void {
     try {
       if (lstatSync(this.lock).isSymbolicLink() || readFileSync(this.lock, "utf8") !== this.token)
-        throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED");
+        throw diagnosticError("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { origin: "cli", phase: "persistence" });
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT")
-        throw Error("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { cause });
+        throw diagnosticError("QUALIFICATION_CACHE_LOCK_OWNERSHIP_CHANGED", { origin: "cli", phase: "persistence" });
       throw cause;
     }
   }

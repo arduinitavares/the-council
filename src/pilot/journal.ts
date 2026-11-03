@@ -174,9 +174,7 @@ export class PilotJournal {
     }
     this.path = join(root, id);
     if (existsSync(this.path))
-      throw Error(
-        "NATIVE_RUN_EXISTS_INSPECT_REQUIRED: no automatic resume or duplicate calls",
-      );
+      throw diagnosticError("NATIVE_RUN_EXISTS_INSPECT_REQUIRED", { origin: "journal", phase: "validation" });
     mkdirSync(this.path, { mode: 0o700 });
     this.fd = openSync(
       join(this.path, "events.jsonl"),
@@ -253,7 +251,9 @@ export class PilotJournal {
         catch(error) {
           let beforeMutation = false;
           try {
-            beforeMutation = error instanceof Error && error.message === "NATIVE_PACKET_ARGUMENT_TOO_LARGE";
+            beforeMutation = error instanceof PilotDiagnosticError &&
+              diagnosticCode(error) === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" &&
+              parseDiagnosticSummary(error.diagnostic).inputDelivery === "not_attempted";
           } catch { /* Unreadable error fields leave the mutation outcome unknown. */ }
           const safe = diagnosticError(error, { origin: "journal", phase: "initialization" });
           this.append({ event: beforeMutation ? "launch-rejected-before-mutation" : "launch-unknown",

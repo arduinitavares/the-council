@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { canonicalJson } from "../domain/hash.js";
+import { PilotDiagnosticError, fitDiagnosticSummary, projectDiagnostic, type DiagnosticSummary } from "./diagnostics.js";
 import { OrcaClient } from "../orca/client.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
 import { freezeConfig, loadPilotConfig } from "./config.js";
@@ -14,7 +16,7 @@ import { LocalReadRpc, LocalScopedRpc } from "./rpc.js";
 import { createNativePilotDriver } from "./composition.js";
 import { commandFromClient } from "./native-command.js";
 import { PilotJournal } from "./journal.js";
-import { OrcaPilotDriver, type Command } from "./orca-driver.js";
+import { type Command } from "./orca-driver.js";
 import { QualificationCache } from "./qualification-cache.js";
 import { verifyNativeProof } from "./verify-proof.js";
 import { runPilot, type PilotOutcome } from "./workflow.js";
@@ -49,8 +51,16 @@ async function auditCommand(args: string[]): Promise<void> {
   }
   throw Error("INVALID_AUDIT_ACTION");
 }
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+function cliDiagnostic(cause: unknown, phase: "validation" | "persistence"): DiagnosticSummary {
+  try { return projectDiagnostic(cause, { origin: "cli", phase }); }
+  catch { return projectDiagnostic("DIAGNOSTIC_SUMMARY_INVALID", { origin: "cli", phase }); }
+}
+function retainDiagnostic(first: DiagnosticSummary, next: DiagnosticSummary): DiagnosticSummary {
+  if (canonicalJson(first) === canonicalJson(next)) return first;
+  return fitDiagnosticSummary({ ...first,
+    details: [...first.details, { origin: next.origin, phase: next.phase, code: next.code }, ...next.details] });
+}
+async function executeNativeCli(args: string[]): Promise<void> {
   if(args[0]==="audit"){await auditCommand(args.slice(1));return;}
   if (args.length === 1 && args[0] === "--help") {
     console.log(
@@ -120,7 +130,11 @@ async function main(): Promise<void> {
   let cache: QualificationCache | undefined;
   let outcome: PilotOutcome | undefined;
   let record: string | undefined;
-  let finalError: unknown;
+  let finalDiagnostic: DiagnosticSummary | undefined;
+  const recordFailure = (cause: unknown) => {
+    const next = cliDiagnostic(cause, "persistence");
+    finalDiagnostic = finalDiagnostic ? retainDiagnostic(finalDiagnostic, next) : next;
+  };
   try {
     // A competing cache writer does not reserve or consume this run identity.
     cache = new QualificationCache(workspace);
@@ -161,7 +175,7 @@ async function main(): Promise<void> {
     const outcomePath = resolve(journal.path, "outcome.json");
     writeFileSync(
       outcomePath,
-      JSON.stringify(outcome, null, 2) + "\n",
+      canonicalJson(outcome) + "\n",
       { mode: 0o600, flag: "wx" },
     );
     record = outcomePath;
@@ -173,33 +187,47 @@ async function main(): Promise<void> {
       unresolved: outcome.unresolved,
     });
   } catch (error) {
-    finalError = error;
+    recordFailure(error);
   } finally {
-    try { cache?.close(); } catch (error) { finalError ??= error; }
-    try { journal?.close(); } catch (error) { finalError ??= error; }
+    try { cache?.close(); } catch (error) { recordFailure(error); }
+    try { journal?.close(); } catch (error) { recordFailure(error); }
   }
-  if (!outcome || !record) throw finalError ?? Error("NATIVE_OUTCOME_NOT_RECORDED");
-  if (finalError !== undefined) {
+  if (!outcome || !record) throw new PilotDiagnosticError(finalDiagnostic ?? cliDiagnostic("NATIVE_OUTCOME_NOT_RECORDED", "persistence"));
+  if (finalDiagnostic) {
     outcome.status = "failed";
-    outcome.error = finalError instanceof Error ? finalError.message : "NATIVE_PERSISTENCE_OR_CLOSE_FAILED";
+    // Preserve the first operational diagnostic, including its delivery and exit facts.
+    outcome.diagnostic = outcome.diagnostic ? retainDiagnostic(outcome.diagnostic, finalDiagnostic) : finalDiagnostic;
+    outcome.error = outcome.diagnostic.code;
     const temporary = resolve(dirname(record), `outcome-${randomUUID()}.tmp`);
-    writeFileSync(temporary, JSON.stringify(outcome, null, 2)+"\n", { mode: 0o600, flag: "wx" });
+    writeFileSync(temporary, canonicalJson(outcome)+"\n", { mode: 0o600, flag: "wx" });
     renameSync(temporary, record);
   }
-  console.log(JSON.stringify({ ...outcome, record }));
+  console.log(canonicalJson({ ...outcome, record }));
   if (outcome.status === "prerequisites_not_verified") process.exitCode = 3;
   else if (outcome.status === "invalid_request") process.exitCode = 2;
   else if (outcome.status === "failed") process.exitCode = 4;
 }
-main().catch((error) => {
-  const reason = error instanceof Error ? error.message : "NATIVE_FAILURE";
-  const busy = reason === "QUALIFICATION_CACHE_BUSY_RECONCILE";
-  console.log(
-    JSON.stringify({
+/** Direct callers and the package entry share the same safe failure boundary. */
+export async function runNativeCli(argv: readonly string[]): Promise<void> {
+  try {
+    await executeNativeCli([...argv]);
+  } catch (error) {
+    const diagnostic = cliDiagnostic(error instanceof z.ZodError ? Error("NATIVE_REQUEST_INVALID") : error, "validation");
+    const reason = diagnostic.code;
+    const busy = reason === "QUALIFICATION_CACHE_BUSY_RECONCILE";
+    console.log(canonicalJson({
+      version: 2,
       status: busy ? "prerequisites_not_verified" : "invalid_request",
       reason,
+      diagnostic,
       ...(busy ? { calls: { probes: 0, topic: 0 } } : {}),
-    }),
-  );
-  process.exitCode = busy ? 3 : 2;
-});
+    }));
+    process.exitCode = busy ? 3 : 2;
+  }
+}
+function isDirectEntry(): boolean {
+  try {
+    return !!process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch { return false; }
+}
+if (isDirectEntry()) void runNativeCli(process.argv.slice(2));

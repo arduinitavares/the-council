@@ -197,7 +197,21 @@ it.each([
   {
     name: "the existing exact Error/message control",
     cause: () => Error("NATIVE_PACKET_ARGUMENT_TOO_LARGE"),
+    event: "launch-unknown", code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE",
+  },
+  {
+    name: "a controlled no-input bounds carrier",
+    cause: () => new PilotDiagnosticError(projectDiagnostic("NATIVE_PACKET_ARGUMENT_TOO_LARGE", {
+      origin: "native-driver", phase: "input", inputDelivery: "not_attempted",
+    })),
     event: "launch-rejected-before-mutation", code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE",
+  },
+  {
+    name: "a controlled bounds carrier with uncertain delivery",
+    cause: () => new PilotDiagnosticError(projectDiagnostic("NATIVE_PACKET_ARGUMENT_TOO_LARGE", {
+      origin: "native-driver", phase: "input", inputDelivery: "unknown",
+    })),
+    event: "launch-unknown", code: "NATIVE_PACKET_ARGUMENT_TOO_LARGE",
   },
   {
     name: "a hostile Error message getter",

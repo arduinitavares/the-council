@@ -7,6 +7,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { z } from "zod";
+import { diagnosticError } from "./diagnostics.js";
 import { CONFIG_LIMIT_BYTES, decodeConfigYaml } from "../config/load.js";
 import { canonicalJson, hashArtifact } from "../domain/hash.js";
 
@@ -66,7 +67,7 @@ export function loadPilotConfig(path: string): PilotConfig {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > CONFIG_LIMIT_BYTES)
-      throw new Error("PILOT_CONFIG_TOO_LARGE_OR_NOT_FILE");
+      throw diagnosticError("PILOT_CONFIG_TOO_LARGE_OR_NOT_FILE", { origin: "cli", phase: "validation" });
     const bytes = Buffer.alloc(CONFIG_LIMIT_BYTES + 1);
     let size = 0;
     while (size < bytes.length) {
@@ -80,10 +81,7 @@ export function loadPilotConfig(path: string): PilotConfig {
   }
   const result = pilotConfigSchema.safeParse(value);
   if (!result.success)
-    throw new Error(
-      "PILOT_CONFIG_INCOMPATIBLE: native requires openai/gemini/xai plus judge; saved controller configurations use the retained controller commands. " +
-        result.error.message,
-    );
+    throw diagnosticError("PILOT_CONFIG_INCOMPATIBLE", { origin: "cli", phase: "validation" });
   return result.data;
 }
 export function freezeConfig(config: PilotConfig): {

@@ -5,6 +5,9 @@ import type { Role } from "./config.js";
 import { classify, proofKey } from "./preflight.js";
 import { CLEANUP_GRACE_MS, assertNativePacketBounds } from "./orca-driver.js";
 import {pilotPayloadSchemas} from "./payload.js";
+import { PilotDiagnosticError, fitDiagnosticSummary, projectDiagnostic,
+  type DiagnosticCode, type DiagnosticPhase, type DiagnosticSummary } from "./diagnostics.js";
+
 import type {
   Attempt,
   Blocker,
@@ -17,7 +20,10 @@ import type {
   StopAcknowledgement,
 } from "./types.js";
 
+export const PILOT_OUTCOME_VERSION = 2;
+
 export interface PilotOutcome {
+  version: 2;
   status:
     | "consensus"
     | "disagreement"
@@ -27,12 +33,15 @@ export interface PilotOutcome {
     | "failed";
   calls: { probes: number; topic: number };
   initializations: number;
+  initializationsUnknown: boolean;
+  pendingMutations: { requestId: string; kind: "run-create" | "worker-start" | "terminal-create"; attemptKey?: string }[];
   evidence: NativeEvidence | null;
   blockers: Blocker[];
   proofs: QualificationProof[];
   results: Result[];
   unresolved: string[];
-  error?: string;
+  error?: DiagnosticCode;
+  diagnostic?: DiagnosticSummary;
 }
 export async function runPilot(
   request: PilotRequest,
@@ -40,9 +49,12 @@ export async function runPilot(
   now = Date.now,
 ): Promise<PilotOutcome> {
   const out: PilotOutcome = {
+    version: PILOT_OUTCOME_VERSION,
     status: "failed",
     calls: { probes: 0, topic: 0 },
     initializations: 0,
+    initializationsUnknown: false,
+    pendingMutations: [],
     evidence: null,
     blockers: [],
     proofs: [],
@@ -52,6 +64,38 @@ export async function runPilot(
   const owned: Attempt[] = [];
   const settled = new Set<string>();
   const released = new Set<string>();
+  const cancelAttempted = new Set<string>();
+  const releaseAttempted = new Set<string>();
+  const unresolved = (id: string) => {
+    if (!out.unresolved.includes(id)) out.unresolved.push(id);
+  };
+  const failure = (cause: unknown, phase: DiagnosticPhase): DiagnosticSummary => {
+    try { return projectDiagnostic(cause, { origin: "workflow", phase }); }
+    catch { return projectDiagnostic("DIAGNOSTIC_SUMMARY_INVALID", { origin: "workflow", phase }); }
+  };
+  const rememberFailure = (cause: unknown, phase: DiagnosticPhase) => {
+    const next = failure(cause, phase);
+    if (!out.diagnostic) {
+      out.diagnostic = next;
+      out.error = next.code;
+    } else {
+      try {
+        out.diagnostic = fitDiagnosticSummary({ ...out.diagnostic,
+          details: [...out.diagnostic.details, { origin: next.origin, phase: next.phase, code: next.code }] });
+      } catch {
+        // Projection failure remains a failure; it cannot create a successful outcome.
+        out.status = "failed";
+      }
+    }
+  };
+  const attemptFailure = (a: Attempt, fallback: DiagnosticCode, phase: DiagnosticPhase) => {
+    if (a.diagnostic) {
+      try { return new PilotDiagnosticError(a.diagnostic); }
+      catch { return new PilotDiagnosticError(failure("DIAGNOSTIC_SUMMARY_INVALID", phase)); }
+    }
+    return new PilotDiagnosticError(projectDiagnostic(a.controlError ?? fallback, { origin: "workflow", phase,
+      inputDelivery: a.inferenceStarted === false ? "not_attempted" : a.inferenceStarted === true ? "acknowledged" : "unknown" }));
+  };
   const acknowledgedStops = new Map<string, StopAcknowledgement>();
   let pendingKey: string | null = null;
   let pendingCounter: "probes" | "topic" | null = null;
@@ -131,10 +175,10 @@ export async function runPilot(
         phase,
         index: out.calls[counter],
       });
-      out.calls[counter]++;
-      pendingCounter = counter;
       // Launch/readiness time consumes this same inference budget.
       const inferenceDeadline = Math.min(request.deadline, now() + request.workerTimeoutMs);
+      pendingCounter = counter;
+      out.calls[counter]++;
       const a = await driver.launch(
         run,
         request,
@@ -144,24 +188,36 @@ export async function runPilot(
         pendingKey,
       );
       owned.push(a);
-      out.initializations += a.initializations ?? 0;
+      if (a.initializations == null || !Number.isSafeInteger(a.initializations) || a.initializations < 0)
+        out.initializationsUnknown = true;
+      else out.initializations += a.initializations;
       if (a.inferenceStarted === false) out.calls[counter]--;
       pendingKey = null;
       pendingCounter = null;
-      if(now()>=inferenceDeadline)throw Error(a.controlError ?? "NATIVE_INFERENCE_DEADLINE");
-      if (!a.launchVerified) throw Error(a.controlError ?? "NATIVE_EFFECTIVE_SELECTION_MISMATCH");
+      if (now() >= inferenceDeadline) throw attemptFailure(a, "NATIVE_INFERENCE_DEADLINE", "inference");
+      if (!a.launchVerified) throw attemptFailure(a, "NATIVE_EFFECTIVE_SELECTION_MISMATCH", "initialization");
       if (phase === "cancel-probe") {
-        const cancellation = await driver.cancel(a, inferenceDeadline);
-        if (cancellation.state === "unknown")
-          throw Error("CANCELLATION_SETTLEMENT_UNKNOWN");
-        settled.add(a.binding.dispatchId);
-        if (!(await driver.release(a))) {
-          out.unresolved.push(a.binding.dispatchId);
-          throw Error("RELEASE_UNKNOWN");
+        const id = a.binding.dispatchId;
+        cancelAttempted.add(id);
+        let cancellation;
+        try { cancellation = await driver.cancel(a, inferenceDeadline); }
+        catch (cause) { unresolved(id); throw cause; }
+        if (cancellation.state !== "settled" && cancellation.state !== "settled_unacknowledged") {
+          unresolved(id);
+          throw cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
+            : Error("CANCELLATION_SETTLEMENT_UNKNOWN");
         }
-        released.add(a.binding.dispatchId);
-        if (cancellation.state !== "settled") throw Error(cancellation.error ?? "CANCELLATION_UNACKNOWLEDGED");
-        acknowledgedStops.set(a.binding.dispatchId, cancellation.stop);
+        settled.add(id);
+        releaseAttempted.add(id);
+        try {
+          if ((await driver.release(a)) !== true) { unresolved(id); throw Error("RELEASE_UNKNOWN"); }
+          released.add(id);
+        } catch (cause) { unresolved(id); throw cause; }
+        if (cancellation.state !== "settled") {
+          throw cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
+            : new PilotDiagnosticError(failure(cancellation.error ?? "CANCELLATION_UNACKNOWLEDGED", "cancellation"));
+        }
+        acknowledgedStops.set(id, cancellation.stop);
         return null;
       }
       const result = await driver.observe(
@@ -196,11 +252,11 @@ export async function runPilot(
       result.settlement = "unknown";
       out.results.push(result);
       settled.add(a.binding.dispatchId);
-      released.add(a.binding.dispatchId);
-      if (!(await driver.release(a))) {
-        out.unresolved.push(a.binding.dispatchId);
-        throw Error("RELEASE_UNKNOWN");
-      }
+      releaseAttempted.add(a.binding.dispatchId);
+      try {
+        if ((await driver.release(a)) !== true) { unresolved(a.binding.dispatchId); throw Error("RELEASE_UNKNOWN"); }
+        released.add(a.binding.dispatchId);
+      } catch (cause) { unresolved(a.binding.dispatchId); throw cause; }
       result.settlement = "settled";
       return result;
     };
@@ -273,17 +329,32 @@ export async function runPilot(
         ? "consensus" : "disagreement";
     }
   } catch (error) {
-    out.error = error instanceof Error ? error.message : "NATIVE_FAILURE";
-    if (out.error === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" && pendingKey && pendingCounter) {
+    out.status = "failed";
+    rememberFailure(error instanceof z.ZodError ? Error("NATIVE_REQUEST_INVALID") : error, "validation");
+    const noMutationBounds = error instanceof PilotDiagnosticError &&
+      out.error === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" && out.diagnostic?.inputDelivery === "not_attempted";
+    if (noMutationBounds && pendingKey && pendingCounter) {
       out.calls[pendingCounter]--;
       pendingKey = null;
       pendingCounter = null;
     }
-    if (out.error.startsWith("NATIVE_RUN_CREATION_OUTCOME_UNKNOWN:")) out.unresolved.push(out.error);
+    const kinds = {
+      NATIVE_RUN_CREATION_OUTCOME_UNKNOWN: "run-create",
+      LAUNCH_OUTCOME_UNKNOWN: "worker-start",
+      WRAPPER_TERMINAL_OUTCOME_UNKNOWN: "terminal-create",
+    } as const;
+    if (error instanceof PilotDiagnosticError && out.error && Object.hasOwn(kinds, out.error)) {
+      const requestId = error.mutationRequestId;
+      if (typeof requestId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+        const kind = kinds[out.error as keyof typeof kinds];
+        out.pendingMutations.push({ requestId, kind, ...(pendingKey && kind !== "run-create" ? { attemptKey: pendingKey } : {}) });
+        if (kind === "run-create") unresolved(requestId);
+      }
+    }
     if (out.error === "INVALID_FINITE_BOUNDS_OR_INPUT" || out.error === "INSUFFICIENT_CALL_BUDGET" ||
-        (out.error === "NATIVE_PACKET_ARGUMENT_TOO_LARGE" && out.calls.probes === 0 && out.calls.topic === 0) || error instanceof z.ZodError) {
+        (noMutationBounds && out.calls.probes === 0 && out.calls.topic === 0) || out.error === "NATIVE_REQUEST_INVALID") {
       out.status = "invalid_request";
-      out.blockers.push({ role: null, control: "request", reason: out.error, source: "native request validation", observed: out.error, nextAction: "Correct the input bounds or configuration before starting a new run." });
+      out.blockers.push({ role: null, control: "request", reason: out.error ?? "DIAGNOSTIC_UNKNOWN", source: "native request validation", observed: out.error ?? "DIAGNOSTIC_UNKNOWN", nextAction: "Correct the input bounds or configuration before starting a new run." });
     } else if (
       out.evidence === null &&
       out.calls.probes === 0 &&
@@ -295,29 +366,43 @@ export async function runPilot(
         control: "bootstrap",
         reason: "NATIVE_INSPECTION_UNVERIFIED",
         source: "native host inspector",
-        observed: out.error,
+        observed: out.error ?? "DIAGNOSTIC_UNKNOWN",
         nextAction:
           "Inspect the named native source without launching dependent inference.",
       });
     }
-    if (pendingKey) out.unresolved.push(`launch outcome unknown:${pendingKey}`);
+    if (pendingKey) unresolved(`launch outcome unknown:${pendingKey}`);
   } finally {
     // One shared, finite grace for cleanup only; no execute()/launch occurs here.
     const cleanupDeadline = now() + CLEANUP_GRACE_MS;
     for (const a of owned) {
-      if (!settled.has(a.binding.dispatchId)) {
-        if ((await driver.cancel(a, cleanupDeadline, "absolute-cleanup")).state === "unknown") {
-          out.unresolved.push(a.binding.dispatchId);
-          continue;
+      const id = a.binding.dispatchId;
+      if (!settled.has(id)) {
+        if (cancelAttempted.has(id)) { unresolved(id); continue; }
+        cancelAttempted.add(id);
+        try {
+          const cancellation = await driver.cancel(a, cleanupDeadline, "absolute-cleanup");
+          if (cancellation.state !== "settled" && cancellation.state !== "settled_unacknowledged") {
+            unresolved(id);
+            rememberFailure(cancellation.diagnostic ? new PilotDiagnosticError(cancellation.diagnostic)
+              : "CANCELLATION_SETTLEMENT_UNKNOWN", "cancellation");
+            continue;
+          }
+          settled.add(id);
+        } catch (cause) {
+          unresolved(id); rememberFailure(cause, "cancellation"); continue;
         }
-        settled.add(a.binding.dispatchId);
       }
-      if (
-        !released.has(a.binding.dispatchId) &&
-        !(await driver.release(a, cleanupDeadline)) &&
-        !out.unresolved.includes(a.binding.dispatchId)
-      )
-        out.unresolved.push(a.binding.dispatchId);
+      if (!released.has(id)) {
+        if (releaseAttempted.has(id)) { unresolved(id); continue; }
+        releaseAttempted.add(id);
+        try {
+          if ((await driver.release(a, cleanupDeadline)) === true) released.add(id);
+          else { unresolved(id); rememberFailure("RELEASE_UNKNOWN", "cleanup"); }
+        } catch (cause) {
+          unresolved(id); rememberFailure(cause, "cleanup");
+        }
+      }
     }
     if (out.unresolved.length) out.status = "failed";
   }

@@ -388,6 +388,7 @@ describe("native first use through Orca command adapter", () => {
     const h = harness();
     const r = await runPilot(request, h.driver, () => now);
     expect(r.status).toBe("consensus");
+    expect(r.version).toBe(2);
     expect(r.calls).toEqual({ probes: 8, topic: 10 });
     expect(r.proofs).toHaveLength(4);
     expect(r.results.filter((x) => x.phase === "ballot")).toHaveLength(3);

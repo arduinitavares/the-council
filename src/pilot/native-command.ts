@@ -1,6 +1,7 @@
 import { OrcaClient } from "../orca/client.js";
 import { decodeStrictJson } from "../workers/strict-json.js";
-import { diagnosticCode, diagnosticError } from "./diagnostics.js";
+import { diagnosticError } from "./diagnostics.js";
+import { nativeDiagnosticError } from "./allowance.js";
 import type { Command } from "./orca-driver.js";
 /** The official CLI/client owns transport credentials and native caller fencing. */
 export async function nativeCommand(executable: string, cwd: string, runtimeId?: string): Promise<Command> {
@@ -28,12 +29,12 @@ export function commandFromClient(client: Pick<OrcaClient, "run">, runtimeId?: s
         return envelope;
       }
       if (envelope?.ok !== true || typeof envelope._meta?.runtimeId !== "string")
-        throw Object.assign(Error("ORCA_INVALID_ENVELOPE"), { code: diagnosticCode(envelope?.error?.code ?? "invalid_runtime_response") });
+        throw Object.assign(Error("ORCA_INVALID_ENVELOPE"), { code: envelope?.error?.code ?? "invalid_runtime_response" });
       bound ??= envelope._meta.runtimeId;
       if (envelope._meta.runtimeId !== bound) throw Error("ORCA_RUNTIME_BINDING_MISMATCH");
       return envelope.result;
     } catch (error) {
-      throw diagnosticError(error, { origin: "native-driver", phase: "native-read" });
+      throw nativeDiagnosticError(error);
     }
   };
 }

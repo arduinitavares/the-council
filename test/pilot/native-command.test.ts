@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { commandFromClient } from "../../src/pilot/native-command.js";
 import { readFailure } from "../../src/pilot/allowance.js";
 import type { ProcessReceipt } from "../../src/orca/client.js";
+import { parseDiagnosticSummary } from "../../src/pilot/diagnostics.js";
 
 // In-memory native receipts acquire no child processes, streams, timers or temporary files.
 function receipt(envelope: unknown, overrides: Partial<ProcessReceipt> = {}): ProcessReceipt {
@@ -36,6 +37,67 @@ it("rejects malformed success without interpolating an unknown native exception 
   expect(error.message).toBe("ORCA_INVALID_ENVELOPE");
   expect(JSON.parse(observation.detail)).toMatchObject({ version: 1, code: "ORCA_INVALID_ENVELOPE", classification: "control" });
   expect(JSON.stringify(error)).not.toContain("diag-stdout-10");
+});
+
+it.each([
+  ["permission_denied", "denied", "permission_denied"],
+  [401, "authentication_failed", "HTTP_401"],
+  ["quota_exceeded", "exhausted", "quota_exceeded"],
+  [999999, "missing", null],
+  ["unknown-diag-exception-10", "missing", null],
+  ["permission_denied-diag-exception-10", "denied", null],
+] as const)("preserves malformed-success observation state for native code %s", async (raw, state, secondary) => {
+  const command = commandFromClient({ run: async () => receipt({ ok: true,
+    error: { code: raw, message: "diag-exception-10", stack: "diag-exception-10", nested: { account: "diag-exception-10" } },
+  }) }, "runtime");
+  const error = await rejection(command(["status", "--json"], "/synthetic", 1000));
+  const result = readFailure("native boundary", error);
+  const summary = parseDiagnosticSummary(JSON.parse(result.detail));
+  expect(error.message).toBe("ORCA_INVALID_ENVELOPE");
+  expect(summary).toMatchObject({ version: 1, code: "ORCA_INVALID_ENVELOPE", classification: "control" });
+  expect(summary.details).toEqual(secondary === null ? [] : [
+    { origin: "native-driver", phase: "native-read", code: secondary },
+  ]);
+  expect(JSON.stringify([error, result])).not.toContain("diag-exception-10");
+  expect(JSON.stringify([error, result])).not.toContain("999999");
+  expect(error.stack).not.toContain("diag-exception-10");
+  expect(result.state).toBe(state);
+});
+
+it.each([
+  ["forbidden", "denied"],
+  ["authentication", "authentication_failed"],
+  ["quota exceeded", "exhausted"],
+  ["unknown native failure", "missing"],
+] as const)("preserves message-only client rejection state for %s without persisting its text", async (message, state) => {
+  const cause = Object.assign(Error(`${message} diag-exception-10`), {
+    stack: "diag-exception-10", extra: { account: "diag-exception-10" },
+    state: "verified", observationState: "verified", nativeObservationState: "denied",
+  });
+  const command = commandFromClient({ run: async () => { throw cause; } });
+  const error = await rejection(command(["status", "--json"], "/synthetic", 1000));
+  const result = readFailure("native source read", error);
+  const summary = parseDiagnosticSummary(JSON.parse(result.detail));
+  expect(error.message).toBe("DIAGNOSTIC_UNKNOWN");
+  expect(summary).toMatchObject({ version: 1, code: "DIAGNOSTIC_UNKNOWN", classification: "unknown",
+    details: [], omissions: { exceptionText: true } });
+  expect(JSON.stringify([error, result])).not.toContain("diag-exception-10");
+  expect(error.stack).not.toContain("diag-exception-10");
+  expect(result.state).toBe(state);
+});
+
+it("keeps hostile client rejections unknown without trusting injected observation fields", async () => {
+  const conversion = { toString() { throw Error("diag-exception-10"); } };
+  const getter = new Proxy({}, { get() { throw Error("diag-exception-10"); } });
+  for (const cause of [getter, { code: conversion, state: "verified", nativeObservationState: "denied" },
+    { state: "verified", observationState: "denied" }, null, Symbol("diag-exception-10")]) {
+    const command = commandFromClient({ run: async () => { throw cause; } });
+    const error = await rejection(command(["status", "--json"], "/synthetic", 1000));
+    const result = readFailure("native source read", error);
+    expect(result.state).toBe("missing");
+    expect(JSON.parse(result.detail)).toMatchObject({ code: "DIAGNOSTIC_UNKNOWN", classification: "unknown" });
+    expect(JSON.stringify([error, result])).not.toContain("diag-exception-10");
+  }
 });
 
 it.each([

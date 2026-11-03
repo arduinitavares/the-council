@@ -1,5 +1,5 @@
 import { canonicalJson } from "../domain/hash.js";
-import { projectDiagnostic } from "./diagnostics.js";
+import { diagnosticError, projectDiagnostic, type PilotDiagnosticError } from "./diagnostics.js";
 import type { Observation } from "./types.js";
 
 const nativeSources = new Set([
@@ -7,8 +7,16 @@ const nativeSources = new Set([
   "Orca accounts.list(refreshUsage=true) rateLimits.codex", "Orca accounts.list(refreshUsage=true) rateLimits.cursor",
 ]);
 
-export function readFailure(source: string, error: unknown): Observation {
-  const diagnostic = projectDiagnostic(error, { origin: "native-read", phase: "native-read" });
+type NativeFailureState = "missing" | "denied" | "authentication_failed" | "exhausted" | "unsupported";
+// Only projected errors created here can carry state. No exception data or
+// caller-supplied observation fields enter this non-serializable carrier.
+const nativeFailureStates = new WeakMap<object, NativeFailureState>();
+
+function nativeFailureState(error: unknown): NativeFailureState {
+  if (error !== null && typeof error === "object") {
+    const carried = nativeFailureStates.get(error);
+    if (carried) return carried;
+  }
   // Preserve source-state classification in memory, without coercing arbitrary
   // objects or copying their text into the persisted diagnostic.
   let code = "";
@@ -17,11 +25,23 @@ export function readFailure(source: string, error: unknown): Observation {
     if (typeof value === "string") code = value.toLowerCase();
     else if (typeof value === "number") code = String(value);
   } catch { /* Unreadable native properties leave the observation missing. */ }
-  const state = /authentication|unauthorized|not.authenticated|\b401\b|^http_401$/.test(code)
+  return /authentication|unauthorized|not.authenticated|\b401\b|^http_401$/.test(code)
     ? "authentication_failed" : /denied|forbidden|\b403\b|^http_403$/.test(code) ? "denied"
     : /exhausted|quota.exceeded/.test(code) ? "exhausted"
     : /unsupported/.test(code) ? "unsupported" : "missing";
-  return { state, source: nativeSources.has(source) ? source : "native source read", detail: canonicalJson(diagnostic) };
+}
+
+/** Preserve only the failure state before shared projection discards its text. */
+export function nativeDiagnosticError(error: unknown): PilotDiagnosticError {
+  const state = nativeFailureState(error);
+  const projected = diagnosticError(error, { origin: "native-driver", phase: "native-read" });
+  nativeFailureStates.set(projected, state);
+  return projected;
+}
+
+export function readFailure(source: string, error: unknown): Observation {
+  const diagnostic = projectDiagnostic(error, { origin: "native-read", phase: "native-read" });
+  return { state: nativeFailureState(error), source: nativeSources.has(source) ? source : "native source read", detail: canonicalJson(diagnostic) };
 }
 
 /** Project only quota fields from the registered account snapshot. Never store

@@ -206,5 +206,8 @@ export class PilotDiagnosticError extends Error {
 }
 export function diagnosticError(cause: unknown, context: DiagnosticContext): PilotDiagnosticError {
   const diagnostic = projectDiagnostic(cause, context);
-  return new PilotDiagnosticError(diagnostic, cause instanceof PilotDiagnosticError ? cause.mutationRequestId : undefined);
+  let mutationRequestId: string | undefined;
+  try { if (cause instanceof PilotDiagnosticError) mutationRequestId = cause.mutationRequestId; }
+  catch { /* Optional identity access cannot discard a validated diagnostic. */ }
+  return new PilotDiagnosticError(diagnostic, mutationRequestId);
 }

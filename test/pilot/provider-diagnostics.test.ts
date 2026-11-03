@@ -180,3 +180,35 @@ it("projects exceptions at the real strict artifact-read boundary before reservi
     expect(readFileSync(join(h.directory, "prepared.json"), "utf8")).not.toContain(diagnosticCanaries.exception);
   } finally { await h.finish(); }
 }, 10000);
+
+it("round 1: returns an unknown-signal report without losing the first failure or close evidence", async () => {
+  const { report, inferenceExists } = await syntheticDiagnosticSession({ firstFailure: true, closeSignal: "diag-unlisted-signal-10" });
+  expect(report).toMatchObject({ status: "failed", error: "PROVIDER_STREAM_EVENT_UNSUPPORTED", calls: 0,
+    diagnostic: { code: "PROVIDER_STREAM_EVENT_UNSUPPORTED", inputDelivery: "not_attempted",
+      exit: { state: "observed", code: 7, signal: null, signalState: "unknown" } },
+    process: { exitCode: 7, signal: null, inputDelivered: false, stopRequested: true } });
+  settled(report);
+  expect(inferenceExists).toBe(false);
+  expect(JSON.stringify(report)).not.toContain("diag-unlisted-signal-10");
+});
+
+it("round 1: rejects success after an unknown signal even with a valid final and exit zero", async () => {
+  const { report, inferenceExists } = await syntheticDiagnosticSession({ validResult: true, closeSignal: "diag-unlisted-signal-10" });
+  expect(report).toMatchObject({ status: "failed", error: "PROVIDER_FINAL_NOT_SUCCESSFUL", calls: 1, result: null,
+    diagnostic: { code: "PROVIDER_FINAL_NOT_SUCCESSFUL", phase: "validation", inputDelivery: "acknowledged",
+      exit: { state: "observed", code: 0, signal: null, signalState: "unknown" } },
+    process: { exitCode: 0, signal: null, inputDelivered: true } });
+  settled(report);
+  expect(inferenceExists).toBe(true);
+  expect(JSON.stringify(report)).not.toContain("diag-unlisted-signal-10");
+});
+
+it("round 1: completes the valid synthetic final when its observed signal is null", async () => {
+  const { report, inferenceExists } = await syntheticDiagnosticSession({ validResult: true });
+  expect(report).toMatchObject({ status: "completed", error: null, calls: 1,
+    diagnostic: { code: "NONE", inputDelivery: "acknowledged", exit: { state: "observed", code: 0, signal: null, signalState: "none" } },
+    process: { exitCode: 0, signal: null, inputDelivered: true } });
+  settled(report);
+  expect(pilotPayloadSchemas.review.parse(pilotResultEnvelopeSchema.parse(report.result).payload).assessment).toBe(diagnosticCanaries.requestedResult);
+  expect(inferenceExists).toBe(true);
+});

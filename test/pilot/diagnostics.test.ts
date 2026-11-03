@@ -148,3 +148,36 @@ it("carries a validated finite summary and only an owned UUID mutation identity"
   expect(diagnosticError(Error("exception-secret"), { origin: "provider", phase: "validation" }).message).toBe("DIAGNOSTIC_UNKNOWN");
   expect(Object.keys(error)).not.toContain("cause");
 });
+
+it("round 1: diagnosticError contains throwing getPrototypeOf access", () => {
+  const cause = new Proxy({}, { getPrototypeOf() { throw Error("diag-exception-10"); } });
+  let carrier: PilotDiagnosticError | undefined;
+  expect(() => { carrier = diagnosticError(cause, { origin: "provider", phase: "input" }); }).not.toThrow();
+  expect(carrier).toBeInstanceOf(PilotDiagnosticError);
+  expect(carrier?.message).toBe("DIAGNOSTIC_UNKNOWN");
+  expect(carrier?.diagnostic).toMatchObject({ code: "DIAGNOSTIC_UNKNOWN", classification: "unknown", phase: "input", omissions: { exceptionText: true } });
+  expect(JSON.stringify(carrier)).not.toContain("diag-exception-10");
+});
+
+it("round 1: diagnosticError preserves a valid summary when mutationRequestId access throws", () => {
+  const summary = core();
+  summary.origin = "native-driver"; summary.phase = "input"; summary.code = "EPIPE"; summary.classification = "transport";
+  summary.inputDelivery = "attempted_unacknowledged";
+  summary.exit = { state: "observed", code: 7, signal: null, signalState: "none" };
+  const cause = new PilotDiagnosticError(summary);
+  Object.defineProperty(cause, "mutationRequestId", { get() { throw Error("diag-exception-10"); } });
+  let carrier: PilotDiagnosticError | undefined;
+  expect(() => { carrier = diagnosticError(cause, { origin: "cli", phase: "persistence" }); }).not.toThrow();
+  expect(carrier?.diagnostic).toEqual(summary);
+  expect(carrier?.message).toBe("EPIPE");
+  expect(carrier?.mutationRequestId).toBeUndefined();
+  expect(JSON.stringify(carrier)).not.toContain("diag-exception-10");
+});
+
+it("round 1: diagnosticError propagates a valid owned UUID without replacing the carried diagnostic", () => {
+  const summary = core(); summary.code = "EPIPE"; summary.classification = "transport";
+  const cause = new PilotDiagnosticError(summary, "f3904db2-476a-46e2-81ab-004a694debe1");
+  const carrier = diagnosticError(cause, { origin: "cli", phase: "persistence" });
+  expect(carrier.diagnostic).toEqual(summary);
+  expect(carrier.mutationRequestId).toBe("f3904db2-476a-46e2-81ab-004a694debe1");
+});

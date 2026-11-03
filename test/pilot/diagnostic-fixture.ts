@@ -132,16 +132,18 @@ export async function diagnosticFixture(mode: DiagnosticMode, protocol: Provider
 }
 
 /** No real PID is signalled: exact synthetic identity, real parser and session. */
-export async function syntheticDiagnosticSession(options: { stderr?: Buffer[]; firstFailure?: boolean; writeFailure?: boolean }) {
+export async function syntheticDiagnosticSession(options: { stderr?: Buffer[]; firstFailure?: boolean; writeFailure?: boolean; closeSignal?: string; validResult?: boolean }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "council-diagnostic-synthetic-")));
   const assignment = fixtureAssignment(root, 5000), { directory } = assignment;
   assignment.phase = "review";
   assignment.recipe.argv = ["--agent", "council-packet"];
   const assignmentHash = sha256(JSON.stringify(assignment));
-  if (options.writeFailure) writeFileSync(join(directory, "input.json"), JSON.stringify({ assignmentHash, requestId: "synthetic-request" }));
+  if (options.writeFailure || options.validResult) writeFileSync(join(directory, "input.json"), JSON.stringify({ assignmentHash, requestId: "synthetic-request" }));
   const child = new EventEmitter() as childProcess.ChildProcess;
   const syntheticPid = 2147483000;
   Object.assign(child, { pid: syntheticPid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
+  const streams = [child.stdin!, child.stdout!, child.stderr!];
+  const streamsClosed = Promise.all(streams.map(stream => new Promise<void>(resolve => { stream.once("close", resolve); })));
   let live = true, stdoutBytes = 0, stdoutChunks = 0;
   const emit = (value: unknown) => {
     const bytes = Buffer.from(JSON.stringify(value)+"\n");
@@ -151,9 +153,22 @@ export async function syntheticDiagnosticSession(options: { stderr?: Buffer[]; f
     if (!live) return;
     live = false;
     child.stdin!.end(); child.stdout!.destroy(); child.stderr!.destroy();
-    child.emit("close", 7, null);
+    child.emit("close", options.validResult ? 0 : 7, options.closeSignal ?? null);
   };
-  child.stdin!.write = (() => { throw Error(diagnosticCanaries.exception); });
+  let resultTurn: ReturnType<typeof setImmediate> | undefined;
+  child.stdin!.write = ((text: string, _encoding: string, callback: (error?: Error | null) => void) => {
+    if (!options.validResult) throw Error(diagnosticCanaries.exception);
+    const user = JSON.parse(text);
+    const request = JSON.parse(user.message.content.slice(user.message.content.indexOf("\n")+1));
+    callback();
+    resultTurn = setImmediate(() => {
+      const envelope = { binding: request.binding, selection: request.selection, phase: request.phase, role: request.role,
+        packetHash: request.packetHash, payload: { assessment: diagnosticCanaries.requestedResult, objections: [] } };
+      emit({ event: "result", result: { status: "SUCCESS", conversation_id: "synthetic-session", response: JSON.stringify(envelope) } });
+      close();
+    });
+    return true;
+  }) as NonNullable<typeof child.stdin>["write"];
   const originalKill = process.kill.bind(process);
   const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal = "SIGTERM") => {
     if (Math.abs(pid) !== syntheticPid) return originalKill(pid, signal);
@@ -169,7 +184,7 @@ export async function syntheticDiagnosticSession(options: { stderr?: Buffer[]; f
   let session: ReturnType<typeof runProviderSession>;
   try { session = runProviderSession(assignment, assignmentHash); }
   finally { spawnObservation.replacement = undefined; }
-  if (!options.writeFailure) polling = setInterval(() => {
+  if (!options.writeFailure && !options.validResult) polling = setInterval(() => {
     if (!existsSync(join(directory, "prepared.json"))) return;
     clearInterval(polling); polling = undefined;
     if (options.firstFailure) {
@@ -186,12 +201,15 @@ export async function syntheticDiagnosticSession(options: { stderr?: Buffer[]; f
   } finally {
     if (polling) clearInterval(polling);
     if (stderrTurn) clearImmediate(stderrTurn);
+    if (resultTurn) clearImmediate(resultTurn);
     clearTimeout(initTimer); close(); kill.mockRestore();
     child.stdin!.destroy(); child.stdout!.destroy(); child.stderr!.destroy();
+    await streamsClosed;
     recordCleanupArtifact("synthetic-"+randomUUID()+".json", { kind: "synthetic", authority: "deterministic child stand-in; no actual process identity or close evidence",
-      options: { firstFailure: options.firstFailure === true, writeFailure: options.writeFailure === true, stderrChunkLengths: options.stderr?.map(bytes => bytes.length) ?? [] },
+      options: { firstFailure: options.firstFailure === true, writeFailure: options.writeFailure === true, validResult: options.validResult === true,
+        unlistedCloseSignalSupplied: options.closeSignal !== undefined, stderrChunkLengths: options.stderr?.map(bytes => bytes.length) ?? [] },
       originalReport: observed ? { status: observed.status, error: observed.error, calls: observed.calls, diagnostic: observed.diagnostic, process: observed.process } : null,
-      teardown: { streamsDestroyed: child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed, timerCleared: true, killMockRestored: true } });
+      teardown: { streamsDestroyed: child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed, streamsClosed: true, timerCleared: true, killMockRestored: true } });
     rmSync(root, { recursive: true });
   }
 }

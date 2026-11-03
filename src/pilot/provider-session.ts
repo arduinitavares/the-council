@@ -115,9 +115,11 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
     }
     stop();
   };
+  const projectCloseSignal = (observed: string | null): DiagnosticSignal | null =>
+    (DIAGNOSTIC_SIGNALS as readonly unknown[]).includes(observed) ? observed as DiagnosticSignal : null;
   const summary = (): DiagnosticSummary => {
     const base = firstDiagnostic ?? projectDiagnostic("NONE", { origin: "provider", phase });
-    const checkedSignal = (DIAGNOSTIC_SIGNALS as readonly unknown[]).includes(signal) ? signal as DiagnosticSignal : null;
+    const checkedSignal = projectCloseSignal(signal);
     return fitDiagnosticSummary({ ...base, inputDelivery: inputDelivered ? "acknowledged" : calls === 1 ? "attempted_unacknowledged" : "not_attempted",
       exit: { state: closed && (Number.isSafeInteger(exitCode) || checkedSignal !== null) ? "observed" : "unknown",
         code: Number.isSafeInteger(exitCode) ? exitCode : null, signal: checkedSignal,
@@ -450,7 +452,10 @@ export async function runProviderSession(a: WrapperAssignment, assignmentHash: s
   if (!processScansSettled) { processScanKnown = false; ownedScan!.handle.stop(); }
   const parsingSettled = !parsingExpired && parsingPending === 0;
   const trackedDescendantsSettled = processScanKnown && processScansSettled && [...seen].every(pid => { try { process.kill(pid, 0); return false; } catch (cause) { return (cause as NodeJS.ErrnoException).code === "ESRCH"; } });
-  const processReceipt = { pid: child.pid ?? null, providerStarted: true, exitCode, signal, closed, groupSettled: groupState() === "exited", trackedDescendantsSettled, escapedDescendantObserved: escaped,
+  // Project only the persisted signal; the original close value still gates success.
+  const processReceipt = { pid: child.pid ?? null, providerStarted: true, exitCode,
+    signal: projectCloseSignal(signal),
+    closed, groupSettled: groupState() === "exited", trackedDescendantsSettled, escapedDescendantObserved: escaped,
     parsingSettled, processScansSettled, timersSettled: timers.size === 0, inputDelivered, stopRequested, descendantEvidence: "observed process tree plus process group; prequalified no-escape controls required" };
   if (!closed) { child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref(); }
   if (!closed || !processReceipt.groupSettled || !trackedDescendantsSettled || !parsingSettled || !processScansSettled || escaped || timers.size) recordFailure("PROVIDER_PROCESS_SETTLEMENT_UNVERIFIED");

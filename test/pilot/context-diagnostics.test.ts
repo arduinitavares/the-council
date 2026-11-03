@@ -6,7 +6,7 @@ import { verifyContextResult } from "../../src/pilot/context-driver.js";
 import { DIAGNOSTIC_CODES } from "../../src/pilot/diagnostics.js";
 import { PilotDiagnosticError } from "../../dist/pilot/diagnostics.js";
 import { createNativePilotDriver } from "../../dist/pilot/composition.js";
-import { sha256, type WrapperAssignment } from "../../src/pilot/wrapper-contract.js";
+import { sha256, providerReportSchema, type WrapperAssignment } from "../../src/pilot/wrapper-contract.js";
 import type { Attempt, Phase, PilotRequest } from "../../src/pilot/types.js";
 import type { ScopedRpc } from "../../src/pilot/rpc.js";
 import { contextFixture } from "./context-fixture.js";
@@ -17,7 +17,8 @@ type Fixture = Awaited<ReturnType<typeof contextFixture>>;
 type Driver = ReturnType<typeof createNativePilotDriver>;
 type Case = {
   h: Fixture;
-  make(onBound?: (a: Attempt) => void): Driver;
+  make(onBound?: (a: Attempt) => void, prepareTerminal?: (parameters: any) => any): Driver;
+  defer(cleanup: () => void): void;
   report(a: Attempt): Promise<any>;
   facts: Record<string, any>;
 };
@@ -45,6 +46,7 @@ async function usingContext(behavior: string, body: (c: Case) => Promise<void>) 
   let failure: unknown;
   const facts: Record<string, any> = { fixture: "offline Node/context; not provider qualification", behavior, root: h.root };
   const closed = new Map<string, Promise<void>>();
+  const cleanups: (() => void)[] = [];
   try {
     const rpc: ScopedRpc = { callScoped: async (method, parameters) => {
       const result = await h.rpc.callScoped(method, parameters);
@@ -57,11 +59,11 @@ async function usingContext(behavior: string, body: (c: Case) => Promise<void>) 
       return result;
     } };
     await body({
-      h, facts,
-      make: onBound => createNativePilotDriver({
+      h, facts, defer: cleanup => { cleanups.push(cleanup); },
+      make: (onBound, prepareTerminal) => createNativePilotDriver({
         command: (...args) => h.command(...args),
         inspector: { inspect: async () => ({ evidence: h.evidence, blockers: [] }) },
-        rpc: () => rpc, orca: h.orca,
+        rpc: () => prepareTerminal ? { callScoped: (method, parameters) => rpc.callScoped(method, method === "terminal.create" ? prepareTerminal(parameters) : parameters) } : rpc, orca: h.orca,
         record: event => {
           h.events.push(event);
           if ((event as any).event === "wrapper-native-bound") onBound?.((event as any).attempt);
@@ -78,6 +80,7 @@ async function usingContext(behavior: string, body: (c: Case) => Promise<void>) 
     });
   } catch (cause) { failure = cause; }
   finally {
+    for (const cleanup of cleanups) { try { cleanup(); } catch (cause) { failure ??= cause; } }
     try {
       for (const [handle, entry] of h.terminals) {
         const directory = h.events.find(e => e.event === "wrapper-terminal-observed" && e.handle === handle)?.directory;
@@ -107,6 +110,13 @@ async function usingContext(behavior: string, body: (c: Case) => Promise<void>) 
       facts.teardownError = cause instanceof Error ? cause.message : "unknown";
       failure ??= cause;
     }
+    try {
+      if (facts.gateTraceFile && existsSync(facts.gateTraceFile)) {
+        facts.gateTrace = JSON.parse(readFileSync(facts.gateTraceFile, "utf8"));
+        expect(facts.gateTrace).toMatchObject({ timerCleared: true, childCloseObserved: true, exitCode: 0, signal: null });
+        expect(presence(facts.gateTrace.wrapperPid)).toBe("absent");
+      }
+    } catch (cause) { failure ??= cause; }
     try { await h.close(); } catch (cause) { failure ??= cause; }
     try {
       facts.events = h.events;
@@ -118,8 +128,9 @@ async function usingContext(behavior: string, body: (c: Case) => Promise<void>) 
   }
   if (failure) throw failure;
 }
-async function launch(c: Case, onBound?: (a: Attempt) => void, phase: Phase = "normal-probe") {
-  const driver = c.make(onBound);
+const shellQuote = (value: string) => "\x27"+value.replaceAll("\x27", "\x27\\\x27\x27")+"\x27";
+async function launch(c: Case, onBound?: (a: Attempt) => void, phase: Phase = "normal-probe", prepareTerminal?: (parameters: any) => any) {
+  const driver = c.make(onBound, prepareTerminal);
   const request: PilotRequest = { workspace: c.h.workspace, config: incidentRoster, policyPath: "/synthetic", candidate: "JSON", suppliedText: "manifest",
     maxProbeCalls: 8, maxTopicCalls: 10, workerTimeoutMs: 5000, deadline: Date.now()+30000, proofs: [] };
   await driver.inspect(request);
@@ -362,4 +373,106 @@ it("sanitizes actual native-boundary exceptions and keeps unverified cancellatio
     expect(c.h.events.filter(e => e.method === "terminal.close")).toHaveLength(0);
     c.facts.cancellation = cancellation;
   });
+}, 15000);
+
+type EarlyDelivery = "attempted_unacknowledged" | "unknown" | "acknowledged" | "not_attempted";
+async function checkEarlyResultDelivery(calls: 0 | 1, inputDelivery: EarlyDelivery, inputDelivered: boolean | null, expected: boolean | null) {
+  await usingContext("normal", async c => {
+    const original = await launch(c);
+    const actual = await c.report(original.a);
+    const nativeState = JSON.parse(readFileSync(c.h.state, "utf8"));
+    const originalNative = JSON.parse(nativeState.tasks.find((t: any) => t.id === original.a.binding.taskId).result);
+    c.facts.originalActualFixture = { report: structuredClone(actual), native: structuredClone(originalNative) };
+    const gate = join(c.h.root, "early-result-gate");
+    const trace = join(c.h.root, "early-result-gate-trace.json");
+    let early: Attempt | undefined;
+    c.facts.gateTraceFile = trace;
+    // Release the owned gate even when the intended RED assertion throws.
+    // Keep semantic bytes separate before the real wrapper writes its report.
+    c.defer(() => {
+      try {
+        if (early) for (const name of ["result.json", "completion-native.json"]) {
+          const file = join(early.context!.directory, name);
+          if (existsSync(file)) renameSync(file, join(early.context!.directory, "semantic-"+name));
+        }
+      } finally { writeFileSync(gate, "resume", { flag: "wx", mode: 0o600 }); }
+    });
+    const { a, driver } = await launch(c, a => {
+      early = a;
+      const bound = assignment(a);
+      const report = { ...structuredClone(actual), binding: a.binding, assignmentHash: a.context!.assignmentHash,
+        packetHash: a.packetHash, controlsHash: bound.controlsHash, status: "failed", calls, result: null, cancellation: null,
+        error: "PROVIDER_INPUT_CLOSED", process: { ...actual.process, inputDelivered },
+        diagnostic: { ...actual.diagnostic, origin: "provider", phase: "input", code: "PROVIDER_INPUT_CLOSED",
+          classification: "control", inputDelivery } };
+      const file = join(a.context!.directory, "result.json");
+      writeFileSync(join(a.context!.directory, "prepared.json"), JSON.stringify(prepared(a)), { flag: "wx", mode: 0o600 });
+      writeFileSync(file, JSON.stringify(report), { flag: "wx", mode: 0o600 });
+      const state = JSON.parse(readFileSync(c.h.state, "utf8"));
+      const task = state.tasks.find((t: any) => t.id === a.binding.taskId);
+      const native = { ...originalNative, outcome: "failed", messageId: "early-result-"+a.binding.dispatchId,
+        reportedBy: a.binding.handle, completedBy: a.binding.handle, reportPath: file,
+        body: "Bound semantic early-result sha256="+sha256(readFileSync(file)) };
+      task.status = "failed"; task.result = JSON.stringify(native);
+      writeFileSync(c.h.state, JSON.stringify(state));
+      writeFileSync(join(a.context!.directory, "completion-native.json"), JSON.stringify({
+        lifecycle: { action: "failed", taskId: a.binding.taskId, dispatchId: a.binding.dispatchId },
+      }), { flag: "wx", mode: 0o600 });
+      c.facts.semanticEarlyResult = { report: structuredClone(report), native: structuredClone(native),
+        resultHash: sha256(readFileSync(file)), assignmentHash: sha256(readFileSync(join(a.context!.directory, "assignment.json"))) };
+    }, "normal-probe", parameters => {
+      const program = [
+        'import { existsSync, writeFileSync } from "node:fs";',
+        'import { spawn } from "node:child_process";',
+        'const trace = '+JSON.stringify(trace)+';',
+        'const facts = { gatePid: process.pid, timerCleared: false, childCloseObserved: false };',
+        'const save = () => { try { writeFileSync(trace, JSON.stringify(facts)); } catch { process.exitCode ??= 1; } };',
+        'const timer = setInterval(() => {',
+        'if (!existsSync('+JSON.stringify(gate)+')) return;',
+        'clearInterval(timer); facts.timerCleared = true;',
+        'const child = spawn("/bin/sh", ["-c", '+JSON.stringify(parameters.command)+'], { stdio: "inherit" });',
+        'child.once("error", () => { facts.spawnError = true; process.exitCode = 1; save(); });',
+        'child.once("close", (code, signal) => { facts.childCloseObserved = true; facts.exitCode = code; facts.signal = signal; process.exitCode ??= code ?? 1; save(); });',
+        'facts.wrapperPid = child.pid; save();',
+        '}, 10); save();',
+      ].join("\n");
+      return { ...parameters, command: "exec "+shellQuote(process.execPath)+" --input-type=module -e "+shellQuote(program) };
+    });
+    const parsed = providerReportSchema.parse(c.facts.semanticEarlyResult.report);
+    const verified = await verifyContextResult(assignment(a), c.h.command);
+    const noReceipt = !existsSync(join(a.context!.directory, "inference-started.json"));
+    expect(parsed.calls).toBe(calls);
+    expect(parsed.diagnostic.inputDelivery).toBe(inputDelivery);
+    expect(parsed.process.inputDelivered).toBe(inputDelivered);
+    expect(verified.report).toEqual(parsed);
+    expect(noReceipt).toBe(true);
+    expect(a.launchVerified).toBe(false);
+    expect(a.controlError).toBe("PROVIDER_INPUT_CLOSED");
+    expect(a.diagnostic).toEqual(parsed.diagnostic);
+    expect(a.initializations).toBe(1);
+    c.facts.positiveSetup = { schemaPassed: true, nativeVerifierPassed: true, resultHash: verified.resultHash,
+      completionMessageId: verified.completionMessageId, calls: parsed.calls, inputDelivery: parsed.diagnostic.inputDelivery,
+      inputDelivered: parsed.process.inputDelivered, noInferenceReceipt: noReceipt, earlyResultBranchReached: true,
+      observedInferenceStarted: a.inferenceStarted, expectedInferenceStarted: expected };
+    expect(a.inferenceStarted).toBe(expected);
+    expect((await driver.cancel(a, Date.now()+1000, "absolute-cleanup")).state).toBe("settled_unacknowledged");
+    await expect(driver.observe(a, Date.now()+1000)).rejects.toMatchObject({ diagnostic: parsed.diagnostic });
+    expect(driver.proof!(a)).toBeNull();
+    expect(c.h.events.filter(e => e.method === "terminal.close")).toHaveLength(0);
+  });
+}
+
+it("keeps attempted-unacknowledged early-result delivery unknown with a reserved call", async () => {
+  await checkEarlyResultDelivery(1, "attempted_unacknowledged", false, null);
+}, 15000);
+
+it.each([
+  { calls: 1, delivery: "acknowledged", input: true, expected: true },
+  { calls: 0, delivery: "not_attempted", input: false, expected: false },
+  { calls: 1, delivery: "unknown", input: null, expected: null },
+  { calls: 0, delivery: "unknown", input: false, expected: null },
+  { calls: 1, delivery: "acknowledged", input: false, expected: null },
+  { calls: 0, delivery: "not_attempted", input: null, expected: null },
+] as const)("requires matching early-result delivery evidence %j", async value => {
+  await checkEarlyResultDelivery(value.calls, value.delivery, value.input, value.expected);
 }, 15000);

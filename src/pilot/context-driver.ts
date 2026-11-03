@@ -200,7 +200,9 @@ export class ContextWrapperTransport implements ContextWrapperPort {
             }
             if (existsSync(join(directory, "result.json"))) {
               const { report } = await verifyContextResult(assignment, this.command);
-              attempt.inferenceStarted = report.calls === 0 ? false : report.calls === 1 ? true : null;
+              // Calls reserve budget before the provider write is acknowledged.
+              attempt.inferenceStarted = report.calls === 1 && report.process.inputDelivered === true && report.diagnostic.inputDelivery === "acknowledged" ? true
+                : report.calls === 0 && report.process.inputDelivered === false && report.diagnostic.inputDelivery === "not_attempted" ? false : null;
               return this.failLaunch(attempt, report.status === "failed" ? new PilotDiagnosticError(report.diagnostic) : Error("WRAPPER_INPUT_DELIVERY_UNVERIFIED"), "input");
             }
             await pause(20);

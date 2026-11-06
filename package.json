@@ -1,0 +1,21 @@
+{
+  "name": "the-council",
+  "version": "0.1.0",
+  "description": "Multi-agent consensus deliberation engine with dynamic seats, structured proof validation, and judge synthesis",
+  "type": "module",
+  "main": "./src/index.js",
+  "bin": {
+    "council": "./src/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "test:unit": "node --test 'test/unit/**/*.test.js'",
+    "test:integration": "node --test 'test/integration/**/*.test.js'",
+    "test:e2e": "node --test 'test/e2e/**/*.test.js'"
+  },
+  "private": true,
+  "license": "MIT"
+}

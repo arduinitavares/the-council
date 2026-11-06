@@ -1,0 +1,3 @@
+# Judge Proof-Bound Synthesis and Excused-Seat Objection Preservation
+
+The Judge both audits each Seat's structured Proof (`check`, `citation`, `benchmark`, `derivation`) as `admitted` or `rejected` and synthesizes the round's Candidate statement, but a state-machine guard enforces that every Candidate clause cites at least one `admitted` Proof ID so the Judge cannot inject unverified opinions. When a Seat hits quota or faults mid-run, we do not swap its harness/model mid-stream: the only recovery actions are a bounded Retry or Excuse Seat ("quota is reached, dude is off"), and if an Excused Seat holds an open Objection (or active Seats drop below minimum quorum), that Objection is preserved so token exhaustion can never manufacture a false Unanimous Consensus.

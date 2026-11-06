@@ -1,0 +1,3 @@
+# Dynamic Seats with Souls Instead of a Fixed Three-Family Roster
+
+Instead of hardcoding three fixed reviewer slots (`openai`, `gemini`, `claude`), the Council roster is an arbitrary list of N `Seat` entries (for example, 3 or 10 seats), where each Seat defines its own `id`, `harness` (`codex`, `antigravity`, `cursor`), `model`/`effort`, and `soul` (a pre-configured temperament or domain lens). This allows mixing any combination of harnesses and model families through Orca and running multiple instances of the same model (such as two `gpt-6-astra` seats) with distinct reasoning postures while still requiring unanimous Seat acceptance for consensus.

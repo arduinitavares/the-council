@@ -30,7 +30,196 @@ FIXTURE_MODES = ("success", "exit7", "deadline", "cancel", "detached-parent", "m
                  "controller-cancel-resistant", "controller-cancel-missing-custody")
 OUTPUT_LIMIT = 1_048_576
 EVIDENCE_PREFIX = "COUNCIL_BOOTSTRAP_EVIDENCE "
+STAGE_PREFIX = "COUNCIL_BOOTSTRAP_STAGE "
+STAGE_BINDING = ("invocation", "nonce", "assignmentHash", "sourceBundleHash", "sourceCommit", "sourceTree", "job")
+STAGES = ("qualifier-entry", "case-entry", "case-return", "owner-settlement-entry",
+          "owner-settlement-return", "aggregate-emission-entry")
 _RESERVE = 0.05  # Keep receipt emission inside, rather than after, settlement.
+
+
+def _json_bytes(value):
+    return json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _diagnostic_text(text, limit, *, tail=False):
+    if not isinstance(text, str):
+        return None, False
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = text[-middle:] if tail else text[:middle]
+        if len(_json_bytes(candidate)) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return (text[-low:] if tail and low else text[:low]), low < len(text)
+
+
+def _diagnostic_facts(values):
+    values = values if isinstance(values, list) else []
+    result = {"items": [], "omittedCount": len(values), "truncated": False}
+    keys = ("operation", "target", "diagnostic", "errno", "path", "signal", "absent", "refusingLayer", "filename")
+    for value in values[:4]:
+        if not isinstance(value, dict):
+            result["truncated"] = True
+            continue
+        for limit in (96, 32, 16, 0):
+            fact = {}
+            clipped = set(value) - set(keys) != set()
+            for key in keys:
+                if key not in value:
+                    continue
+                item = value[key]
+                if isinstance(item, str):
+                    item, shortened = _diagnostic_text(item, limit)
+                    clipped = clipped or shortened
+                elif item is not None and type(item) not in (int, bool):
+                    item, clipped = None, True
+                if type(item) is int and len(_json_bytes(item)) > 32:
+                    item, clipped = None, True
+                fact[key] = item
+            fact["truncated"] = clipped
+            candidate = dict(result, items=result["items"] + [fact], omittedCount=result["omittedCount"] - 1,
+                             truncated=result["truncated"] or clipped)
+            if len(_json_bytes(candidate)) <= 384:
+                result = candidate
+                break
+    result["truncated"] = result["truncated"] or result["omittedCount"] > 0
+    return result
+
+
+def _last_qualification_stage(text, binding):
+    result = {"last": None, "rejected": 0, "incomplete": False}
+    fields = set(STAGE_BINDING) | {"schemaVersion", "diagnosticOnly", "stage", "case", "sequence", "atMonotonic", "remainingSeconds"}
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate stage field")
+            value[key] = item
+        return value
+    for line in text.splitlines(keepends=True):
+        if not line.startswith(STAGE_PREFIX):
+            continue
+        if not line.endswith("\n"):
+            result["incomplete"] = True
+        try:
+            if not line.endswith("\n") or len(line.encode("utf-8")) > 1024:
+                raise ValueError("incomplete or oversized stage")
+            frame = json.loads(line[len(STAGE_PREFIX):], object_pairs_hook=unique)
+            if (not isinstance(frame, dict) or set(frame) != fields
+                    or any(frame.get(key) != binding.get(key) or binding.get(key) is None for key in STAGE_BINDING)
+                    or type(frame.get("schemaVersion")) is not int or frame["schemaVersion"] != 1
+                    or frame.get("diagnosticOnly") is not True or frame.get("stage") not in STAGES
+                    or frame.get("case") not in (None, *FIXTURE_MODES)
+                    or type(frame.get("sequence")) is not int or not 0 <= frame["sequence"] < 64
+                    or any(type(frame.get(key)) not in (int, float) or not 0 <= frame[key] < 1e100
+                           for key in ("atMonotonic", "remainingSeconds"))
+                    or len(STAGE_PREFIX.encode() + _json_bytes(frame) + b"\n") > 1024):
+                raise ValueError("malformed or foreign stage")
+            result["last"] = frame
+        except (ValueError, TypeError, OverflowError):
+            result["rejected"] += 1
+    return result
+
+
+def command_diagnostic(receipt):
+    """A bounded diagnostic projection; it never supplies an acceptance receipt."""
+    keys = ("id", "job", "phase", "sourceCommit", "sourceTree", "contractHash", "lockHash",
+            "invocation", "nonce", "assignmentHash", "status", "wrapperExitCode", "childExitCode",
+            "childSignal", "timedOut", "cancelled", "receiptWritten", "executionDuration", "settlementDuration",
+            "executionSeconds", "settlementSeconds", "startedAt", "endedAt")
+    result = {"diagnosticOnly": True, "omittedFields": []}
+    for key in keys:
+        value = receipt.get(key)
+        if (value is not None and type(value) not in (str, int, float, bool)) or (
+                type(value) is float and not -1e100 < value < 1e100):
+            value = None
+            result["omittedFields"].append(key)
+        elif len(_json_bytes(value)) > 256:
+            value = None
+            result["omittedFields"].append(key)
+        result[key] = value
+    files = receipt.get("sourceFiles")
+    result["sourceBundleHash"] = bundle_hash(files) if isinstance(files, dict) and files else None
+    output = receipt.get("output", {})
+    stderr = output.get("stderr")
+    excerpt, shortened = _diagnostic_text(stderr, 128, tail=True)
+    result["output"] = {key: output.get(key) for key in ("complete", "truncated", "capturedBytes")}
+    result["output"].update(rawOutputOmitted=True, stderr={"text": excerpt, "truncated": shortened,
+        "omittedBytes": len(stderr.encode()) - len(excerpt.encode()) if isinstance(stderr, str) else None})
+    result["resources"] = {"complete": receipt.get("resources", {}).get("complete")}
+    for key in ("errors", "refusals", "cleanupActions"):
+        result[key] = _diagnostic_facts(receipt.get(key))
+    result["qualificationStage"] = (_last_qualification_stage(output.get("stdout", ""), result)
+                                     if receipt.get("id") == "qualification" else {"last": None, "rejected": 0, "incomplete": False})
+    # Keep the bound even for unusually large diagnostic values. Unknown facts
+    # stay null and every omitted fact is counted; never manufacture a status.
+    for key in ("cleanupActions", "refusals", "errors"):
+        while len(_json_bytes(result)) > 4096 and result[key]["items"]:
+            result[key]["items"].pop()
+            result[key]["omittedCount"] += 1
+            result[key]["truncated"] = True
+    for key in sorted(keys, key=lambda name: len(_json_bytes(result[name])), reverse=True):
+        if len(_json_bytes(result)) <= 4096:
+            break
+        if result[key] is not None:
+            result[key] = None
+            result["omittedFields"].append(key)
+    return result
+
+
+class QualificationLog:
+    """One qualifier's stdout route: an actual refusal closes all its writers."""
+    def __init__(self, binding, *, clock=None, stage_writer=None):
+        self.binding = {key: binding.get(key) for key in STAGE_BINDING}
+        self.clock = clock if clock is not None else time.monotonic
+        self.stage_writer = stage_writer
+        self.sequence = 0
+        self.refusal = self.refusal_error = None
+        self.stage_failed = False
+
+    def _call(self, operation, emit):
+        if self.refusal_error is not None:
+            raise self.refusal_error
+        try:
+            return emit()
+        except PermissionError as exc:
+            self.refusal_error = exc
+            self.refusal = {"operation": operation, "target": "stdout", "diagnostic": str(exc),
+                            "errno": exc.errno, "refusingLayer": "qualification-log"}
+            raise
+
+    def receipt(self, payload, remaining, emit):
+        return self._call("receipt", lambda: emit(payload, remaining))
+
+    def write(self, payload, remaining, *, prefix=""):
+        return self._call("qualification-evidence", lambda: write_json(payload, remaining, prefix=prefix))
+
+    def stage(self, stage, end, *, case=None):
+        if self.refusal is not None or self.stage_failed or self.sequence >= 64:
+            return False
+        now = self.clock()
+        remaining = min(0.05, max(0, end - now))
+        frame = dict(self.binding, schemaVersion=1, diagnosticOnly=True, stage=stage, case=case,
+                     sequence=self.sequence, atMonotonic=now, remainingSeconds=remaining)
+        self.sequence += 1
+        if (remaining <= 0 or stage not in STAGES or case not in (None, *FIXTURE_MODES)
+                or len(STAGE_PREFIX.encode() + _json_bytes(frame) + b"\n") > 1024):
+            return False
+        writer = self.stage_writer or (lambda payload, seconds: write_json(payload, seconds, prefix=STAGE_PREFIX))
+        try:
+            remaining = min(remaining, max(0, end - self.clock()))
+            if remaining <= 0:
+                return False
+            written = self._call("qualification-stage", lambda: writer(frame, remaining)) is True and self.clock() < end
+            self.stage_failed = not written
+            return written
+        except PermissionError:
+            return False
+        except OSError:
+            self.stage_failed = True
+            return False
 
 
 class PartialSpawnError(RuntimeError):
@@ -235,6 +424,10 @@ def _emit_outcome(payload, ops, deadline, emit, *, cancellation=None):
 
 def supervise(spec: dict, context: dict, *, ops: object) -> dict:
     ctx = context
+    def emit_receipt(payload, remaining):
+        route = ctx.get("qualificationLog")
+        return (ops.emit_receipt(payload, remaining) if route is None
+                else route.receipt(payload, remaining, ops.emit_receipt))
     receipt = {key: ctx.get(key) for key in (
         "sourceCommit", "sourceTree", "sourceFiles", "sourceIdentity", "contractHash", "lockHash",
         "invocation", "nonce", "assignmentHash", "job", "phase")}
@@ -264,7 +457,7 @@ def supervise(spec: dict, context: dict, *, ops: object) -> dict:
         # Rejection has no spawn, wait, signal, root cleanup or environment setup.
         receipt["receiptWritten"] = True
         try:
-            receipt["receiptWritten"] = ops.emit_receipt(receipt, _RESERVE) is True
+            receipt["receiptWritten"] = emit_receipt(receipt, _RESERVE) is True
         except Exception as write_exc:
             error("receipt", write_exc)
             receipt["receiptWritten"] = False
@@ -499,7 +692,7 @@ def supervise(spec: dict, context: dict, *, ops: object) -> dict:
     remaining = max(0, min(settlement_cap, settlement_start + spec["settlementSeconds"]) - ops.monotonic())
     receipt["receiptWritten"] = True
     try:
-        if not _emit_outcome(receipt, ops, min(settlement_cap, settlement_start + spec["settlementSeconds"]), ops.emit_receipt,
+        if not _emit_outcome(receipt, ops, min(settlement_cap, settlement_start + spec["settlementSeconds"]), emit_receipt,
                              cancellation=cancellation):
             raise OSError("final receipt was not completely written inside settlement")
     except Exception as exc:
@@ -752,6 +945,7 @@ def main(argv: list[str], *, ops: object | None = None) -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--node", required=True)
     args = parser.parse_args(argv)
+    summary_write_refusal = None
     try:
         contract = json.loads(CONTRACT_PATH.read_text())
         _validate_contract(contract)
@@ -833,15 +1027,23 @@ def main(argv: list[str], *, ops: object | None = None) -> int:
                        "productAcceptance": False, "job": args.job, "sourceCommit": args.source,
                        "sourceTree": metadata["sourceTree"], "sourceFiles": files,
                        "runtime": {"python": platform.python_version(), "os": platform.platform(),
-                                   "architecture": platform.machine(), "cpuCount": os.cpu_count()}}
-            written = _emit_outcome(summary, active, active.monotonic() + 1, write_json)
+                                   "architecture": platform.machine(), "cpuCount": os.cpu_count()},
+                       "commandDiagnostics": [command_diagnostic(receipt) for receipt in receipts]}
+            try:
+                written = _emit_outcome(summary, active, active.monotonic() + 1, write_json)
+            except PermissionError as exc:
+                summary_write_refusal = {"operation": "job-summary-write", "target": "stdout",
+                                         "diagnostic": str(exc), "errno": exc.errno}
+                summary["status"] = "incomplete"
+                summary.setdefault("refusals", []).append(summary_write_refusal)
+                return 1  # Finally still restores handlers; the refused writer stays closed.
             return 0 if written and summary["status"] == "bootstrap-qualified" and not active.cancelled() else 1
         finally:
             for signum, handler in old_handlers.items():
                 signal.signal(signum, handler)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         # Bootstrap setup failure is explicit and never enables the candidate.
-        if ops is None:
+        if ops is None and summary_write_refusal is None:
             write_json({"status": "incomplete", "productAcceptance": False,
                         "operation": "bootstrap-setup", "diagnostic": str(exc)}, 1)
         return 1

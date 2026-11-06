@@ -284,7 +284,340 @@ def native_attachment_observation(fault, *, repeat_finish, refuse=None):
                 "ioRefusals": getattr(io, "finalization_refusals", [])}
 
 
+def job_summary_observation(*, stderr=b"qualification partial stderr\n", refuse=False, stdout=None,
+                            summary_refusal_at=None, summary_error=None):
+    """Exercise main and supervise; replace only their external effects."""
+    import contextlib
+    class JobOps(FakeOps):
+        def __init__(self):
+            super().__init__()
+            self.owned, self.bindings = {}, {}
+            self.command, self.close_remaining = None, None
+        def spawn(self, spec, ctx):
+            self.command = spec["id"]
+            self.ctx = ctx
+            self.sent_output = False
+            self.exit_at = self.now + 0.1 if self.command == "pure" else math.inf
+            self.eof_at, self.code = self.exit_at, 0 if self.command == "pure" else None
+            return super().spawn(spec, ctx)
+        def targets(self, handle, ctx):
+            return []
+        def read_output(self, handle, limit):
+            if not self.sent_output:
+                self.sent_output = True
+                return (stdout(self.ctx) if stdout is not None and self.command == "qualification" else b""), stderr if self.command == "qualification" else b"pure\n", False
+            return b"", b"", self.now >= self.eof_at
+        def resource_state(self, handle, ctx, output):
+            closed = self.command == "pure" and self.now >= self.exit_at
+            return dict({k: ctx[k] for k in ("nonce", "assignmentHash", "invocation", "sourceCommit", "sourceTree", "job")},
+                        complete=closed, errors=[], resources=[{"id": ctx["requiredResources"][0],
+                        "ownership": "owned", "state": "closed" if closed else "unknown"}])
+        def close_output(self, handle, remaining):
+            if self.command == "qualification":
+                self.close_remaining = remaining
+                self.now += 0.06
+            return True
+        def emit_receipt(self, receipt, remaining):
+            if refuse:
+                raise PermissionError(13, "injected receipt refusal")
+            return super().emit_receipt(receipt, remaining)
+    ops, summaries = JobOps(), []
+    original_handlers = {signal.SIGTERM: object(), signal.SIGINT: object()}
+    handlers = dict(original_handlers)
+    ops.summary_outcomes = []
+    ops.handler_events = []
+    original_emit_outcome = offline._emit_outcome
+    def observe_outcome(payload, *args, **kwargs):
+        if "id" not in payload:
+            ops.summary_outcomes.append(payload)
+        return original_emit_outcome(payload, *args, **kwargs)
+    def install_handler(signum, handler):
+        previous = handlers[signum]
+        handlers[signum] = handler
+        ops.handler_events.append((signum, handler))
+        return previous
+    def write_summary(payload, remaining):
+        summaries.append(copy.deepcopy(payload))
+        if len(summaries) == summary_refusal_at:
+            raise PermissionError(13, "injected job-summary refusal", "stdout")
+        if len(summaries) == 1 and summary_error is not None:
+            raise summary_error
+        return True
+    files = {"scripts/ci/offline.py": "a" * 64, "test/ci/test_offline.py": "b" * 64,
+             "scripts/ci/offline-contract.json": "c" * 64, "package-lock.json": CONTRACT["lockSha256"]}
+    env = {"RUNNER_TEMP": "/owned", "GITHUB_SHA": "1" * 40,
+           "COUNCIL_BOOTSTRAP_COMMIT": "1" * 40, "COUNCIL_BOOTSTRAP_TREE": "2" * 40,
+           "COUNCIL_BOOTSTRAP_JOB": "checks", "RUNNER_ENVIRONMENT": "github-hosted",
+           "RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64", "GITHUB_REPOSITORY": "arduinitavares/the-council",
+           "GITHUB_REPOSITORY_VISIBILITY": "public"}
+    with contextlib.ExitStack() as stack:
+        for patch in (
+            mock.patch.object(os, "environ", env), mock.patch.object(offline, "require_hosted"),
+            mock.patch.object(offline, "RealOps", return_value=ops),
+            mock.patch.object(offline, "source_files", return_value=files),
+            mock.patch.object(offline.uuid, "uuid4", return_value=mock.Mock(hex="d" * 32)),
+            mock.patch.object(offline.platform, "python_version", return_value="injected-python"),
+            mock.patch.object(offline.platform, "platform", return_value="injected-os"),
+            mock.patch.object(offline.platform, "machine", return_value="arm64"),
+            mock.patch.object(os, "cpu_count", return_value=3),
+            mock.patch.object(Path, "read_text", return_value=json.dumps(CONTRACT)),
+            mock.patch.object(Path, "resolve", autospec=True, side_effect=lambda item: item),
+            mock.patch.object(Path, "exists", return_value=False), mock.patch.object(Path, "is_symlink", return_value=False),
+            mock.patch.object(Path, "mkdir"), mock.patch.object(Path, "open", mock.mock_open()),
+            mock.patch.object(signal, "signal", side_effect=install_handler),
+            mock.patch.object(offline, "_emit_outcome", side_effect=observe_outcome),
+            mock.patch.object(offline, "write_json", side_effect=write_summary),
+        ):
+            stack.enter_context(patch)
+        code = offline.main(["job", "checks", "--source", "1" * 40, "--root", "/owned/job", "--node", "/pinned/node"])
+    ops.handlers_restored = handlers == original_handlers
+    return code, summaries, ops
+
+
 class PureTests(unittest.TestCase):
+    def test_summary_proposal_and_final_refusals_stop_writes_and_restore_handlers(self):
+        # Break: summary refusal escapes into the setup-error logger and retries stdout.
+        for refusal_at in (1, 2):
+            with self.subTest(refusal_at=refusal_at):
+                code, attempts, ops = job_summary_observation(summary_refusal_at=refusal_at)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(attempts), refusal_at,
+                                 "summary refusal must not invoke a setup-error or alternate writer")
+                self.assertEqual([row.get("sequence") for row in attempts], list(range(refusal_at)))
+                self.assertTrue(all("commandDiagnostics" in row for row in attempts))
+                self.assertFalse(any(row.get("operation") == "bootstrap-setup" for row in attempts))
+                self.assertTrue(ops.handlers_restored)
+                self.assertEqual(len(ops.handler_events), 4)
+                self.assertEqual([row[0] for row in ops.handler_events],
+                                 [signal.SIGTERM, signal.SIGINT, signal.SIGTERM, signal.SIGINT])
+                outcome = ops.summary_outcomes[-1]
+                self.assertEqual(outcome["status"], "incomplete")
+                self.assertFalse(outcome["productAcceptance"])
+                self.assertEqual(outcome["refusals"], [{"operation": "job-summary-write", "target": "stdout",
+                    "diagnostic": "[Errno 13] injected job-summary refusal: 'stdout'", "errno": 13}])
+
+    def test_nonpermission_summary_error_keeps_existing_setup_diagnostic_and_restores_handlers(self):
+        code, attempts, ops = job_summary_observation(summary_error=OSError("injected summary transport failure"))
+        self.assertEqual(code, 1)
+        self.assertEqual(len(attempts), 2)
+        self.assertIn("commandDiagnostics", attempts[0])
+        self.assertEqual(attempts[1]["operation"], "bootstrap-setup")
+        self.assertIn("injected summary transport failure", attempts[1]["diagnostic"])
+        self.assertTrue(ops.handlers_restored)
+
+    def test_stage_writer_late_completion_is_not_reported_as_written(self):
+        now, writes = [0.0], []
+        def late(payload, remaining):
+            writes.append(remaining)
+            now[0] = 1.01
+            return True
+        log = offline.QualificationLog(dict(context(), sourceBundleHash="8" * 64), clock=lambda: now[0], stage_writer=late)
+        self.assertFalse(log.stage("case-entry", 1, case="success"), "stage completion after its horizon is not a successful diagnostic write")
+        self.assertLessEqual(writes[0], 1)
+        self.assertFalse(log.stage("case-return", 2, case="success"))
+        self.assertEqual(len(writes), 1)
+
+    def test_qualification_failure_stages_keep_case_through_aggregate_emission(self):
+        binding = dict(context(), sourceBundleHash="8" * 64)
+        stages = []
+        class Case(FakeOps):
+            def __init__(self, mode, ctx, end):
+                super().__init__(code=7)
+                self.mode, self.ctx = mode, ctx
+                self.denied_operations, self.finish_actions, self.cleanup_errors = set(), [], []
+                self.outlived_command = self.held_stream = False
+            def resource_state(self, handle, ctx, output):
+                report = super().resource_state(handle, ctx, output)
+                report["resources"][0]["id"] = "command"
+                return report
+            def read_output(self, handle, limit):
+                out, err, eof = super().read_output(handle, limit)
+                return out, err.replace(b"partial stderr", b"fixture partial stderr command"), eof
+            def finish(self, receipt, end):
+                return True
+        def write(payload, seconds, *, prefix=""):
+            if prefix == "COUNCIL_BOOTSTRAP_STAGE ":
+                stages.append(copy.deepcopy(payload))
+            return True
+        env = {"COUNCIL_BOOTSTRAP_ROOT": "/owned/run", "RUNNER_ENVIRONMENT": "github-hosted",
+               "RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64", "GITHUB_REPOSITORY": "arduinitavares/the-council",
+               "GITHUB_REPOSITORY_VISIBILITY": "public"}
+        with mock.patch.object(os, "environ", env), mock.patch.object(offline, "require_hosted"), \
+                mock.patch(__name__ + ".protocol_binding", return_value=binding), mock.patch(__name__ + ".FixtureController", Case), \
+                mock.patch.object(offline, "write_json", side_effect=write), mock.patch.object(Path, "is_dir", return_value=True), \
+                mock.patch.object(Path, "is_symlink", return_value=False), mock.patch.object(time, "monotonic", return_value=0), \
+                mock.patch.object(signal, "getitimer", return_value=(0, 0)), mock.patch.object(signal, "setitimer"), \
+                mock.patch.object(signal, "signal"):
+            self.assertEqual(run_qualification(30), 1)
+        self.assertEqual([row["stage"] for row in stages], ["qualifier-entry", "case-entry", "case-return",
+            "owner-settlement-entry", "owner-settlement-return", "aggregate-emission-entry"])
+        self.assertEqual(stages[-1]["case"], "success", "aggregate stage must not erase the last attempted case")
+        for row in stages:
+            self.assertLessEqual(len(("COUNCIL_BOOTSTRAP_STAGE " + json.dumps(row, separators=(",", ":")) + "\n").encode()), 1024)
+            for key in ("nonce", "assignmentHash", "invocation", "sourceBundleHash", "sourceCommit", "sourceTree", "job"):
+                self.assertEqual(row[key], binding[key])
+
+    def test_command_projection_caps_large_numeric_facts_without_inventing_status(self):
+        # Break: individually bounded numbers collectively exceed the command byte cap.
+        receipt = {key: 10 ** 220 for key in ("job", "phase", "sourceCommit", "sourceTree", "contractHash", "lockHash",
+            "invocation", "nonce", "assignmentHash", "wrapperExitCode", "timedOut", "cancelled", "receiptWritten",
+            "executionDuration", "settlementDuration", "executionSeconds", "settlementSeconds", "startedAt", "endedAt")}
+        receipt.update(id="qualification", status="incomplete", childExitCode=None, childSignal=None,
+                       resources={"complete": None}, output={"stdout": "", "stderr": ""},
+                       errors=[{"operation": "receipt", "diagnostic": "🧭" * 1000, "errno": 13}] * 40,
+                       cleanupActions=[{"operation": "signal", "target": "x" * 1000, "signal": 15}] * 40)
+        projection = offline.command_diagnostic(receipt)
+        self.assertLessEqual(len(json.dumps(projection, separators=(",", ":")).encode()), 4096)
+        self.assertEqual(projection["status"], "incomplete")
+        self.assertIsNone(projection["childExitCode"])
+        self.assertIsNone(projection["resources"]["complete"])
+        self.assertTrue(projection["omittedFields"])
+        self.assertGreater(projection["errors"]["omittedCount"], 0)
+        self.assertTrue(projection["errors"]["truncated"])
+
+    def test_job_summary_diagnostics_are_utf8_bounded_and_keep_omissions_explicit(self):
+        _, summaries, _ = job_summary_observation(stderr=("é🧭" * 4000).encode())
+        attempts = summaries[-1].get("commandDiagnostics", [])
+        self.assertEqual(len(attempts), 2, "missing bounded command failure projections")
+        for attempt in attempts:
+            self.assertLessEqual(len(json.dumps(attempt, separators=(",", ":")).encode()), 4096)
+            self.assertNotIn("stdoutBase64", attempt["output"])
+            self.assertNotIn("stderrBase64", attempt["output"])
+            self.assertTrue(attempt["output"]["rawOutputOmitted"])
+        self.assertTrue(attempts[-1]["output"]["stderr"]["truncated"])
+        self.assertGreater(attempts[-1]["output"]["stderr"]["omittedBytes"], 0)
+        self.assertIsNone(attempts[-1]["childExitCode"])
+
+    def test_parent_retains_only_complete_matching_qualification_stage(self):
+        def output(ctx):
+            binding = {k: ctx[k] for k in ("nonce", "assignmentHash", "invocation", "sourceBundleHash", "sourceCommit", "sourceTree", "job")}
+            frame = dict(binding, schemaVersion=1, diagnosticOnly=True, stage="case-entry", case="success",
+                         sequence=0, atMonotonic=1.0, remainingSeconds=29.0)
+            def line(value):
+                return ("COUNCIL_BOOTSTRAP_STAGE " + json.dumps(value, separators=(",", ":")) + "\n").encode()
+            good = line(frame)
+            bad = b"COUNCIL_BOOTSTRAP_STAGE {broken}\n"
+            for key in binding:
+                bad += line(dict(frame, **{key: "foreign"}))
+            bad += line(dict(frame, extra="x" * 1100))
+            bad += line(dict(frame, sequence=True))
+            bad += line(dict(frame, stage="invented"))
+            last = dict(frame, sequence=1, stage="case-return")
+            return good + bad + line(last) + line(dict(frame, sequence=2))[:-1]
+        _, summaries, _ = job_summary_observation(stdout=output)
+        attempts = summaries[-1].get("commandDiagnostics", [])
+        self.assertEqual(len(attempts), 2, "stage diagnostics missing from actual summary")
+        stage = attempts[-1]["qualificationStage"]
+        self.assertEqual(stage["last"]["stage"], "case-return")
+        self.assertEqual(stage["last"]["sequence"], 1)
+        self.assertGreaterEqual(stage["rejected"], 12)
+        self.assertTrue(stage["incomplete"])
+        self.assertEqual(stage["last"]["nonce"], attempts[-1]["nonce"])
+        self.assertNotIn("resources", stage["last"])
+
+    def test_actual_receipt_refusal_still_prevents_job_summary(self):
+        code, summaries, _ = job_summary_observation(refuse=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(summaries, [])
+
+    def test_qualification_stage_refusal_stops_writes_but_continues_final_owner_cleanup(self):
+        events, owners = [], []
+        binding = dict(context(), sourceBundleHash="8" * 64)
+        class Case(FakeOps):
+            def __init__(self, mode, ctx, end):
+                super().__init__()
+                self.mode, self.ctx = mode, ctx
+                self.denied_operations, self.finish_actions, self.cleanup_errors = set(), [], []
+                self.outlived_command = self.held_stream = False
+                owners.append(self)
+            def resource_state(self, handle, ctx, output):
+                result = super().resource_state(handle, ctx, output)
+                result["resources"][0]["id"] = "command"
+                return result
+            def read_output(self, handle, limit):
+                out, err, eof = super().read_output(handle, limit)
+                return out, err.replace(b"partial stderr", b"fixture partial stderr command"), eof
+            def finish(self, receipt, end):
+                events.append("cleanup")
+                return True
+        def write(payload, remaining, *, prefix=""):
+            if prefix == "COUNCIL_BOOTSTRAP_STAGE " and payload["stage"] == "case-return":
+                events.append("refused")
+                raise PermissionError(13, "stage refused")
+            events.append("write")
+            return True
+        env = {"COUNCIL_BOOTSTRAP_ROOT": "/owned/run", "RUNNER_ENVIRONMENT": "github-hosted",
+               "RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64", "GITHUB_REPOSITORY": "arduinitavares/the-council",
+               "GITHUB_REPOSITORY_VISIBILITY": "public"}
+        with mock.patch.object(os, "environ", env), mock.patch.object(offline, "require_hosted"), \
+                mock.patch(__name__ + ".protocol_binding", return_value=binding), \
+                mock.patch(__name__ + ".FixtureController", Case), mock.patch.object(offline, "write_json", side_effect=write), \
+                mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "is_symlink", return_value=False), \
+                mock.patch.object(time, "monotonic", return_value=0), mock.patch.object(signal, "getitimer", return_value=(0, 0)), \
+                mock.patch.object(signal, "setitimer"), mock.patch.object(signal, "signal"):
+            result = run_qualification(30)
+        self.assertEqual(result, 1, "refused diagnostic producer cannot emit an aggregate success")
+        self.assertEqual(len(owners), 1)
+        self.assertIn("refused", events)
+        self.assertEqual(events[events.index("refused") + 1:], ["cleanup"])
+
+
+    def test_stage_writer_caps_frames_and_stops_shared_route_after_refusal(self):
+        factory = getattr(offline, "QualificationLog", None)
+        self.assertTrue(callable(factory), "qualification stages need a bounded refusal-retaining producer")
+        binding = dict(context(), sourceBundleHash="8" * 64)
+        now, writes, receipts = [0.0], [], []
+        def writer(payload, remaining):
+            writes.append((copy.deepcopy(payload), remaining))
+            raise PermissionError(13, "stage refused")
+        log = factory(binding, clock=lambda: now[0], stage_writer=writer)
+        self.assertFalse(log.stage("case-entry", 1, case="success"))
+        self.assertEqual(log.refusal["errno"], 13)
+        self.assertEqual(log.refusal["operation"], "qualification-stage")
+        self.assertFalse(log.stage("case-return", 1, case="success"))
+        with self.assertRaises(PermissionError):
+            log.receipt({}, 1, lambda *args: receipts.append(args))
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(receipts, [])
+        oversized = factory(dict(binding, nonce="🧭" * 400), clock=lambda: now[0], stage_writer=lambda *args: writes.append(args))
+        self.assertFalse(oversized.stage("qualifier-entry", 1))
+        self.assertEqual(len(writes), 1)
+        bounded = factory(binding, clock=lambda: now[0], stage_writer=lambda payload, remaining: writes.append((payload, remaining)) or True)
+        self.assertTrue(bounded.stage("qualifier-entry", 0.02))
+        payload, allowance = writes[-1]
+        self.assertLessEqual(allowance, 0.02)
+        self.assertLessEqual(len(("COUNCIL_BOOTSTRAP_STAGE " + json.dumps(payload, separators=(",", ":")) + "\n").encode()), 1024)
+        now[0] = 0.03
+        self.assertFalse(bounded.stage("case-entry", 0.02, case="success"))
+        self.assertEqual(len(writes), 2)
+
+    def test_unwritten_qualification_receipt_retains_failure_in_job_summary(self):
+        # Break: main drops the only returned failure when its receipt cannot be emitted.
+        code, summaries, ops = job_summary_observation()
+        self.assertEqual(code, 1)
+        self.assertAlmostEqual(ops.close_remaining, 0.05)
+        self.assertEqual([r["id"] for r in ops.receipts], ["pure", "pure"])
+        summary = summaries[-1]
+        self.assertEqual(summary["status"], "incomplete")
+        self.assertFalse(summary["productAcceptance"])
+        attempts = summary.get("commandDiagnostics", [])
+        self.assertEqual([r.get("id") for r in attempts], ["pure", "qualification"],
+                         "job summary must retain the unwritten qualification failure")
+        failure = attempts[-1]
+        self.assertFalse(failure["receiptWritten"])
+        self.assertIsNone(failure["childExitCode"])
+        self.assertIsNone(failure["childSignal"])
+        self.assertTrue(failure["timedOut"])
+        self.assertFalse(failure["resources"]["complete"])
+        self.assertIn("receipt", [r["operation"] for r in failure["errors"]["items"]])
+        self.assertIn("qualification partial stderr", failure["output"]["stderr"]["text"])
+        self.assertEqual(failure["sourceCommit"], "1" * 40)
+        self.assertEqual(failure["sourceTree"], "2" * 40)
+        self.assertEqual(failure["job"], "checks")
+        self.assertTrue(failure["nonce"])
+        self.assertTrue(failure["assignmentHash"])
+        self.assertTrue(failure["diagnosticOnly"])
+
     def test_native_cleanup_refusal_is_structured_and_never_retried_by_empty_receipt_finish(self):
         result = native_attachment_observation("factory", repeat_finish=True, refuse="cleanup")
         self.assertFalse(result["first"])
@@ -1563,13 +1896,15 @@ def protocol_binding():
     return result
 
 
-def emit_evidence(kind, complete, resource_id, *, details=None, seconds=0.5):
+def emit_evidence(kind, complete, resource_id, *, details=None, seconds=0.5, stage_frame=None, writer=None):
+    if stage_frame is not None:
+        return offline.write_json(stage_frame, seconds, prefix=offline.STAGE_PREFIX)
     report = dict(protocol_binding(), kind=kind, complete=complete,
                   resources=[{"id": resource_id, "ownership": "owned",
                               "state": "closed" if complete else "unknown"}],
                   errors=[] if complete else ["qualification or cleanup incomplete"],
                   details=details)
-    return offline.write_json(report, seconds, prefix=offline.EVIDENCE_PREFIX)
+    return (offline.write_json if writer is None else writer)(report, seconds, prefix=offline.EVIDENCE_PREFIX)
 
 
 def fixture_main(mode):
@@ -2930,6 +3265,9 @@ def run_qualification(deadline):
         raise ValueError("qualification needs its exact command-owned root")
     start = time.monotonic()
     execution_end, settlement_end = start + 30, start + 60
+    log = offline.QualificationLog(outer_binding, stage_writer=lambda frame, seconds:
+        emit_evidence("qualification-stage", False, "owned-fixtures", seconds=seconds, stage_frame=frame))
+    last_case = None
     details, controllers = [], []
     ok = True
     cancelled = [False]
@@ -2944,12 +3282,18 @@ def run_qualification(deadline):
         handlers[signum] = signal.signal(signum, cancel)
     signal.setitimer(signal.ITIMER_REAL, 30)
     try:
+        log.stage("qualifier-entry", execution_end)
         for mode, expected in (("success", "passed"), ("exit7", "failed"),
                                ("deadline", "timed-out"), ("cancel", "cancelled"),
                                ("detached-parent", "passed"), ("missing-custody", "incomplete"),
                                ("controller-cancel-resistant", "cancelled"),
                                ("controller-cancel-missing-custody", "cancelled")):
-            if cancelled[0] or time.monotonic() + 3 >= execution_end:
+            if log.refusal is not None or cancelled[0] or time.monotonic() + 3 >= execution_end:
+                ok = False
+                break
+            last_case = mode
+            log.stage("case-entry", execution_end, case=mode)
+            if log.refusal is not None:
                 ok = False
                 break
             nonce = uuid.uuid4().hex
@@ -2977,13 +3321,15 @@ def run_qualification(deadline):
                         "COUNCIL_BOOTSTRAP_TREE": ctx["sourceTree"], "COUNCIL_BOOTSTRAP_JOB": ctx["job"],
                         "COUNCIL_BOOTSTRAP_SOURCE": outer_binding["sourceBundleHash"]})
             ctx["environment"] = env
+            ctx["qualificationLog"] = log
             if mode.startswith("controller-cancel-"):
                 ctx["requiredResources"] = ["custodial-controller"]
                 case_start = time.monotonic()
                 result = run_controller_cancellation_case(mode, ctx, min(execution_end, case_start + 1),
                                                           min(settlement_end, case_start + 2))
                 details.append(result)
-                if not result["matched"]:
+                log.stage("case-return", execution_end, case=mode)
+                if log.refusal is not None or not result["matched"]:
                     ok = False
                     break
                 continue
@@ -2992,7 +3338,8 @@ def run_qualification(deadline):
                 result = qualification_fixture(mode, ctx, min(execution_end, case_start + 1),
                                                min(settlement_end, case_start + 2))
                 details.append(result)
-                if not result["matched"]:
+                log.stage("case-return", execution_end, case=mode)
+                if log.refusal is not None or not result["matched"]:
                     ok = False
                     break
                 continue
@@ -3023,7 +3370,8 @@ def run_qualification(deadline):
                             "heldStreamAfterExit": controller.held_stream,
                             "topology": "single directly retained standard-library fixture child",
                             "ownerCleanup": controller.finish_actions, "errors": controller.cleanup_errors})
-            if not case_ok:
+            log.stage("case-return", execution_end, case=mode)
+            if log.refusal is not None or not case_ok:
                 ok = False
                 break
     except Exception as exc:
@@ -3034,9 +3382,12 @@ def run_qualification(deadline):
         # cannot turn an earlier failed/incomplete supervisor receipt into a pass.
         for controller in controllers:
             if hasattr(controller, "ctx"):
+                case = getattr(controller, "mode", None)
                 try:
+                    log.stage("owner-settlement-entry", settlement_end - 0.5, case=case)
                     if not controller.finish({}, settlement_end - 0.5):
                         ok = False
+                    log.stage("owner-settlement-return", settlement_end - 0.5, case=case)
                 except Exception as exc:
                     ok = False
                     details.append({"operation": "owner-final-settlement", "diagnostic": str(exc)})
@@ -3044,10 +3395,16 @@ def run_qualification(deadline):
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
     complete = ok and not cancelled[0] and len(details) == 8 and time.monotonic() < execution_end
-    if any("receipt" in c.denied_operations for c in controllers if hasattr(c, "denied_operations")):
+    if log.refusal is not None or any("receipt" in c.denied_operations for c in controllers if hasattr(c, "denied_operations")):
         return 1  # Preserve an actual write refusal; no alternate log route.
+    log.stage("aggregate-emission-entry", settlement_end, case=last_case)
+    if log.refusal is not None:
+        return 1
     remaining = max(0, min(0.5, settlement_end - time.monotonic()))
-    written = emit_evidence("qualification", complete, "owned-fixtures", details=details, seconds=remaining)
+    try:
+        written = emit_evidence("qualification", complete, "owned-fixtures", details=details, seconds=remaining, writer=log.write)
+    except PermissionError:
+        return 1
     return 0 if complete and written else 1
 
 

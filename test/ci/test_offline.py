@@ -374,7 +374,603 @@ def job_summary_observation(*, stderr=b"qualification partial stderr\n", refuse=
     return code, summaries, ops
 
 
+def native_timing_observation(scenario):
+    """Real native owner/send/writer; only kernel, filesystem and clocks are injected."""
+    import contextlib
+    import fcntl
+    import io as string_io
+    import socket
+    from types import SimpleNamespace
+    now, removed, killed = [0.0], [False], [False]
+    effects, writes, emitted, processes, selectors_created = [], [], [], {}, []
+    queues, files, pipe_roles = {}, set(), {}
+    ctx = context()
+    ctx["requiredResources"] = ["command", "work", "anchor"]
+    ctx["roots"] = [dict(path="/owned/run/timing", nonce=ctx["nonce"],
+                         assignmentHash=ctx["assignmentHash"], invocation=ctx["invocation"])]
+    root = Path(ctx["roots"][0]["path"])
+    codes = {"command": None, "anchor": None}
+    snapshots, blocked_release = [], [False]
+    control_refusal = PermissionError(13, "injected control refusal")
+    receipt_refusal = PermissionError(13, "injected receipt refusal")
+
+    def frame(event, role, at=None, **extra):
+        message = dict({k: ctx.get(k) for k in GROUP_BINDING}, event=event,
+                       pid={"command": 61, "anchor": 62, "work": 63}[role],
+                       parentPid=61 if role == "work" else 51, group=61, session=4000, **extra)
+        fd = 51 if role in ("command", "work") else 53
+        queues.setdefault(fd, []).append((now[0] if at is None else at,
+            (GROUP_PREFIX + json.dumps(message) + "\n").encode()))
+        return message
+
+    class Stream:
+        def __init__(self, fd):
+            self.fd, self.closed = fd, False
+            queues[fd] = []
+        def fileno(self):
+            return self.fd
+        def close(self):
+            effects.append(("stream-close", self.fd))
+            self.closed = True
+
+    class Process:
+        def __init__(self, role):
+            self.pid, self.returncode = (61 if role == "command" else 62), None
+            self.stdout = Stream(51 if role == "command" else 53)
+            self.stderr = Stream(52 if role == "command" else 54)
+
+    class Selector:
+        def __init__(self):
+            self.keys = {}
+            selectors_created.append(self)
+        def register(self, stream, event, name):
+            if scenario == "partial-attachment":
+                raise ValueError("injected stream attachment failure")
+            self.keys[stream.fileno()] = SimpleNamespace(fileobj=stream, data=name)
+        def select(self, timeout):
+            if timeout != 0:
+                raise AssertionError("native stream observation must remain nonblocking")
+            return [(key, selectors.EVENT_READ) for fd, key in self.keys.items()
+                    if (queues[fd] and queues[fd][0][0] <= now[0]) or killed[0]]
+        def unregister(self, stream):
+            self.keys.pop(stream.fileno())
+        def close(self):
+            effects.append(("selector-close",))
+
+    def popen(argv, **kwargs):
+        role = "command" if argv[-1] == "group-command" else "anchor"
+        effects.append(("spawn", role, kwargs["process_group"]))
+        process = processes[role] = Process(role)
+        frame(role + "-ready", role)
+        return process
+
+    def pipe():
+        read, write = (91, 92) if not pipe_roles else (101, 102)
+        pipe_roles[write] = "command" if write == 92 else "anchor"
+        effects.append(("pipe", read, write))
+        return read, write
+
+    def write(fd, data):
+        role, message = pipe_roles[fd], json.loads(data)
+        event = message["event"]
+        writes.append((role, event, now[0], bytes(data)))
+        effects.append(("write", role, event))
+        if scenario == "control-refusal" and event == "RELEASE" and role == "anchor":
+            raise control_refusal
+        if event == "ARM":
+            frame("armed", "anchor")
+        elif event == "GO":
+            at = {"blind": .975, "late": 1.001, "nonwritable": .950}.get(scenario, .150)
+            frame("work-ready", "work", at=at)
+            queues[52].append((at, b"fixture partial stderr work\n"))
+            if scenario in ("duplicates", "conflicting"):
+                for _ in range(40):
+                    frame("work-ready", "work", at=at)
+                if scenario == "conflicting":
+                    frame("work-ready", "work", at=at, conflict=True)
+        elif event == "RELEASE" and role == "anchor":
+            frame("release-armed", "anchor")
+        elif event == "RELEASE":
+            frame("parent-exiting", "command", workPid=63)
+            codes["command"] = 0
+        elif event == "STOP":
+            frame("term", "anchor")
+            frame("kill", "anchor", at=round(now[0] + .1, 12))
+        return len(data)
+
+    def select_effect(read, write_fds, error, seconds):
+        if read or error:
+            raise AssertionError("unexpected readiness probe")
+        if write_fds:
+            fd = write_fds[0]
+            effects.append(("select-write", pipe_roles[fd], now[0], seconds))
+            work_seen = any(item[1] == "GO" for item in writes)
+            if (scenario == "nonwritable" and not blocked_release[0] and fd == 102 and work_seen
+                    and now[0] >= .95 and not any(item[1] == "RELEASE" for item in writes)):
+                blocked_release[0] = True
+                now[0] = 1.0
+                return [], [], []
+            return [], write_fds, []
+        entry = now[0]
+        now[0] = round(now[0] + seconds, 12)
+        if scenario == "late" and entry == .95 and now[0] == 1:
+            now[0] = 1.001
+        effects.append(("blind-wait", entry, seconds, now[0]))
+        if any(item[1] == "STOP" for item in writes):
+            kills = [at for at, data in queues[53] if b'"event": "kill"' in data]
+            if kills and now[0] >= kills[0]:
+                killed[0] = True
+                codes["anchor"] = -signal.SIGKILL
+                codes["command"] = 0 if codes["command"] == 0 else -signal.SIGTERM
+        return [], [], []
+
+    def read(fd, limit):
+        effects.append(("read", fd, now[0]))
+        ready = []
+        while queues[fd] and queues[fd][0][0] <= now[0]:
+            ready.append(queues[fd].pop(0)[1])
+        data = b"".join(ready)
+        if len(data) > limit:
+            raise AssertionError("test kernel exceeded read limit")
+        return data
+
+    def waitpid(pid, flags):
+        role = "command" if pid == 61 else "anchor"
+        code = codes[role]
+        return (0, 0) if code is None else (pid, code << 8 if code >= 0 else -code)
+
+    def kill(pid, signum):
+        if pid != 61 or scenario != "partial-attachment" or signum != signal.SIGTERM:
+            raise AssertionError("unexpected direct signal")
+        effects.append(("direct-signal", pid, int(signum)))
+        codes["command"], killed[0] = -signum, True
+
+    class Socket:
+        def __init__(self, *args, **kwargs):
+            effects.append(("socket",))
+            if scenario == "partial-setup":
+                raise ValueError("injected socket setup failure")
+        def bind(self, address):
+            if address != ("127.0.0.1", 0) and not killed[0]:
+                raise AssertionError("probe before physical settlement")
+            effects.append(("bind", address))
+        def listen(self, count):
+            effects.append(("listen", count))
+        def getsockname(self):
+            if scenario == "snapshot":
+                now[0] = .006
+            return "127.0.0.1", 31337
+        def fileno(self):
+            return 80
+        def close(self):
+            effects.append(("socket-close",))
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.close()
+
+    def open_file(path, *args, **kwargs):
+        if path.parent != root or path.name not in ("owner.json", "fixture.lock"):
+            raise AssertionError("unexpected file allocation")
+        files.add(path.name)
+        effects.append(("file", path.name))
+        return string_io.StringIO()
+
+    def unlink(path):
+        if path.parent != root or path.name not in files:
+            raise AssertionError("unexpected root cleanup")
+        files.remove(path.name)
+        effects.append(("unlink", path.name))
+
+    def rmdir(path):
+        if path != root or files:
+            raise AssertionError("wrong/nonempty root removal")
+        removed[0] = True
+        effects.append(("rmdir",))
+
+    def emit(payload, remaining, **kwargs):
+        effects.append(("receipt",))
+        emitted.append(copy.deepcopy(payload))
+        if scenario == "receipt-refusal":
+            raise receipt_refusal
+        return True
+
+    real_supervise, real_finish = offline.supervise, ParentExitController.finish
+    def supervise(*args, **kwargs):
+        receipt = real_supervise(*args, **kwargs)
+        owner = kwargs["ops"]
+        snapshots.append({"receipt": json.dumps(receipt, sort_keys=True),
+                          "execution": None, "finishes": [], "owner": owner})
+        return receipt
+    def finish(owner, receipt, end):
+        witness = getattr(owner.io, "timing_witness", None)
+        before = None if witness is None else json.dumps(witness.result()["execution"], sort_keys=True)
+        comparison = {"executionBefore": before,
+                      "executionFrozenBefore": None if witness is None else witness.result()["executionFrozen"],
+                      "receiptBefore": json.dumps(receipt, sort_keys=True)}
+        answer = real_finish(owner, receipt, end)
+        after = None if witness is None else json.dumps(witness.result()["execution"], sort_keys=True)
+        comparison.update(executionAfter=after,
+                          executionFrozenAfter=None if witness is None else witness.result()["executionFrozen"],
+                          receiptAfter=json.dumps(receipt, sort_keys=True))
+        if snapshots:
+            snapshots[-1]["finishes"].append(comparison)
+            if snapshots[-1]["execution"] is None:
+                snapshots[-1]["execution"] = (before, after)
+        return answer
+
+    with contextlib.ExitStack() as stack:
+        for patch in (
+            mock.patch.object(time, "monotonic", side_effect=lambda: now[0]),
+            mock.patch.object(offline.RealOps, "monotonic", staticmethod(lambda: now[0])),
+            mock.patch.object(offline.subprocess, "Popen", side_effect=popen),
+            mock.patch.object(os, "pipe", side_effect=pipe),
+            mock.patch.object(os, "close", side_effect=lambda fd: effects.append(("fd-close", fd))),
+            mock.patch.object(os, "set_blocking", side_effect=lambda fd, flag: effects.append(("blocking", fd, flag))),
+            mock.patch.object(os, "read", side_effect=read),
+            mock.patch.object(os, "write", side_effect=write),
+            mock.patch.object(os, "waitpid", side_effect=waitpid),
+            mock.patch.object(os, "kill", side_effect=kill),
+            mock.patch.object(os, "getpid", return_value=51),
+            mock.patch.object(os, "getsid", return_value=4000),
+            mock.patch.object(os, "getpgid", side_effect=lambda pid: (_ for _ in ()).throw(ProcessLookupError()) if killed[0] else 61),
+            mock.patch.object(os, "open", side_effect=lambda *a, **k: effects.append(("lock-open",)) or 33),
+            mock.patch.object(select, "select", side_effect=select_effect),
+            mock.patch.object(selectors, "DefaultSelector", side_effect=Selector),
+            mock.patch.object(fcntl, "flock", side_effect=lambda *a: effects.append(("flock",))),
+            mock.patch.object(socket, "socket", side_effect=Socket),
+            mock.patch.object(Path, "mkdir", autospec=True, side_effect=lambda path, **k: effects.append(("mkdir", str(path)))),
+            mock.patch.object(Path, "open", autospec=True, side_effect=open_file),
+            mock.patch.object(Path, "is_symlink", return_value=False),
+            mock.patch.object(Path, "resolve", autospec=True, side_effect=lambda path, *a, **k: path),
+            mock.patch.object(Path, "read_text", return_value=json.dumps(ctx["roots"][0])),
+            mock.patch.object(Path, "iterdir", side_effect=lambda: iter(root / name for name in sorted(files))),
+            mock.patch.object(Path, "unlink", autospec=True, side_effect=unlink),
+            mock.patch.object(Path, "rmdir", autospec=True, side_effect=rmdir),
+            mock.patch.object(os.path, "lexists", side_effect=lambda path: not removed[0]),
+            mock.patch.object(offline, "write_json", side_effect=emit),
+            mock.patch.object(offline, "supervise", side_effect=supervise),
+            mock.patch.object(ParentExitController, "finish", autospec=True, side_effect=finish),
+        ):
+            stack.enter_context(patch)
+        io = NativeGroupIO()
+        result = qualification_fixture("missing-custody", ctx, 1, 2, io=io)
+        first_witness = copy.deepcopy(result.get("nativeTimingWitness"))
+        receipt_before = snapshots[-1]["receipt"] if snapshots else json.dumps(result["receipt"], sort_keys=True)
+        owner = snapshots[-1]["owner"] if snapshots else ctx.get("qualificationOwners", [None])[-1]
+        second = owner.finish(result["receipt"], 2) if owner is not None else None
+        current = getattr(io, "timing_witness", None)
+        final_witness = current.result() if current is not None else None
+        return {"result": result, "effects": effects, "writes": writes, "emitted": emitted,
+                "firstWitness": first_witness, "finalWitness": final_witness, "secondFinish": second,
+                "snapshots": snapshots, "receiptBefore": receipt_before,
+                "receiptAfter": json.dumps(result["receipt"], sort_keys=True), "ctx": ctx,
+                "now": now[0], "registered": "command" in getattr(io.base, "owned", {}),
+                "controlRefusal": control_refusal, "receiptRefusal": receipt_refusal}
+
+
 class PureTests(unittest.TestCase):
+    # Catches lost parent observations when an already available frame waits behind a blind wait.
+    def test_native_timing_witness_records_predeadline_frame_delayed_by_blind_wait(self):
+        observed = native_timing_observation("blind")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        witness = result["nativeTimingWitness"]
+        failure = witness["execution"]["lastFailure"]
+        self.assertEqual((failure["role"], failure["event"]), ("anchor", "RELEASE"))
+        self.assertEqual((failure["entryUs"], failure["deadlineUs"]), (0, 0))
+        self.assertTrue(failure["entryExpired"])
+        self.assertEqual((failure["selectCount"], failure["writeAttempts"]), (0, 0))
+        self.assertEqual(failure["exception"], "deadline")
+        frames = [e for e in witness["execution"]["events"] if e["kind"] == "frame" and e["event"] == "work-ready"]
+        self.assertEqual(frames[-1]["observedUs"], 0)
+        self.assertIn(("blind-wait", .95, .05, 1.0), observed["effects"])
+        self.assertFalse(result["matched"])
+        self.assertFalse(result["receipt"]["timedOut"])
+        self.assertIsNone(result["receipt"]["childExitCode"])
+        self.assertTrue(any("private group control write deadline" in e["diagnostic"] for e in result["receipt"]["errors"]))
+        self.assertFalse(any(w[1] == "RELEASE" and w[0] == "anchor" for w in observed["writes"]))
+        self.assertIsNone(witness["childEmissionTime"])
+
+    # Catches invented child emission time and accidental late-frame success after scheduling overshoot.
+    def test_native_timing_witness_records_first_observation_after_deadline(self):
+        observed = native_timing_observation("late")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        witness = result["nativeTimingWitness"]
+        failure = witness["execution"]["lastFailure"]
+        self.assertEqual(failure["entryUs"], 1000)
+        self.assertTrue(failure["entryExpired"])
+        self.assertEqual((failure["selectCount"], failure["writeAttempts"]), (0, 0))
+        self.assertIsNone(witness["childEmissionTime"])
+        self.assertFalse(result["matched"])
+        self.assertFalse(result["receipt"]["timedOut"])
+        self.assertFalse(any(w[1] == "RELEASE" and w[0] == "anchor" for w in observed["writes"]))
+
+    # Catches conflation of expired entry with a single on-time select that uses the remaining allowance.
+    def test_native_timing_witness_distinguishes_nonwritable_select_expiry(self):
+        observed = native_timing_observation("nonwritable")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        failure = result["nativeTimingWitness"]["execution"]["lastFailure"]
+        self.assertEqual((failure["entryUs"], failure["deadlineUs"]), (-50000, 0))
+        self.assertFalse(failure["entryExpired"])
+        self.assertEqual((failure["selectCount"], failure["writeAttempts"]), (1, 0))
+        self.assertEqual((failure["selectEntryUs"], failure["selectReturnUs"], failure["writable"]), (-50000, 0, False))
+        self.assertFalse(result["matched"])
+        self.assertEqual(failure["exception"], "deadline")
+
+    # Catches cleanup overwriting the original witness/receipt or replenishing inherited execution time.
+    def test_native_timing_witness_preserves_ontime_negative_case_and_snapshot(self):
+        observed = native_timing_observation("snapshot")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["receipt"]["status"], "incomplete")
+        self.assertTrue(any("intentional missing work custody" in e["diagnostic"] for e in result["receipt"]["errors"]))
+        self.assertEqual(result["nativeTimingWitness"]["execution"]["preSuperviseRemainingUs"], 994000)
+        self.assertTrue(result["nativeTimingWitness"]["executionFrozen"])
+        before, after = observed["snapshots"][0]["execution"]
+        self.assertIsNotNone(before)
+        self.assertEqual(before, after)
+        self.assertEqual(json.dumps(observed["finalWitness"]["execution"], sort_keys=True), before)
+        self.assertEqual(observed["receiptBefore"], observed["receiptAfter"])
+        self.assertTrue(result["originalReceiptUnchanged"])
+        self.assertTrue(observed["secondFinish"])
+        waits = [e for e in observed["effects"] if e[0] == "blind-wait" and e[1] < .206]
+        self.assertEqual(len(waits), 4)
+        block = result["nativeTimingWitness"]["execution"]
+        self.assertEqual((block["waitCount"], block["requestedWaitUs"], block["observedWaitUs"]), (4, 200000, 200000))
+        # Catches an unfrozen first cleanup even when a later finish leaves execution unchanged.
+        finishes = observed["snapshots"][0].get("finishes")
+        self.assertIsInstance(finishes, list)
+        self.assertEqual(len(finishes), 2)
+        first, second = finishes
+        self.assertTrue(first["executionFrozenBefore"])
+        self.assertTrue(first["executionFrozenAfter"])
+        self.assertTrue(second["executionFrozenBefore"])
+        self.assertTrue(second["executionFrozenAfter"])
+        self.assertEqual(first["executionBefore"], before)
+        self.assertEqual(first["executionAfter"], after)
+        self.assertEqual(first["executionBefore"].encode("utf-8"), first["executionAfter"].encode("utf-8"))
+        self.assertEqual(first["executionAfter"].encode("utf-8"), second["executionBefore"].encode("utf-8"))
+        self.assertEqual(second["executionBefore"].encode("utf-8"), second["executionAfter"].encode("utf-8"))
+        self.assertEqual(json.dumps(observed["finalWitness"]["execution"], sort_keys=True), second["executionAfter"])
+        supervisor_receipt = observed["snapshots"][0]["receipt"]
+        self.assertEqual(observed["receiptBefore"], supervisor_receipt)
+        self.assertEqual(observed["receiptAfter"], supervisor_receipt)
+        for finish in finishes:
+            self.assertEqual(finish["receiptBefore"], supervisor_receipt)
+            self.assertEqual(finish["receiptAfter"], supervisor_receipt)
+
+    # Catches unbounded identical observations, dropped failure summaries and cleanup evicting execution.
+    def test_native_timing_witness_caps_both_phases_and_retains_failures(self):
+        observed = native_timing_observation("duplicates")
+        self.assertIsInstance(observed["result"].get("nativeTimingWitness"), dict)
+        self.assertTrue(observed["result"]["matched"])
+        collector = _NativeTimingWitness(1)
+        for phase in ("execution", "owner-cleanup"):
+            for i in range(100):
+                collector.record(phase, {"kind": "frame", "event": "work-ready", "observed": .975,
+                    "readId": i, "armed": True, "released": False, "stopSent": False})
+            collector.record_failure(phase, {"kind": "send", "role": "anchor", "event": "RELEASE", "entry": 1,
+                "deadline": 1, "entryExpired": True, "selectCount": 0, "writeAttempts": 0, "exception": "deadline"})
+            collector.record_failure(phase, {"kind": "send", "role": "anchor", "event": "STOP", "entry": 1,
+                "deadline": 1, "entryExpired": True, "selectCount": 0, "writeAttempts": 0, "exception": "deadline"})
+            if phase == "execution":
+                collector.freeze_execution()
+                frozen = json.dumps(collector.result()["execution"], sort_keys=True)
+        witness = collector.result()
+        compact = lambda value: json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
+        self.assertLessEqual(len(compact(witness)), 4096)
+        self.assertLessEqual(len(compact(witness["execution"])), 2816)
+        self.assertLessEqual(len(compact(witness["ownerCleanup"])), 1024)
+        self.assertEqual(json.dumps(witness["execution"], sort_keys=True), frozen)
+        for key, maximum in (("execution", 23), ("ownerCleanup", 7)):
+            block = witness[key]
+            self.assertLessEqual(len(block["events"]), maximum)
+            self.assertEqual(block["lastFailure"]["event"], "STOP")
+            self.assertEqual(block["seenEvents"], 102)
+            self.assertEqual(block["droppedEvents"], 101 - len(block["events"]))
+        self.assertLessEqual(sum(len(witness[k]["events"]) + 1 for k in ("execution", "ownerCleanup")), 32)
+        collector.record("execution", {"kind": "startup", "observed": 2, "exception": "other"})
+        self.assertEqual(json.dumps(collector.result()["execution"], sort_keys=True), frozen)
+        print("native timing cap example: " + compact(witness).decode())
+
+    # Catches raw/unbounded diagnostic data, wrapping original exceptions and collector faults changing writes.
+    def test_native_timing_witness_keeps_unknowns_and_does_not_mask_errors(self):
+        observed = native_timing_observation("ontime")
+        self.assertIsInstance(observed["result"].get("nativeTimingWitness"), dict)
+        collector = _NativeTimingWitness(1)
+        collector.record("execution", {"kind": "send", "role": "secret role", "event": "secret event",
+            "entry": float("nan"), "deadline": 1000, "entryExpired": True, "frameBytes": 5000, "secret": "omit"})
+        record = collector.result()["execution"]["events"][0]
+        self.assertEqual((record["entryUs"], record["deadlineUs"], record["frameBytes"]), (None, None, None))
+        self.assertEqual((record["role"], record["event"]), ("unknown", "unknown"))
+        self.assertNotIn("secret", record)
+        self.assertEqual(collector.result()["execution"]["unknownObservations"], 3)
+        collector.execution["seenEvents"] = 2147483647
+        collector.record("execution", {"kind": "startup", "observed": float("inf"), "exception": "other"})
+        self.assertEqual(collector.result()["execution"]["seenEvents"], 2147483647)
+        self.assertTrue(collector.result()["execution"]["countsSaturated"])
+        original = PermissionError(13, "original exception identity")
+        with mock.patch.object(time, "monotonic", return_value=.5), mock.patch.object(os, "set_blocking"), \
+                mock.patch.object(select, "select", return_value=([], [92], [])), \
+                mock.patch.object(os, "write", side_effect=original), \
+                mock.patch.object(collector, "record", side_effect=ValueError("collector broke")):
+            try:
+                group_frame_write(92, {"event": "GO"}, 1, witness=collector, role="command", event="GO")
+            except PermissionError as caught:
+                self.assertIs(caught, original)
+            else:
+                self.fail("original operation exception was suppressed")
+        witness = collector.result()
+        self.assertFalse(witness["available"])
+        self.assertEqual(witness["unavailableReason"], "collector-error")
+        self.assertTrue(witness["execution"]["collectorFailed"])
+        self.assertIsNone(witness["execution"]["lastFailure"]["writtenBytes"])
+        # A negative sub-microsecond duration must stay unknown rather than round to zero.
+        boundaries = _NativeTimingWitness(1)
+        boundaries.record("execution", {"kind": "wait", "entry": 1, "return": 1,
+            "requested": -.0000001, "observedDuration": 60.0000001})
+        wait = boundaries.result()["execution"]["events"][0]
+        self.assertIsNone(wait["requestedUs"])
+        self.assertIsNone(wait["observedUs"])
+        self.assertEqual(boundaries.result()["execution"]["unknownObservations"], 2)
+        boundaries.record_failure("execution", {"kind": "send", "selectCount": 2147483648,
+                                                "writeAttempts": 2147483648})
+        failure = boundaries.result()["execution"]["lastFailure"]
+        self.assertEqual((failure["selectCount"], failure["writeAttempts"]), (2147483647, 2147483647))
+        self.assertTrue(boundaries.result()["execution"]["countsSaturated"])
+        success = _NativeTimingWitness(1)
+        payload = (json.dumps({"event": "GO"}, sort_keys=True) + "\n").encode()
+        with mock.patch.object(time, "monotonic", return_value=.5), mock.patch.object(os, "set_blocking"), \
+                mock.patch.object(select, "select", return_value=([], [92], [])), \
+                mock.patch.object(os, "write", return_value=len(payload)) as writer, \
+                mock.patch.object(success, "record", side_effect=ValueError("collector broke")):
+            self.assertIsNone(group_frame_write(92, {"event": "GO"}, 1, witness=success, role="command", event="GO"))
+            self.assertEqual(writer.call_args_list, [mock.call(92, payload)])
+        self.assertFalse(success.result()["available"])
+        # An unavailable extra clock sample cannot invent an unexpired entry or mask the write error.
+        for bad_sample in (float("nan"), "unavailable clock"):
+            sampled = _NativeTimingWitness(1)
+            samples = [bad_sample]
+            def clock():
+                return samples.pop() if samples else .5
+            with mock.patch.object(time, "monotonic", side_effect=clock), mock.patch.object(os, "set_blocking"), \
+                    mock.patch.object(select, "select", return_value=([], [92], [])), \
+                    mock.patch.object(os, "write", side_effect=original):
+                caught = None
+                try:
+                    group_frame_write(92, {"event": "GO"}, 1, witness=sampled, role="command", event="GO")
+                except Exception as exc:
+                    caught = exc
+                self.assertIs(caught, original)
+            self.assertIsNone(sampled.result()["execution"]["lastFailure"]["entryExpired"])
+        reader = NativeGroupIO()
+        reader.base, reader.timing_witness = offline.RealOps(), _NativeTimingWitness(1)
+        selector = mock.Mock()
+        selector.select.side_effect = original
+        reader.handles = [{"selector": selector}]
+        try:
+            reader.read(offline.OUTPUT_LIMIT)
+        except PermissionError as caught:
+            self.assertIs(caught, original)
+        else:
+            self.fail("read refusal was suppressed")
+        self.assertIsInstance(reader.timing_witness.result()["execution"]["lastFailure"], dict)
+        self.assertEqual(reader.timing_witness.result()["execution"]["lastFailure"]["kind"], "read")
+        # Catches an attempted write with no byte count being reported as fully known.
+        missing_count = _NativeTimingWitness(1)
+        with mock.patch.object(time, "monotonic", return_value=.5), mock.patch.object(os, "set_blocking"), \
+                mock.patch.object(select, "select", return_value=([], [92], [])), \
+                mock.patch.object(os, "write", side_effect=original) as writer:
+            try:
+                group_frame_write(92, {"event": "GO"}, 1, witness=missing_count, role="command", event="GO")
+            except PermissionError as caught:
+                self.assertIs(caught, original)
+            else:
+                self.fail("missing write count masked the original refusal")
+            self.assertEqual(writer.call_args_list, [mock.call(92, payload)])
+        missing_block = missing_count.result()["execution"]
+        self.assertIsNone(next(e for e in missing_block["events"] if e["kind"] == "write")["writtenBytes"])
+        self.assertIsNone(missing_block["lastFailure"]["writtenBytes"])
+        self.assertEqual(missing_block["lastFailure"]["writeAttempts"], 1)
+        # One applicable field in the write event and one in the retained summary.
+        self.assertEqual(missing_block["unknownObservations"], 2)
+        self.assertFalse(missing_block["collectorFailed"])
+        self.assertTrue(missing_count.result()["available"])
+        inapplicable = _NativeTimingWitness(1)
+        inapplicable.record_failure("execution", {"kind": "read", "exception": "permission"})
+        self.assertIsNone(inapplicable.result()["execution"]["lastFailure"]["writtenBytes"])
+        self.assertEqual(inapplicable.result()["execution"]["unknownObservations"], 0)
+        inapplicable.record_failure("execution", {"kind": "send", "writeAttempts": 0,
+            "entry": 1, "deadline": 1, "entryExpired": True, "exception": "deadline"})
+        self.assertEqual(inapplicable.result()["execution"]["unknownObservations"], 0)
+        inapplicable.record_failure("execution", {"kind": "send", "writeAttempts": 1, "exception": "permission"})
+        self.assertEqual(inapplicable.result()["execution"]["unknownObservations"], 1)
+        inapplicable.execution["unknownObservations"] = 2147483647
+        inapplicable.record_failure("execution", {"kind": "send", "writeAttempts": 1, "exception": "permission"})
+        self.assertEqual(inapplicable.result()["execution"]["unknownObservations"], 2147483647)
+        self.assertTrue(inapplicable.result()["execution"]["countsSaturated"])
+
+    # Catches diagnostic fields entering compared frames or changing control payloads/duplicate handling.
+    def test_native_timing_witness_preserves_frame_equality_and_control_bytes(self):
+        observed = native_timing_observation("duplicates")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        self.assertTrue(result["matched"])
+        self.assertEqual(len([w for w in observed["writes"] if w[0:2] == ("anchor", "RELEASE")]), 1)
+        for frame_value in result["frames"].values():
+            self.assertNotIn("nativeTimingWitness", frame_value)
+            self.assertNotIn("observedUs", frame_value)
+        for role, event, at, payload in observed["writes"]:
+            expected = {k: observed["ctx"].get(k) for k in GROUP_BINDING}
+            expected["event"] = event
+            if event == "ARM":
+                expected["group"] = 61
+            if event == "RELEASE" and role == "anchor":
+                expected["settlementEnd"] = at + 1
+            self.assertEqual(payload, (json.dumps(expected, sort_keys=True) + "\n").encode())
+        conflict = native_timing_observation("conflicting")["result"]
+        self.assertFalse(conflict["matched"])
+        self.assertTrue(any("conflicting native group frame" in e["diagnostic"] for e in conflict["receipt"]["errors"]))
+        self.assertNotIn("conflict", conflict["frames"]["work-ready"])
+        self.assertIsInstance(conflict["nativeTimingWitness"]["execution"]["lastFailure"], dict)
+        self.assertEqual(conflict["nativeTimingWitness"]["execution"]["lastFailure"]["kind"], "frame")
+        self.assertEqual(conflict["nativeTimingWitness"]["execution"]["lastFailure"]["exception"], "value")
+
+    # Catches retries/alternate IO after a refusal and witness emission outside the existing case route.
+    def test_native_timing_witness_preserves_refusals_without_extra_io(self):
+        observed = native_timing_observation("control-refusal")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        self.assertFalse(result["ownerClosed"])
+        self.assertTrue(result["receipt"]["refusals"])
+        self.assertEqual(len([w for w in observed["writes"] if w[0:2] == ("anchor", "RELEASE")]), 1)
+        self.assertFalse(any(w[1] == "STOP" for w in observed["writes"]))
+        failure = result["nativeTimingWitness"]["execution"]["lastFailure"]
+        self.assertEqual((failure["exception"], failure["writeAttempts"], failure["writtenBytes"]), ("permission", 1, None))
+        refused = native_timing_observation("receipt-refusal")
+        self.assertFalse(refused["result"]["ownerClosed"])
+        self.assertEqual(len(refused["emitted"]), 1)
+        self.assertTrue(any(e["operation"] == "receipt" and e["errno"] == 13 for e in refused["result"]["receipt"]["refusals"]))
+        self.assertTrue(all(set(p) == {"receipt"} for p in observed["emitted"] + refused["emitted"]))
+        self.assertFalse(any("nativeTimingWitness" in p["receipt"] for p in observed["emitted"] + refused["emitted"]))
+        self.assertFalse(any(e[0] == "direct-signal" for e in observed["effects"] + refused["effects"]))
+        # The actual refused RELEASE has one unknown write field in each encoded projection.
+        self.assertEqual(result["nativeTimingWitness"]["execution"]["unknownObservations"], 2)
+
+    # Catches discarded partial Popen custody or absent timing evidence being mistaken for closure.
+    def test_native_timing_witness_reports_partial_startup_unknown(self):
+        observed = native_timing_observation("partial-attachment")
+        result = observed["result"]
+        self.assertIsInstance(result.get("nativeTimingWitness"), dict)
+        self.assertTrue(observed["registered"])
+        self.assertTrue(result["ownerClosed"])
+        self.assertFalse(result["matched"])
+        self.assertFalse(result["nativeTimingWitness"]["available"])
+        self.assertEqual(result["nativeTimingWitness"]["unavailableReason"], "partial-startup")
+        self.assertIsNone(result["nativeTimingWitness"]["childEmissionTime"])
+        self.assertEqual(observed["receiptBefore"], observed["receiptAfter"])
+        early = native_timing_observation("partial-setup")["result"]
+        self.assertFalse(early["nativeTimingWitness"]["available"])
+        self.assertEqual(early["nativeTimingWitness"]["unavailableReason"], "partial-startup")
+        unsupported = run_parent_exit_case("missing-custody", dict(context(), requiredResources=["command", "work", "anchor"]),
+                                           1, 2, io=FakeNativeGroupIO())["nativeTimingWitness"]
+        self.assertFalse(unsupported["available"])
+        self.assertEqual(unsupported["unavailableReason"], "unsupported-transport")
+        with mock.patch.object(_NativeTimingWitness, "__init__", side_effect=ValueError("collector allocation failed")):
+            no_collector = native_timing_observation("partial-attachment")["result"]
+        self.assertFalse(no_collector["nativeTimingWitness"]["available"])
+        self.assertEqual(no_collector["nativeTimingWitness"]["unavailableReason"], "collector-error")
+        self.assertTrue(no_collector["ownerClosed"])
+        self.assertFalse(no_collector["matched"])
+        self.assertIsInstance(result["nativeTimingWitness"]["execution"]["lastFailure"], dict)
+        self.assertEqual(result["nativeTimingWitness"]["execution"]["lastFailure"]["kind"], "startup")
+        self.assertEqual(result["nativeTimingWitness"]["execution"]["lastFailure"]["exception"], "value")
+        self.assertEqual(early["nativeTimingWitness"]["execution"]["lastFailure"]["kind"], "startup")
+
     def test_summary_proposal_and_final_refusals_stop_writes_and_restore_handlers(self):
         # Break: summary refusal escapes into the setup-error logger and retries stdout.
         for refusal_at in (1, 2):
@@ -2205,18 +2801,300 @@ def group_message(binding, event, **fields):
     return dict({k: binding.get(k) for k in GROUP_BINDING}, event=event, **fields)
 
 
-def group_frame_write(fd, message, end):
-    data = (json.dumps(message, sort_keys=True) + "\n").encode()
-    if len(data) > 4096:
-        raise ValueError("oversized private group control frame")
-    os.set_blocking(fd, False)
-    while time.monotonic() < end:
-        if select.select([], [fd], [], max(0, end - time.monotonic()))[1]:
-            count = os.write(fd, data)
-            if count != len(data):
-                raise OSError("partial group control frame; no alternate write")
+class _NativeTimingWitness:
+    """Bounded parent observations, independent of control and receipt decisions."""
+    _COUNT_MAX = 2_147_483_647
+    _TIME_MAX = 60_000_000
+    _KINDS = {"send", "select", "write", "read", "frame", "wait", "startup"}
+    _ROLES = {"command", "anchor", "work", "unknown"}
+    _EVENTS = {"ARM", "GO", "RELEASE", "STOP", "command-ready", "anchor-ready", "armed",
+               "work-ready", "release-armed", "parent-exiting", "refused", "protocol-error",
+               "term", "kill", "unknown"}
+    _EXCEPTIONS = {"deadline", "permission", "would-block", "broken-pipe", "os-error", "value", "type", "other"}
+
+    @staticmethod
+    def _empty(execution=False):
+        block = {"events": [], "lastFailure": None, "seenEvents": 0, "droppedEvents": 0,
+                 "unknownObservations": 0, "countsSaturated": False, "collectorFailed": False,
+                 "waitCount": 0, "requestedWaitUs": 0, "observedWaitUs": 0}
+        if execution:
+            block.update(fixtureExecutionUs=1000000, fixtureSettlementUs=1000000,
+                         preSuperviseRemainingUs=None)
+        return block
+
+    def __init__(self, execution_end):
+        self.execution_end = execution_end
+        self.execution, self.owner_cleanup = self._empty(True), self._empty()
+        self._result = {"schemaVersion": 1, "available": True, "unavailableReason": None,
+                        "executionFrozen": False, "childEmissionTime": None,
+                        "execution": self.execution, "ownerCleanup": self.owner_cleanup}
+
+    @staticmethod
+    def unavailable(reason):
+        reason = reason if reason in ("partial-startup", "unsupported-transport", "collector-error") else "collector-error"
+        return {"schemaVersion": 1, "available": False, "unavailableReason": reason,
+                "executionFrozen": True, "childEmissionTime": None,
+                "execution": _NativeTimingWitness._empty(True), "ownerCleanup": _NativeTimingWitness._empty()}
+
+    @staticmethod
+    def _size(value):
+        return len(json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+    def _block(self, phase):
+        if phase == "execution":
+            return None if self._result["executionFrozen"] else self.execution
+        return self.owner_cleanup if phase == "owner-cleanup" else None
+
+    def _increment(self, block, key, amount=1):
+        value = block[key] + amount
+        if value > self._COUNT_MAX:
+            block["countsSaturated"] = True
+        block[key] = min(self._COUNT_MAX, value)
+
+    def _unknown(self, block):
+        self._increment(block, "unknownObservations")
+        return None
+
+    def _number(self, block, value, *, time_value=False, duration=False, maximum=None, optional=False):
+        if value is None and optional:
+            return None
+        try:
+            if type(value) not in (int, float) or not math.isfinite(value):
+                return self._unknown(block)
+            if time_value:
+                value = (value - self.execution_end) * 1_000_000
+                low, high = -self._TIME_MAX, self._TIME_MAX
+            elif duration:
+                value = value * 1_000_000
+                low, high = 0, self._TIME_MAX
+            else:
+                low, high = 0, maximum
+                if type(value) is not int:
+                    return self._unknown(block)
+            if low <= value <= high:
+                return round(value) if time_value or duration else value
+        except (ValueError, TypeError, OverflowError):
+            pass
+        return self._unknown(block)
+
+    @staticmethod
+    def _enum(value, allowed):
+        return value if value is None or (isinstance(value, str) and value in allowed) else "unknown"
+
+    def _boolean(self, block, value, *, optional=False):
+        if type(value) is bool or (optional and value is None):
+            return value
+        return self._unknown(block)
+
+    def _trim(self, phase, block):
+        limit, count = (2816, 23) if phase == "execution" else (1024, 7)
+        # Reserve the whole failure allocation even before its first use.
+        while True:
+            projection = dict(block, lastFailure=None)
+            if len(block["events"]) <= count and self._size(projection) + 512 <= limit:
+                break
+            if not block["events"]:
+                raise ValueError("timing metadata exceeded its fixed allocation")
+            block["events"].pop(0)
+            self._increment(block, "droppedEvents")
+
+    def _fail(self, phase):
+        self._result["available"], self._result["unavailableReason"] = False, "collector-error"
+        block = self._block(phase)
+        if block is not None:
+            block["collectorFailed"] = True
+            self._unknown(block)
+            self._trim(phase, block)
+
+    def partial_startup(self):
+        self._result["available"] = False
+        if self._result["unavailableReason"] != "collector-error":
+            self._result["unavailableReason"] = "partial-startup"
+
+    def pre_supervise(self, observed):
+        block = self._block("execution")
+        if block is not None:
+            remaining = None if observed is None else self.execution_end - observed
+            block["preSuperviseRemainingUs"] = self._number(block, remaining, duration=True)
+            self._trim("execution", block)
+
+    def record(self, phase, observation):
+        block = self._block(phase)
+        if block is None:
             return
-    raise TimeoutError("private group control write deadline")
+        try:
+            self._increment(block, "seenEvents")
+            kind = observation.get("kind")
+            if kind not in self._KINDS:
+                self._increment(block, "droppedEvents")
+                self._unknown(block)
+                self._trim(phase, block)
+                return
+            record = {"kind": kind}
+            if kind in ("send", "select", "write"):
+                record.update(role=self._enum(observation.get("role"), self._ROLES),
+                              event=self._enum(observation.get("event"), self._EVENTS))
+            time_fields = {"send": ("entry", "deadline"), "select": ("entry", "return", "deadline"),
+                           "write": ("attempt",), "read": ("observed",), "frame": ("observed",),
+                           "wait": ("entry", "return"), "startup": ("observed",)}[kind]
+            for key in time_fields:
+                record[key + "Us"] = self._number(block, observation.get(key), time_value=True)
+            if kind == "send":
+                record["entryExpired"] = self._boolean(block, observation.get("entryExpired"))
+                record["frameBytes"] = self._number(block, observation.get("frameBytes"), maximum=4096)
+            elif kind == "select":
+                record["writable"] = self._boolean(block, observation.get("writable"))
+            elif kind == "write":
+                for key in ("attemptedBytes", "writtenBytes"):
+                    record[key] = self._number(block, observation.get(key), maximum=4096)
+            elif kind in ("read", "frame"):
+                record["readId"] = self._number(block, observation.get("readId"), maximum=self._COUNT_MAX)
+                if kind == "read":
+                    for key in ("stdoutBytes", "stderrBytes"):
+                        record[key] = self._number(block, observation.get(key), maximum=offline.OUTPUT_LIMIT)
+                else:
+                    record["event"] = self._enum(observation.get("event"), self._EVENTS)
+                    for key in ("armed", "released", "stopSent"):
+                        record[key] = self._boolean(block, observation.get(key))
+            elif kind == "wait":
+                self._increment(block, "waitCount")
+                for source, target in (("requested", "requestedWaitUs"), ("observedDuration", "observedWaitUs")):
+                    value = self._number(block, observation.get(source), duration=True)
+                    record["requestedUs" if source == "requested" else "observedUs"] = value
+                    previous = block[target]
+                    if previous is None or value is None:
+                        block[target] = None
+                    elif previous + value > self._TIME_MAX:
+                        block[target] = self._unknown(block)
+                    else:
+                        block[target] = previous + value
+            if kind in ("write", "startup"):
+                value = observation.get("exception")
+                record["exception"] = value if value is None or value in self._EXCEPTIONS else "other"
+            block["events"].append(record)
+            self._trim(phase, block)
+        except Exception:
+            self._fail(phase)
+
+    def record_failure(self, phase, summary):
+        block = self._block(phase)
+        if block is None:
+            return
+        try:
+            self._increment(block, "seenEvents")
+            if block["lastFailure"] is not None:
+                self._increment(block, "droppedEvents")
+            kind = summary.get("kind")
+            record = {"phase": phase, "kind": kind if kind in self._KINDS else "startup",
+                      "role": self._enum(summary.get("role"), self._ROLES),
+                      "event": self._enum(summary.get("event"), self._EVENTS)}
+            for source in ("entry", "deadline", "selectEntry", "selectReturn"):
+                record[source + "Us"] = self._number(block, summary.get(source), time_value=True, optional=True)
+            for key in ("entryExpired", "writable"):
+                record[key] = self._boolean(block, summary.get(key), optional=True)
+            for key in ("selectCount", "writeAttempts", "frameBytes", "attemptedBytes", "writtenBytes"):
+                value = summary.get(key)
+                if key in ("selectCount", "writeAttempts") and type(value) is int and value > self._COUNT_MAX:
+                    value = self._COUNT_MAX
+                    block["countsSaturated"] = True
+                # Count applicable encoded unknowns, including this summary's copy.
+                missing_write_count = (key == "writtenBytes"
+                    and type(summary.get("writeAttempts")) is int and summary["writeAttempts"] > 0)
+                record[key] = self._number(block, value, maximum=self._COUNT_MAX if key in ("selectCount", "writeAttempts") else 4096, optional=not missing_write_count)
+            value = summary.get("exception")
+            record["exception"] = value if value is None or value in self._EXCEPTIONS else "other"
+            if self._size(record) > 512:
+                raise ValueError("timing failure exceeded its fixed allocation")
+            block["lastFailure"] = record
+            self._trim(phase, block)
+        except Exception:
+            self._fail(phase)
+
+    def freeze_execution(self):
+        self._result["executionFrozen"] = True
+
+    def result(self):
+        return self._result
+
+
+def _timing_call(witness, method, *args):
+    if witness is None:
+        return None
+    try:
+        return getattr(witness, method)(*args)
+    except Exception:
+        # Diagnostic failures never replace an operation's result or exception.
+        try:
+            witness._fail(args[0] if args and args[0] in ("execution", "owner-cleanup") else "execution")
+        except Exception:
+            pass
+        return None
+
+
+def _timing_now(witness):
+    if witness is not None:
+        try:
+            observed = time.monotonic()
+            if type(observed) in (int, float) and math.isfinite(observed):
+                return observed
+        except Exception:
+            pass
+    return None
+
+
+def _timing_exception(exc):
+    for exception, name in ((PermissionError, "permission"), (BlockingIOError, "would-block"),
+                            (BrokenPipeError, "broken-pipe"), (TimeoutError, "deadline"),
+                            (OSError, "os-error"), (ValueError, "value"), (TypeError, "type")):
+        if isinstance(exc, exception):
+            return name
+    return "other"
+
+
+def group_frame_write(fd, message, end, *, witness=None, phase="execution", role=None, event=None):
+    entry = _timing_now(witness)
+    summary = {"kind": "send", "role": role, "event": event, "entry": entry, "deadline": end,
+               "entryExpired": None if entry is None else entry >= end,
+               "selectCount": 0, "writeAttempts": 0, "frameBytes": None,
+               "attemptedBytes": 0, "writtenBytes": 0}
+    try:
+        data = (json.dumps(message, sort_keys=True) + "\n").encode()
+        summary["frameBytes"] = len(data)
+        _timing_call(witness, "record", phase, dict(summary))
+        if len(data) > 4096:
+            raise ValueError("oversized private group control frame")
+        os.set_blocking(fd, False)
+        while time.monotonic() < end:
+            summary["selectCount"] += 1
+            summary["selectEntry"] = _timing_now(witness)
+            summary["selectReturn"], summary["writable"] = None, None
+            writable = select.select([], [fd], [], max(0, end - time.monotonic()))[1]
+            summary["selectReturn"], summary["writable"] = _timing_now(witness), bool(writable)
+            _timing_call(witness, "record", phase, {"kind": "select", "role": role, "event": event,
+                "entry": summary["selectEntry"], "return": summary["selectReturn"], "deadline": end,
+                "writable": bool(writable)})
+            if writable:
+                attempt = _timing_now(witness)
+                summary["writeAttempts"] += 1
+                summary["attemptedBytes"], summary["writtenBytes"] = len(data), None
+                try:
+                    count = os.write(fd, data)
+                except Exception as exc:
+                    _timing_call(witness, "record", phase, {"kind": "write", "role": role, "event": event,
+                        "attempt": attempt, "attemptedBytes": len(data), "writtenBytes": None,
+                        "exception": _timing_exception(exc)})
+                    raise
+                summary["writtenBytes"] = count
+                _timing_call(witness, "record", phase, {"kind": "write", "role": role, "event": event,
+                    "attempt": attempt, "attemptedBytes": len(data), "writtenBytes": count, "exception": None})
+                if count != len(data):
+                    raise OSError("partial group control frame; no alternate write")
+                return
+        raise TimeoutError("private group control write deadline")
+    except Exception as exc:
+        summary["exception"] = _timing_exception(exc)
+        _timing_call(witness, "record_failure", phase, summary)
+        raise
 
 
 def group_frame_read(fd, binding, end):
@@ -2349,6 +3227,8 @@ def group_fixture_main(role, *, emit=None):
 
 class NativeGroupIO:
     """Only OS effects for this fixed inert fixture; never accepts product argv."""
+    _timing_supported = True
+
     def __init__(self):
         self.base = None
         self.controls, self.handles, self.fds = {}, [], set()
@@ -2378,7 +3258,19 @@ class NativeGroupIO:
         return time.monotonic()
 
     def wait(self, seconds):
-        select.select([], [], [], seconds)
+        witness = getattr(self, "timing_witness", None)
+        phase = getattr(self, "timing_phase", "execution")
+        entry = _timing_now(witness)
+        try:
+            select.select([], [], [], seconds)
+        except Exception as exc:
+            _timing_call(witness, "record_failure", phase,
+                         {"kind": "wait", "exception": _timing_exception(exc)})
+            raise
+        finally:
+            returned = _timing_now(witness)
+            _timing_call(witness, "record", phase, {"kind": "wait", "entry": entry, "return": returned,
+                         "requested": seconds, "observedDuration": None if entry is None or returned is None else returned - entry})
 
     def _pipe(self):
         read, write = os.pipe()
@@ -2425,16 +3317,35 @@ class NativeGroupIO:
             raise offline.PartialSpawnError(exc, handle) from exc
 
     def command(self, ctx, execution_end, settlement_end):
-        return self._start("command", ctx, execution_end, settlement_end)
+        try:
+            return self._start("command", ctx, execution_end, settlement_end)
+        except Exception as exc:
+            self._startup_observation(exc)
+            raise
 
     def anchor(self, ctx, execution_end, settlement_end, group):
-        return self._start("anchor", ctx, execution_end, settlement_end, group)
+        try:
+            return self._start("anchor", ctx, execution_end, settlement_end, group)
+        except Exception as exc:
+            self._startup_observation(exc)
+            raise
+
+    def _startup_observation(self, exc):
+        witness = getattr(self, "timing_witness", None)
+        _timing_call(witness, "partial_startup")
+        _timing_call(witness, "record", getattr(self, "timing_phase", "execution"),
+                     {"kind": "startup", "observed": _timing_now(witness),
+                      "exception": _timing_exception(getattr(exc, "cause", exc))})
+        _timing_call(witness, "record_failure", getattr(self, "timing_phase", "execution"),
+                     {"kind": "startup", "exception": _timing_exception(getattr(exc, "cause", exc))})
 
     def send(self, role, event, end, **fields):
         if role in self.refused:
             raise ValueError("refused control route remains closed")
         try:
-            group_frame_write(self.controls[role], group_message(self.ctx, event, **fields), end)
+            group_frame_write(self.controls[role], group_message(self.ctx, event, **fields), end,
+                              witness=getattr(self, "timing_witness", None),
+                              phase=getattr(self, "timing_phase", "execution"), role=role, event=event)
         except PermissionError:
             self.refused.add(role)
             raise
@@ -2447,10 +3358,21 @@ class NativeGroupIO:
                 # Attachment never established an observation route. Retain
                 # unknown output/EOF and the original setup error; do not retry it.
                 continue
-            stdout, stderr, _ = self.base.read_output(handle, limit)
+            try:
+                stdout, stderr, _ = self.base.read_output(handle, limit)
+            except Exception as exc:
+                _timing_call(getattr(self, "timing_witness", None), "record_failure",
+                             getattr(self, "timing_phase", "execution"),
+                             {"kind": "read", "exception": _timing_exception(exc)})
+                raise
             self.channels.append((index, stdout))
             out.extend(stdout)
             err.extend(stderr)
+        witness = getattr(self, "timing_witness", None)
+        self.timing_read_id = min(2_147_483_647, getattr(self, "timing_read_id", 0) + 1)
+        _timing_call(witness, "record", getattr(self, "timing_phase", "execution"),
+                     {"kind": "read", "observed": _timing_now(witness), "readId": self.timing_read_id,
+                      "stdoutBytes": len(out), "stderrBytes": len(err)})
         return bytes(out), bytes(err), bool(self.handles) and all(h["eof"] for h in self.handles)
 
     def status(self, role):
@@ -2564,19 +3486,30 @@ class ParentExitController:
     def poll(self, handle):
         return self.io.status("command")
 
+    def _frame_failure(self, event, exc):
+        _timing_call(getattr(self.io, "timing_witness", None), "record_failure",
+                     getattr(self.io, "timing_phase", "execution"),
+                     {"kind": "frame", "event": event, "exception": _timing_exception(exc)})
+        return exc
+
     def _accept(self, frame):
         event = frame.get("event")
+        witness = getattr(self.io, "timing_witness", None)
+        _timing_call(witness, "record", getattr(self.io, "timing_phase", "execution"),
+                     {"kind": "frame", "event": event, "observed": _timing_now(witness),
+                      "readId": getattr(self.io, "timing_read_id", None), "armed": self.armed,
+                      "released": self.released, "stopSent": self.stop_sent})
         if any(frame.get(k) != self.ctx.get(k) for k in GROUP_BINDING):
-            raise ValueError("foreign native group binding")
+            raise self._frame_failure(event, ValueError("foreign native group binding"))
         if frame.get("session") != self.io.session or frame.get("group") != self.command_pid:
-            raise ValueError("native group/session conflict")
+            raise self._frame_failure(event, ValueError("native group/session conflict"))
         role = "work" if event == "work-ready" else "command" if event in ("command-ready", "parent-exiting") else "anchor"
         expected = self.command_pid if role == "command" else self.anchor_pid
         if role != "work" and (expected is None or frame.get("pid") != expected or frame.get("parentPid") != self.io.owner_pid):
-            raise ValueError("retained native child identity mismatch")
+            raise self._frame_failure(event, ValueError("retained native child identity mismatch"))
         if event in self.frames:
             if self.frames[event] != frame:
-                raise ValueError("conflicting native group frame")
+                raise self._frame_failure(event, ValueError("conflicting native group frame"))
             return
         if event == "command-ready":
             self.frames[event] = frame
@@ -2585,34 +3518,34 @@ class ParentExitController:
             self.io.send("anchor", "ARM", self.execution_end, group=self.command_pid)
         elif event == "armed":
             if "anchor-ready" not in self.frames:
-                raise ValueError("unregistered anchor ARM")
+                raise self._frame_failure(event, ValueError("unregistered anchor ARM"))
             self.armed = True
             self.io.send("command", "GO", self.execution_end)
         elif event == "work-ready":
             if (not self.armed or frame.get("parentPid") != self.command_pid
                     or type(frame.get("pid")) is not int or frame["pid"] in (self.command_pid, self.anchor_pid)):
-                raise ValueError("work not created by the registered command parent")
+                raise self._frame_failure(event, ValueError("work not created by the registered command parent"))
             self.frames[event] = frame  # Custody binding before permitting actual parent exit.
             self.io.work_pid = frame["pid"]
             self.io.send("anchor", "RELEASE", self.execution_end,
                          settlementEnd=min(self.settlement_end, self.monotonic() + 1))
         elif event == "release-armed":
             if "work-ready" not in self.frames:
-                raise ValueError("release before work custody")
+                raise self._frame_failure(event, ValueError("release before work custody"))
             self.io.send("command", "RELEASE", self.execution_end)
             self.released = True
         elif event == "parent-exiting":
             if not self.released or frame.get("workPid") != self.frames["work-ready"]["pid"]:
-                raise ValueError("parent-exit/work identity mismatch")
+                raise self._frame_failure(event, ValueError("parent-exit/work identity mismatch"))
         elif event == "refused":
             self.refused = True
             diagnostic = "anchor signal refused: " + frame.get("diagnostic", "unknown")
             self.errors.append(diagnostic)
-            raise PermissionError(frame.get("errno", 1), diagnostic)
+            raise self._frame_failure(event, PermissionError(frame.get("errno", 1), diagnostic))
         elif event == "protocol-error":
             self.errors.append("anchor control observation failed: " + frame.get("diagnostic", "unknown"))
         elif event not in ("term", "kill"):
-            raise ValueError("unexpected native group event")
+            raise self._frame_failure(event, ValueError("unexpected native group event"))
         self.frames[event] = frame
 
     def read_output(self, handle, limit):
@@ -2781,6 +3714,14 @@ def run_parent_exit_case(mode, ctx, execution_end, settlement_end, *, io=None, c
     if "qualificationOwners" in ctx:
         ctx["qualificationOwners"].append(controller)
     transport = io if io is not None else NativeGroupIO()
+    witness = None
+    unavailable = "unsupported-transport"
+    if getattr(transport, "_timing_supported", False) is True:
+        try:
+            witness = _NativeTimingWitness(execution_end)
+            transport.timing_witness, transport.timing_phase = witness, "execution"
+        except Exception:
+            unavailable = "collector-error"
     receipt = {"status": "incomplete", "wrapperExitCode": 1, "receiptWritten": False, "resources": {"complete": False}}
     try:
         controller.__init__(mode, ctx, execution_end, settlement_end, transport)
@@ -2792,9 +3733,19 @@ def run_parent_exit_case(mode, ctx, execution_end, settlement_end, *, io=None, c
         # Admission keeps the original fixed 1+1 limits; this invocation must
         # start before its predeclared end rather than granting a fresh budget.
         spec["executionSeconds"] = 1
+        # Parent sample immediately before entry, not the supervisor's internal start.
+        _timing_call(witness, "pre_supervise", _timing_now(witness))
         receipt = offline.supervise(spec, ctx, ops=controller)
+        _timing_call(witness, "freeze_execution")
     except Exception as exc:
+        _timing_call(witness, "partial_startup")
+        _timing_call(witness, "record", "execution", {"kind": "startup", "observed": _timing_now(witness),
+                     "exception": _timing_exception(exc)})
+        _timing_call(witness, "record_failure", "execution", {"kind": "startup", "exception": _timing_exception(exc)})
+        _timing_call(witness, "freeze_execution")
         controller.errors = getattr(controller, "errors", []) + [str(exc)]
+    if witness is not None:
+        transport.timing_phase = "owner-cleanup"
     frozen = json.dumps(receipt, sort_keys=True)
     owner_closed = controller.finish(receipt, settlement_end)
     return {"receipt": receipt, "ownerClosed": owner_closed,
@@ -2803,7 +3754,9 @@ def run_parent_exit_case(mode, ctx, execution_end, settlement_end, *, io=None, c
             "heldStreamAfterExit": controller.held_stream, "frames": controller.frames,
             "ownerCleanup": controller.finish_actions, "errors": controller.errors,
             "ownerRefusals": controller.finalization_refusals,
-            "anchorExitCode": transport.status("anchor")}
+            "anchorExitCode": transport.status("anchor"),
+            "nativeTimingWitness": (_timing_call(witness, "result")
+                                    or _NativeTimingWitness.unavailable(unavailable))}
 
 
 class FakeNativeGroupIO:

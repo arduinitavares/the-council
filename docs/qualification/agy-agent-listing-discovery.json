@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "scope": "Accepted diagnostic evidence only; production issue3 remains open.",
+  "documentSha256": "44f27190e1bf93eb88d183a24b092525263293f3ab8875c65c1d1a3626aefed5",
+  "authoredFrozenReviewArtifactSha256": "14f338b3660143dc0abf3dc13a54b43a625d9572f65954cf1b2b512014f4b3ee",
+  "statusAtAuthorFreeze": "The document preserves its author-time pending review/installation wording. Later acceptance is recorded here.",
+  "coordinatorDisposition": "Accepted after checking original receipts, source hashes, actual review settings/actions and settled ownership. R1 stale report reference is corrected.",
+  "diagnosis": "Explicit --add-dir supplies the missing workspace selection in the recorded isolated metadata commands. Repository marker alone does not. Council already supplies --add-dir.",
+  "executableVersion": "1.4.12",
+  "executableSha256": "34423fc9b0af3841e7646aa72a2d40ffeab8218b22d1cb99eac7355f9eba31e3",
+  "primaryBatchSha256": [
+    "0c7b467292edbbec85a2c56a6449f2e4eb6da24dc4f720a53eb872b4163fd6d1",
+    "8c74b5ee26ac1a63d2c44d7b350c3009983d9220e6bafeb637be0315514df2a1"
+  ],
+  "cases": [
+    {
+      "batch": "placement",
+      "case": "workspace-minimal",
+      "argvPattern": [
+        "agy",
+        "agent"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.53,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "placement",
+      "case": "global-minimal",
+      "argvPattern": [
+        "agy",
+        "agent"
+      ],
+      "stdout": "council-listing-control\n",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.533,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "placement",
+      "case": "workspace-explicit",
+      "argvPattern": [
+        "agy",
+        "agent"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.508,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "placement",
+      "case": "global-explicit",
+      "argvPattern": [
+        "agy",
+        "agent"
+      ],
+      "stdout": "council-listing-control\n",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.59,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "workspace-selection",
+      "case": "help-agent",
+      "argvPattern": [
+        "agy",
+        "help",
+        "agent"
+      ],
+      "stdout": "",
+      "stderr": "Usage: agy agent [flags]\n\nList available agents\n\nFlags:\n  -h      Show help\n  --help  Show help\n",
+      "exitCode": 0,
+      "elapsedSeconds": 0.143,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "workspace-selection",
+      "case": "workspace-add-dir",
+      "argvPattern": [
+        "agy",
+        "--add-dir",
+        "<case-cwd>",
+        "agent"
+      ],
+      "stdout": "council-listing-control\n",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.69,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "workspace-selection",
+      "case": "workspace-git",
+      "argvPattern": [
+        "agy",
+        "agent"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.523,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    },
+    {
+      "batch": "workspace-selection",
+      "case": "workspace-both",
+      "argvPattern": [
+        "agy",
+        "--add-dir",
+        "<case-cwd>",
+        "agent"
+      ],
+      "stdout": "council-listing-control\n",
+      "stderr": "",
+      "exitCode": 0,
+      "elapsedSeconds": 0.596,
+      "outputCollectionComplete": true,
+      "protectedUnchanged": true,
+      "modelPromptSubmitted": false,
+      "exposedOwnedPidsSettled": true
+    }
+  ],
+  "reviews": [
+    {
+      "model": "gpt-6-astra",
+      "effort": "ultra",
+      "verdict": "PASS",
+      "reportSha256": "ddc6c3367b7335850b1ac9ff0bc42e965b760c5bd195e9828ccfffd04a2a9807",
+      "artifactSha256": "14f338b3660143dc0abf3dc13a54b43a625d9572f65954cf1b2b512014f4b3ee",
+      "elapsedSeconds": 143.514,
+      "positiveSettlementVerified": true
+    },
+    {
+      "model": "gemini-4-argon-high",
+      "effort": "high",
+      "verdict": "PASS",
+      "reportSha256": "46ad499628e989f71199248c1b006bb4ddbd67a33aeefebe1d26df2e43f118dc",
+      "artifactSha256": "14f338b3660143dc0abf3dc13a54b43a625d9572f65954cf1b2b512014f4b3ee",
+      "elapsedSeconds": 148.407,
+      "positiveSettlementVerified": true
+    }
+  ],
+  "verification": {
+    "metadataCommands": 8,
+    "maxSecondsPerCommand": 15,
+    "copiedDocumentMatchesAcceptedBytes": true,
+    "allOriginalReceiptsRechecked": true,
+    "allExposedOwnedLifecyclesSettled": true,
+    "productionCodeChanged": false,
+    "defaultNpmTestsRerunForDocumentation": false,
+    "previousFullSuiteGate": "failed; unchanged"
+  },
+  "remaining": [
+    "Selected-agent startup and inheritance are not qualified by listing.",
+    "Complete plugin loader, enablement, parser and normalization rules remain prerequisites.",
+    "Production witness acquisition/adoption/reuse/launch integration remains conditional.",
+    "Issue3 and parent1 remain open."
+  ]
+}

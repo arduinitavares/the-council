@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, dirname, resolve, sep } from "node:path";
+import { delimiter, join, dirname, resolve, sep, extname, parse } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parse as parseToml } from "smol-toml";
@@ -11,7 +11,11 @@ import { acquiredAuditDisposition, adoptAuditSnapshot, currentSourceDigest, save
 import { canonicalJson } from "../domain/hash.js";
 import type { Command } from "./orca-driver.js";
 import { codexKernel } from "./codex-controls.js";
-import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
+import { validateAgyNativeHookSource } from "./agy-native-hook-validation.js";
+import type { AgyRecipeInputs } from "./agy-inventory-witness.js";
+import { reconstructCurrentAgyInputs } from "./agy-startup-inventory.js";
+import { selectAgySourceRules } from "./agy-loader-contract.js";
+import { readInventoryJson, listInventoryDirectory, type InventoryBudget, type InventoryRead, type InventoryProblem, type BoundedFile, type ReadReceipt } from "./inventory-io.js";
 
 export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
 export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
@@ -67,16 +71,21 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const effects: string[] = [];
   const ordering: string[] = [];
   const hookDescriptors: unknown[] = [];
+  const inventoryBudget: InventoryBudget = { paths: new Set<string>(), jsonBytes: 0 };
   const add = (name: string, state: Observation["state"], source: string, detail: string, enforcement: string, stage: "bootstrap" | "effective" = "bootstrap") => {
     facts.push(controlFactSchema.parse({ name, stage, observation: { state, source, detail }, enforcement, observedAt: Date.now(), digest: sha256(JSON.stringify({ source, detail })) }));
   };
   const name = { codex: "codex", antigravity: "agy", cursor: "cursor-agent" }[selection.route];
+  const currentAgy = selection.route === "antigravity" ? reconstructCurrentAgyInputs({ selection, version, workspace }, inventoryBudget) : null;
+  const agyContext = currentAgy?.state === "present" ? currentAgy.value.context : currentAgy?.context;
+  const agyExecutable = currentAgy?.state === "present" ? currentAgy.value.executable : currentAgy?.executable;
+  const inspectionHome = currentAgy ? agyContext?.home : homedir();
   if (selection.route !== "antigravity") {
     const supportedVersion = selection.route === "codex" ? /(?:^|\s)0\.164\.0(?:\s|$)/.test(version) : /2026\.10\.22-27dcf5f/.test(version);
     add("provider-version-contract", supportedVersion ? "verified" : "unsupported", "Installed exact provider version", supportedVersion ? version : "No current scoped control contract for this exposed version", "No inherited stale qualification");
   }
-  let executable: string | undefined;
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+  let executable: string | undefined = agyExecutable?.path;
+  if (selection.route !== "antigravity") for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     const candidate = join(directory, name);
     if (existsSync(candidate)) { executable = realpathSync(candidate); break; }
   }
@@ -95,12 +104,43 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     }
     add("installed-command-contract", "verified", `${name} --help / ${version}`, sha256(help), "Installed public CLI parameters, not effective configuration");
   } catch { add("installed-command-contract", "missing", `${name} --help`, "Bounded non-inference command evidence unavailable", "No initialization"); }
+  const inventoryProblems = (problems: readonly InventoryProblem[]) => {
+    for (const problem of problems) {
+      unavailable.push(`${problem.code}:${problem.path}`);
+      add("source-acquisition", "unknown", problem.path, canonicalJson(problem), "No inferred source absence or digest");
+    }
+  };
+  const addAgySource = (source: AuditSource) => {
+    if (!sources.some(existing => existing.path === source.path && existing.kind === source.kind)) sources.push(source);
+  };
+  const readAgyJson = (file: string): InventoryRead<{ value: unknown; file: BoundedFile }> => {
+    const result = readInventoryJson(file, inventoryBudget);
+    if (result.state === "present") addAgySource({ path: file, kind: "file", sha256: result.value.file.sha256 });
+    else if (result.state === "absent") addAgySource({ path: file, kind: "absent", sha256: null });
+    else inventoryProblems(result.problems);
+    return result;
+  };
   const track = (file: string, kind: "file" | "metadata" = "file") => {
-    if (sources.some(source => source.path === file)) return;
-    try { const source: AuditSource = { path: file, kind: existsSync(file) ? kind : "absent", sha256: null }; source.sha256 = currentSourceDigest(source); sources.push(source); }
+    if (selection.route === "antigravity" && kind === "file" && extname(file).toLowerCase() === ".json") { readAgyJson(file); return; }
+    if (selection.route !== "antigravity" && sources.some(source => source.path === file)) return;
+    try {
+      const source: AuditSource = { path: file, kind: existsSync(file) ? kind : "absent", sha256: null };
+      if (selection.route === "antigravity" && sources.some(existing => existing.path === file && existing.kind === source.kind)) return;
+      source.sha256 = currentSourceDigest(source); sources.push(source);
+    }
     catch { unavailable.push(`SOURCE_METADATA_OR_DIGEST_UNAVAILABLE:${file}`); add("source-acquisition", "unknown", file, "Source metadata/digest unavailable", "No inferred source absence"); }
   };
   const read = (file: string): any => {
+    if (selection.route === "antigravity") {
+      ordering.push(file);
+      const result = readAgyJson(file);
+      if (result.state === "present") return result.value.value;
+      if (result.state === "unknown") {
+        unavailable.push(`CONFIGURATION_UNREADABLE:${file}`);
+        add("configuration-readable", "unknown", file, "Configuration is unavailable or malformed", "No initialization");
+      }
+      return undefined;
+    }
     track(file); ordering.push(file);
     if (!existsSync(file)) return undefined;
     try { return readStrictFile(file, 1024*1024); }
@@ -150,63 +190,169 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     }
     for (const nested of Object.values(value)) if (typeof nested === "object") hookEffects(nested);
   };
-  const canonicalPolicy=join(homedir(),".agents/policies/model-policy.md");
-  track(canonicalPolicy);
-  if(!existsSync(canonicalPolicy))unavailable.push("EXECUTION_HOST_CANONICAL_POLICY_UNAVAILABLE");
-  if(executable)track(executable);
+  const canonicalPolicy=inspectionHome === undefined ? undefined : join(inspectionHome,".agents/policies/model-policy.md");
+  if(canonicalPolicy)track(canonicalPolicy);
+  if(!canonicalPolicy || !existsSync(canonicalPolicy))unavailable.push("EXECUTION_HOST_CANONICAL_POLICY_UNAVAILABLE");
+  if(agyExecutable)addAgySource({path:agyExecutable.path,kind:"file",sha256:agyExecutable.sha256});
+  else if(executable)track(executable);
   let recipe: ProviderRecipe | undefined;
   const cwd = join(workspace, ".council/native-packets");
   const argv: string[] = [];
   const materializations: { path: string; content: string; sha256: string }[] = [];
   let codexPolicy: ProviderRecipe["codexPolicy"];
   let agyHookShell: ProviderRecipe["agyHookShell"];
-  if (selection.route === "antigravity") {
+  const agyRecipePlan: AgyRecipeInputs | undefined = currentAgy?.state === "present" ? currentAgy.value.recipeInputs : undefined;
+  if (selection.route === "antigravity" && currentAgy && agyContext) {
+    const home = agyContext.home;
     const exposed = agyHelpFlags(help);
     const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
     const missing = required.filter(flag => !exposed?.has(flag));
     add("public-cli-capability-contract", missing.length ? "unsupported" : "verified", `installed AGY --help / ${version}`,
       missing.length ? `Required recipe flags not exposed: ${missing.map(flag => "--"+flag).join(", ")}` : `Required recipe flags exposed; help sha256=${sha256(help)}`,
       "Public launch syntax only; version, executable, sources and effective gates remain independently bound");
-    const sourceContract = /(?:^|\s)1\.4\.12(?:\s|$)/.test(version);
-    add("provider-startup-source-contract", sourceContract ? "verified" : "unsupported", "Inspected AGY startup/source acquisition contract",
-      sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
-      "Unreviewed versions cannot inherit loader/hook-source qualification");
-    const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
-    const config = read(global);
-    const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
-    let inventoryKnown = true;
-    for (const root of [join(homedir(), ".gemini/antigravity-cli/plugins"), join(workspace, ".agents/plugins")]) if (existsSync(root)) {
-      if (lstatSync(root).isSymbolicLink()) { inventoryKnown = false; continue; }
-      const entries = readdirSync(root, { withFileTypes: true });
-      if (entries.length > 100) { inventoryKnown = false; continue; }
-      for (const entry of entries) { if (entry.isSymbolicLink()) inventoryKnown = false; else if (entry.isDirectory()) hookFiles.push(join(root, entry.name, "hooks.json")); }
+    const sourceSelection = agyExecutable ? selectAgySourceRules({ path: agyExecutable.path, sha256: agyExecutable.sha256 }) : null;
+    if (sourceSelection?.state === "unknown") unavailable.push(`${sourceSelection.problem.code}:${sourceSelection.problem.path}`);
+    else if (sourceSelection?.state === "pinned-subset") unavailable.push("AGY_SOURCE_GRAPH_UNQUALIFIED");
+    add("provider-startup-source-contract", "unknown", "Acquired AGY executable source-subset identity",
+      sourceSelection?.state === "pinned-subset" ? `${sourceSelection.ruleSet}: conditional source subset matched; complete graph, runner dispatch, activity and native authority remain unresolved`
+        : sourceSelection?.state === "unknown" ? canonicalJson(sourceSelection.problem) : "Guarded executable identity unavailable",
+      "Executable identity selects only reviewed source rules; no version-derived startup qualification");
+    const global = join(home, ".gemini/antigravity-cli/settings.json");
+    for (const source of currentAgy.sources) addAgySource(source);
+    ordering.push(...currentAgy.ordering);
+    if (currentAgy.state === "unknown") {
+      inventoryProblems(currentAgy.problems.filter(problem => !problem.code.startsWith("AGY_RECIPE_SETTINGS_INVALID:")));
+      for (const problem of currentAgy.problems.filter(problem => problem.code.startsWith("AGY_RECIPE_SETTINGS_INVALID:"))) {
+        unavailable.push(problem.code);
+        add("agy-recipe-settings", "unknown", global, problem.code, "No recipe from malformed controlling settings");
+      }
     }
-    if(!inventoryKnown)unavailable.push("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
-    const hooks = hookFiles.map(file => read(file)).filter(value=>value!==undefined);
-    for(const hooksSource of hooks)hookEffects(hooksSource);
-    if (executable && agyHookShellApplicable(hookDescriptors, workspace)) {
-      const acquired = acquireAgyHookShellPolicy({ workspace, executable, version, descriptors: hookDescriptors, basePath: process.env.PATH ?? "" });
-      if (acquired.policy) {
-        agyHookShell = acquired.policy;
-        for (const source of acquired.sources) if (!sources.some(s => s.path === source.path && s.kind === source.kind)) sources.push(source);
-        effects.push(...acquired.effects);
-        // The policy recognizes the whole discovered referencing set, including
-        // duplicates. An extra custom descriptor prevents this discharge.
-        const known = `HOOK_DYNAMIC_CLOSURE_UNAVAILABLE:${agyHookShell.installed}:${sha256(agyHookShell.hookContent)}`;
-        for (let i = unavailable.length - 1; i >= 0; i--) if (unavailable[i] === known) unavailable.splice(i, 1);
-      } else unavailable.push(...acquired.unavailable);
+    const settingsUnavailable = !currentAgy.sources.some(source => source.path === global);
+    if (settingsUnavailable) {
+      unavailable.push(`CONFIGURATION_UNREADABLE:${global}`);
+      add("configuration-readable", "unknown", global, "Configuration is unavailable or malformed", "No initialization");
     }
-    for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
-    const enabledHook = (value: any): boolean => value && typeof value === "object" && (Array.isArray(value) ? value.some(enabledHook) : value.enabled === false ? false : typeof value.command === "string" || typeof value.prompt === "string" || typeof value.type === "string" || Object.values(value).some(enabledHook));
-    add("startup-hooks-and-plugins", inventoryKnown && hooks.every(value => value !== undefined && !enabledHook(value)) ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${hooks.length} sources inventoried; enabled or unreadable hooks require source/effect audit within existing authority, not automatic renewed approval`, "SessionStart precedes inference; settings hooks={} is insufficient");
-    const agent = "---\nname: council-packet\ndescription: Supplied-packet Council reader with no tools or helpers.\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nRead the supplied packet only and return its strict bound JSON envelope.\n";
-    const session = JSON.stringify({ allowNonWorkspaceAccess: false, permissions: { ...(config?.permissions ?? {}), deny: [...new Set([...(config?.permissions?.deny ?? []), "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"])] } });
-    materializations.push({ path: join(cwd, ".agents/agents/council-packet/agent.md"), content: agent, sha256: sha256(agent) }, { path: join(cwd, ".council-profiles", sha256(session), "session-settings.json"), content: session, sha256: sha256(session) });
-    const collisionSources = [join(homedir(), ".gemini/config/agents/council-packet.md"), join(homedir(), ".gemini/config/agents/council-packet/agent.md")];
+    const hookFiles = [join(home, ".gemini/antigravity-cli/hooks.json"), join(home, ".gemini/config/hooks.json"), join(home, ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
+    let inventoryKnown = !settingsUnavailable;
+    const inventoryFailuresBefore = unavailable.length;
+    const directoryMetadata = (root: string, receipt?: ReadReceipt): AuditSource | InventoryProblem => {
+      const custody = ["dev", "ino", "uid", "gid", "mode"] as const;
+      const selected = [...custody, "size", "mtimeMs", "ctimeMs"] as const;
+      const fault = (code: string, path: string): never => { throw Object.assign(Error(code), { code, path }); };
+      try {
+        const resolved = resolve(root), traversalRoot = parse(resolved).root;
+        const parts = resolved.slice(traversalRoot.length).split(sep).filter(Boolean);
+        const observed: { path: string; stat: Stats; leaf: boolean }[] = [];
+        let current: string = traversalRoot;
+        for (let index = 0; index <= parts.length; index++) {
+          if (index) current = join(current, parts[index - 1]!);
+          const stat = lstatSync(current), leaf = index === parts.length;
+          if (!leaf && stat.isSymbolicLink()) fault("INVENTORY_SYMLINK", current);
+          if (!leaf && !stat.isDirectory()) fault("ENOTDIR", current);
+          // Only an exact leaf-link refusal may retain link metadata. No link
+          // target is opened, and unsafe parents stop before their descendants.
+          if (leaf && (receipt ? !stat.isDirectory() || stat.isSymbolicLink() : !stat.isSymbolicLink())) fault("INVENTORY_UNSTABLE", current);
+          if (receipt) {
+            const expected = receipt.components.find(component => component.path === current)?.identity;
+            if (!expected || (leaf ? selected : custody).some(key => stat[key] !== expected[key])) fault("INVENTORY_UNSTABLE", current);
+          }
+          observed.push({ path: current, stat, leaf });
+        }
+        for (const entry of observed) {
+          const after = lstatSync(entry.path);
+          if ((!entry.leaf && (!after.isDirectory() || after.isSymbolicLink())) ||
+              after.isSymbolicLink() !== entry.stat.isSymbolicLink() ||
+              (entry.leaf ? selected : custody).some(key => after[key] !== entry.stat[key])) fault("INVENTORY_UNSTABLE", entry.path);
+        }
+        const leaf = observed[observed.length - 1]!.stat;
+        // Bind the original metadata meaning to the enumerated generation,
+        // rather than fingerprinting a newer directory after its fd closes.
+        const stat = receipt?.after ?? leaf;
+        return { path: root, kind: "metadata", sha256: sha256(canonicalJson({ mode: stat.mode, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, symbolicLink: leaf.isSymbolicLink() })) };
+      } catch (cause) {
+        const error = cause as { code?: unknown; path?: unknown } | null;
+        return { code: typeof error?.code === "string" ? error.code : "INVENTORY_IO_UNKNOWN", path: typeof error?.path === "string" ? error.path : root, edge: null };
+      }
+    };
+    const listAgyDirectory = (root: string) => {
+      const result = listInventoryDirectory(root, inventoryBudget);
+      if (result.state === "unknown") {
+        inventoryProblems(result.problems);
+        if (result.problems.some(problem => problem.code === "INVENTORY_SYMLINK" && problem.path === root)) {
+          const metadata = directoryMetadata(root);
+          if ("code" in metadata) inventoryProblems([metadata]);
+          else addAgySource(metadata);
+        }
+      }
+      else if (result.state === "absent") addAgySource({ path: root, kind: "absent", sha256: null });
+      else {
+        const metadata = directoryMetadata(root, result.receipt);
+        if ("code" in metadata) {
+          inventoryProblems([metadata]);
+          return { state: "unknown" as const, problems: [metadata] };
+        }
+        addAgySource(metadata);
+      }
+      return result;
+    };
+    const candidateLeaves = ["plugin.json", ".antigravity-plugin/plugin.json", ".gemini-plugin/plugin.json", ".claude-plugin/plugin.json", "gemini-extension.json"];
+    for (const root of [join(home, ".gemini/antigravity-cli/plugins"), join(home, ".gemini/config/plugins"), join(workspace, ".agents/plugins")]) {
+      try {
+        const listing = listAgyDirectory(root);
+        if (listing.state === "absent") continue;
+        if (listing.state === "unknown") { inventoryKnown = false; continue; }
+        for (const entry of listing.value.entries) {
+          if (entry.type === "symlink") { listAgyDirectory(join(root, entry.name)); inventoryKnown = false; continue; }
+          if (entry.type !== "directory") continue;
+          const plugin = join(root, entry.name);
+          try {
+            if (listAgyDirectory(plugin).state !== "present") { inventoryKnown = false; continue; }
+            let hasMetadata = false;
+            for (const leaf of candidateLeaves) {
+              const file = join(plugin, leaf);
+              const result = readAgyJson(file);
+              if (result.state === "present") hasMetadata = true;
+              else if (result.state === "unknown") inventoryKnown = false;
+            }
+            const hook = join(plugin, "hooks.json");
+            hookFiles.push(hook);
+            // Fingerprints select no manifest and establish no enablement rule.
+            // Hookless candidates and unresolved metadata cannot qualify startup.
+            if (hasMetadata || !existsSync(hook)) inventoryKnown = false;
+          } catch { inventoryKnown = false; }
+        }
+      } catch { inventoryKnown = false; }
+    }
+    // Retain guarded bytes and their custody receipt with each complete source.
+    // These observations establish acquisition order, not effective loader order.
+    const hooks = hookFiles.map(path => {
+      ordering.push(path);
+      const acquisition = readAgyJson(path);
+      if (acquisition.state !== "present") return { path, acquisition };
+      const validation = validateAgyNativeHookSource({ path, file: acquisition.value.file });
+      if (validation.state === "valid") unavailable.push(`AGY_PLUGIN_RUNTIME_INPUT_UNAVAILABLE:${path}`);
+      else for (const problem of validation.problems) unavailable.push(`${problem.code}:${problem.path}:${problem.pointer}`);
+      return { path, acquisition, validation };
+    });
+    if (unavailable.length > inventoryFailuresBefore) inventoryKnown = false;
+    if (!inventoryKnown) unavailable.push("AGY_PLUGIN_INVENTORY_UNAVAILABLE");
+    // No H1 source has qualified loader membership, activation or command bases.
+    // Conforming occurrences remain inert; the generic scanner is for other routes.
+    for(const instruction of [join(home,".gemini/GEMINI.md"),join(home,".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
+    const acquiredHooks = hooks.filter(source => source.acquisition.state === "present");
+    add("startup-hooks-and-plugins", "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${acquiredHooks.length} acquired sources; native conformance does not establish loader membership or runtime activity`, "SessionStart precedes inference; settings hooks={} is insufficient");
+    if (agyRecipePlan) {
+      materializations.push(...agyRecipePlan.materializations);
+      argv.push(...agyRecipePlan.argv);
+    }
+    const collisionSources = [join(home, ".gemini/config/agents/council-packet.md"), join(home, ".gemini/config/agents/council-packet/agent.md")];
     for(const file of collisionSources)track(file);const collision=collisionSources.some(existsSync);
-    add("custom-agent-definition", collision ? "missing" : "verified", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : sha256(agent), "Definition metadata only; verify actual selected agent and empty init.tools before input");
+    const agentHash = agyRecipePlan?.agentDefinition?.sha256;
+    add("custom-agent-definition", collision ? "missing" : agentHash ? "verified" : "unknown", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : agentHash ?? "AGY recipe settings unavailable", "Definition metadata only; verify actual selected agent and empty init.tools before input");
     add("effective-input-gate", "unknown", "AGY stream-json init", "Require init before user input, exact model/agent/cwd/permission and empty tools", "Wrapper withholds stdin until effective checks pass", "effective");
-    argv.push("--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--add-dir", cwd, "--mode", "plan", "--sandbox", "--settings", join(cwd, ".council-profiles", sha256(session), "session-settings.json"), "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s");
+  } else if (selection.route === "antigravity") {
+    if (currentAgy?.state === "unknown") inventoryProblems(currentAgy.problems);
+    add("provider-startup-source-contract", "unknown", "Current AGY context", "Current home/context unavailable", "No inferred startup source qualification");
   } else if (selection.route === "codex") {
     const configurations: any[] = [];
     const codexHome = nonblankRoot(process.env.CODEX_HOME) ?? join(homedir(),".codex");
@@ -285,7 +431,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   // Sources and their digests are acquired even when enforcement is unavailable.
   // A future supported recipe must satisfy the same fact conjunction; no flag
   // or input file can mark the current missing controls verified.
-  if (executable && help) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
+  if (executable && help && (selection.route !== "antigravity" || agyRecipePlan)) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
     executable, argv, cwd, version, selection: selectionSchema.parse(selection), expectedPermission: "request-review", sources, facts,
     ...(selection.route === "antigravity" ? { agent: "council-packet" } : {}), materializations };
   if (recipe && codexPolicy) recipe.codexPolicy = codexPolicy;
@@ -298,7 +444,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
   const disposition=await acquiredAuditDisposition(audit,command);
   const auditedNames=new Set(["startup-and-platform-exceptions","startup-hooks-and-plugins","helper-and-startup-effect-enforcement"]);
   for(const fact of facts)if(auditedNames.has(fact.name)&&fact.observation.state!=="verified"){
-    fact.observation={state:disposition.verified?"verified":"unknown",source:"Source snapshot and authenticated coordinator disposition",detail:disposition.detail};
+    fact.observation={state:disposition.verified?"verified":"unknown",source:"Source snapshot and authenticated coordinator disposition",detail:selection.route === "antigravity" && audit.unavailable.length ? audit.unavailable.join("; ") : disposition.detail};
     fact.digest=auditHash(audit);
   }
   if(recipe&&selection.route==="codex")recipe.instructionSources=sources.filter(source=>source.kind!=="absent"&&/(?:AGENTS(?:\.override)?\.md|GEMINI\.md)$/.test(source.path)).map(source=>({path:source.path,sha256:source.sha256!}));

@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "codeRevision": "54a4dafca0bf64f131b398fe99600812143e37c3",
+  "runtime": {
+    "node": "v22.23.4",
+    "npm": "10.9.9"
+  },
+  "checks": [
+    {
+      "name": "consolidated-build-01",
+      "argv": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "result": "passed",
+      "exitCode": 0,
+      "elapsedSeconds": 0.618,
+      "deadlineSeconds": 120,
+      "timeout": false,
+      "logSha256": "a77b25b76a9c2a765879731cb859779bc886ef39a8528571ff473af8d8ebd184"
+    },
+    {
+      "name": "consolidated-typecheck-01",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "result": "passed",
+      "exitCode": 0,
+      "elapsedSeconds": 0.677,
+      "deadlineSeconds": 120,
+      "timeout": false,
+      "logSha256": "85458fb8c9a80de9d9968cc4a383741605f5c41eed67ac23b7a5e1532d9b505b"
+    },
+    {
+      "name": "consolidated-focused-01",
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "test/pilot/inventory-io.test.ts",
+        "test/pilot/agy-inventory-witness.test.ts",
+        "test/pilot/agy-inventory-store.test.ts",
+        "test/pilot/agy-materialization-state.test.ts",
+        "test/pilot/agy-installed-plugin-sources.test.ts",
+        "test/pilot/provider-controls.test.ts",
+        "test/pilot/control-audit.test.ts",
+        "test/pilot/provider-session.test.ts",
+        "test/pilot/agy-hook-shell.test.ts",
+        "--no-file-parallelism"
+      ],
+      "result": "passed",
+      "exitCode": 0,
+      "elapsedSeconds": 115.421,
+      "deadlineSeconds": 300,
+      "timeout": false,
+      "logSha256": "4cb58ba75194e7fb7c4c2944cf8dde50fbc4ab816e5e54933dcebe036bff9323"
+    },
+    {
+      "name": "consolidated-full-01",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "result": "failed",
+      "exitCode": 1,
+      "elapsedSeconds": 329.929,
+      "deadlineSeconds": 600,
+      "timeout": false,
+      "logSha256": "a83e551dbf0a1f81ef8bbba06eb2cc7e8167518ca2341b75c336d94e9f4654f2"
+    }
+  ],
+  "focused": {
+    "files": 9,
+    "passed": 603,
+    "failed": 0,
+    "fileParallelism": false
+  },
+  "defaultFullSuite": {
+    "filesPassed": 60,
+    "filesFailed": 12,
+    "testsPassed": 1444,
+    "testsFailed": 62,
+    "newMechanicsTestFailures": 27,
+    "cause": "unclassified"
+  },
+  "knownOwnedProcessCount": 1190,
+  "knownOwnedProcessesAndGroupsSettled": true,
+  "trackedSourceUnchangedAcrossChecks": true,
+  "sourceHashes": {
+    "src/pilot/inventory-io.ts": "6ff6fa2cec50ceb71344a27a61387859f8f8bef3ba79e7d4754eda76c535c132",
+    "src/pilot/agy-inventory-witness.ts": "d281a9d29b5a36f7dcf9184eb49a70fbe4dbb2b8fb59c24774c8333df31b50e6",
+    "src/pilot/agy-inventory-store.ts": "682c46f2f7f7e0c19ab04c4306da7ade273c08b76af716e6c262b47522cca575",
+    "src/pilot/agy-materialization-state.ts": "89b77baa057bd8f6888abbec8bfd85581d265cf72304b143c7c30e5e332412bb",
+    "test/pilot/inventory-io.test.ts": "316fd91486bbc4905a5bc826e92269eed7dc388a605e49232be87efaa208bf7c",
+    "test/pilot/agy-inventory-witness.test.ts": "205ac9907b696b1dc1d282f0b88d8ed68b02e03f5b41fa2107d8adb539aa45d4",
+    "test/pilot/agy-inventory-store.test.ts": "c3d3057dc16142e9642525e185e07a37bef570f38f09b9f6c9024d7cddb25287",
+    "test/pilot/agy-materialization-state.test.ts": "a123a53f4476e09a513f6db589c57813cd3b647fdde67d291275a2e57cfdca54"
+  },
+  "openMechanicsConcern": "Deterministic unrelated-ancestor-sibling probe returns INVENTORY_UNSTABLE for unchanged selected file/JSON/directory.",
+  "productionLoaderIntegration": false,
+  "completeIssue3": false,
+  "wholeIncrementReview": "pending"
+}

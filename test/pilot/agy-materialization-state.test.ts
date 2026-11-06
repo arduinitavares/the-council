@@ -1,0 +1,457 @@
+import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { dirname, join, parse, sep } from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { AgyRecipeInputs } from "../../src/pilot/agy-inventory-witness.js";
+import { inspectAgyMaterializationState, type StaticMaterializationState } from "../../src/pilot/agy-materialization-state.js";
+
+const betweenObservations = vi.hoisted(() => ({
+  after: undefined as ((path: string) => void) | undefined, states: [] as string[],
+}));
+// Invoke real IO first; inject changes only after a complete observation returns.
+vi.mock("../../src/pilot/inventory-io.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/pilot/inventory-io.js")>();
+  const record = <T extends { state: string }>(path: string, result: T): T => {
+    betweenObservations.states.push(result.state);
+    betweenObservations.after?.(path);
+    return result;
+  };
+  return { ...actual,
+    listInventoryDirectory: (...args: Parameters<typeof actual.listInventoryDirectory>) => record(args[0], actual.listInventoryDirectory(...args)),
+    readInventoryFile: (...args: Parameters<typeof actual.readInventoryFile>) => record(args[0], actual.readInventoryFile(...args)),
+    readInventoryJson: (...args: Parameters<typeof actual.readInventoryJson>) => record(args[0], actual.readInventoryJson(...args)),
+  };
+});
+
+// Only syscall faults are doubled; listings, payloads and receipts remain real.
+vi.mock("node:fs", async importOriginal => {
+  const actual = await importOriginal<typeof fs & { default: typeof fs }>();
+  return { ...actual, default: { ...actual.default } };
+});
+// Bound only the path operation responsible for the historical synchronous loop.
+// Every unaltered call uses Node's real dirname, including the production walk.
+vi.mock("node:path", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:path")>();
+  return { ...actual, dirname: vi.fn(actual.dirname) };
+});
+let workspace: string, fixtureRoot: string, fixtureContainer: string;
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+const budget = () => ({ paths: new Set<string>(), jsonBytes: 0 });
+const session = '{"allowNonWorkspaceAccess":false,"permissions":{"deny":["write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"]}}';
+const agent = "---\nname: council-packet\ntools: []\n---\nRead the supplied packet only.\n";
+function inputs(requestingWorkspace = workspace): AgyRecipeInputs {
+  const cwd = join(requestingWorkspace, ".council/native-packets");
+  const agentPath = join(cwd, ".agents/agents/council-packet/agent.md");
+  return { protocol: "agy-stream", executable: join(requestingWorkspace, "inert-agy"), argv: [], cwd,
+    version: "fixture", selection: { route: "antigravity", model: "fixture", effort: "high" },
+    expectedPermission: "plan", agent: "council-packet",
+    agentDefinition: { path: agentPath, sha256: digest(agent) },
+    materializations: [{ path: agentPath, content: agent, sha256: digest(agent) },
+      { path: join(cwd, ".council-profiles", digest(session), "session-settings.json"), content: session, sha256: digest(session) }],
+    codexPolicy: null, agyHookShell: null };
+}
+function install(recipe = inputs(), indexes = [0, 1]) {
+  for (const index of indexes) {
+    const material = recipe.materializations[index]!;
+    fs.mkdirSync(dirname(material.path), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(material.path, material.content, { mode: material.mode ?? 0o600, flag: "wx" });
+  }
+  return recipe;
+}
+function expectedParents(recipe = inputs()) {
+  // Independently enumerated; do not derive expected coverage with production code.
+  return [workspace, join(workspace, ".council"), recipe.cwd,
+    join(recipe.cwd, ".agents"), join(recipe.cwd, ".agents/agents"),
+    join(recipe.cwd, ".agents/agents/council-packet"), join(recipe.cwd, ".council-profiles"),
+    join(recipe.cwd, ".council-profiles", digest(session))].sort();
+}
+function inspect(recipe = inputs()) { return inspectAgyMaterializationState(workspace, recipe, budget()); }
+// Per-file containers isolate fixture churn while files still run in parallel.
+const fixtureParent = fileURLToPath(new URL("./fixtures/agy-materialization-workspaces/", import.meta.url));
+beforeAll(() => { fixtureContainer = fs.realpathSync(fs.mkdtempSync(join(fixtureParent, "suite-"))); });
+afterAll(() => { fs.rmSync(fixtureContainer, { recursive: true, force: true }); });
+beforeEach(() => {
+  workspace = fixtureRoot = fs.mkdtempSync(join(fixtureContainer, "case-"));
+  betweenObservations.after = undefined; betweenObservations.states = [];
+});
+afterEach(() => { betweenObservations.after = undefined; vi.restoreAllMocks(); fs.rmSync(fixtureRoot, { recursive: true, force: true }); });
+
+// Breaks caught: comparing namespace timestamps strictly above workspace, or
+// weakening custody/full workspace identity to make unrelated noise acceptable.
+it("keeps the static set complete through unrelated sibling changes above workspace", () => {
+  workspace = join(fixtureRoot, "selected-workspace"); fs.mkdirSync(workspace, { mode: 0o700 });
+  const recipe = install(), selected = fs.lstatSync(workspace);
+  let changed = false;
+  betweenObservations.after = path => {
+    if (path === workspace && !changed) { changed = true; fs.writeFileSync(join(fixtureRoot, "unrelated-sibling"), "inert"); }
+  };
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(fs.lstatSync(workspace)).toMatchObject({ ino: selected.ino, size: selected.size, mtimeMs: selected.mtimeMs, ctimeMs: selected.ctimeMs });
+  expect(fs.readdirSync(workspace)).toEqual([".council"]);
+  for (const material of recipe.materializations) expect(fs.readFileSync(material.path, "utf8")).toBe(material.content);
+  expect(result.state).toBe("complete");
+  if (result.state === "unknown") throw Error(JSON.stringify(result.problems));
+  expect(result.receipts).toHaveLength(10);
+});
+
+it.each(["dev", "ino", "uid", "gid", "mode"] as const)("rejects ancestor %s drift between individually present observations", field => {
+  workspace = join(fixtureRoot, "selected-workspace"); fs.mkdirSync(workspace, { mode: 0o700 });
+  const recipe = install(), lstat = fs.lstatSync;
+  let changed = false;
+  betweenObservations.after = path => { if (path === workspace) changed = true; };
+  vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+    return changed && String(args[0]) === fixtureRoot
+      ? Object.assign(Object.create(stat), { [field]: stat[field] + 1 }) : stat;
+  }) as typeof fs.lstatSync);
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected custody drift refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: fixtureRoot, edge: null });
+});
+
+it.each(["workspace", "parent"])("retains full %s ctime identity across individually present observations", kind => {
+  const recipe = install(), target = kind === "workspace" ? workspace : recipe.cwd, lstat = fs.lstatSync;
+  let changed = false;
+  betweenObservations.after = path => { if (path === target) changed = true; };
+  vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = Reflect.apply(lstat, fs, args) as fs.Stats;
+    return changed && String(args[0]) === target
+      ? Object.assign(Object.create(stat), { ctimeMs: stat.ctimeMs + 1 }) : stat;
+  }) as typeof fs.lstatSync);
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected selected ctime refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: target, edge: null });
+});
+
+it("rejects changed observed workspace membership between individually present observations", () => {
+  const recipe = install();
+  let changed = false;
+  betweenObservations.after = path => {
+    if (path === workspace && !changed) { changed = true; fs.writeFileSync(join(workspace, "ordinary-new"), "inert"); }
+  };
+  const result = inspect(recipe);
+  expect(changed).toBe(true);
+  expect(betweenObservations.states, JSON.stringify(result.state === "unknown" ? result.problems : [])).toEqual(Array(10).fill("present"));
+  expect(result.directoryObservations[0]?.observation).toMatchObject({ state: "present", value: { entries: [{ name: ".council", type: "directory" }] } });
+  expect(fs.readdirSync(workspace).sort()).toEqual([".council", "ordinary-new"]);
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected observed membership refusal");
+  expect(result.problems).toContainEqual({ code: "MATERIALIZATION_COMPONENT_CHANGED", path: workspace, edge: null });
+});
+
+// Breaks caught: conflating partial/absent/complete, omitted parents and invented identities.
+it("reports all absent with every exact missing directory and its verified parents", () => {
+  const result = inspect();
+  expect(result.state).toBe("absent");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents());
+  for (const item of result.directoryObservations) {
+    if (item.path === workspace) {
+      expect(item.observation).toMatchObject({ state: "present", value: { entries: [] } });
+    } else {
+      expect(item.observation).toMatchObject({ state: "absent", path: item.path });
+      if (item.observation.state !== "absent") throw Error("expected absence");
+      expect(item.observation.verifiedParents.at(-1)?.path).toBe(workspace);
+      expect(item.observation.verifiedParents.every(parent => parent.identity.type === "directory")).toBe(true);
+    }
+  }
+  expect(fs.readdirSync(workspace)).toEqual([]);
+});
+
+it("reports the complete byte-identical static set with real receipts and exact parent coverage", () => {
+  const recipe = install(), result = inspect(recipe);
+  expect(result.state).toBe("complete");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents(recipe));
+  if (result.state === "unknown") throw Error("expected complete");
+  expect(result.receipts.filter(receipt => receipt.before.type === "file").map(receipt => receipt.path).sort())
+    .toEqual(recipe.materializations.map(material => material.path).sort());
+  for (const receipt of result.receipts) {
+    expect(receipt.before).toEqual(receipt.after);
+    expect(receipt.before.ino).toBeGreaterThan(0);
+  }
+  expect(result).not.toHaveProperty("normalizationRuleIds");
+  expect(result).not.toHaveProperty("loaderContract");
+});
+
+it.each([0, 1])("rejects a partial set with only material %i without repairing missing files", index => {
+  const recipe = install(inputs(), [index]), result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents(recipe));
+  expect(fs.existsSync(recipe.materializations[1 - index]!.path)).toBe(false);
+});
+
+// Breaks caught: prefix exclusions, dropping siblings, and treating missing as empty.
+it("preserves ordinary siblings and other profile names in every shared parent", () => {
+  const recipe = install();
+  const shared = [workspace, join(workspace, ".council"), recipe.cwd,
+    join(recipe.cwd, ".agents"), join(recipe.cwd, ".agents/agents"), join(recipe.cwd, ".council-profiles")];
+  for (const parent of shared) {
+    fs.writeFileSync(join(parent, "ordinary-no-extension"), "sibling");
+    fs.mkdirSync(join(parent, "agy-hook-ordinary"));
+    fs.symlinkSync(recipe.materializations[0]!.path, join(parent, "another-edge"));
+  }
+  const result = inspect(recipe);
+  expect(result.state).toBe("complete");
+  for (const parent of shared) {
+    const read = result.directoryObservations.find(item => item.path === parent)!.observation;
+    expect(read.state).toBe("present");
+    if (read.state !== "present") throw Error("expected full listing");
+    expect(read.value.entries).toEqual(expect.arrayContaining([
+      { name: "ordinary-no-extension", type: "file" }, { name: "agy-hook-ordinary", type: "directory" },
+      { name: "another-edge", type: "symlink" },
+    ]));
+  }
+});
+
+it("preserves empty existing managed leaves while both static files are absent", () => {
+  const recipe = inputs();
+  for (const material of recipe.materializations) fs.mkdirSync(dirname(material.path), { recursive: true, mode: 0o700 });
+  const result = inspect(recipe);
+  expect(result.state).toBe("absent");
+  for (const material of recipe.materializations) {
+    expect(result.directoryObservations.find(item => item.path === dirname(material.path))!.observation)
+      .toMatchObject({ state: "present", value: { entries: [] } });
+  }
+  expect(result).not.toHaveProperty("normalizationRuleIds");
+  expect(result).not.toHaveProperty("rootListings");
+});
+
+it.each([
+  [0, "extra-manifest.json", "file"], [1, "instance-123.json", "file"],
+  [0, "extra-child", "directory"], [1, "agy-hook-runtime", "directory"],
+  [0, "same-source-another-edge", "symlink"],
+] as const)("rejects and retains managed leaf %i extra %s (%s)", (index, name, type) => {
+  const recipe = install(), parent = dirname(recipe.materializations[index]!.path), extra = join(parent, name);
+  if (type === "file") fs.writeFileSync(extra, "{}");
+  if (type === "directory") fs.mkdirSync(extra);
+  if (type === "symlink") fs.symlinkSync(recipe.materializations[1]!.path, extra);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.find(item => item.path === parent)!.observation)
+    .toMatchObject({ state: "present", value: { entries: expect.arrayContaining([{ name, type }]) } });
+  expect(fs.lstatSync(extra).isSymbolicLink()).toBe(type === "symlink");
+});
+
+it("retains same-name directory substitution instead of accepting a file", () => {
+  const recipe = install(), path = recipe.materializations[0]!.path;
+  fs.unlinkSync(path); fs.mkdirSync(path);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.find(item => item.path === dirname(path))!.observation)
+    .toMatchObject({ state: "present", value: { entries: [{ name: "agent.md", type: "directory" }] } });
+});
+
+it.each(["leaf", "component"])("rejects a %s symlink without following it", kind => {
+  const recipe = install(), path = kind === "leaf" ? recipe.materializations[0]!.path : join(recipe.cwd, ".agents");
+  const saved = join(workspace, "saved"); fs.renameSync(path, saved); fs.symlinkSync(saved, path);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  if (result.state !== "unknown") throw Error("expected refusal");
+  expect(result.problems.some(problem => problem.code === "INVENTORY_SYMLINK")).toBe(true);
+  expect(fs.lstatSync(path).isSymbolicLink()).toBe(true);
+});
+
+it("rejects changed payload bytes without overwriting them", () => {
+  const recipe = install(), path = recipe.materializations[0]!.path;
+  fs.writeFileSync(path, "changed");
+  expect(inspect(recipe).state).toBe("unknown");
+  expect(fs.readFileSync(path, "utf8")).toBe("changed");
+});
+
+it.each(["file", "parent", "workspace"])("rejects stable foreign ownership of a %s", kind => {
+  const recipe = install(), path = kind === "file" ? recipe.materializations[0]!.path :
+    kind === "parent" ? join(recipe.cwd, ".agents") : workspace;
+  const target = fs.lstatSync(path), lstat = fs.lstatSync, fstat = fs.fstatSync;
+  const foreign = (stat: fs.Stats) => stat.dev === target.dev && stat.ino === target.ino
+    ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { uid: (process.geteuid?.() ?? 0) + 1 }) : stat;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => foreign(lstat(...args) as fs.Stats)) as typeof fs.lstatSync);
+  vi.spyOn(fs, "fstatSync").mockImplementation(((...args: Parameters<typeof fs.fstatSync>) => foreign(fstat(...args) as fs.Stats)) as typeof fs.fstatSync);
+  expect(inspect(recipe).state).toBe("unknown");
+});
+
+it("enforces explicit file modes and accepts their exact intended values", () => {
+  const recipe = inputs(); recipe.materializations[0]!.mode = 0o400; recipe.materializations[1]!.mode = 0o600;
+  install(recipe);
+  expect(inspect(recipe).state).toBe("complete");
+  fs.chmodSync(recipe.materializations[0]!.path, 0o600);
+  expect(inspect(recipe).state).toBe("unknown");
+  expect(fs.lstatSync(recipe.materializations[0]!.path).mode & 0o7777).toBe(0o600);
+});
+
+// Breaks caught: recipe hash spoofing, duplicate membership and runtime profiles as statics.
+it.each(["content", "settings-address", "duplicate", "runtime-path", "extra-material", "agent-path"])("rejects an invalid static recipe: %s", kind => {
+  const recipe = inputs();
+  if (kind === "content") { install(recipe); recipe.materializations[0]!.content = "different intended content"; }
+  if (kind === "settings-address") {
+    recipe.materializations[1]!.path = join(recipe.cwd, ".council-profiles", "a".repeat(64), "session-settings.json"); install(recipe);
+  }
+  if (kind === "duplicate") { recipe.materializations[1] = { ...recipe.materializations[0]! }; install(recipe, [0]); }
+  if (kind === "runtime-path") {
+    recipe.materializations[0]!.path = join(recipe.cwd, ".council-profiles/agy-hook-fixture/hook.sh"); install(recipe);
+  }
+  if (kind === "extra-material") {
+    install(recipe); recipe.materializations.push({ path: join(recipe.cwd, "instance-123.json"), content: "{}", sha256: digest("{}") });
+  }
+  if (kind === "agent-path") { recipe.materializations[0]!.path = join(recipe.cwd, ".agents/agents/other/agent.md"); install(recipe); }
+  expect(inspect(recipe).state).toBe("unknown");
+});
+
+it("retains earlier full observations and an explicit failed listing after a bounded IO fault", () => {
+  const recipe = install(), failed = join(recipe.cwd, ".agents/agents"), opendir = fs.opendirSync;
+  vi.spyOn(fs, "opendirSync").mockImplementation(((path: fs.PathLike, options?: fs.OpenDirOptions) => {
+    if (String(path) === failed) throw Object.assign(new Error("fixture IO fault"), { code: "EIO", path: failed });
+    return opendir(path, options);
+  }) as typeof fs.opendirSync);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents(recipe));
+  expect(result.directoryObservations[0]!.observation.state).toBe("present");
+  expect(result.directoryObservations.find(item => item.path === failed)!.observation)
+    .toMatchObject({ state: "unknown", problems: [{ code: "EIO", path: failed, edge: null }] });
+  expect(result.directoryObservations.at(-1)!.observation.state).toBe("present");
+});
+
+it("retains an unknown overflowing listing instead of a successful 100-entry prefix", () => {
+  const recipe = install(), parent = dirname(recipe.materializations[0]!.path);
+  for (let i = 0; i < 100; i++) fs.writeFileSync(join(parent, `ordinary-${i}`), "x");
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.find(item => item.path === parent)!.observation)
+    .toMatchObject({ state: "unknown", problems: [{ code: "INVENTORY_DIRECTORY_LIMIT", path: parent, edge: null }] });
+});
+
+it("shares the caller's aggregate JSON budget for the settings payload", () => {
+  const recipe = install(), full = { paths: new Set<string>(), jsonBytes: 16777216 };
+  const result = inspectAgyMaterializationState(workspace, recipe, full);
+  expect(result.state).toBe("unknown");
+  expect(full.jsonBytes).toBeGreaterThanOrEqual(16777216);
+});
+
+it.each(["directory-directory", "directory-file"])("rejects a replacement between %s observations even when each IO call is stable", kind => {
+  const recipe = install(), agents = join(recipe.cwd, ".agents"), staged = join(workspace, "staged");
+  fs.mkdirSync(join(staged, "agents/council-packet"), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(join(staged, "agents/council-packet/agent.md"), agent, { mode: 0o600 });
+  const trigger = kind === "directory-directory" ? agents : dirname(recipe.materializations[1]!.path);
+  const open = fs.openSync, close = fs.closeSync;
+  let descriptor: number | undefined, replaced = false;
+  vi.spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+    const fd = open(path, flags, mode);
+    if (String(path) === trigger) descriptor = fd;
+    return fd;
+  });
+  vi.spyOn(fs, "closeSync").mockImplementation(fd => {
+    close(fd);
+    if (fd === descriptor && !replaced) {
+      replaced = true; fs.renameSync(agents, join(recipe.cwd, ".agents-retired")); fs.renameSync(staged, agents);
+    }
+  });
+  const result = inspect(recipe);
+  expect(replaced).toBe(true);
+  expect(result.directoryObservations.every(item => item.observation.state === "present")).toBe(true);
+  expect(result.state).toBe("unknown");
+});
+
+it.each([false, true])("performs no writes, repairs, or creation for installed=%s", installed => {
+  const recipe = installed ? install() : inputs();
+  const writes = [vi.spyOn(fs, "writeFileSync"), vi.spyOn(fs, "mkdirSync"), vi.spyOn(fs, "renameSync"),
+    vi.spyOn(fs, "unlinkSync"), vi.spyOn(fs, "rmSync"), vi.spyOn(fs, "chmodSync")];
+  const result = inspect(recipe);
+  expect(result.state).toBe(installed ? "complete" : "absent");
+  for (const write of writes) expect(write).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+});
+
+// T4-01: without rejection/progress checks the real inspector exhausts this
+// scoped guard. A guard exception is an executed test failure, never a success.
+function boundedParentWalk(run: () => void, alter?: (path: string, real: typeof dirname) => string) {
+  const mocked = vi.mocked(dirname), real = mocked.getMockImplementation()!;
+  let calls = 0;
+  mocked.mockImplementation(path => {
+    if (++calls > 256) throw Error("TEST_PARENT_WALK_EXCEEDED_256_STEPS");
+    return alter ? alter(path, real) : real(path);
+  });
+  try { run(); } finally { mocked.mockImplementation(real); }
+}
+
+it("T4-01 rejects a non-root trailing-separator workspace before acquisition without looping", () => {
+  const recipe = inputs(), lstat = vi.spyOn(fs, "lstatSync");
+  let result: StaticMaterializationState | undefined;
+  expect(() => boundedParentWalk(() => {
+    result = inspectAgyMaterializationState(workspace + sep, recipe, budget());
+  })).not.toThrow();
+  expect(result).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it.each([0, 1])("T4-01 rejects a trailing separator on static material %i before acquisition", index => {
+  const recipe = inputs(); recipe.materializations[index]!.path += sep;
+  const lstat = vi.spyOn(fs, "lstatSync");
+  expect(() => boundedParentWalk(() => {
+    expect(inspect(recipe)).toMatchObject({ state: "unknown", directoryObservations: [] });
+  })).not.toThrow();
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it.each(["no-progress", "outside-workspace", "lateral"])("T4-01 bounds invalid parent ancestry: %s", kind => {
+  const recipe = inputs(), leaf = dirname(recipe.materializations[0]!.path), lstat = vi.spyOn(fs, "lstatSync");
+  let result: StaticMaterializationState | undefined;
+  expect(() => boundedParentWalk(() => { result = inspect(recipe); }, (path, real) => {
+    if (path !== leaf) return real(path);
+    return kind === "no-progress" ? path : kind === "outside-workspace" ? parse(path).root : join(workspace, "unrelated");
+  })).not.toThrow();
+  expect(result).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it("T4-01 preserves the legitimate filesystem-root spelling without accessing real root contents", () => {
+  const root = parse(workspace).root;
+  // Refuse at the first syscall; a valid root must reach acquisition, rather
+  // than be rejected as a noncanonical recipe. No real root listing occurs.
+  vi.spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike) => {
+    throw Object.assign(Error("controlled root observation"), { code: "EIO", path: String(path) });
+  }) as typeof fs.lstatSync);
+  const result = inspectAgyMaterializationState(root, inputs(root), budget());
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations).toHaveLength(8);
+  expect(result.directoryObservations[0]).toMatchObject({ path: root, observation: { state: "unknown" } });
+  if (result.state !== "unknown") throw Error("expected controlled IO refusal");
+  expect(result.problems.every(problem => problem.code === "EIO")).toBe(true);
+});
+
+it.each([false, true])("T4-ROUTE rejects agy-stream selecting codex before acquisition, installed=%s", installed => {
+  const recipe = installed ? install() : inputs();
+  recipe.selection = { route: "codex", model: "gpt-6.1-sol", effort: "max" };
+  const lstat = vi.spyOn(fs, "lstatSync");
+  expect(inspect(recipe)).toMatchObject({ state: "unknown", directoryObservations: [] });
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+it("T4-WORKSPACE requires an existing requesting workspace while retaining all absent observations", () => {
+  const recipe = inputs(); fs.rmdirSync(workspace);
+  const result = inspect(recipe);
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.map(item => item.path)).toEqual(expectedParents(recipe));
+  for (const item of result.directoryObservations) {
+    expect(item.observation).toMatchObject({ state: "absent", path: item.path });
+    if (item.observation.state !== "absent") throw Error("expected verified absence");
+    expect(item.observation.verifiedParents.at(-1)?.path).toBe(dirname(workspace));
+  }
+  expect(fs.existsSync(workspace)).toBe(false);
+});
+
+it.each(["file", "symlink"])("T4-WORKSPACE rejects a requesting workspace that is a %s", kind => {
+  const path = join(workspace, "invalid-workspace");
+  if (kind === "file") fs.writeFileSync(path, "ordinary file");
+  else fs.symlinkSync(workspace, path);
+  const result = inspectAgyMaterializationState(path, inputs(path), budget());
+  expect(result.state).toBe("unknown");
+  expect(result.directoryObservations.find(item => item.path === path)?.observation.state).toBe("unknown");
+});

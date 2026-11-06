@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "sourceRevision": "85e9a3a5206d5087ceecbf59e4314b02fa3611b0",
+  "runtime": {
+    "platform": "macOS",
+    "node": "v22.23.4",
+    "npm": "10.9.9"
+  },
+  "sourceHashes": {
+    "src/pilot/inventory-io.ts": "b187629fcfad5d422ad6e271b5deeba708eb764eff39286ddf1742f0d0cd62c4",
+    "src/pilot/agy-materialization-state.ts": "db04673f5f566ee3840bc9129bd174206816329718763acf64a0627ac75dbd6d",
+    "test/pilot/inventory-io.test.ts": "614fca3b8fa296f5bf0b014767b01f8369de18eeaf316e10a001bbfb0fbbc9bc",
+    "test/pilot/agy-materialization-state.test.ts": "bf8fb84add9b208cbcf5e4f59f2730ce84a90729cd7c3abe676f644c28bd5bb6",
+    "test/pilot/fixtures/inventory-io-workspaces/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test/pilot/fixtures/agy-materialization-workspaces/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "productionLoaderIntegration": false,
+  "completeIssue3": false,
+  "reviewStateAtVerificationFreeze": "Initial whole review failed; scoped final re-review is pending at this recorded checkpoint.",
+  "independentRootProbes": {
+    "files": 4,
+    "passed": 6,
+    "failed": 0,
+    "logSha256": "54e7e24fa8cef421e86af9a4fcb23a4edfbaa77b52681c51d4fcc888c3e33ad9"
+  },
+  "affectedTwoFileCheck": {
+    "passed": 139,
+    "failed": 0,
+    "fileParallelism": "default",
+    "logSha256": "af8c42775ad1d42f720a69859a353afe5018fea305ce3cc4dac99d371be03de3"
+  },
+  "workerNineFileCheck": {
+    "passed": 607,
+    "failed": 31,
+    "failuresByFile": {
+      "test/pilot/provider-session.test.ts": 29,
+      "test/pilot/agy-hook-shell.test.ts": 2
+    },
+    "inventorySuitesPassed": true,
+    "causes": "unclassified",
+    "logSha256": "bcc62ec59b5ca30ebf80ad9ae399847c7b61e15a1597610fe7de780e7193a0fd"
+  },
+  "compiledBinding": {
+    "fileCount": 139,
+    "unchangedAcrossFullCheck": true,
+    "workerNineFileTimingAndHashesVerified": true,
+    "sourceUnchangedAcrossFullCheck": true
+  },
+  "defaultFullSuite": {
+    "argv": [
+      "npm",
+      "test"
+    ],
+    "exitCode": 1,
+    "elapsedSeconds": 334.37,
+    "deadlineSeconds": 600,
+    "timeout": false,
+    "filesPassed": 69,
+    "filesFailed": 3,
+    "testsPassed": 1527,
+    "testsFailed": 14,
+    "targetedNineFilesHaveNoFailures": true,
+    "failedTestNames": [
+      "FAIL  test/pilot/cache-composition.test.ts > composes inspector, durable cache, native wrapper proofs, historical PID reuse and bounded requalification",
+      "FAIL  test/pilot/context-wrapper.test.ts > runs E4 through the shipped composition, actual wrapper processes and stateful native boundaries",
+      "FAIL  test/pilot/context-wrapper.test.ts > blocks init-after-input at the real pre-input process boundary and never starts topics",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca 1.4.244 and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca 1.4.245 and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca 0.9.0 and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca 2.0.0-dev+local and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca  custom version  and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca undefined and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca null and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca  and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca     and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca 42 and retains required host checks",
+      "FAIL  test/pilot/discovery.test.ts > inspects Orca {} and retains required host checks"
+    ],
+    "causes": "unclassified",
+    "logSha256": "9493c96790fd8b6743c5f56116feb41ef5521009a82761586c81c1d05f85b0c8"
+  },
+  "lifecycle": {
+    "originalSupervisorResult": {
+      "runnerExitCode": 1,
+      "elapsedSeconds": 342.729,
+      "knownPidCount": 1135,
+      "remainingPids": [
+        65347
+      ],
+      "remainingGroups": [
+        65347
+      ],
+      "wrapperPid": 61338,
+      "trackedUnchanged": true,
+      "distUnchanged": true,
+      "distFileCount": 139,
+      "logSha256": "9493c96790fd8b6743c5f56116feb41ef5521009a82761586c81c1d05f85b0c8"
+    },
+    "initialOwnedSurvivorCount": 1,
+    "ownedFixtureProgram": "test/pilot/fixtures/context-provider.cjs",
+    "cleanupSignals": [
+      "SIGTERM"
+    ],
+    "allObservedOwnedProcessesAndGroupsAbsentAfterCleanup": true,
+    "originalFailedReceiptsPreserved": true
+  },
+  "limitations": [
+    "Benign ancestor namespace changes during separate named stream, child-type or absence acquisition can conservatively yield unknown.",
+    "No universal noise tolerance, atomic filesystem snapshot or future-race guarantee.",
+    "Full suite is not green; 14 failures and an owned fixture child requiring cleanup remain observed test failures.",
+    "No attribution of unclassified failures to issue8, real Orca, or provider permissions.",
+    "Loader selection/path/enablement/parser/normalization prerequisites and production integration remain conditional."
+  ]
+}

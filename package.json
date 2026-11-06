@@ -3,14 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "council": "dist/cli/index.js" },
+  "bin": {
+    "council": "dist/cli/index.js",
+    "council-native": "dist/pilot/cli.js"
+  },
   "files": [
     "dist/",
     "council.yaml",
     "skills/the-council/",
     "docs/runbook.md",
     "docs/qualification/local-macos.md",
-    "docs/superpowers/diagrams/"
+    "docs/superpowers/diagrams/",
+    "docs/qualification/issue-1-validation.md",
+    "docs/qualification/issue-1-second-project-prerequisites.json"
   ],
   "scripts": {
     "test": "vitest run",
@@ -19,15 +24,17 @@
     "postbuild": "node scripts/copy-assets.mjs"
   },
   "dependencies": {
+    "acorn": "8.19.0",
+    "better-sqlite3": "13.0.3",
+    "smol-toml": "1.9.1",
     "xstate": "5.33.3",
-    "zod": "4.6.7",
     "yaml": "2.9.1",
-    "better-sqlite3": "13.0.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "typescript": "7.0.2",
-    "vitest": "5.0.5",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "22.20.5",
-    "@types/better-sqlite3": "9.6.0"
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }

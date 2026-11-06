@@ -17,7 +17,8 @@ export function resolveConfigPath(override: string | undefined, invocationCwd: s
   try { return resolve(realpathSync(packageRoot), 'council.yaml'); }
   catch { throw new ConfigError('CONFIG_NOT_FOUND'); }
 }
-export function parseCouncilConfig(raw: Uint8Array): CouncilConfig {
+/** Shared strict YAML syntax; roster compatibility is checked by each entry. */
+export function decodeConfigYaml(raw: Uint8Array): unknown {
   try {
     if (raw.byteLength > CONFIG_LIMIT_BYTES) throw new ConfigError('CONFIG_INVALID');
     const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
@@ -29,6 +30,16 @@ export function parseCouncilConfig(raw: Uint8Array): CouncilConfig {
     });
     const value: unknown = doc.toJS({ maxAliasCount: 0 });
     if (typeof value === 'object' && value !== null && 'version' in value && typeof value.version === 'number' && value.version !== 1) throw new ConfigError('CONFIG_VERSION_UNSUPPORTED');
+    return value;
+  } catch (error) {
+    if (error instanceof ConfigError) throw error;
+    throw new ConfigError('CONFIG_INVALID');
+  }
+}
+export function parseCouncilConfig(raw: Uint8Array): CouncilConfig {
+  try {
+    const value = decodeConfigYaml(raw);
+    if (typeof value === 'object' && value !== null && 'reviewers' in value && typeof value.reviewers === 'object' && value.reviewers !== null && 'xai' in value.reviewers) throw new ConfigError('CONFIG_NATIVE_ONLY_USE_NATIVE_COMMAND');
     return configSchema.parse(value);
   } catch (error) {
     if (error instanceof ConfigError) throw error;

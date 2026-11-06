@@ -1,0 +1,519 @@
+{
+  "version": 1,
+  "scope": "issue-1-ranking-item-3-gemini-startup-source-repairs",
+  "evidenceDateLocal": "2026-10-30",
+  "executionHost": "local macOS",
+  "baseline": "6b5378ef60fac4c302cd4422deb3258fd6a4ce2b",
+  "codeAcceptance": "scoped-source-repair-reviewed",
+  "operationalAcceptance": "open",
+  "before": {
+    "version": "1.4.12",
+    "recipeAvailable": false,
+    "bootstrap": "unsupported",
+    "effectiveControls": "unknown",
+    "providerSpawned": false,
+    "inputDelivered": false,
+    "modelCalls": 0,
+    "facts": [
+      {
+        "name": "provider-version-contract",
+        "state": "unsupported"
+      },
+      {
+        "name": "installed-command-contract",
+        "state": "missing"
+      },
+      {
+        "name": "workspace-trust",
+        "state": "missing"
+      },
+      {
+        "name": "startup-hooks-and-plugins",
+        "state": "unknown"
+      },
+      {
+        "name": "custom-agent-tool-ceiling",
+        "state": "verified"
+      },
+      {
+        "name": "effective-input-gate",
+        "state": "unknown"
+      },
+      {
+        "name": "session-controls",
+        "state": "unsupported"
+      }
+    ]
+  },
+  "after": {
+    "version": "1.4.12",
+    "recipeAvailable": true,
+    "bootstrap": "missing",
+    "effectiveControls": "unknown",
+    "providerSpawned": false,
+    "inputDelivered": false,
+    "modelCalls": 0,
+    "facts": [
+      {
+        "name": "installed-command-contract",
+        "state": "verified"
+      },
+      {
+        "name": "public-cli-capability-contract",
+        "state": "verified"
+      },
+      {
+        "name": "provider-startup-source-contract",
+        "state": "verified"
+      },
+      {
+        "name": "workspace-trust",
+        "state": "missing"
+      },
+      {
+        "name": "startup-hooks-and-plugins",
+        "state": "unknown"
+      },
+      {
+        "name": "custom-agent-definition",
+        "state": "verified"
+      },
+      {
+        "name": "effective-input-gate",
+        "state": "unknown"
+      }
+    ],
+    "protectedFilesUnchanged": true,
+    "unresolvedAuditClasses": [
+      "HOOK_DYNAMIC_CLOSURE_UNAVAILABLE"
+    ]
+  },
+  "realProviderDiagnostics": [
+    {
+      "name": "intended-packet-definition",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true,
+      "retainedInitProjectionFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "rawInitKeys": null,
+      "rawInitKeysStatus": "not retained; unknown"
+    },
+    {
+      "name": "exact-packet-add-dir",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true,
+      "retainedInitProjectionFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "rawInitKeys": null,
+      "rawInitKeysStatus": "not retained; unknown"
+    },
+    {
+      "name": "one-read-tool-definition",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "separate read-tool probe agent",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true,
+      "retainedInitProjectionFields": [
+        "agent",
+        "cwd",
+        "model",
+        "permission_mode",
+        "tools"
+      ],
+      "rawInitKeys": null,
+      "rawInitKeysStatus": "not retained; unknown"
+    },
+    {
+      "name": "init-schema-check",
+      "diagnosticOnly": true,
+      "model": "gemini-4-argon-high",
+      "selectedAgent": "council-packet",
+      "cwdBinding": "exact packet cwd",
+      "permissionMode": "request-review",
+      "advertisedTools": 60,
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "inputDelivered": false,
+      "modelCalls": 0,
+      "exitCode": 0,
+      "stderrEmpty": true,
+      "processGroupAbsent": true,
+      "remainingObservedProcesses": 0,
+      "protectedFilesUnchanged": true,
+      "rawInitKeys": [
+        "model",
+        "cwd",
+        "agent",
+        "tools",
+        "permission_mode"
+      ],
+      "rawInitKeysStatus": "retained raw init key enumeration"
+    }
+  ],
+  "softwareChecks": [
+    {
+      "stage": "baseline RED",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts",
+      "exitCode": 1,
+      "failed": 16,
+      "passed": 131,
+      "productionHashesUnchanged": true
+    },
+    {
+      "stage": "initial GREEN",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts",
+      "exitCode": 0,
+      "passed": 147
+    },
+    {
+      "stage": "R1 intermediate RED",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "exitCode": 1,
+      "failed": 1,
+      "passed": 22,
+      "reason": "future version must not inherit startup/source contract from identical help"
+    },
+    {
+      "stage": "R1 GREEN",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "exitCode": 0,
+      "passed": 23
+    },
+    {
+      "stage": "final typecheck",
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    {
+      "stage": "final build",
+      "command": "npm run build",
+      "exitCode": 0
+    },
+    {
+      "stage": "full suite attempt1",
+      "command": "npm test -- --maxWorkers 2",
+      "status": "failed",
+      "exitCode": 1,
+      "failed": 2,
+      "passed": 1054,
+      "total": 1056,
+      "files": 66,
+      "durationSeconds": 322.61,
+      "failures": [
+        "test/pilot/fix5-regressions.test.ts > uses AGY four-field init with source-bound agent selection: normal",
+        "test/pilot/control-audit.test.ts > prepares actual versioned hook sources, adopts only matching native owner disposition, and invalidates drift"
+      ],
+      "disposition": "directly affected positive fixtures corrected after settled attempt; production gates retained"
+    },
+    {
+      "stage": "covering focused tests after fixture corrections",
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts test/pilot/provider-session.test.ts test/pilot/fix5-regressions.test.ts test/pilot/control-audit.test.ts",
+      "status": "passed",
+      "exitCode": 0,
+      "passed": 172,
+      "files": 4,
+      "durationSeconds": 76.74
+    },
+    {
+      "stage": "typecheck after fixture corrections",
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    {
+      "stage": "full suite attempt2",
+      "command": "npm test -- --maxWorkers 2",
+      "status": "passed",
+      "exitCode": 0,
+      "failed": 0,
+      "passed": 1056,
+      "total": 1056,
+      "files": 66,
+      "durationSeconds": 322.43,
+      "sourceBuildTestsAndConfigFrozen": true,
+      "processExitObserved": true
+    }
+  ],
+  "frozenManifest": {
+    "fileCount": 279,
+    "sha256": "d2cdc88670242d796c15268bb6fa082464f819b60b7ffdcf9160b12b9432d7e6",
+    "wrapperProducerHash": "2a54a48d830b6e29619d15381417ad0ca3216fa2cf6dd6e00be25bc8ced42620",
+    "files": {
+      "src/pilot/provider-controls.ts": "807315cbb7f681a10702e00115623a6c8a46c6c59f1eec2c62d76dfdc09ee993",
+      "src/pilot/provider-session.ts": "2df4e0c6492f50c23bb1da900f05b1e31196dbe1d21e512432ccfdcca353aada",
+      "dist/pilot/provider-controls.js": "7bf7f0dd48097bd2b9109a96a0b3f43caef2c6c09d894f03efa0dca81f2113d0",
+      "dist/pilot/provider-session.js": "8f39e135812243656d96e939ecc94bb60d0c3cf615541c38cd85a4972a376d71"
+    },
+    "includes": "195 source/build files, 78 test files, five configuration files and one script; excludes public documentation",
+    "sourceBuildUnchangedFromAttempt1": true,
+    "scope": "historical verification of revision 3ad31cfaa8272a70f920988019e6895ebeb077f0 before the final parser fix"
+  },
+  "remainingOperationalGates": [
+    "Council-required exact packet enrollment metadata",
+    "complete startup hook/source audit closure",
+    "effective main-agent tool containment; captured60-tool init remains rejected",
+    "authentic Council startup with every pre-input fact verified"
+  ],
+  "independentChangeReviews": "Initial revision: Astra spec FAIL / quality Needs fixes (one Important parser finding, one Minor); Argon spec PASS / quality Approved (three Minor findings). Final scoped 3ad31cf..c14a24c re-review: Argon high through Orca and native Astra/max approved; F1-F3 addressed, M1 accurately deferred, no new Critical/Important/Minor findings. Coordinator verified actual diff, execution evidence and frozen hashes; operational acceptance remains open.",
+  "workerProviderLaunches": 0,
+  "workerDelegates": 0,
+  "publicEvidenceSanitized": true,
+  "deferredFollowUp": {
+    "finding": "M1: preexisting post-ready no-input/error wait",
+    "status": "deferred by coordinator; no provider-session source edit in final parser wave",
+    "cost": "A child ignoring SIGTERM can delay forced cleanup until the assignment deadline; when no parser error was recorded, missing input can be reported as ENOENT. The final queued-parser barrier still prevents the reproduced input delivery."
+  },
+  "finalFixVerification": {
+    "baselineRevision": "3ad31cfaa8272a70f920988019e6895ebeb077f0",
+    "declarationIndentation": "Pinned once from the first declaration; consistent legacy space indentation supported; deeper continuation text never supplies a flag",
+    "optionalSubcommandSection": "May be absent; when present must contain at least one actual entry",
+    "initialSourceRed": {
+      "exitCode": 1,
+      "failed": 26,
+      "passed": 25,
+      "productionHashesUnchanged": true,
+      "scopeNote": "intermediate test-design stage; two uniform-width negative cases later withdrawn under coordinator clarification"
+    },
+    "correctedBaselineBuiltApiRed": {
+      "exitCode": 1,
+      "failed": 24,
+      "passed": 28,
+      "builtApiMatchesBaseline": true,
+      "scopeNote": "supplementary API RED for corrected fixtures; does not replace the original pre-source-edit RED"
+    },
+    "focusedGreen": {
+      "command": "npm test -- --maxWorkers 2 test/pilot/provider-controls.test.ts",
+      "exitCode": 0,
+      "passed": 52,
+      "files": 1
+    },
+    "developmentAttemptResults": [
+      {
+        "stage": "red",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  26 failed | 25 passed (51)",
+          "Duration  18.75s (tests 100%)"
+        ],
+        "durationSeconds": 19.064
+      },
+      {
+        "stage": "green",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  2 failed | 49 passed (51)",
+          "Duration  10.44s (tests 99%)"
+        ],
+        "durationSeconds": 10.737
+      },
+      {
+        "stage": "green-attempt-2",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  1 failed | 50 passed (51)",
+          "Duration  13.91s (tests 99%)"
+        ],
+        "durationSeconds": 14.215
+      },
+      {
+        "stage": "green-attempt-3",
+        "exitCode": 0,
+        "summary": [
+          "Test Files  1 passed (1)",
+          "Tests  51 passed (51)",
+          "Duration  12.00s (tests 99%)"
+        ],
+        "durationSeconds": 12.284
+      },
+      {
+        "stage": "baseline-api-red",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  14 failed | 38 passed (52)",
+          "Duration  10.74s (tests 99%, import 1%)"
+        ],
+        "durationSeconds": 11.037
+      },
+      {
+        "stage": "baseline-api-red-attempt-2",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  24 failed | 28 passed (52)",
+          "Duration  14.19s (tests 99%)"
+        ],
+        "durationSeconds": 14.5
+      },
+      {
+        "stage": "uniform-legacy-red",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  2 failed | 50 passed (52)",
+          "Duration  15.45s (tests 99%)"
+        ],
+        "durationSeconds": 15.748
+      },
+      {
+        "stage": "green-final",
+        "exitCode": 1,
+        "summary": [
+          "Test Files  1 failed (1)",
+          "Tests  1 failed | 51 passed (52)",
+          "Duration  10.46s (tests 99%)"
+        ],
+        "durationSeconds": 10.769
+      },
+      {
+        "stage": "green-settled",
+        "exitCode": 0,
+        "summary": [
+          "Test Files  1 passed (1)",
+          "Tests  52 passed (52)",
+          "Duration  10.67s (tests 99%)"
+        ],
+        "durationSeconds": 10.954
+      },
+      {
+        "stage": "typecheck",
+        "exitCode": 0,
+        "summary": [],
+        "durationSeconds": 0.569
+      },
+      {
+        "stage": "build",
+        "exitCode": 0,
+        "summary": [],
+        "durationSeconds": 0.562
+      }
+    ],
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "build": {
+      "command": "npm run build",
+      "exitCode": 0
+    },
+    "fullSuite": {
+      "command": "npm test -- --maxWorkers 2",
+      "exitCode": 0,
+      "passed": 1085,
+      "failed": 0,
+      "files": 66,
+      "durationSeconds": 321.71,
+      "wallDurationSeconds": 322.04,
+      "sourceBuildTestsAndConfigFrozen": true,
+      "processExitObserved": true,
+      "failures": []
+    },
+    "frozenManifest": {
+      "fileCount": 279,
+      "counts": {
+        "dist": 129,
+        "configuration": 5,
+        "scripts": 1,
+        "src": 66,
+        "test": 78
+      },
+      "sha256": "915fd6d5fee43e564eb09d3db8ae352a210c63cd3f93a71a14c76a60d2a9e544",
+      "publicDocumentationIncluded": false,
+      "independentPostRunRehashPassed": true,
+      "postRunDrift": [],
+      "files": {
+        "src/pilot/provider-controls.ts": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d",
+        "src/pilot/provider-session.ts": "2df4e0c6492f50c23bb1da900f05b1e31196dbe1d21e512432ccfdcca353aada",
+        "test/pilot/provider-controls.test.ts": "1077666f94d2a6bab8735ecd2de80fdfda8057c782f8f3f1d61d97d189602695",
+        "dist/pilot/provider-controls.js": "454601565d787c400e743f5ce6fe7be13bbb608b82aa3b0a52dee2d24bd5eaf9",
+        "dist/pilot/provider-session.js": "8f39e135812243656d96e939ecc94bb60d0c3cf615541c38cd85a4972a376d71"
+      }
+    },
+    "independentChangeAcceptance": "pending coordinator-owned scoped re-review",
+    "operationalRankingItem3": "open; original enrollment, hook/source closure and main-agent containment gates remain",
+    "newActualProviderLaunches": 0,
+    "historicalVerificationEvidencePreserved": true
+  },
+  "finalScopedReview": {
+    "functionalRevision": "c14a24c78c054d335202dcf77742d2eb72271fc8",
+    "argon": {
+      "model": "gemini-4-argon-high",
+      "requestedEffort": "high",
+      "backendEffort": "provider-managed; not exposed",
+      "route": "Orca custom terminal, read-only AGY",
+      "verdict": "approved",
+      "newFindings": 0,
+      "independentHashing": false,
+      "testsRun": false
+    },
+    "astra": {
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "route": "native, explicitly requested",
+      "verdict": "spec PASS / quality Approved",
+      "newFindings": 0,
+      "independentHashing": true,
+      "testsRun": false
+    },
+    "coordinatorDisposition": "F1-F3 accepted after evidence checks; M1 deferred; bounded source repair accepted; draft publication only",
+    "coordinatorExecutedParserCounterexampleBeforeAndAfter": true,
+    "operationalAcceptance": "open"
+  },
+  "historicalEnrollmentFollowUp": {
+    "evidenceDateUtc": "2026-10-31",
+    "verification": "gemini-enrollment-verification.md",
+    "receipt": "gemini-enrollment-receipt.json",
+    "scope": "subsequent AGY 1.4.12 direct metadata prerequisite omission; original observations preserved",
+    "independentChangeReview": "approved by Argon high through Orca and native Astra max; coordinator verified findings",
+    "operationalAcceptance": "open"
+  }
+}

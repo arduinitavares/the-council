@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "selection": "bootstrap",
+  "productExecutionEnabled": false,
+  "productAcceptanceEnabled": false,
+  "discoverySha256": "6469e02e5c3018253cd3068bf7011e8ff666a11c9d29b272b7bf5cd8e0203ebc",
+  "referenceCommit": "3f3c3cdf63130d4aa27037c8f0d42ed5fd36dd8b",
+  "lockSha256": "7ab6ebf13b6bdafd028fb309ff112a878ad9ec189e548ec167bf11493583d2bd",
+  "sourceReview": "pending; pure success does not admit hosted execution",
+  "runtimeQualification": "pending; source review precedes the first hosted attempt",
+  "workflowMetadata": {
+    "COUNCIL_BOOTSTRAP_COMMIT": "exact checked-out event commit",
+    "COUNCIL_BOOTSTRAP_TREE": "actual tree obtained from that checkout by the reviewed workflow",
+    "COUNCIL_BOOTSTRAP_JOB": "checks, diagnostics or defaults",
+    "GITHUB_REPOSITORY_VISIBILITY": "public; must be supplied explicitly by the workflow, not assumed to be a default variable"
+  },
+  "resourceProtocol": "bootstrap-owned-v1",
+  "outputLimitBytes": 1048576,
+  "jobs": [
+    "checks",
+    "diagnostics",
+    "defaults"
+  ],
+  "bootstrap": [
+    {
+      "id": "pure",
+      "profile": "bootstrap",
+      "argv": [
+        "{python}",
+        "-I",
+        "-S",
+        "-B",
+        "{testFile}",
+        "--pure",
+        "--deadline-seconds",
+        "30"
+      ],
+      "executionSeconds": 30,
+      "settlementSeconds": 30
+    },
+    {
+      "id": "qualification",
+      "profile": "bootstrap",
+      "argv": [
+        "{python}",
+        "-I",
+        "-S",
+        "-B",
+        "{testFile}",
+        "--qualify",
+        "--deadline-seconds",
+        "30"
+      ],
+      "executionSeconds": 30,
+      "settlementSeconds": 30
+    }
+  ],
+  "fixtureModes": [
+    "success",
+    "exit7",
+    "deadline",
+    "cancel",
+    "detached-parent",
+    "missing-custody",
+    "controller-cancel-resistant",
+    "controller-cancel-missing-custody"
+  ],
+  "fixtureExecutionSeconds": 1,
+  "fixtureSettlementSeconds": 1,
+  "qualificationExecutionSeconds": 30,
+  "qualificationSettlementSeconds": 30,
+  "heldReasons": {
+    "dependencySetup": "Published lock-integrity-bound archive/script/download effects for the fresh Mac install remain unverified. Bootstrap performs no npm install.",
+    "context": "No complete descendant identity/closure receipt and no bounded close wait. Product command admission remains held.",
+    "providerCleanup": "Receipt schema is practical source-backed evidence, not an arbitrary-descendant proof. Validate every binding and failure field; distinguish negative product reports from actual physical teardown. External exact root-absence verification still needs a bridge.",
+    "nativeHost": "No outer root registration for interrupted setup/teardown. Keep affected product commands held.",
+    "crashWindow": "The test does not delete its council-crash-* root and exposes no outer custody record. Add a reviewed exact-invocation registration bridge before deletion; no glob-based sweeping or VM-disposal-as-proof.",
+    "packaging": "Module-evaluation collection can allocate before hooks. Missing outer custody proof remains held. No nested npm install was found in the inspected tests.",
+    "coverage": "Collection is not execution. Reconcile full source/test/config/lock/dependency input bindings and final identity mappings before using it for product acceptance. The older67files/1227tests remain separate.",
+    "live": "All live provider/Council work retains its separate gates."
+  },
+  "candidateSchedules": {
+    "checks": [
+      "setup",
+      "typecheck",
+      "build",
+      "causal"
+    ],
+    "diagnostics": [
+      "setup",
+      "build",
+      "c12"
+    ],
+    "defaults": [
+      "setup",
+      "build",
+      "defaults-1",
+      "defaults-2",
+      "defaults-3"
+    ]
+  },
+  "candidateProfiles": {
+    "setup": {
+      "argv": [
+        "npm",
+        "ci",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "executionSeconds": 270,
+      "settlementSeconds": 30,
+      "totalSeconds": 300
+    },
+    "typecheck": {
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "executionSeconds": 120,
+      "settlementSeconds": 30
+    },
+    "build": {
+      "argv": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "executionSeconds": 120,
+      "settlementSeconds": 30
+    },
+    "causal": {
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "test/pilot/discovery-matrix-fixture.test.ts",
+        "-t",
+        "retains the next case environment"
+      ],
+      "executionSeconds": 120,
+      "settlementSeconds": 30
+    },
+    "c12": {
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "test/pilot/context-diagnostics.test.ts",
+        "test/pilot/workflow-diagnostics.test.ts",
+        "test/pilot/native-command.test.ts",
+        "test/pilot/allowance.test.ts",
+        "test/pilot/journal-diagnostics.test.ts",
+        "test/pilot/provider-diagnostics.test.ts",
+        "test/pilot/diagnostics.test.ts"
+      ],
+      "executionSeconds": 300,
+      "settlementSeconds": 30
+    },
+    "defaults-1": {
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "executionSeconds": 180,
+      "settlementSeconds": 30
+    },
+    "defaults-2": {
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "executionSeconds": 180,
+      "settlementSeconds": 30
+    },
+    "defaults-3": {
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "executionSeconds": 180,
+      "settlementSeconds": 30
+    }
+  },
+  "offlineClaim": "A whitelist excludes inherited credentials and NODE_OPTIONS. npm_config_offline is an npm setting, not OS network containment. Bootstrap uses only its inert standard-library fixtures. Product network claims remain held.",
+  "qualificationReady": true,
+  "qualificationHolds": [],
+  "qualificationReadiness": "Fixture source and injected coverage only. Fresh independent source review and actual hosted qualification remain required; this flag grants no runtime or product acceptance."
+}

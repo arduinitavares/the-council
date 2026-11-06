@@ -1,0 +1,251 @@
+name: Council bootstrap supervisor qualification
+
+on:
+  push:
+    branches:
+      - dev/issue-1-first-use-reviewed
+
+permissions:
+  contents: read
+
+# Bootstrap only. Candidate setup and product schedules remain held in the
+# reviewed contract. A bootstrap-qualified receipt is not product acceptance.
+# Further attempts require coordinator disposition; there is no retry loop.
+jobs:
+  checks:
+    name: Bootstrap qualification (checks)
+    if: >-
+      ${{ github.event_name == 'push' &&
+          github.repository == 'arduinitavares/the-council' &&
+          github.ref == 'refs/heads/dev/issue-1-first-use-reviewed' &&
+          github.event.repository.visibility == 'public' &&
+          github.event.repository.private == false }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - name: Check out the event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+          set-safe-directory: false
+      - name: Set up the pinned workload Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.4'
+          architecture: arm64
+          check-latest: false
+          package-manager-cache: false
+      - name: Record runtime facts and qualify the bootstrap supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_JOB" = checks
+          COUNCIL_BOOTSTRAP_COMMIT="$(git rev-parse --verify HEAD)"
+          test "$COUNCIL_BOOTSTRAP_COMMIT" = "$GITHUB_SHA"
+          COUNCIL_BOOTSTRAP_TREE="$(git rev-parse --verify 'HEAD^{tree}')"
+          COUNCIL_BOOTSTRAP_JOB="$GITHUB_JOB"
+          export COUNCIL_BOOTSTRAP_COMMIT COUNCIL_BOOTSTRAP_TREE COUNCIL_BOOTSTRAP_JOB
+          python3 -I -S -B - <<'PY'
+          import json
+          import os
+          import platform
+          import sys
+
+          facts = {
+              "requestedRunner": "macos-26",
+              "requestedNode": "22.23.4",
+              "pythonVersion": platform.python_version(),
+              "pythonExecutable": sys.executable,
+              "system": platform.system(),
+              "os": platform.platform(),
+              "macOSVersion": platform.mac_ver()[0],
+              "architecture": platform.machine(),
+              "processor": platform.processor(),
+              "cpuCount": os.cpu_count(),
+          }
+          for name in (
+              "ImageOS", "ImageVersion", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH",
+              "GITHUB_REPOSITORY", "GITHUB_REPOSITORY_VISIBILITY", "GITHUB_RUN_ID",
+              "GITHUB_RUN_ATTEMPT", "COUNCIL_BOOTSTRAP_COMMIT", "COUNCIL_BOOTSTRAP_TREE",
+              "COUNCIL_BOOTSTRAP_JOB",
+          ):
+              facts[name] = os.environ.get(name)
+          print(json.dumps(facts, sort_keys=True), flush=True)
+          if not facts["ImageOS"] or not facts["ImageVersion"] or not facts["cpuCount"]:
+              raise SystemExit("runner image or CPU metadata is unavailable")
+          if (facts["system"] != "Darwin" or facts["architecture"] != "arm64"
+                  or not facts["macOSVersion"].startswith("26.")):
+              raise SystemExit("bootstrap requires the declared macOS 26 ARM64 runner")
+          PY
+          # Official actions use their own runtime; these facts describe workload Node.
+          node --eval 'console.log(JSON.stringify({nodeVersion: process.version, nodeArchitecture: process.arch, nodeExecutable: process.execPath})); if (process.version !== "v22.23.4" || process.arch !== "arm64") process.exit(1)'
+          printf 'npm version: '
+          npm_config_update_notifier=false npm --version
+          python3 -I -S -B scripts/ci/offline.py job checks \
+            --source "$GITHUB_SHA" \
+            --root "$RUNNER_TEMP/council-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" \
+            --node "$(command -v node)"
+
+  diagnostics:
+    name: Bootstrap qualification (diagnostics)
+    needs: checks
+    if: >-
+      ${{ needs.checks.result == 'success' &&
+          github.event_name == 'push' &&
+          github.repository == 'arduinitavares/the-council' &&
+          github.ref == 'refs/heads/dev/issue-1-first-use-reviewed' &&
+          github.event.repository.visibility == 'public' &&
+          github.event.repository.private == false }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - name: Check out the event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+          set-safe-directory: false
+      - name: Set up the pinned workload Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.4'
+          architecture: arm64
+          check-latest: false
+          package-manager-cache: false
+      - name: Record runtime facts and qualify the bootstrap supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_JOB" = diagnostics
+          COUNCIL_BOOTSTRAP_COMMIT="$(git rev-parse --verify HEAD)"
+          test "$COUNCIL_BOOTSTRAP_COMMIT" = "$GITHUB_SHA"
+          COUNCIL_BOOTSTRAP_TREE="$(git rev-parse --verify 'HEAD^{tree}')"
+          COUNCIL_BOOTSTRAP_JOB="$GITHUB_JOB"
+          export COUNCIL_BOOTSTRAP_COMMIT COUNCIL_BOOTSTRAP_TREE COUNCIL_BOOTSTRAP_JOB
+          python3 -I -S -B - <<'PY'
+          import json
+          import os
+          import platform
+          import sys
+
+          facts = {
+              "requestedRunner": "macos-26",
+              "requestedNode": "22.23.4",
+              "pythonVersion": platform.python_version(),
+              "pythonExecutable": sys.executable,
+              "system": platform.system(),
+              "os": platform.platform(),
+              "macOSVersion": platform.mac_ver()[0],
+              "architecture": platform.machine(),
+              "processor": platform.processor(),
+              "cpuCount": os.cpu_count(),
+          }
+          for name in (
+              "ImageOS", "ImageVersion", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH",
+              "GITHUB_REPOSITORY", "GITHUB_REPOSITORY_VISIBILITY", "GITHUB_RUN_ID",
+              "GITHUB_RUN_ATTEMPT", "COUNCIL_BOOTSTRAP_COMMIT", "COUNCIL_BOOTSTRAP_TREE",
+              "COUNCIL_BOOTSTRAP_JOB",
+          ):
+              facts[name] = os.environ.get(name)
+          print(json.dumps(facts, sort_keys=True), flush=True)
+          if not facts["ImageOS"] or not facts["ImageVersion"] or not facts["cpuCount"]:
+              raise SystemExit("runner image or CPU metadata is unavailable")
+          if (facts["system"] != "Darwin" or facts["architecture"] != "arm64"
+                  or not facts["macOSVersion"].startswith("26.")):
+              raise SystemExit("bootstrap requires the declared macOS 26 ARM64 runner")
+          PY
+          # Official actions use their own runtime; these facts describe workload Node.
+          node --eval 'console.log(JSON.stringify({nodeVersion: process.version, nodeArchitecture: process.arch, nodeExecutable: process.execPath})); if (process.version !== "v22.23.4" || process.arch !== "arm64") process.exit(1)'
+          printf 'npm version: '
+          npm_config_update_notifier=false npm --version
+          python3 -I -S -B scripts/ci/offline.py job diagnostics \
+            --source "$GITHUB_SHA" \
+            --root "$RUNNER_TEMP/council-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" \
+            --node "$(command -v node)"
+
+  defaults:
+    name: Bootstrap qualification (defaults)
+    needs: diagnostics
+    if: >-
+      ${{ needs.diagnostics.result == 'success' &&
+          github.event_name == 'push' &&
+          github.repository == 'arduinitavares/the-council' &&
+          github.ref == 'refs/heads/dev/issue-1-first-use-reviewed' &&
+          github.event.repository.visibility == 'public' &&
+          github.event.repository.private == false }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - name: Check out the event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+          set-safe-directory: false
+      - name: Set up the pinned workload Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.4'
+          architecture: arm64
+          check-latest: false
+          package-manager-cache: false
+      - name: Record runtime facts and qualify the bootstrap supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_JOB" = defaults
+          COUNCIL_BOOTSTRAP_COMMIT="$(git rev-parse --verify HEAD)"
+          test "$COUNCIL_BOOTSTRAP_COMMIT" = "$GITHUB_SHA"
+          COUNCIL_BOOTSTRAP_TREE="$(git rev-parse --verify 'HEAD^{tree}')"
+          COUNCIL_BOOTSTRAP_JOB="$GITHUB_JOB"
+          export COUNCIL_BOOTSTRAP_COMMIT COUNCIL_BOOTSTRAP_TREE COUNCIL_BOOTSTRAP_JOB
+          python3 -I -S -B - <<'PY'
+          import json
+          import os
+          import platform
+          import sys
+
+          facts = {
+              "requestedRunner": "macos-26",
+              "requestedNode": "22.23.4",
+              "pythonVersion": platform.python_version(),
+              "pythonExecutable": sys.executable,
+              "system": platform.system(),
+              "os": platform.platform(),
+              "macOSVersion": platform.mac_ver()[0],
+              "architecture": platform.machine(),
+              "processor": platform.processor(),
+              "cpuCount": os.cpu_count(),
+          }
+          for name in (
+              "ImageOS", "ImageVersion", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH",
+              "GITHUB_REPOSITORY", "GITHUB_REPOSITORY_VISIBILITY", "GITHUB_RUN_ID",
+              "GITHUB_RUN_ATTEMPT", "COUNCIL_BOOTSTRAP_COMMIT", "COUNCIL_BOOTSTRAP_TREE",
+              "COUNCIL_BOOTSTRAP_JOB",
+          ):
+              facts[name] = os.environ.get(name)
+          print(json.dumps(facts, sort_keys=True), flush=True)
+          if not facts["ImageOS"] or not facts["ImageVersion"] or not facts["cpuCount"]:
+              raise SystemExit("runner image or CPU metadata is unavailable")
+          if (facts["system"] != "Darwin" or facts["architecture"] != "arm64"
+                  or not facts["macOSVersion"].startswith("26.")):
+              raise SystemExit("bootstrap requires the declared macOS 26 ARM64 runner")
+          PY
+          # Official actions use their own runtime; these facts describe workload Node.
+          node --eval 'console.log(JSON.stringify({nodeVersion: process.version, nodeArchitecture: process.arch, nodeExecutable: process.execPath})); if (process.version !== "v22.23.4" || process.arch !== "arm64") process.exit(1)'
+          printf 'npm version: '
+          npm_config_update_notifier=false npm --version
+          python3 -I -S -B scripts/ci/offline.py job defaults \
+            --source "$GITHUB_SHA" \
+            --root "$RUNNER_TEMP/council-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" \
+            --node "$(command -v node)"

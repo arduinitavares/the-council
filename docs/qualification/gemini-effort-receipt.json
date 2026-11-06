@@ -1,0 +1,29 @@
+{
+  "scope": "Gemini model and explicit high launch-setting verification only; not full Council qualification",
+  "route": "Orca-created local terminal -> task-owned Python harness -> AGY",
+  "orcaVersionObserved": "1.4.245",
+  "requestedModel": "gemini-4-argon-high",
+  "observedInitializationModel": "gemini-4-argon-high",
+  "requestedEffort": "high",
+  "launchEffortArgument": [
+    "--effort",
+    "high"
+  ],
+  "backendEffort": "not separately exposed",
+  "resultStatus": "SUCCESS",
+  "markerMatches": true,
+  "markerSha256": "005ce92607218215c2fc56a3b17028fb1bab4b9fe486bc8b0a14bbc595c1e58c",
+  "onlyActualTool": "read_file",
+  "providerExitCode": 0,
+  "providerGroupAbsent": true,
+  "wrapperAndOriginalTerminalPidsAbsent": 3,
+  "globalSettingsUnchanged": true,
+  "canonicalPolicyUnchanged": true,
+  "terminalClosure": {
+    "identityMatched": true,
+    "ptyKilled": true,
+    "originalHostExitReceipt": "unknown; reconciled by provider/wrapper/OS absence and exact terminal closure"
+  },
+  "stderr": "warning: --mode plan has no effect while slash command expansion is disabled.\n",
+  "warningDisposition": "Requested plan mode was ignored with slash-disable flag; explicit session Deny, sandbox, request-review initialization and observed read-only actions retained. Later Opus reviews omit the conflicting flag."
+}

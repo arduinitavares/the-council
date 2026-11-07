@@ -69,6 +69,7 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
  * @param {number} [options.timeoutMs]
  * @param {string} [options.cwd]
  * @param {NodeJS.ProcessEnv} [options.env]
+ * @param {string|Buffer} [options.input]
  * @param {number} [options.maxBuffer=10485760]
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
  */
@@ -104,7 +105,11 @@ export async function execCli(executable, args = [], options = {}) {
     });
 
     child.stdin?.on?.('error', () => {});
-    child.stdin?.end();
+    if (options.input !== undefined && options.input !== null) {
+      child.stdin?.end(options.input);
+    } else {
+      child.stdin?.end();
+    }
   });
 }
 

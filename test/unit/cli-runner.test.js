@@ -137,6 +137,26 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(syncRead.exitCode, 0);
       assert.equal(syncRead.stdout, 'sync-eof:');
     });
+
+    it('writes options.input to child stdin before closing EOF and suppresses EPIPE on early exit', async () => {
+      const withInput = await execCli(
+        process.execPath,
+        [
+          '-e',
+          'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => { input += c; }); process.stdin.on("end", () => { process.stdout.write("received:" + input); });'
+        ],
+        { input: 'explicit stdin payload', timeoutMs: 500 }
+      );
+      assert.equal(withInput.exitCode, 0);
+      assert.equal(withInput.stdout, 'received:explicit stdin payload');
+
+      const earlyExit = await execCli(
+        process.execPath,
+        ['-e', 'process.exit(0);'],
+        { input: 'x'.repeat(2 * 1024 * 1024), timeoutMs: 1000 }
+      );
+      assert.equal(earlyExit.exitCode, 0);
+    });
   });
 
   describe('runAntigravityCli', () => {
@@ -224,26 +244,25 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(out, '{"vote":"accept"}');
     });
 
-    it('completes without hanging when default execCli spawns a codex executable that reads piped stdin until EOF', async () => {
+    it('completes without hanging when default execCli spawns a codex process that reads piped stdin until EOF', async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-codex-stdin-'));
-      const fakeCodexPath = path.join(tmpDir, 'fake-codex');
+      const fakeExecSubcommandScript = path.join(tmpDir, 'exec');
       fs.writeFileSync(
-        fakeCodexPath,
+        fakeExecSubcommandScript,
         [
-          `#!${process.execPath}`,
           'let stdinBuf = "";',
           'process.stdin.setEncoding("utf8");',
           'process.stdin.on("data", (chunk) => { stdinBuf += chunk; });',
           'process.stdin.on("end", () => {',
           '  process.stdout.write(JSON.stringify({ vote: "accept", stdinBytes: stdinBuf.length, prompt: process.argv.at(-1) }));',
           '});'
-        ].join('\n'),
-        { mode: 0o755 }
+        ].join('\n')
       );
 
       try {
         const out = await runCodexCli({
-          executable: fakeCodexPath,
+          executable: process.execPath,
+          cwd: tmpDir,
           model: 'gpt-6.1-sol (high)',
           prompt: 'Verify closed stdin pipe',
           timeoutMs: 1000

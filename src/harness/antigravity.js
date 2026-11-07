@@ -4,7 +4,7 @@
  * (claude-sonnet-5-5-*, claude-opus-5-5-*) via Orca CLI/API per ADR 0002.
  */
 
-import { HarnessAdapter, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
 import { runAntigravityCli } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
@@ -37,11 +37,15 @@ export class AntigravityAdapter extends HarnessAdapter {
   }
 
   classifyError(error, context = {}) {
+    if (error instanceof HarnessError) {
+      return error;
+    }
+
     const raw = (error?.message || '') + ' ' + (error?.stderr || '');
 
     // Gemini and Claude quota & rate limit signatures
     const isQuota =
-      /429|resource_exhausted|rate_limit_error|overloaded_error|quota\s+window\s+exhausted|token_budget_exceeded|quota\s+exceeded/i.test(
+      /\b429\b|resource_exhausted|rate_limit_error|overloaded_error|quota\s+window\s+exhausted|token_budget_exceeded|quota\s+exceeded/i.test(
         raw
       );
 

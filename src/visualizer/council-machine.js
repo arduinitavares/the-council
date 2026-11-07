@@ -190,7 +190,13 @@
         next.round += 1;
         next.phase = 'reviewing';
         next.judge.status = 'idle';
-        activeSeats(next).forEach(function (s) { s.status = 'thinking'; });
+        delete next.judge.faultReason;
+        delete next.judge.errorClass;
+        activeSeats(next).forEach(function (s) {
+          s.status = 'thinking';
+          delete s.faultReason;
+          delete s.errorClass;
+        });
         return succeed(state, next, event.type, 'Entered Deliberation Round ' + next.round + '/' + next.maxRounds + ' (reviewing).');
       }
 
@@ -228,6 +234,8 @@
         });
         if (state.phase === 'reviewing') {
           seat.status = 'proof_submitted';
+          delete seat.faultReason;
+          delete seat.errorClass;
         }
         return succeed(state, next, event.type, 'Seat "' + seat.id + '" submitted Proof ' + proofId + ' (' + event.kind + ').');
       }
@@ -295,8 +303,14 @@
           })
         };
         next.judge.status = 'idle';
+        delete next.judge.faultReason;
+        delete next.judge.errorClass;
         next.phase = 'confirming';
-        activeSeats(next).forEach(function (s) { s.status = 'thinking'; });
+        activeSeats(next).forEach(function (s) {
+          s.status = 'thinking';
+          delete s.faultReason;
+          delete s.errorClass;
+        });
         return succeed(state, next, event.type, 'Judge audited Proofs and synthesized Round ' + state.round + ' Candidate (' + clauses.length + ' clauses).');
       }
 
@@ -327,6 +341,8 @@
             }
           });
           seat.status = 'accepted';
+          delete seat.faultReason;
+          delete seat.errorClass;
           return succeed(state, next, event.type, 'Seat "' + seat.id + '" voted ACCEPT on Round ' + state.round + ' Candidate.');
         }
         if (event.vote === 'object') {
@@ -347,6 +363,8 @@
             status: 'open'
           });
           seat.status = 'objected';
+          delete seat.faultReason;
+          delete seat.errorClass;
           return succeed(state, next, event.type, 'Seat "' + seat.id + '" raised Objection ' + objId + ' backed by Proof ' + proof.id + '.');
         }
         return reject(state, event.type, 'Unknown vote type "' + event.vote + '".');
@@ -360,6 +378,10 @@
         const isValidSeatFaultStatus =
           event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
         seat.status = isValidSeatFaultStatus ? event.status : 'fault_quota';
+        seat.faultReason = event.reason || 'Quota reached';
+        if (event.errorClass) {
+          seat.errorClass = event.errorClass;
+        }
         next.returnPhase = state.phase;
         next.phase = 'seat_fault';
         next.faultSeatId = seat.id;
@@ -379,6 +401,8 @@
         }
         seat.retries += 1;
         seat.status = 'thinking';
+        delete seat.faultReason;
+        delete seat.errorClass;
         next.phase = state.returnPhase || 'reviewing';
         next.faultSeatId = null;
         return succeed(state, next, event.type, 'Retrying Seat "' + seat.id + '" (' + seat.retries + '/' + state.maxRetriesPerSeat + '); resumed "' + next.phase + '".');
@@ -392,6 +416,9 @@
         }
         seat.status = 'excused';
         seat.excusedReason = event.reason || 'Quota reached — excused mid-run';
+        if (event.errorClass) {
+          seat.errorClass = event.errorClass;
+        }
         let lockedCount = 0;
         next.objections.forEach(function (o) {
           if (o.seatId === seat.id && o.status === 'open') {
@@ -437,6 +464,10 @@
           event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
         const faultStatus = isValidJudgeFaultStatus ? event.status : 'fault_quota';
         next.judge.status = faultStatus;
+        next.judge.faultReason = faultReason || 'Judge fault';
+        if (event.errorClass) {
+          next.judge.errorClass = event.errorClass;
+        }
         if (event.terminal === true) {
           const remaining = activeSeats(next).length;
           next.phase = 'completed';
@@ -477,6 +508,8 @@
         }
         next.judge.retries += 1;
         next.judge.status = 'thinking';
+        delete next.judge.faultReason;
+        delete next.judge.errorClass;
         next.phase = state.returnPhase || 'judging';
         return succeed(state, next, event.type, 'Retried Judge "' + next.judge.id + '"; resumed "' + next.phase + '".');
       }

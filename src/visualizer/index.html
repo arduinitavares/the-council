@@ -846,10 +846,14 @@
             '</div>' +
             '<div style="font-size:12px; font-family:var(--mono); color:var(--text-secondary);">' + esc(j.model) + ' · non-voting</div>' +
             '<div style="font-size:12px; color:var(--text-secondary);">' + esc(j.soul) + '</div>' +
-            '<div style="font-size:11px; font-family:var(--mono); color:var(--accent);">Status: ' + esc(j.status.toUpperCase()) + '</div>' +
+            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); gap:8px;">' +
+              '<span style="color:var(--accent);">Status: ' + esc(j.status.toUpperCase()) + '</span>' +
+              (j.faultReason ? '<span style="color:var(--red);">' + esc(j.faultReason) + '</span>' : '') +
+            '</div>' +
           '</div>';
 
         const seatCards = councilState.seats.map(function (s) {
+          const seatFaultNote = s.excusedReason || s.faultReason;
           return (
             '<div class="seat-card status-' + esc(s.status) + '">' +
               '<div style="display:flex; justify-content:space-between; align-items:center;">' +
@@ -858,9 +862,9 @@
               '</div>' +
               '<div style="font-size:12px; font-family:var(--mono); color:var(--text-secondary);">' + esc(s.model) + ' · retries ' + s.retries + '/' + councilState.maxRetriesPerSeat + '</div>' +
               '<div style="font-size:12px; color:var(--text-secondary);">' + esc(s.soul) + '</div>' +
-              '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono);">' +
+              '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); gap:8px;">' +
                 '<span style="color:var(--accent);">Status: ' + esc(s.status.toUpperCase()) + '</span>' +
-                (s.excusedReason ? '<span style="color:var(--red);">' + esc(s.excusedReason) + '</span>' : '') +
+                (seatFaultNote ? '<span style="color:var(--red);">' + esc(seatFaultNote) + '</span>' : '') +
               '</div>' +
             '</div>'
           );

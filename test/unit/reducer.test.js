@@ -243,16 +243,24 @@ describe('Unit: Production State Machine Reducer (src/machine/reducer.js)', () =
     state = transitionCouncil(state, { type: COUNCIL_EVENTS.START_JUDGING });
     assert.equal(state.phase, 'judging');
 
-    // Judge faults
-    state = transitionCouncil(state, { type: COUNCIL_EVENTS.JUDGE_FAULT });
+    // Judge faults with reason and errorClass
+    state = transitionCouncil(state, {
+      type: COUNCIL_EVENTS.JUDGE_FAULT,
+      reason: '[QuotaExhaustionError] HTTP 429',
+      errorClass: 'QuotaExhaustionError'
+    });
     assert.equal(state.phase, 'judge_fault');
     assert.equal(state.canonicalPhase, 'RECOVERY');
     assert.equal(state.judge.status, 'fault_quota');
+    assert.equal(state.judge.faultReason, '[QuotaExhaustionError] HTTP 429');
+    assert.equal(state.judge.errorClass, 'QuotaExhaustionError');
 
-    // Retry judge
+    // Retry judge clears faultReason and errorClass
     state = transitionCouncil(state, { type: COUNCIL_EVENTS.RETRY_JUDGE });
     assert.equal(state.phase, 'judging');
     assert.equal(state.judge.retries, 1);
+    assert.equal(state.judge.faultReason, undefined);
+    assert.equal(state.judge.errorClass, undefined);
 
     // Non-fault status passed to SEAT_FAULT / JUDGE_FAULT is sanitized to fault_quota
     const badSeatFault = transitionCouncil(state, {

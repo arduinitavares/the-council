@@ -255,7 +255,6 @@ export class HarnessAdapter {
 
     const timeoutPromise = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        controller.abort();
         reject(
           new TimeoutError(
             `Harness "${this.name}" execution timed out after ${timeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
@@ -267,6 +266,7 @@ export class HarnessAdapter {
             }
           )
         );
+        controller.abort();
       }, timeoutMs);
     });
 
@@ -290,9 +290,38 @@ export class HarnessAdapter {
     }
 
     const msg = error?.message || String(error);
+    const raw = `${msg} ${error?.stderr || ''}`;
+
+    // Timeout pattern
+    if (
+      error?.name === 'TimeoutError' ||
+      error?.code === 'ETIMEDOUT' ||
+      (error?.killed && error?.signal === 'SIGTERM') ||
+      /\btimed?\s*out\b/i.test(raw)
+    ) {
+      return new TimeoutError(msg, {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        timeoutMs: error?.timeoutMs || null,
+        cause: error
+      });
+    }
+
+    // Authentication / HTTP 401/403 pattern
+    if (/\b(?:401|403)\b|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key/i.test(raw)) {
+      return new AuthenticationError(msg, {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        exitCode: error?.exitCode ?? error?.code ?? error?.status ?? null,
+        stderr: error?.stderr || '',
+        cause: error
+      });
+    }
 
     // Common HTTP 429 / Quota pattern
-    if (/429|quota|rate\s*limit|resource_exhausted/i.test(msg)) {
+    if (/\b429\b|\bquota\b|rate[\s_-]*limit|resource_exhausted/i.test(raw)) {
       return new QuotaExhaustionError(msg, {
         harness: this.name,
         seatId: context.seatId,

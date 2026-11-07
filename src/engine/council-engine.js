@@ -21,6 +21,7 @@ import { transitionCouncil } from '../machine/reducer.js';
 import { validateProof } from '../proofs/validator.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
+import { HarnessError, InvalidResponseError } from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
 
 export class CouncilEngine {
@@ -167,12 +168,60 @@ export class CouncilEngine {
   }
 
   /**
-   * Formats a fault error message, preserving non-zero CLI exit codes and stderr when present.
+   * Resolves the canonical HarnessError class name for a fault.
+   * @param {unknown} error
+   * @returns {'TimeoutError' | 'QuotaExhaustionError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'HarnessError'}
+   */
+  _classifyErrorClass(error) {
+    const knownClasses = new Set([
+      'TimeoutError',
+      'QuotaExhaustionError',
+      'HarnessExecutionError',
+      'InvalidResponseError',
+      'AuthenticationError',
+      'HarnessError'
+    ]);
+    if (error instanceof HarnessError && typeof error.name === 'string' && knownClasses.has(error.name)) {
+      return /** @type {any} */ (error.name);
+    }
+    if (error && typeof error === 'object' && typeof error.name === 'string' && knownClasses.has(error.name)) {
+      return /** @type {any} */ (error.name);
+    }
+
+    const status = this._classifyFaultStatus(error);
+    if (status === 'fault_timeout') {
+      return 'TimeoutError';
+    }
+    if (status === 'fault_quota') {
+      return 'QuotaExhaustionError';
+    }
+
+    const msg = error instanceof Error ? error.message : String(error || '');
+    const stderr = error && typeof error === 'object' && typeof error.stderr === 'string' ? error.stderr : '';
+    const combined = `${msg}\n${stderr}`;
+    if (/\b(?:401|403)\b|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key/i.test(combined)) {
+      return 'AuthenticationError';
+    }
+    if (/invalid\s+proof|violates.*schema|failed\s+to\s+parse|candidate\s+guard|unknown\s+vote/i.test(combined)) {
+      return 'InvalidResponseError';
+    }
+    return 'HarnessExecutionError';
+  }
+
+  /**
+   * Formats a single-line fault error message including the error class, message,
+   * non-zero CLI exit code, and a bounded stderr excerpt when present.
    * @param {unknown} error
    * @returns {string}
    */
   _formatFaultReason(error) {
-    let reason = error instanceof Error ? error.message : String(error);
+    const errorClass = this._classifyErrorClass(error);
+    const rawMsg = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
+    let reason =
+      rawMsg.startsWith(`[${errorClass}]`) || rawMsg.startsWith(`${errorClass}:`)
+        ? rawMsg
+        : `[${errorClass}] ${rawMsg}`;
+
     if (error && typeof error === 'object') {
       const exitCode = error.exitCode ?? error.cause?.exitCode ?? null;
       const stderrRaw =
@@ -185,8 +234,13 @@ export class CouncilEngine {
       if (exitCode !== null && exitCode !== undefined && !reason.includes(`exit code ${exitCode}`)) {
         reason += ` (exit code ${exitCode})`;
       }
-      if (stderrRaw && !reason.includes(stderrRaw)) {
-        reason += ` — stderr: ${stderrRaw}`;
+      if (stderrRaw) {
+        const stderrSingleLine = stderrRaw.replace(/\s+/g, ' ').trim();
+        const stderrExcerpt =
+          stderrSingleLine.length > 240 ? `${stderrSingleLine.slice(0, 237)}...` : stderrSingleLine;
+        if (stderrExcerpt && !reason.includes(stderrExcerpt)) {
+          reason += ` — stderr: ${stderrExcerpt}`;
+        }
       }
     }
     return reason;
@@ -200,15 +254,16 @@ export class CouncilEngine {
    * @returns {{ action: string, retries?: number, lockedObjections?: number }}
    */
   handleSeatFault(seatId, error) {
+    const errorClass = this._classifyErrorClass(error);
     const reason = this._formatFaultReason(error);
     const faultStatus = this._classifyFaultStatus(error);
     const seat = (this.state.seats || []).find((s) => s.id === seatId);
     const retries = seat ? seat.retries : 0;
     const isRetryable = this._isRetryableError(error);
 
-    this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason });
+    this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
-    this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus });
+    this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass });
 
     if (seat && isRetryable && retries < this.config.maxRetriesPerSeat) {
       this._step({ type: 'RETRY_SEAT', seatId });
@@ -218,7 +273,7 @@ export class CouncilEngine {
         isRetryable && retries > 0
           ? `Exhausted retries (${retries}/${this.config.maxRetriesPerSeat}): ${reason}`
           : reason;
-      this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason });
+      this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason, errorClass });
       const locked = (this.state.objections || []).filter((o) => o.seatId === seatId && o.status === 'preserved_excused').length;
       this.telemetry.emitSeatExcused(seatId, excuseReason, locked);
       return { action: 'excused', lockedObjections: locked };
@@ -279,7 +334,15 @@ export class CouncilEngine {
 
           const validation = validateProof(proofInput);
           if (!validation.valid) {
-            throw new Error(`Invalid proof from seat ${seat.id}: ${validation.errors.join('; ')}`);
+            throw new InvalidResponseError(
+              `Invalid proof from seat ${seat.id}: ${validation.errors.join('; ')}`,
+              {
+                harness: seat.harness,
+                seatId: seat.id,
+                model: seat.model,
+                validationErrors: validation.errors
+              }
+            );
           }
 
           this._step({
@@ -352,16 +415,21 @@ export class CouncilEngine {
         });
 
         if (!this.state.lastTransition.ok) {
-          throw new Error(this.state.lastTransition.message);
+          throw new InvalidResponseError(this.state.lastTransition.message, {
+            harness: judge.harness,
+            seatId: judge.id,
+            model: judge.model
+          });
         }
 
         judgeExecuted = true;
       } catch (err) {
+        const errorClass = this._classifyErrorClass(err);
         const errorMsg = this._formatFaultReason(err);
         const faultStatus = this._classifyFaultStatus(err);
         const isRetryable = this._isRetryableError(err);
-        this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg });
-        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus });
+        this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg, errorClass });
+        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass });
 
         if (isRetryable && this.state.judge.retries < maxJudgeRetries) {
           this._step({ type: 'RETRY_JUDGE' });
@@ -372,6 +440,7 @@ export class CouncilEngine {
             error: errorMsg,
             reason: errorMsg,
             status: faultStatus,
+            errorClass,
             terminal: true
           });
           this.telemetry.emitVerdict(this.state.verdict);
@@ -425,7 +494,11 @@ export class CouncilEngine {
           if (voteResult.vote === 'accept') {
             this._step({ type: 'CAST_VOTE', seatId: seat.id, vote: 'accept' });
             if (!this.state.lastTransition.ok) {
-              throw new Error(this.state.lastTransition.message);
+              throw new InvalidResponseError(this.state.lastTransition.message, {
+                harness: seat.harness,
+                seatId: seat.id,
+                model: seat.model
+              });
             }
             this.telemetry.emitSeatTelemetry(seat.id, 'accepted');
             this.telemetry.emitVoteCast(seat.id, 'accept');
@@ -438,14 +511,22 @@ export class CouncilEngine {
               proofId: voteResult.proofId
             });
             if (!this.state.lastTransition.ok) {
-              throw new Error(this.state.lastTransition.message);
+              throw new InvalidResponseError(this.state.lastTransition.message, {
+                harness: seat.harness,
+                seatId: seat.id,
+                model: seat.model
+              });
             }
             this.telemetry.emitSeatTelemetry(seat.id, 'objected');
             this.telemetry.emitVoteCast(seat.id, 'object', voteResult.reason, voteResult.proofId);
             const latestObj = this.state.objections[this.state.objections.length - 1];
             this.telemetry.emitObjectionRaised(latestObj);
           } else {
-            throw new Error(`Unknown vote outcome "${voteResult.vote}" from seat ${seat.id}`);
+            throw new InvalidResponseError(`Unknown vote outcome "${voteResult.vote}" from seat ${seat.id}`, {
+              harness: seat.harness,
+              seatId: seat.id,
+              model: seat.model
+            });
           }
           executed = true;
         } catch (err) {

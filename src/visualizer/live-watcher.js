@@ -90,15 +90,16 @@ export class VisualizerLiveWatcher {
   _handleStateTransition({ event, state, snapshot, timestamp } = {}) {
     if (this._stopped || !state) return;
 
-    this.liveRun.currentState = state;
+    const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
+    this.liveRun.currentState = clone(state);
     this.liveRun.isRunning = state.phase !== 'completed';
     this.liveRun.updatedAt = timestamp || new Date().toISOString();
 
     const stepLabel = `${this.liveRun.steps.length + 1}. Transition: ${event?.type || 'EVENT'} -> ${state.phase} (Round ${state.round})`;
     this.liveRun.steps.push({
       label: stepLabel,
-      event: event || null,
-      stateSnapshot: state
+      event: event ? clone(event) : null,
+      stateSnapshot: clone(state)
     });
 
     this._writeAtomic();
@@ -111,15 +112,38 @@ export class VisualizerLiveWatcher {
   _handleSeatTelemetry({ seatId, status, metadata, timestamp } = {}) {
     if (this._stopped) return;
 
+    const applyTelemetryToTarget = (target) => {
+      if (!target) return;
+      target.status = status;
+      const isFaultStatus = status === 'fault_quota' || status === 'fault_timeout' || status === 'fault';
+      if (isFaultStatus) {
+        if (metadata && metadata.reason) {
+          target.faultReason = metadata.reason;
+        }
+        if (metadata && metadata.errorClass) {
+          target.errorClass = metadata.errorClass;
+        }
+      } else if (
+        status === 'thinking' ||
+        status === 'idle' ||
+        status === 'proof_submitted' ||
+        status === 'accepted' ||
+        status === 'objected'
+      ) {
+        delete target.faultReason;
+        delete target.errorClass;
+      }
+    };
+
     if (this.liveRun.currentState) {
       if (Array.isArray(this.liveRun.currentState.seats)) {
         const seat = this.liveRun.currentState.seats.find((s) => s.id === seatId);
         if (seat) {
-          seat.status = status;
+          applyTelemetryToTarget(seat);
         }
       }
       if (this.liveRun.currentState.judge && this.liveRun.currentState.judge.id === seatId) {
-        this.liveRun.currentState.judge.status = status;
+        applyTelemetryToTarget(this.liveRun.currentState.judge);
       }
     }
 

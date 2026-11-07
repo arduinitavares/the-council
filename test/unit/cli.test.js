@@ -338,16 +338,16 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const stderr = mockIO.getStderr();
         const stdout = mockIO.getStdout();
 
-        // Verbose stderr must show the actual fault statuses and reasons (including exit code and stderr)
-        assert.match(stderr, /\[TELEMETRY\] Seat "seat-cli-fail" -> \[FAULT\] \(.*exit code 2.*stderr: fatal: unknown flag --bad-arg.*\)/);
-        assert.match(stderr, /\[TRANSITION\] SEAT_FAULT -> seat_fault \(Round 1\): .*exit code 2/);
-        assert.match(stderr, /\[TRANSITION\] EXCUSE_SEAT -> reviewing \(Round 1\): .*exit code 2/);
-        assert.match(stderr, /\[TELEMETRY\] Seat "judge-main" -> \[FAULT_TIMEOUT\] \(.*timed out after 240000ms.*\)/);
-        assert.match(stderr, /\[TRANSITION\] JUDGE_FAULT -> completed \(Round 1\): .*timed out after 240000ms/);
+        // Verbose stderr must show the actual fault statuses, error classes, and reasons (including exit code and stderr)
+        assert.match(stderr, /\[TELEMETRY\] Seat "seat-cli-fail" -> \[FAULT\] \(\[HarnessExecutionError\].*exit code 2.*stderr: fatal: unknown flag --bad-arg.*\)/);
+        assert.match(stderr, /\[TRANSITION\] SEAT_FAULT -> seat_fault \(Round 1\): \[HarnessExecutionError\].*exit code 2/);
+        assert.match(stderr, /\[TRANSITION\] EXCUSE_SEAT -> reviewing \(Round 1\): .*\[HarnessExecutionError\].*exit code 2/);
+        assert.match(stderr, /\[TELEMETRY\] Seat "judge-main" -> \[FAULT_TIMEOUT\] \(\[TimeoutError\].*timed out after 240000ms.*\)/);
+        assert.match(stderr, /\[TRANSITION\] JUDGE_FAULT -> completed \(Round 1\): \[TimeoutError\].*timed out after 240000ms/);
 
-        // Human stdout verdict summary must list Excused Seats with their excusedReason
+        // Human stdout verdict summary must list Excused Seats with their excusedReason and error class
         assert.match(stdout, /Excused Seats:/);
-        assert.match(stdout, /seat-cli-fail.*exit code 2.*stderr: fatal: unknown flag --bad-arg/);
+        assert.match(stdout, /seat-cli-fail.*\[HarnessExecutionError\].*exit code 2.*stderr: fatal: unknown flag --bad-arg/);
       } finally {
         if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
       }

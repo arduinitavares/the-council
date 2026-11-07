@@ -4,7 +4,7 @@
  * Adheres strictly to the Orca CLI/API-only boundary (no desktop GUI, no native dialogs).
  */
 
-import { HarnessAdapter, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
 import { runCodexCli } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
@@ -47,11 +47,15 @@ export class CodexAdapter extends HarnessAdapter {
    * @param {Object} [context]
    */
   classifyError(error, context = {}) {
+    if (error instanceof HarnessError) {
+      return error;
+    }
+
     const raw = (error?.message || '') + ' ' + (error?.stderr || '');
 
     // OpenAI Quota / Rate limit patterns
     const isQuota =
-      /429|insufficient_quota|rate_limit_exceeded|tokens_per_minute_exceeded|requests_per_minute_exceeded|usage_limit_reached|quota\s+exceeded/i.test(
+      /\b429\b|insufficient_quota|rate_limit_exceeded|tokens_per_minute_exceeded|requests_per_minute_exceeded|usage_limit_reached|quota\s+exceeded/i.test(
         raw
       );
 

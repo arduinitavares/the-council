@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   parseModelAndEffort,
   execCli,
@@ -110,6 +113,50 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         }
       );
     });
+
+    it('closes child stdin immediately so processes reading piped stdin until EOF do not hang', async () => {
+      const asyncRead = await execCli(
+        process.execPath,
+        [
+          '-e',
+          'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => { input += c; }); process.stdin.on("end", () => { process.stdout.write("eof:" + input); });'
+        ],
+        { timeoutMs: 500 }
+      );
+      assert.equal(asyncRead.exitCode, 0);
+      assert.equal(asyncRead.stdout, 'eof:');
+
+      const syncRead = await execCli(
+        process.execPath,
+        [
+          '-e',
+          'const fs = require("node:fs"); process.stdout.write("sync-eof:" + fs.readFileSync(0, "utf8"));'
+        ],
+        { timeoutMs: 500 }
+      );
+      assert.equal(syncRead.exitCode, 0);
+      assert.equal(syncRead.stdout, 'sync-eof:');
+    });
+
+    it('writes options.input to child stdin before closing EOF and suppresses EPIPE on early exit', async () => {
+      const withInput = await execCli(
+        process.execPath,
+        [
+          '-e',
+          'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => { input += c; }); process.stdin.on("end", () => { process.stdout.write("received:" + input); });'
+        ],
+        { input: 'explicit stdin payload', timeoutMs: 500 }
+      );
+      assert.equal(withInput.exitCode, 0);
+      assert.equal(withInput.stdout, 'received:explicit stdin payload');
+
+      const earlyExit = await execCli(
+        process.execPath,
+        ['-e', 'process.exit(0);'],
+        { input: 'x'.repeat(2 * 1024 * 1024), timeoutMs: 1000 }
+      );
+      assert.equal(earlyExit.exitCode, 0);
+    });
   });
 
   describe('runAntigravityCli', () => {
@@ -195,6 +242,39 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'Audit and synthesize candidate'
       ]);
       assert.equal(out, '{"vote":"accept"}');
+    });
+
+    it('completes without hanging when default execCli spawns a codex process that reads piped stdin until EOF', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-codex-stdin-'));
+      const fakeExecSubcommandScript = path.join(tmpDir, 'exec');
+      fs.writeFileSync(
+        fakeExecSubcommandScript,
+        [
+          'let stdinBuf = "";',
+          'process.stdin.setEncoding("utf8");',
+          'process.stdin.on("data", (chunk) => { stdinBuf += chunk; });',
+          'process.stdin.on("end", () => {',
+          '  process.stdout.write(JSON.stringify({ vote: "accept", stdinBytes: stdinBuf.length, prompt: process.argv.at(-1) }));',
+          '});'
+        ].join('\n')
+      );
+
+      try {
+        const out = await runCodexCli({
+          executable: process.execPath,
+          cwd: tmpDir,
+          model: 'gpt-6.1-sol (high)',
+          prompt: 'Verify closed stdin pipe',
+          timeoutMs: 1000
+        });
+        assert.deepEqual(JSON.parse(out), {
+          vote: 'accept',
+          stdinBytes: 0,
+          prompt: 'Verify closed stdin pipe'
+        });
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 

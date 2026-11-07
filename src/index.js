@@ -17,4 +17,5 @@ export * from './seats/index.js';
 export * from './harness/index.js';
 export * from './telemetry/index.js';
 export * from './engine/index.js';
+export { VisualizerLiveWatcher } from './visualizer/live-watcher.js';
 export { runCli } from './cli/index.js';

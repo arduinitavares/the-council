@@ -408,7 +408,11 @@
     <section class="surface-card" aria-labelledby="heading-walkthroughs">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
         <h2 id="heading-walkthroughs" style="margin:0;">Guided Walkthroughs &amp; Real-Time Observer Stream</h2>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="btn-live-follow" onclick="toggleLiveFollow()">
+            <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+            <span id="btn-live-follow-label">Live Follow: OFF</span>
+          </button>
           <button id="btn-autoplay" class="primary" onclick="toggleAutoPlay()">
             <svg class="icon-svg" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
             <span id="btn-autoplay-label">Auto-Play Real-Time Stream</span>
@@ -564,17 +568,57 @@
     </section>
   </div>
 
-  <!-- Load Portable Modules -->
+  <!-- Load Portable Modules & Latest Live Run -->
+  <script src="./live-run-latest.js" onerror="/* optional: created on first live run */"></script>
   <script src="./council-machine.js"></script>
   <script src="./council-walkthroughs.js"></script>
   <script src="./council-visualizer.js"></script>
 
   <script>
-    const WALKTHROUGHS = CouncilWalkthroughs.WALKTHROUGHS;
+    const BASE_WALKTHROUGHS = CouncilWalkthroughs.WALKTHROUGHS;
+    let WALKTHROUGHS = [...BASE_WALKTHROUGHS];
     let activeWalkthroughIdx = 0;
     let currentStepIdx = 0;
-    let councilState = CouncilMachine.createInitialCouncilState(WALKTHROUGHS[0].initialConfig);
     let autoPlayTimer = null;
+    let liveFollowTimer = null;
+
+    function syncLiveRunWalkthrough() {
+      const liveRun = (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
+                      (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun);
+      if (liveRun) {
+        const existingIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
+        const liveEntry = {
+          id: 'wt-live-latest',
+          title: '🔴 Latest Live Run' + (liveRun.initialConfig && liveRun.initialConfig.topic ? ': ' + liveRun.initialConfig.topic : ''),
+          description: liveRun.description || ('Real-time observer stream for live deliberation: ' + (liveRun.initialConfig && liveRun.initialConfig.topic ? liveRun.initialConfig.topic : 'Deliberation')),
+          initialConfig: liveRun.initialConfig || {},
+          steps: liveRun.steps || [],
+          currentState: liveRun.currentState,
+          isRunning: liveRun.isRunning,
+          updatedAt: liveRun.updatedAt
+        };
+        if (existingIdx >= 0) {
+          WALKTHROUGHS[existingIdx] = liveEntry;
+        } else {
+          WALKTHROUGHS.unshift(liveEntry);
+        }
+      }
+    }
+
+    syncLiveRunWalkthrough();
+
+    let councilState = (function () {
+      const liveRun = (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
+                      (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun);
+      if (liveRun && liveRun.currentState) {
+        return liveRun.currentState;
+      }
+      return CouncilMachine.createInitialCouncilState(WALKTHROUGHS[0].initialConfig);
+    })();
+
+    if (WALKTHROUGHS[0] && WALKTHROUGHS[0].id === 'wt-live-latest' && WALKTHROUGHS[0].steps) {
+      currentStepIdx = WALKTHROUGHS[0].steps.length;
+    }
 
     function val(id) {
       const el = document.getElementById(id);
@@ -584,8 +628,14 @@
     function selectWalkthrough(idx) {
       stopAutoPlay();
       activeWalkthroughIdx = idx;
-      currentStepIdx = 0;
-      councilState = CouncilMachine.createInitialCouncilState(WALKTHROUGHS[idx].initialConfig);
+      const wt = WALKTHROUGHS[idx];
+      if (wt && wt.id === 'wt-live-latest' && wt.currentState) {
+        councilState = wt.currentState;
+        currentStepIdx = (wt.steps || []).length;
+      } else if (wt) {
+        currentStepIdx = 0;
+        councilState = CouncilMachine.createInitialCouncilState(wt.initialConfig);
+      }
       renderAll();
     }
 
@@ -597,7 +647,9 @@
       const wt = WALKTHROUGHS[activeWalkthroughIdx];
       if (!wt || !wt.steps[stepIdx]) return;
       const step = wt.steps[stepIdx];
-      if (step.multiEvents) {
+      if (wt.id === 'wt-live-latest' && step.stateSnapshot) {
+        councilState = step.stateSnapshot;
+      } else if (step.multiEvents) {
         step.multiEvents.forEach(function (ev) {
           councilState = CouncilMachine.transitionCouncil(councilState, ev);
         });
@@ -609,6 +661,7 @@
     }
 
     function toggleAutoPlay() {
+      stopLiveFollow();
       if (autoPlayTimer) {
         stopAutoPlay();
         renderAll();
@@ -640,11 +693,80 @@
       const lbl = document.getElementById('btn-autoplay-label');
       if (lbl) lbl.textContent = 'Auto-Play Real-Time Stream';
       const badge = document.getElementById('stream-badge');
-      if (badge) badge.textContent = '';
+      if (badge && !liveFollowTimer) badge.textContent = '';
+    }
+
+    function toggleLiveFollow() {
+      if (liveFollowTimer) {
+        stopLiveFollow();
+        renderAll();
+        return;
+      }
+      stopAutoPlay();
+      syncLiveRunWalkthrough();
+      const liveIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
+      if (liveIdx >= 0) {
+        selectWalkthrough(liveIdx);
+      }
+
+      const btnLabel = document.getElementById('btn-live-follow-label');
+      if (btnLabel) btnLabel.textContent = 'Live Follow: ON (1s)';
+      const btn = document.getElementById('btn-live-follow');
+      if (btn) btn.classList.add('active');
+      const badge = document.getElementById('stream-badge');
+      if (badge) badge.textContent = '⚡ LIVE FOLLOW ACTIVE (file:// auto-sync)';
+
+      pollLiveRun();
+      liveFollowTimer = setInterval(pollLiveRun, 1000);
+    }
+
+    function stopLiveFollow() {
+      if (liveFollowTimer) {
+        clearInterval(liveFollowTimer);
+        liveFollowTimer = null;
+      }
+      const btnLabel = document.getElementById('btn-live-follow-label');
+      if (btnLabel) btnLabel.textContent = 'Live Follow: OFF';
+      const btn = document.getElementById('btn-live-follow');
+      if (btn) btn.classList.remove('active');
+      const badge = document.getElementById('stream-badge');
+      if (badge && !autoPlayTimer) badge.textContent = '';
+    }
+
+    function pollLiveRun() {
+      const oldScript = document.getElementById('script-live-reload');
+      if (oldScript) {
+        oldScript.remove();
+      }
+
+      const script = document.createElement('script');
+      script.id = 'script-live-reload';
+      script.src = './live-run-latest.js?t=' + Date.now();
+
+      script.onload = function () {
+        script.remove();
+        syncLiveRunWalkthrough();
+        const liveIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
+        if (liveIdx >= 0) {
+          const liveWt = WALKTHROUGHS[liveIdx];
+          if (activeWalkthroughIdx === liveIdx && liveWt.currentState) {
+            councilState = liveWt.currentState;
+            currentStepIdx = (liveWt.steps || []).length;
+          }
+        }
+        renderAll();
+      };
+
+      script.onerror = function () {
+        script.remove();
+      };
+
+      document.head.appendChild(script);
     }
 
     function dispatchUI(event) {
       stopAutoPlay();
+      stopLiveFollow();
       councilState = CouncilMachine.transitionCouncil(councilState, event);
       renderAll();
     }

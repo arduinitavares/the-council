@@ -1,0 +1,154 @@
+/**
+ * @fileoverview Pure Observer Telemetry Subscriber for The Council Live Visualizer.
+ * ESM Module (Node >= 22). Zero external dependencies.
+ *
+ * Subscribes to CouncilTelemetryEmitter ('state_transition', 'seat_telemetry') without
+ * mutating CouncilEngine or state machine logic. Atomically persists
+ * window.CouncilLatestLiveRun to src/visualizer/live-run-latest.js.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+export class VisualizerLiveWatcher {
+  /**
+   * @param {Object} [options]
+   * @param {import('../telemetry/emitter.js').CouncilTelemetryEmitter} [options.telemetry]
+   * @param {string} [options.outputPath] - Target path to live-run-latest.js
+   * @param {Object} [options.initialConfig] - Snapshot of Council configuration
+   */
+  constructor(options = {}) {
+    this.telemetry = options.telemetry || null;
+    this.outputPath = options.outputPath || path.resolve(process.cwd(), 'src/visualizer/live-run-latest.js');
+    this.initialConfig = options.initialConfig || {};
+    this._stopped = false;
+
+    this.liveRun = {
+      id: 'wt-live-latest',
+      title: `Live Run: ${this.initialConfig.topic || 'Deliberation'}`,
+      description: `Real-time observer stream for live deliberation: ${this.initialConfig.topic || 'Deliberation'}`,
+      updatedAt: new Date().toISOString(),
+      isRunning: true,
+      initialConfig: {
+        topic: this.initialConfig.topic || '',
+        maxRounds: this.initialConfig.maxRounds ?? 3,
+        minQuorum: this.initialConfig.minQuorum ?? 2,
+        judge: this.initialConfig.judge || null,
+        seats: Array.isArray(this.initialConfig.seats) ? [...this.initialConfig.seats] : []
+      },
+      currentState: null,
+      steps: []
+    };
+
+    this._boundStateTransition = this._handleStateTransition.bind(this);
+    this._boundSeatTelemetry = this._handleSeatTelemetry.bind(this);
+
+    if (this.telemetry) {
+      this.attach(this.telemetry);
+    }
+
+    this._writeAtomic();
+  }
+
+  /**
+   * Attaches watcher to a telemetry emitter.
+   * @param {import('../telemetry/emitter.js').CouncilTelemetryEmitter} telemetry
+   */
+  attach(telemetry) {
+    if (!telemetry || typeof telemetry.on !== 'function') return;
+    if (this.telemetry && this.telemetry !== telemetry) {
+      this.detach();
+    }
+    this.telemetry = telemetry;
+    this._stopped = false;
+    this.telemetry.on('state_transition', this._boundStateTransition);
+    this.telemetry.on('seat_telemetry', this._boundSeatTelemetry);
+  }
+
+  /**
+   * Detaches watcher and removes all telemetry listeners.
+   */
+  detach() {
+    this._stopped = true;
+    if (this.telemetry && typeof this.telemetry.off === 'function') {
+      this.telemetry.off('state_transition', this._boundStateTransition);
+      this.telemetry.off('seat_telemetry', this._boundSeatTelemetry);
+    }
+  }
+
+  /**
+   * Alias for detach() for lifecycle cleanup.
+   */
+  stop() {
+    this.detach();
+  }
+
+  /**
+   * Handles state machine transition event.
+   * @private
+   */
+  _handleStateTransition({ event, state, snapshot, timestamp } = {}) {
+    if (this._stopped || !state) return;
+
+    this.liveRun.currentState = state;
+    this.liveRun.isRunning = state.phase !== 'completed';
+    this.liveRun.updatedAt = timestamp || new Date().toISOString();
+
+    const stepLabel = `${this.liveRun.steps.length + 1}. Transition: ${event?.type || 'EVENT'} -> ${state.phase} (Round ${state.round})`;
+    this.liveRun.steps.push({
+      label: stepLabel,
+      event: event || null,
+      stateSnapshot: state
+    });
+
+    this._writeAtomic();
+  }
+
+  /**
+   * Handles real-time seat status telemetry.
+   * @private
+   */
+  _handleSeatTelemetry({ seatId, status, metadata, timestamp } = {}) {
+    if (this._stopped) return;
+
+    if (this.liveRun.currentState) {
+      if (Array.isArray(this.liveRun.currentState.seats)) {
+        const seat = this.liveRun.currentState.seats.find((s) => s.id === seatId);
+        if (seat) {
+          seat.status = status;
+        }
+      }
+      if (this.liveRun.currentState.judge && this.liveRun.currentState.judge.id === seatId) {
+        this.liveRun.currentState.judge.status = status;
+      }
+    }
+
+    this.liveRun.updatedAt = timestamp || new Date().toISOString();
+    this._writeAtomic();
+  }
+
+  /**
+   * Atomically writes current liveRun to outputPath via temp file + fs.renameSync.
+   * Wrapped in try/catch for observer safety so disk faults never crash deliberation.
+   * @private
+   */
+  _writeAtomic() {
+    if (this._stopped) return;
+
+    try {
+      const dir = path.dirname(this.outputPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      const tempPath = `${this.outputPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      const payload = JSON.stringify(this.liveRun, null, 2);
+      const content = `/**\n * Auto-generated by The Council VisualizerLiveWatcher.\n * Do not edit manually.\n */\n(function (root) {\n  'use strict';\n  const data = ${payload};\n  if (typeof window !== 'undefined') {\n    window.CouncilLatestLiveRun = data;\n  }\n  if (typeof globalThis !== 'undefined') {\n    globalThis.CouncilLatestLiveRun = data;\n  }\n  if (root) {\n    root.CouncilLatestLiveRun = data;\n  }\n})(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));\n`;
+
+      fs.writeFileSync(tempPath, content, 'utf8');
+      fs.renameSync(tempPath, this.outputPath);
+    } catch {
+      // Safe observer failure suppression: file write errors must never crash deliberation
+    }
+  }
+}

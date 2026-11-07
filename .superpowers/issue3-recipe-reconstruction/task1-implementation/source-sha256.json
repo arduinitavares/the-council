@@ -1,0 +1,6 @@
+{
+  "src/pilot/provider-controls.ts": "7de43e3e7f631a6f2c0706e8fa995e33388fcbe86f7838a04165905f9f4394e4",
+  "test/pilot/provider-controls.test.ts": "e1d360ff8444136ea032f6002e3c92d9f5efb84e63b3b5019f17ea86ce46c022",
+  "src/pilot/agy-recipe-plan.ts": "3db88aca9341371c25582274f2160adc0860ee0dd73ce9dc49d8fa3a1568c7f8",
+  "test/pilot/agy-recipe-plan.test.ts": "8a7393f3ea63730b2fe50741d2d41454dc2f69e5238f98f750489dd80d7aa198"
+}

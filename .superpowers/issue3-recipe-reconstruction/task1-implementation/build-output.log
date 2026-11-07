@@ -1,0 +1,8 @@
+
+> the-council@0.1.0 build
+> tsc -p tsconfig.build.json
+
+
+> the-council@0.1.0 postbuild
+> node scripts/copy-assets.mjs
+

@@ -1,0 +1,29 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/provider-controls.test.ts test/pilot/control-audit.test.ts
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+ ❯ test/pilot/control-audit.test.ts (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/pilot/control-audit.test.ts [ test/pilot/control-audit.test.ts ]
+Error: Cannot find module '../../dist/pilot/provider-controls.js' imported from /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council/test/pilot/control-audit.test.ts
+ ❯ test/pilot/control-audit.test.ts:4:1
+      2| import { mkdirSync, writeFileSync, readFileSync, chmodSync } from "nod…
+      3| import { join, delimiter } from "node:path";
+      4| import { prepareProviderAudit, adoptProviderAudit, inspectProviderCont…
+       | ^
+      5| import { acquiredAuditDisposition, adoptAuditSnapshot, auditHash, save…
+      6| import { createHash } from "node:crypto";
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  76 passed (76)
+   Start at  09:20:37
+   Duration  25.23s (tests 99%)
+

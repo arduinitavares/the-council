@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "npm",
+    "test",
+    "--",
+    "test/pilot/provider-controls.test.ts",
+    "test/pilot/control-audit.test.ts"
+  ],
+  "exitCode": 1,
+  "elapsedSeconds": 26.37,
+  "groupAbsent": true
+}

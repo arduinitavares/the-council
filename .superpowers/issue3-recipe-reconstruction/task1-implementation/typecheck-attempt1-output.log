@@ -1,0 +1,7 @@
+
+> the-council@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+src/pilot/agy-recipe-plan.ts(39,55): error TS2322: Type '{ route: NativeProviderRoute; model: string; effort: string; effortEncoding?: 'native' | 'model' | undefined; }' is not assignable to type '{ route: "antigravity" | "codex" | "cursor"; model: string; effort: "high" | "low" | "max" | "medium" | "ultra" | "xhigh"; effortEncoding?: "model" | "native" | undefined; }'.
+  Types of property 'effort' are incompatible.
+    Type 'string' is not assignable to type '"high" | "low" | "max" | "medium" | "ultra" | "xhigh"'.

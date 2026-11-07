@@ -1,0 +1,13 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/agy-recipe-plan.test.ts test/pilot/provider-controls.test.ts
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+
+ Test Files  2 passed (2)
+      Tests  102 passed (102)
+   Start at  09:29:42
+   Duration  26.27s (tests 99%)
+

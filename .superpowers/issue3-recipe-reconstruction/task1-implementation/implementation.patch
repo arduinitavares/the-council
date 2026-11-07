@@ -1,0 +1,271 @@
+diff --git a/src/pilot/provider-controls.ts b/src/pilot/provider-controls.ts
+index 332f249..1264ba6 100644
+--- a/src/pilot/provider-controls.ts
++++ b/src/pilot/provider-controls.ts
+@@ -12,6 +12,7 @@ import { canonicalJson } from "../domain/hash.js";
+ import type { Command } from "./orca-driver.js";
+ import { codexKernel } from "./codex-controls.js";
+ import { acquireAgyHookShellPolicy, agyHookShellApplicable } from "./agy-hook-shell.js";
++import { buildAgyRecipePlan, AgyRecipeSettingsError } from "./agy-recipe-plan.js";
+ 
+ export interface ProviderControlEvidence { bootstrap: Observation; controls: Observation; facts: ControlFact[]; audit?: AuditSnapshot | undefined; recipe?: ProviderRecipe | undefined }
+ export type ProviderControlSource = (selection: ModelSelection, version: string, workspace: string, billing: Observation, command?: Command) => Promise<ProviderControlEvidence>;
+@@ -160,6 +161,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection,
+   const materializations: { path: string; content: string; sha256: string }[] = [];
+   let codexPolicy: ProviderRecipe["codexPolicy"];
+   let agyHookShell: ProviderRecipe["agyHookShell"];
++  let agyRecipePlan: ReturnType<typeof buildAgyRecipePlan> | undefined;
+   if (selection.route === "antigravity") {
+     const exposed = agyHelpFlags(help);
+     const required = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
+@@ -172,7 +174,9 @@ export const inspectProviderControls: ProviderControlSource = async (selection,
+       sourceContract ? `Source acquisition rules inspected for ${version}; hook closure and effective controls remain independent` : "No inspected startup/source acquisition contract for this version; public flags alone are insufficient",
+       "Unreviewed versions cannot inherit loader/hook-source qualification");
+     const global = join(homedir(), ".gemini/antigravity-cli/settings.json");
++    const settingsFailuresBefore = unavailable.length;
+     const config = read(global);
++    const settingsUnavailable = unavailable.length > settingsFailuresBefore;
+     const hookFiles = [join(homedir(), ".gemini/antigravity-cli/hooks.json"), join(homedir(), ".gemini/config/hooks.json"), join(homedir(), ".gemini/hooks.json"), join(workspace, ".gemini/hooks.json"), join(workspace, ".agents/hooks.json")];
+     let inventoryKnown = true;
+     const inventoryFailuresBefore = unavailable.length;
+@@ -252,14 +256,22 @@ export const inspectProviderControls: ProviderControlSource = async (selection,
+     for(const instruction of [join(homedir(),".gemini/GEMINI.md"),join(homedir(),".gemini/antigravity-cli/GEMINI.md"),join(workspace,"GEMINI.md"),join(workspace,"AGENTS.md")])track(instruction);
+     const enabledHook = (value: any): boolean => value && typeof value === "object" && (Array.isArray(value) ? value.some(enabledHook) : value.enabled === false ? false : typeof value.command === "string" || typeof value.prompt === "string" || typeof value.type === "string" || Object.values(value).some(enabledHook));
+     add("startup-hooks-and-plugins", inventoryKnown && hooks.every(value => value !== undefined && !enabledHook(value)) ? "verified" : "unknown", "AGY documented global/workspace/installed-plugin hook sources", `${hooks.length} sources inventoried; enabled or unreadable hooks require source/effect audit within existing authority, not automatic renewed approval`, "SessionStart precedes inference; settings hooks={} is insufficient");
+-    const agent = "---\nname: council-packet\ndescription: Supplied-packet Council reader with no tools or helpers.\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nRead the supplied packet only and return its strict bound JSON envelope.\n";
+-    const session = JSON.stringify({ allowNonWorkspaceAccess: false, permissions: { ...(config?.permissions ?? {}), deny: [...new Set([...(config?.permissions?.deny ?? []), "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"])] } });
+-    materializations.push({ path: join(cwd, ".agents/agents/council-packet/agent.md"), content: agent, sha256: sha256(agent) }, { path: join(cwd, ".council-profiles", sha256(session), "session-settings.json"), content: session, sha256: sha256(session) });
++    if (!settingsUnavailable) {
++      try {
++        agyRecipePlan = buildAgyRecipePlan({ selection, version, workspace, executable: executable ?? "unavailable", legacySettings: config, agyHookShell: agyHookShell ?? null });
++        materializations.push(...agyRecipePlan.materializations);
++        argv.push(...agyRecipePlan.argv);
++      } catch (cause) {
++        if (!(cause instanceof AgyRecipeSettingsError)) throw cause;
++        unavailable.push(cause.message);
++        add("agy-recipe-settings", "unknown", global, cause.message, "No recipe from malformed controlling settings");
++      }
++    }
+     const collisionSources = [join(homedir(), ".gemini/config/agents/council-packet.md"), join(homedir(), ".gemini/config/agents/council-packet/agent.md")];
+     for(const file of collisionSources)track(file);const collision=collisionSources.some(existsSync);
+-    add("custom-agent-definition", collision ? "missing" : "verified", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : sha256(agent), "Definition metadata only; verify actual selected agent and empty init.tools before input");
++    const agentHash = agyRecipePlan?.agentDefinition?.sha256;
++    add("custom-agent-definition", collision ? "missing" : agentHash ? "verified" : "unknown", "Generated source-bound AGY main-agent definition", collision ? "A preexisting global agent has the task-owned name" : agentHash ?? "AGY recipe settings unavailable", "Definition metadata only; verify actual selected agent and empty init.tools before input");
+     add("effective-input-gate", "unknown", "AGY stream-json init", "Require init before user input, exact model/agent/cwd/permission and empty tools", "Wrapper withholds stdin until effective checks pass", "effective");
+-    argv.push("--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--add-dir", cwd, "--mode", "plan", "--sandbox", "--settings", join(cwd, ".council-profiles", sha256(session), "session-settings.json"), "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s");
+   } else if (selection.route === "codex") {
+     const configurations: any[] = [];
+     const codexHome = nonblankRoot(process.env.CODEX_HOME) ?? join(homedir(),".codex");
+@@ -338,7 +350,7 @@ export const inspectProviderControls: ProviderControlSource = async (selection,
+   // Sources and their digests are acquired even when enforcement is unavailable.
+   // A future supported recipe must satisfy the same fact conjunction; no flag
+   // or input file can mark the current missing controls verified.
+-  if (executable && help) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
++  if (executable && help && (selection.route !== "antigravity" || agyRecipePlan)) recipe = { protocol: selection.route === "antigravity" ? "agy-stream" : selection.route === "codex" ? "codex-app-server" : "cursor-stream",
+     executable, argv, cwd, version, selection: selectionSchema.parse(selection), expectedPermission: "request-review", sources, facts,
+     ...(selection.route === "antigravity" ? { agent: "council-packet" } : {}), materializations };
+   if (recipe && codexPolicy) recipe.codexPolicy = codexPolicy;
+diff --git a/test/pilot/provider-controls.test.ts b/test/pilot/provider-controls.test.ts
+index cdb6b54..f962cb1 100644
+--- a/test/pilot/provider-controls.test.ts
++++ b/test/pilot/provider-controls.test.ts
+@@ -10,6 +10,64 @@ import { incidentRoster } from "./fixtures.js";
+ const agyFlags = ["model", "effort", "agent", "add-dir", "mode", "sandbox", "settings", "input-format", "output-format", "print-timeout"];
+ const agyHelp = (flags = agyFlags) => "Usage of agy:\n"+flags.map(flag => `  --${flag}${flag === "sandbox" ? "" : " string"}\n      public option\n`).join("");
+ 
++// Break caught: extraction changes the launch contract, permission merge order,
++// generated bytes, or their content-addressed materialization identities.
++it("preserves the existing AGY recipe bytes for valid controlling settings", async () => {
++  const agent = "---\nname: council-packet\ndescription: Supplied-packet Council reader with no tools or helpers.\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nRead the supplied packet only and return its strict bound JSON envelope.\n";
++  const session = '{"allowNonWorkspaceAccess":false,"permissions":{"allow":["read_file(*)"],"deny":["existing-deny(*)","command(*)","write_file(*)","read_url(*)","execute_url(*)","mcp(*)"],"ask":["read_file(private)"]}}';
++  const agentHash = createHash("sha256").update(agent).digest("hex");
++  const sessionHash = createHash("sha256").update(session).digest("hex");
++  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
++    const cwd = join(workspace, ".council/native-packets");
++    const agentPath = join(cwd, ".agents/agents/council-packet/agent.md");
++    const sessionPath = join(cwd, ".council-profiles", sessionHash, "session-settings.json");
++    expect(result.recipe).toMatchObject({ protocol: "agy-stream", executable: join(workspace, "../agy"),
++      cwd, version: "1.4.12", selection: incidentRoster.reviewers.gemini, expectedPermission: "request-review",
++      agent: "council-packet", agentDefinition: { path: agentPath, sha256: agentHash },
++      argv: ["--model", "gemini-4-argon-high", "--effort", "high", "--agent", "council-packet", "--add-dir", cwd,
++        "--mode", "plan", "--sandbox", "--settings", sessionPath, "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s"],
++      materializations: [{ path: agentPath, content: agent, sha256: agentHash }, { path: sessionPath, content: session, sha256: sessionHash }],
++    });
++    expect(result.audit?.unavailable).toEqual([]);
++    expect(result.controls.state).toBe("unknown");
++  }, 0, (_workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify({
++    allowNonWorkspaceAccess: true, permissions: { allow: ["read_file(*)"], deny: ["existing-deny(*)", "command(*)", "existing-deny(*)"], ask: ["read_file(private)"] },
++  })));
++});
++
++// Break caught: spreading malformed controlling values drops or corrupts Deny
++// while still yielding a launchable recipe at the inspection boundary.
++it.each([
++  { settings: { permissions: "deny-all" }, field: "permissions" },
++  { settings: { permissions: null }, field: "permissions" },
++  { settings: { permissions: [] }, field: "permissions" },
++  { settings: { permissions: { deny: "command(*)" } }, field: "permissions.deny" },
++  { settings: { permissions: { deny: null } }, field: "permissions.deny" },
++  { settings: { permissions: { deny: {} } }, field: "permissions.deny" },
++  { settings: { permissions: { deny: ["existing-deny(*)", 7] } }, field: "permissions.deny" },
++  { settings: [], field: "settings" },
++  { settings: null, field: "settings" },
++])("rejects malformed AGY controlling settings: $settings", async ({ settings, field }) => {
++  await withAgyControls(agyHelp(), "1.4.12", result => {
++    expect(result.audit?.unavailable).toContain(`AGY_RECIPE_SETTINGS_INVALID:${field}`);
++    expect(result.recipe).toBeUndefined();
++    expect(result.bootstrap.state).not.toBe("verified");
++    expect(result.controls.state).toBe("unknown");
++  }, 0, (_workspace, settingsFile) => writeFileSync(settingsFile, JSON.stringify(settings)));
++});
++
++// Break caught: an absent optional settings file is conflated with a read
++// failure, preventing reconstruction of the valid default profile.
++it("builds an AGY recipe when the existing settings file is missing", async () => {
++  await withAgyControls(agyHelp(), "1.4.12", (result, workspace) => {
++    const settingsFile = join(workspace, "../.gemini/antigravity-cli/settings.json");
++    expect(result.recipe?.protocol).toBe("agy-stream");
++    expect(result.audit?.sources.find(source => source.path === settingsFile)).toEqual({ path: settingsFile, kind: "absent", sha256: null });
++    expect(result.audit?.unavailable).toEqual([]);
++    expect(result.controls.state).toBe("unknown");
++  }, 0, (_workspace, settingsFile) => rmSync(settingsFile));
++});
++
+ it("keeps ordinary non-Orca hooks in the generic pending effect audit", async () => {
+   await withAgyControls(agyHelp(), "1.4.12", result => {
+     expect(result.audit?.unavailable).toEqual([]);
+@@ -158,6 +216,7 @@ it.each(["malformed", "non-regular"])("keeps AGY 1.4.12 blocked on %s settings",
+     const settingsFile = join(workspace, "../.gemini/antigravity-cli/settings.json");
+     expect(result.facts.find(fact => fact.name === "configuration-readable")?.observation.state).toBe("unknown");
+     expect(result.audit?.unavailable).toContain("CONFIGURATION_UNREADABLE:"+settingsFile);
++    expect(result.recipe).toBeUndefined();
+     expect(result.bootstrap.state).not.toBe("verified");
+     expect(result.controls.state).toBe("unknown");
+   }, 0, (_workspace, settingsFile) => {
+diff --git a/src/pilot/agy-recipe-plan.ts b/src/pilot/agy-recipe-plan.ts
+new file mode 100644
+index 0000000..efe4b2e
+--- /dev/null
++++ b/src/pilot/agy-recipe-plan.ts
+@@ -0,0 +1,49 @@
++import { createHash } from "node:crypto";
++import { join } from "node:path";
++import { selectionSchema, type ModelSelection } from "./config.js";
++import type { ProviderRecipe } from "./wrapper-contract.js";
++import type { AgyRecipeInputs } from "./agy-inventory-witness.js";
++
++export class AgyRecipeSettingsError extends Error {
++  constructor(field: "settings" | "permissions" | "permissions.deny") {
++    super(`AGY_RECIPE_SETTINGS_INVALID:${field}`);
++    this.name = "AgyRecipeSettingsError";
++  }
++}
++
++const record = (value: unknown): value is Record<string, unknown> => {
++  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
++  const prototype = Object.getPrototypeOf(value);
++  return prototype === Object.prototype || prototype === null;
++};
++const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
++
++/** Reconstruct package-owned bytes only. Parsed settings and an optional hook
++ * policy are inputs, never proof of source acquisition or startup authority. */
++export function buildAgyRecipePlan(input: {
++  selection: ModelSelection; version: string; workspace: string; executable: string;
++  legacySettings: unknown; agyHookShell: ProviderRecipe["agyHookShell"] | null;
++}): AgyRecipeInputs {
++  const { selection, version, workspace, executable, legacySettings, agyHookShell } = input;
++  if (legacySettings !== undefined && !record(legacySettings)) throw new AgyRecipeSettingsError("settings");
++  const settings = legacySettings ?? {};
++  if ("permissions" in settings && !record(settings.permissions)) throw new AgyRecipeSettingsError("permissions");
++  const permissions = (settings.permissions ?? {}) as Record<string, unknown>;
++  if ("deny" in permissions && (!Array.isArray(permissions.deny) || [...permissions.deny].some(value => typeof value !== "string"))) {
++    throw new AgyRecipeSettingsError("permissions.deny");
++  }
++  const inheritedDeny = (permissions.deny ?? []) as string[];
++  const cwd = join(workspace, ".council/native-packets");
++  const agent = "---\nname: council-packet\ndescription: Supplied-packet Council reader with no tools or helpers.\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nRead the supplied packet only and return its strict bound JSON envelope.\n";
++  const session = JSON.stringify({ allowNonWorkspaceAccess: false, permissions: { ...permissions, deny: [...new Set([...inheritedDeny, "write_file(*)", "command(*)", "read_url(*)", "execute_url(*)", "mcp(*)"])] } });
++  const agentDefinition = { path: join(cwd, ".agents/agents/council-packet/agent.md"), sha256: sha256(agent) };
++  const sessionHash = sha256(session);
++  const sessionPath = join(cwd, ".council-profiles", sessionHash, "session-settings.json");
++  return {
++    protocol: "agy-stream", executable, cwd, version, selection: selectionSchema.parse(selection), expectedPermission: "request-review",
++    agent: "council-packet", agentDefinition,
++    materializations: [{ path: agentDefinition.path, content: agent, sha256: agentDefinition.sha256 }, { path: sessionPath, content: session, sha256: sessionHash }],
++    argv: ["--model", selection.model, "--effort", selection.effort, "--agent", "council-packet", "--add-dir", cwd, "--mode", "plan", "--sandbox", "--settings", sessionPath, "--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "120s"],
++    codexPolicy: null, agyHookShell: agyHookShell ?? null,
++  };
++}
+diff --git a/test/pilot/agy-recipe-plan.test.ts b/test/pilot/agy-recipe-plan.test.ts
+new file mode 100644
+index 0000000..e133032
+--- /dev/null
++++ b/test/pilot/agy-recipe-plan.test.ts
+@@ -0,0 +1,66 @@
++import { expect, it } from "vitest";
++import { createHash } from "node:crypto";
++import { buildAgyRecipePlan, AgyRecipeSettingsError } from "../../src/pilot/agy-recipe-plan.js";
++import { incidentRoster } from "./fixtures.js";
++
++const input = { selection: incidentRoster.reviewers.gemini, version: "1.4.12", workspace: "/fixture/project", executable: "/fixture/agy", agyHookShell: null };
++const emptySession = '{"allowNonWorkspaceAccess":false,"permissions":{"deny":["write_file(*)","command(*)","read_url(*)","execute_url(*)","mcp(*)"]}}';
++
++// Break caught: missing/empty settings generate distinct or unstable profiles,
++// or recipe construction acquires startup authority rather than only inputs.
++it.each([undefined, {}, { permissions: {} }, { permissions: { deny: [] } }])("builds the same recipe for valid empty settings %j", legacySettings => {
++  const plan = buildAgyRecipePlan({ ...input, legacySettings });
++  const sessionHash = createHash("sha256").update(emptySession).digest("hex");
++  expect(plan).toMatchObject({ protocol: "agy-stream", executable: "/fixture/agy", version: "1.4.12", cwd: "/fixture/project/.council/native-packets",
++    selection: { route: "antigravity", model: "gemini-4-argon-high", effort: "high" }, expectedPermission: "request-review", agent: "council-packet", codexPolicy: null, agyHookShell: null });
++  expect(plan.materializations[1]).toEqual({ path: `/fixture/project/.council/native-packets/.council-profiles/${sessionHash}/session-settings.json`, content: emptySession, sha256: sessionHash });
++  expect(plan.agentDefinition).toEqual({ path: plan.materializations[0]!.path, sha256: plan.materializations[0]!.sha256 });
++  expect(plan).not.toHaveProperty("facts");
++  expect(plan).not.toHaveProperty("sources");
++});
++
++// Break caught: Deny merging mutates frozen inputs, reorders inherited rules,
++// loses unrelated permission fields, or binds hashes to different bytes.
++it("preserves inherited Deny order and permission fields without mutating inputs", () => {
++  const legacySettings = Object.freeze({ permissions: Object.freeze({ allow: Object.freeze(["read_file(*)"]), deny: Object.freeze(["custom(*)", "command(*)", "custom(*)"]) }) });
++  const selection = Object.freeze({ ...input.selection });
++  const plan = buildAgyRecipePlan({ ...input, selection, legacySettings });
++  expect(plan.materializations[1]!.content).toBe('{"allowNonWorkspaceAccess":false,"permissions":{"allow":["read_file(*)"],"deny":["custom(*)","command(*)","write_file(*)","read_url(*)","execute_url(*)","mcp(*)"]}}');
++  for (const item of plan.materializations) expect(item.sha256).toBe(createHash("sha256").update(item.content).digest("hex"));
++  expect(legacySettings.permissions.deny).toEqual(["custom(*)", "command(*)", "custom(*)"]);
++  expect(selection).toEqual({ route: "antigravity", model: "gemini-4-argon-high", effort: "high" });
++});
++
++// Break caught: optional acquired hook policy is dropped or rewritten by the
++// pure builder, or a new version gate is invented during extraction.
++it("retains an optional hook policy without acquiring sources or gating versions", () => {
++  const policy = {
++    version: 1 as const, contract: "agy-orca-hook-v1" as const, route: "antigravity" as const,
++    workspace: input.workspace, executionCwd: "/fixture/project/.council/native-packets", executable: input.executable, providerVersion: "fixture-version", basePath: "/usr/bin:/bin",
++    uid: 501, gid: 20, node: "/fixture/node", installed: "/fixture/hook.sh", hookContent: "fixture only", templateHash: "a".repeat(64),
++    descriptors: [], identities: [], startupDirectories: [], absences: [],
++    environment: { PATH: "/usr/bin:/bin" as const, LANG: "C" as const, LC_ALL: "C" as const, DEVELOPER_DIR: "/Library/Developer/CommandLineTools" as const,
++      PYTHONNOUSERSITE: "1" as const, PYTHONDONTWRITEBYTECODE: "1" as const, __CF_USER_TEXT_ENCODING: "0x1F5:0:0" },
++  };
++  const before = JSON.stringify(policy);
++  const plan = buildAgyRecipePlan({ ...input, version: "fixture-version", legacySettings: undefined, agyHookShell: policy });
++  expect(plan.version).toBe("fixture-version");
++  expect(plan.agyHookShell).toEqual(policy);
++  expect(JSON.stringify(policy)).toBe(before);
++});
++
++// Break caught: malformed controlling settings become a launchable profile or
++// throw an incidental spread error that callers cannot classify.
++it.each([
++  [null, "settings"], [[], "settings"], ["invalid", "settings"],
++  [new Date(0), "settings"],
++  [{ permissions: null }, "permissions"], [{ permissions: [] }, "permissions"], [{ permissions: true }, "permissions"],
++  [{ permissions: new Date(0) }, "permissions"],
++  [{ permissions: { deny: null } }, "permissions.deny"], [{ permissions: { deny: "command(*)" } }, "permissions.deny"],
++  [{ permissions: { deny: {} } }, "permissions.deny"], [{ permissions: { deny: [1] } }, "permissions.deny"],
++  [{ permissions: { deny: Array(1) } }, "permissions.deny"],
++])("rejects malformed settings %j with a named error", (legacySettings, field) => {
++  const build = () => buildAgyRecipePlan({ ...input, legacySettings });
++  expect(build).toThrow(AgyRecipeSettingsError);
++  expect(build).toThrow(`AGY_RECIPE_SETTINGS_INVALID:${field}`);
++});

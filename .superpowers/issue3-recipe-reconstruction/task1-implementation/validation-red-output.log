@@ -1,0 +1,34 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/agy-recipe-plan.test.ts
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+ ❯ test/pilot/agy-recipe-plan.test.ts (19 tests | 3 failed) 8ms
+   × rejects malformed settings "1970-01-01T00:00:00.000Z" with a named error 1ms
+   × rejects malformed settings {"permissions":"1970-01-01T00:00:00.000Z"} with a named error 0ms
+   × rejects malformed settings {"permissions":{"deny":[null]}} with a named error 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/pilot/agy-recipe-plan.test.ts > rejects malformed settings "1970-01-01T00:00:00.000Z" with a named error
+ FAIL  test/pilot/agy-recipe-plan.test.ts > rejects malformed settings {"permissions":"1970-01-01T00:00:00.000Z"} with a named error
+ FAIL  test/pilot/agy-recipe-plan.test.ts > rejects malformed settings {"permissions":{"deny":[null]}} with a named error
+AssertionError: expected function to throw an error, but it didn't
+ ❯ test/pilot/agy-recipe-plan.test.ts:64:17
+     62| ])("rejects malformed settings %j with a named error", (legacySettings…
+     63|   const build = () => buildAgyRecipePlan({ ...input, legacySettings });
+     64|   expect(build).toThrow(AgyRecipeSettingsError);
+       |                 ^
+     65|   expect(build).toThrow(`AGY_RECIPE_SETTINGS_INVALID:${field}`);
+     66| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 16 passed (19)
+   Start at  09:32:36
+   Duration  159ms (import 61%, transform 27%, tests 10%, worker 2%)
+

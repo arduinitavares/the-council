@@ -1,0 +1,69 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/provider-controls.test.ts -t rejects malformed AGY controlling settings
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+ ❯ test/pilot/provider-controls.test.ts (85 tests | 9 failed | 76 skipped) 1937ms
+   × rejects malformed AGY controlling settings: { permissions: 'deny-all' } 452ms
+   × rejects malformed AGY controlling settings: { permissions: null } 199ms
+   × rejects malformed AGY controlling settings: { permissions: [] } 183ms
+   × rejects malformed AGY controlling settings: { permissions: { deny: 'command(*)' } } 177ms
+   × rejects malformed AGY controlling settings: { permissions: { deny: null } } 194ms
+   × rejects malformed AGY controlling settings: { permissions: { deny: {} } } 180ms
+   × rejects malformed AGY controlling settings: { permissions: { deny: [Array] } } 182ms
+   × rejects malformed AGY controlling settings: [] 190ms
+   × rejects malformed AGY controlling settings: null 180ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: 'deny-all' }
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: null }
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: [] }
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: { deny: 'command(*)' } }
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: { deny: null } }
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: { deny: [Array] } }
+AssertionError: expected [] to include 'AGY_RECIPE_SETTINGS_INVALID:permissio…'
+ ❯ test/pilot/provider-controls.test.ts:27:39
+     25| ])("rejects malformed AGY controlling settings: $settings", async ({ s…
+     26|   await withAgyControls(agyHelp(), "1.4.12", result => {
+     27|     expect(result.audit?.unavailable).toContain(`AGY_RECIPE_SETTINGS_I…
+       |                                       ^
+     28|     expect(result.recipe).toBeUndefined();
+     29|     expect(result.bootstrap.state).not.toBe("verified");
+ ❯ withAgyControls test/pilot/provider-controls.test.ts:91:5
+ ❯ test/pilot/provider-controls.test.ts:26:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: { permissions: { deny: {} } }
+TypeError: ((intermediate value) ?? []) is not iterable
+ ❯ inspectProviderControls src/pilot/provider-controls.ts:256:169
+
+ ❯ withAgyControls test/pilot/provider-controls.test.ts:91:11
+ ❯ test/pilot/provider-controls.test.ts:26:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: []
+ FAIL  test/pilot/provider-controls.test.ts > rejects malformed AGY controlling settings: null
+AssertionError: expected [] to include 'AGY_RECIPE_SETTINGS_INVALID:settings'
+ ❯ test/pilot/provider-controls.test.ts:27:39
+     25| ])("rejects malformed AGY controlling settings: $settings", async ({ s…
+     26|   await withAgyControls(agyHelp(), "1.4.12", result => {
+     27|     expect(result.audit?.unavailable).toContain(`AGY_RECIPE_SETTINGS_I…
+       |                                       ^
+     28|     expect(result.recipe).toBeUndefined();
+     29|     expect(result.bootstrap.state).not.toBe("verified");
+ ❯ withAgyControls test/pilot/provider-controls.test.ts:91:5
+ ❯ test/pilot/provider-controls.test.ts:26:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  9 failed | 76 skipped (85)
+   Start at  09:27:27
+   Duration  2.15s (tests 94%, import 4%, transform 2%)
+

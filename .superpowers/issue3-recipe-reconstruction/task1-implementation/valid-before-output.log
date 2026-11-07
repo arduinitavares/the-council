@@ -1,0 +1,13 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/provider-controls.test.ts -t preserves the existing AGY recipe bytes
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 85 skipped (86)
+   Start at  09:28:07
+   Duration  414ms (tests 73%, import 16%, transform 10%)
+

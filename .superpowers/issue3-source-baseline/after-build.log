@@ -1,0 +1,13 @@
+
+> the-council@0.1.0 test
+> vitest run test/pilot/provider-controls.test.ts test/pilot/control-audit.test.ts
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-issue3-inventory/the-council
+
+
+ Test Files  2 passed (2)
+      Tests  85 passed (85)
+   Start at  09:23:20
+   Duration  16.27s (tests 99%)
+

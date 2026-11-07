@@ -11,7 +11,12 @@ import {
   createCouncilEngine
 } from '../../src/engine/index.js';
 import { MockAdapter } from '../../src/harness/mock.js';
-import { QuotaExhaustionError } from '../../src/harness/adapter.js';
+import {
+  QuotaExhaustionError,
+  HarnessExecutionError,
+  AuthenticationError,
+  TimeoutError
+} from '../../src/harness/adapter.js';
 
 describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
   describe('Config Validation & Resolution', () => {
@@ -261,5 +266,254 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       const result = await engine.run();
       assert.equal(engine.aborted, true);
     });
+
+    it('does not retry a Seat when the error is non-retryable (isRetryable === false)', async () => {
+      const mockHarness = new MockAdapter();
+      let badSeatCalls = 0;
+
+      const origExecute = mockHarness.executeSeat.bind(mockHarness);
+      mockHarness.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 's3-bad-model') {
+          badSeatCalls += 1;
+          throw new HarnessExecutionError(
+            'Harness "codex" rejects forbidden model "gemini-3.1-pro". Allowed families: gpt-*',
+            { harness: 'codex', isRetryable: false }
+          );
+        }
+        return origExecute(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Non-retryable Seat Fault',
+          minQuorum: 2,
+          maxRetriesPerSeat: 2,
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 's3-bad-model', harness: 'mock', model: 'gemini-3.1-pro', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const result = await engine.run();
+      assert.equal(badSeatCalls, 1, 'Non-retryable seat error must not be retried');
+      const s3 = engine.state.seats.find((s) => s.id === 's3-bad-model');
+      assert.equal(s3.retries, 0, 'Seat retries counter must remain 0');
+      assert.equal(s3.status, 'excused');
+      assert.match(s3.excusedReason, /rejects forbidden model/);
+      assert.equal(result.ok, true);
+    });
+
+    it('does not retry the Judge when the error is non-retryable (isRetryable === false)', async () => {
+      const mockHarness = new MockAdapter();
+      let judgeCalls = 0;
+
+      mockHarness.executeJudgeAuditAndSynthesis = async () => {
+        judgeCalls += 1;
+        throw new AuthenticationError('Antigravity authentication failed (401)', { harness: 'antigravity' });
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Non-retryable Judge Fault',
+          minQuorum: 2,
+          maxRetriesPerSeat: 2,
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const result = await engine.run();
+      assert.equal(judgeCalls, 1, 'Non-retryable judge error must not be retried');
+      assert.equal(engine.state.judge.retries, 0, 'Judge retries counter must remain 0');
+      assert.equal(result.ok, false);
+      assert.equal(result.verdict.kind, 'Dissent Report (Judge Fault)');
+      assert.match(result.verdict.note, /Antigravity authentication failed/);
+    });
+
+    it('classifies TimeoutError as fault_timeout (not fault_quota) and does not label timeout excusals as quota', async () => {
+      const mockHarness = new MockAdapter();
+      const origExecuteSeat = mockHarness.executeSeat.bind(mockHarness);
+      mockHarness.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 's3-timeout') {
+          throw new TimeoutError('Harness "cursor" execution timed out after 240000ms for seat "s3-timeout"', {
+            harness: 'cursor',
+            seatId: 's3-timeout',
+            timeoutMs: 240000
+          });
+        }
+        return origExecuteSeat(ctx);
+      };
+      mockHarness.executeJudgeAuditAndSynthesis = async () => {
+        throw new TimeoutError('Harness "codex" execution timed out after 240000ms for seat "judge-astra"', {
+          harness: 'codex',
+          seatId: 'judge-astra',
+          timeoutMs: 240000
+        });
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Timeout Fault Classification',
+          minQuorum: 2,
+          maxRetriesPerSeat: 1,
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 's3-timeout', harness: 'mock', model: 'm', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const telemetryStatuses = [];
+      engine.getTelemetry().on('seat_telemetry', (evt) => {
+        telemetryStatuses.push(evt);
+      });
+
+      const result = await engine.run();
+
+      // Neither seat nor judge timeout should ever emit fault_quota
+      const quotaTelemetry = telemetryStatuses.filter((t) => t.status === 'fault_quota');
+      assert.equal(quotaTelemetry.length, 0, 'Timeout faults must never emit fault_quota status');
+
+      const seatTimeoutTelemetry = telemetryStatuses.filter(
+        (t) => t.seatId === 's3-timeout' && t.status === 'fault_timeout'
+      );
+      assert.ok(seatTimeoutTelemetry.length >= 1, 'Seat timeout must emit fault_timeout status');
+      assert.match(seatTimeoutTelemetry[0].metadata?.reason || '', /timed out after 240000ms/);
+
+      const judgeTimeoutTelemetry = telemetryStatuses.filter(
+        (t) => t.seatId === engine.state.judge.id && t.status === 'fault_timeout'
+      );
+      assert.ok(judgeTimeoutTelemetry.length >= 1, 'Judge timeout must emit fault_timeout status');
+      assert.equal(result.state.judge.status, 'fault_timeout');
+
+      const s3 = result.state.seats.find((s) => s.id === 's3-timeout');
+      assert.equal(s3.status, 'excused');
+      assert.match(s3.excusedReason, /Exhausted retries \(1\/1\):.*timed out after 240000ms/);
+      assert.doesNotMatch(s3.excusedReason, /or quota/i);
+    });
+
+    it('surfaces CLI exitCode and stderr in Seat and Judge fault reasons and classifies generic execution failures as fault', async () => {
+      const mockHarness = new MockAdapter();
+      const origExecuteSeat = mockHarness.executeSeat.bind(mockHarness);
+      mockHarness.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 's3-cli-err') {
+          throw new HarnessExecutionError('Codex model policy rejected "quota-model" (429)', {
+            harness: 'codex',
+            seatId: 's3-cli-err',
+            exitCode: 2,
+            stderr: 'error: unexpected argument --unknown-flag (quota check)'
+          });
+        }
+        return origExecuteSeat(ctx);
+      };
+      mockHarness.executeJudgeAuditAndSynthesis = async () => {
+        throw new HarnessExecutionError('Judge CLI crashed', {
+          harness: 'antigravity',
+          seatId: 'judge-astra',
+          exitCode: 127,
+          stderr: 'zsh: command not found: agy'
+        });
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'CLI ExitCode and Stderr Surfacing',
+          minQuorum: 2,
+          maxRetriesPerSeat: 1,
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 's3-cli-err', harness: 'mock', model: 'm', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const telemetryStatuses = [];
+      engine.getTelemetry().on('seat_telemetry', (evt) => {
+        telemetryStatuses.push(evt);
+      });
+
+      const result = await engine.run();
+
+      const seatFaultTelemetry = telemetryStatuses.find(
+        (t) => t.seatId === 's3-cli-err' && t.status === 'fault'
+      );
+      assert.ok(seatFaultTelemetry, 'Seat CLI error must emit status "fault"');
+      assert.match(seatFaultTelemetry.metadata?.reason || '', /exit code 2/);
+      assert.match(seatFaultTelemetry.metadata?.reason || '', /stderr: error: unexpected argument --unknown-flag/);
+
+      const s3 = result.state.seats.find((s) => s.id === 's3-cli-err');
+      assert.match(s3.excusedReason, /exit code 2/);
+      assert.match(s3.excusedReason, /stderr: error: unexpected argument --unknown-flag/);
+
+      assert.equal(result.state.judge.status, 'fault');
+      assert.match(result.verdict.note, /exit code 127/);
+      assert.match(result.verdict.note, /stderr: zsh: command not found: agy/);
+    });
+
+    it('classifies TimeoutError as fault_timeout even when seatId contains "quota" or timeoutMs contains "429" (e.g. 42900ms)', async () => {
+      const mockHarness = new MockAdapter();
+      const origExecuteSeat = mockHarness.executeSeat.bind(mockHarness);
+      mockHarness.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 'quota-analyst') {
+          throw new TimeoutError('Seat "quota-analyst" timed out after 42900ms', {
+            harness: 'codex',
+            seatId: 'quota-analyst',
+            timeoutMs: 42900
+          });
+        }
+        return origExecuteSeat(ctx);
+      };
+      mockHarness.executeJudgeAuditAndSynthesis = async () => {
+        throw new TimeoutError('Judge "judge-quota-auditor" timed out after 42900ms', {
+          harness: 'codex',
+          seatId: 'judge-quota-auditor',
+          timeoutMs: 42900
+        });
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Timeout vs Quota Collision Test',
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          judge: { id: 'judge-quota-auditor', harness: 'mock', model: 'm', soul: 'J' },
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 'quota-analyst', harness: 'mock', model: 'm', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const telemetryStatuses = [];
+      engine.getTelemetry().on('seat_telemetry', (evt) => {
+        telemetryStatuses.push(evt);
+      });
+
+      const result = await engine.run();
+
+      const seatTimeoutTelemetry = telemetryStatuses.find(
+        (t) => t.seatId === 'quota-analyst' && t.status === 'fault_timeout'
+      );
+      assert.ok(seatTimeoutTelemetry, 'TimeoutError on seat "quota-analyst" (42900ms) must emit fault_timeout');
+      assert.equal(
+        telemetryStatuses.some((t) => t.seatId === 'quota-analyst' && t.status === 'fault_quota'),
+        false,
+        'TimeoutError must not be misclassified as fault_quota'
+      );
+      assert.equal(result.state.judge.status, 'fault_timeout');
+    });
   });
 });
+

@@ -352,7 +352,7 @@
     const seatNodesSvg = seats.map(function (s) {
       const b = pos['seat:' + s.id];
       const isExcused = s.status === 'excused';
-      const isFault = s.status === 'fault_quota';
+      const isFault = s.status === 'fault_quota' || s.status === 'fault_timeout' || s.status === 'fault';
       const stroke = isFault ? '#f87171' : (s.status === 'accepted' ? '#34d399' : (s.status === 'objected' ? '#fbbf24' : '#334763'));
       return (
         '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" opacity="' + (isExcused ? '0.5' : '1') + '">' +

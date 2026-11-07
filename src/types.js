@@ -24,7 +24,7 @@ export const OBJECTION_STATUSES = Object.freeze(['open', 'withdrawn', 'preserved
 
 /**
  * Valid seat status values.
- * @type {readonly ['idle', 'thinking', 'proof_submitted', 'accepted', 'objected', 'fault_quota', 'excused']}
+ * @type {readonly ['idle', 'thinking', 'proof_submitted', 'accepted', 'objected', 'fault_quota', 'fault_timeout', 'fault', 'excused']}
  */
 export const SEAT_STATUSES = Object.freeze([
   'idle',
@@ -33,14 +33,22 @@ export const SEAT_STATUSES = Object.freeze([
   'accepted',
   'objected',
   'fault_quota',
+  'fault_timeout',
+  'fault',
   'excused'
 ]);
 
 /**
  * Valid judge status values.
- * @type {readonly ['idle', 'thinking', 'fault_quota']}
+ * @type {readonly ['idle', 'thinking', 'fault_quota', 'fault_timeout', 'fault']}
  */
-export const JUDGE_STATUSES = Object.freeze(['idle', 'thinking', 'fault_quota']);
+export const JUDGE_STATUSES = Object.freeze([
+  'idle',
+  'thinking',
+  'fault_quota',
+  'fault_timeout',
+  'fault'
+]);
 
 /**
  * Valid vote types.
@@ -149,11 +157,11 @@ export const DEFAULT_CONFIG = Object.freeze({
  */
 
 /**
- * @typedef {'idle' | 'thinking' | 'proof_submitted' | 'accepted' | 'objected' | 'fault_quota' | 'excused'} SeatStatus
+ * @typedef {'idle' | 'thinking' | 'proof_submitted' | 'accepted' | 'objected' | 'fault_quota' | 'fault_timeout' | 'fault' | 'excused'} SeatStatus
  */
 
 /**
- * @typedef {'idle' | 'thinking' | 'fault_quota'} JudgeStatus
+ * @typedef {'idle' | 'thinking' | 'fault_quota' | 'fault_timeout' | 'fault'} JudgeStatus
  */
 
 /**

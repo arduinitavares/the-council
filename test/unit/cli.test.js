@@ -285,6 +285,73 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       const parsed = JSON.parse(buffered);
       assert.equal(parsed.ok, true);
     });
+
+    it('prints underlying fault reasons, exitCode, and stderr in -v verbose output and lists Excused Seats in verdict summary', async () => {
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+      const { HarnessExecutionError, TimeoutError } = await import('../../src/harness/adapter.js');
+
+      const mockAdapter = new MockAdapter();
+      const origExecuteSeat = mockAdapter.executeSeat.bind(mockAdapter);
+      mockAdapter.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 'seat-cli-fail') {
+          throw new HarnessExecutionError('CLI process failed', {
+            harness: 'codex',
+            seatId: 'seat-cli-fail',
+            exitCode: 2,
+            stderr: 'fatal: unknown flag --bad-arg'
+          });
+        }
+        return origExecuteSeat(ctx);
+      };
+      mockAdapter.executeJudgeAuditAndSynthesis = async () => {
+        throw new TimeoutError('Harness "antigravity" execution timed out after 240000ms', {
+          harness: 'antigravity',
+          seatId: 'judge-main',
+          timeoutMs: 240000
+        });
+      };
+
+      const tmpFile = path.join(os.tmpdir(), `cli-fault-verbose-${Date.now()}.json`);
+      fs.writeFileSync(tmpFile, JSON.stringify({
+        topic: 'Verbose Fault Diagnostics Test',
+        minQuorum: 2,
+        maxRetriesPerSeat: 0,
+        seats: [
+          { id: 'seat-ok-1', harness: 'mock', model: 'm1', soul: 'S1' },
+          { id: 'seat-ok-2', harness: 'mock', model: 'm2', soul: 'S2' },
+          { id: 'seat-cli-fail', harness: 'codex', model: 'gpt-6-astra', soul: 'S3' }
+        ],
+        judge: { id: 'judge-main', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge' }
+      }));
+
+      try {
+        const mockIO = createMockIO();
+        mockIO.io.harnessRegistry = { get: () => mockAdapter };
+        mockIO.io.liveWatcher = {
+          attach: () => {},
+          stop: () => {}
+        };
+
+        const code = await runCli(['run', '--live', '-v', '-c', tmpFile], mockIO.io);
+        assert.equal(code, 2);
+
+        const stderr = mockIO.getStderr();
+        const stdout = mockIO.getStdout();
+
+        // Verbose stderr must show the actual fault statuses and reasons (including exit code and stderr)
+        assert.match(stderr, /\[TELEMETRY\] Seat "seat-cli-fail" -> \[FAULT\] \(.*exit code 2.*stderr: fatal: unknown flag --bad-arg.*\)/);
+        assert.match(stderr, /\[TRANSITION\] SEAT_FAULT -> seat_fault \(Round 1\): .*exit code 2/);
+        assert.match(stderr, /\[TRANSITION\] EXCUSE_SEAT -> reviewing \(Round 1\): .*exit code 2/);
+        assert.match(stderr, /\[TELEMETRY\] Seat "judge-main" -> \[FAULT_TIMEOUT\] \(.*timed out after 240000ms.*\)/);
+        assert.match(stderr, /\[TRANSITION\] JUDGE_FAULT -> completed \(Round 1\): .*timed out after 240000ms/);
+
+        // Human stdout verdict summary must list Excused Seats with their excusedReason
+        assert.match(stdout, /Excused Seats:/);
+        assert.match(stdout, /seat-cli-fail.*exit code 2.*stderr: fatal: unknown flag --bad-arg/);
+      } finally {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      }
+    });
   });
 
   describe('Command: council demo', () => {

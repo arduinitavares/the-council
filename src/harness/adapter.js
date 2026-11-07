@@ -33,6 +33,8 @@ export class HarnessError extends Error {
     if (options.cause) {
       this.cause = options.cause;
     }
+    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
+    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
   }
 }
 

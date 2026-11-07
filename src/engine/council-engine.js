@@ -127,6 +127,72 @@ export class CouncilEngine {
   }
 
   /**
+   * Determines whether an error should be retried.
+   * Errors that explicitly declare `isRetryable: false` (e.g. model policy violations,
+   * authentication failures, non-zero CLI exits) are not retried.
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  _isRetryableError(error) {
+    return !(error && typeof error === 'object' && error.isRetryable === false);
+  }
+
+  /**
+   * Classifies a fault error into 'fault_quota', 'fault_timeout', or 'fault'.
+   * @param {unknown} error
+   * @returns {'fault_quota' | 'fault_timeout' | 'fault'}
+   */
+  _classifyFaultStatus(error) {
+    if (error && typeof error === 'object') {
+      if (error.isQuotaFault === true || error.name === 'QuotaExhaustionError') {
+        return 'fault_quota';
+      }
+      if (error.name === 'TimeoutError' || typeof error.timeoutMs === 'number' || error.code === 'ETIMEDOUT') {
+        return 'fault_timeout';
+      }
+      if (error.isQuotaFault === false) {
+        return 'fault';
+      }
+    }
+    const msg = error instanceof Error ? error.message : String(error || '');
+    const stderr = error && typeof error === 'object' && typeof error.stderr === 'string' ? error.stderr : '';
+    const combined = `${msg}\n${stderr}`;
+    if (/timed?\s*out/i.test(combined)) {
+      return 'fault_timeout';
+    }
+    if (/\b429\b|\bquota\b|rate[\s_-]*limit|pool[\s_]+exhausted|resource_exhausted/i.test(combined)) {
+      return 'fault_quota';
+    }
+    return 'fault';
+  }
+
+  /**
+   * Formats a fault error message, preserving non-zero CLI exit codes and stderr when present.
+   * @param {unknown} error
+   * @returns {string}
+   */
+  _formatFaultReason(error) {
+    let reason = error instanceof Error ? error.message : String(error);
+    if (error && typeof error === 'object') {
+      const exitCode = error.exitCode ?? error.cause?.exitCode ?? null;
+      const stderrRaw =
+        typeof error.stderr === 'string' && error.stderr.trim()
+          ? error.stderr.trim()
+          : typeof error.cause?.stderr === 'string' && error.cause.stderr.trim()
+          ? error.cause.stderr.trim()
+          : '';
+
+      if (exitCode !== null && exitCode !== undefined && !reason.includes(`exit code ${exitCode}`)) {
+        reason += ` (exit code ${exitCode})`;
+      }
+      if (stderrRaw && !reason.includes(stderrRaw)) {
+        reason += ` — stderr: ${stderrRaw}`;
+      }
+    }
+    return reason;
+  }
+
+  /**
    * Handles a faulted seat per ADR 0003: bounded retry or excusal.
    * Preserves completed turns and locks open objections as preserved_excused.
    * @param {string} seatId
@@ -134,20 +200,27 @@ export class CouncilEngine {
    * @returns {{ action: string, retries?: number, lockedObjections?: number }}
    */
   handleSeatFault(seatId, error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = this._formatFaultReason(error);
+    const faultStatus = this._classifyFaultStatus(error);
     const seat = (this.state.seats || []).find((s) => s.id === seatId);
     const retries = seat ? seat.retries : 0;
+    const isRetryable = this._isRetryableError(error);
 
+    this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason });
     this.telemetry.emitSeatFault(seatId, reason, retries);
-    this._step({ type: 'SEAT_FAULT', seatId, reason });
+    this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus });
 
-    if (seat && retries < this.config.maxRetriesPerSeat) {
+    if (seat && isRetryable && retries < this.config.maxRetriesPerSeat) {
       this._step({ type: 'RETRY_SEAT', seatId });
       return { action: 'retried', retries: seat.retries + 1 };
     } else {
-      this._step({ type: 'EXCUSE_SEAT', seatId, reason: `Exhausted retries or quota: ${reason}` });
+      const excuseReason =
+        isRetryable && retries > 0
+          ? `Exhausted retries (${retries}/${this.config.maxRetriesPerSeat}): ${reason}`
+          : reason;
+      this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason });
       const locked = (this.state.objections || []).filter((o) => o.seatId === seatId && o.status === 'preserved_excused').length;
-      this.telemetry.emitSeatExcused(seatId, reason, locked);
+      this.telemetry.emitSeatExcused(seatId, excuseReason, locked);
       return { action: 'excused', lockedObjections: locked };
     }
   }
@@ -284,26 +357,23 @@ export class CouncilEngine {
 
         judgeExecuted = true;
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        this.telemetry.emitSeatTelemetry(judge.id, 'fault_quota');
-        this._step({ type: 'JUDGE_FAULT', error: errorMsg });
+        const errorMsg = this._formatFaultReason(err);
+        const faultStatus = this._classifyFaultStatus(err);
+        const isRetryable = this._isRetryableError(err);
+        this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg });
+        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus });
 
-        if (this.state.judge.retries < maxJudgeRetries) {
+        if (isRetryable && this.state.judge.retries < maxJudgeRetries) {
           this._step({ type: 'RETRY_JUDGE' });
           this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
         } else {
-          this.state = {
-            ...this.state,
-            phase: 'completed',
-            verdict: {
-              kind: 'Dissent Report (Judge Fault)',
-              candidate: null,
-              unresolvedObjections: this.state.objections || [],
-              activeSeatCount: activeSeats(this.state).length,
-              excusedSeatCount: (this.state.seats || []).filter((s) => s.status === 'excused').length,
-              note: `Judge candidate synthesis failed: ${errorMsg}`
-            }
-          };
+          this._step({
+            type: 'JUDGE_FAULT',
+            error: errorMsg,
+            reason: errorMsg,
+            status: faultStatus,
+            terminal: true
+          });
           this.telemetry.emitVerdict(this.state.verdict);
           break;
         }

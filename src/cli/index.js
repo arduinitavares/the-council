@@ -159,10 +159,12 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     const engine = new CouncilEngine(wt.initialConfig);
     if (values.verbose) {
       engine.getTelemetry().on('seat_telemetry', (t) => {
-        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]`);
+        const detail = t.metadata?.reason || t.metadata?.error;
+        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]${detail ? ` (${detail})` : ''}`);
       });
       engine.getTelemetry().on('state_transition', (t) => {
-        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})`);
+        const detail = t.event?.reason || t.event?.error;
+        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})${detail ? `: ${detail}` : ''}`);
       });
     }
 
@@ -230,10 +232,12 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     if (values.verbose) {
       engine.getTelemetry().on('seat_telemetry', (t) => {
-        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]`);
+        const detail = t.metadata?.reason || t.metadata?.error;
+        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]${detail ? ` (${detail})` : ''}`);
       });
       engine.getTelemetry().on('state_transition', (t) => {
-        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})`);
+        const detail = t.event?.reason || t.event?.error;
+        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})${detail ? `: ${detail}` : ''}`);
       });
     }
 
@@ -256,6 +260,14 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       log(`Verdict : ${result.verdict?.kind || 'No verdict emitted'}`);
       log(`Rounds  : ${result.state.round}`);
       log(`Seats   : ${result.state.seats.length} total (${result.verdict?.activeSeatCount || 0} active, ${result.verdict?.excusedSeatCount || 0} excused)`);
+
+      const excusedList = (result.state?.seats || []).filter((s) => s.status === 'excused');
+      if (excusedList.length > 0) {
+        log('\nExcused Seats:');
+        excusedList.forEach((s) => {
+          log(`  - [${s.id}] (${s.harness} / ${s.model}): ${s.excusedReason || 'Excused'}`);
+        });
+      }
 
       if (result.state?.proofs?.length > 0) {
         log('\nSubmitted Proofs:');

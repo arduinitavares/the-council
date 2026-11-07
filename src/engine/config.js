@@ -84,26 +84,175 @@ export function validateConfig(config) {
 }
 
 /**
+ * Canonical Built-In Council Presets.
+ */
+export const COUNCIL_PRESETS = Object.freeze({
+  architecture: Object.freeze({
+    judge: Object.freeze({
+      id: 'judge-opus',
+      harness: 'antigravity',
+      model: 'claude-opus-5-5-high',
+      soul: 'Impartial Architecture Judge: admits only scoped, sourced proofs and synthesizes context-partitioned candidate clauses citing admitted proofs.'
+    }),
+    seats: Object.freeze([
+      Object.freeze({
+        id: 'astra-systems',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'Systems & Architecture Purist: prioritizes clean seams, deep modules, high cohesion, and strict boundary isolation.'
+      }),
+      Object.freeze({
+        id: 'sol-pragmatic',
+        harness: 'codex',
+        model: 'gpt-5-sol (high)',
+        soul: 'Pragmatic Systems Engineer: prioritizes operability, standard tooling, and minimal moving parts.'
+      }),
+      Object.freeze({
+        id: 'argon-staff',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Staff Distributed Systems Engineer: evaluates concurrency, failure domains, and operational blast radius.'
+      }),
+      Object.freeze({
+        id: 'opus-domain',
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-high',
+        soul: 'Enterprise Domain Architect: focuses on domain modeling, API contracts, and backward compatibility.'
+      })
+    ])
+  }),
+  'product-comparison': Object.freeze({
+    judge: Object.freeze({
+      id: 'judge-opus',
+      harness: 'antigravity',
+      model: 'claude-opus-5-5-high',
+      soul: 'Impartial Product Judge: admits verified benchmarks and synthesizes balanced comparative candidates citing proof IDs.'
+    }),
+    seats: Object.freeze([
+      Object.freeze({
+        id: 'astra-specs',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'Technical Specifications Auditor: cites official hardware, performance, and benchmark specifications.'
+      }),
+      Object.freeze({
+        id: 'astra-ux',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'User Experience & Ergonomics Reviewer: evaluates daily workflows, ecosystem cohesion, and developer friction.'
+      }),
+      Object.freeze({
+        id: 'argon-value',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Price-to-Performance & Longevity Analyst: evaluates total cost of ownership, durability, and value.'
+      }),
+      Object.freeze({
+        id: 'grok-skeptic',
+        harness: 'cursor',
+        model: 'grok-4-skeptic',
+        soul: 'Independent Skeptic & Edge-Case Prober: challenges marketing claims, vendor lock-in, and real-world failure modes.'
+      })
+    ])
+  }),
+  'security-audit': Object.freeze({
+    judge: Object.freeze({
+      id: 'judge-astra',
+      harness: 'codex',
+      model: 'gpt-6-astra (max)',
+      soul: 'Impartial Security Judge: admits verified vulnerability proofs and synthesizes defensive candidate requirements.'
+    }),
+    seats: Object.freeze([
+      Object.freeze({
+        id: 'astra-secops',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'Application Security Engineer: inspects injection vectors, privilege escalation, and auth flows.'
+      }),
+      Object.freeze({
+        id: 'opus-threat',
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-high',
+        soul: 'Threat Modeling Architect: analyzes STRIDE categories, trust boundaries, and credential boundaries.'
+      }),
+      Object.freeze({
+        id: 'argon-supplychain',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Supply Chain & Dependency Auditor: reviews transitive dependencies, package provenance, and SBOM risks.'
+      })
+    ])
+  }),
+  'argon-only': Object.freeze({
+    judge: Object.freeze({
+      id: 'judge-argon',
+      harness: 'antigravity',
+      model: 'gemini-4-argon-high',
+      soul: 'Impartial Consensus Judge: audits proofs and drafts context-partitioned candidate clauses.'
+    }),
+    seats: Object.freeze([
+      Object.freeze({
+        id: 'argon-systems',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Argon Systems Specialist: analyzes low-level resource utilization and performance.'
+      }),
+      Object.freeze({
+        id: 'argon-pragmatic',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Argon Pragmatic Engineer: focuses on rapid delivery, standard libraries, and simplicity.'
+      }),
+      Object.freeze({
+        id: 'argon-skeptic',
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        soul: 'Argon Adversarial Critic: stress-tests assumptions, edge cases, and failure modes.'
+      })
+    ])
+  })
+});
+
+/**
  * Merges partial config with default values and normalizes options.
  * @param {Object} [userConfig={}]
  * @returns {Object} Normalized CouncilConfig
  */
 export function resolveConfig(userConfig = {}) {
+  let presetDefinition = null;
+  if (userConfig.preset !== undefined && userConfig.preset !== null) {
+    if (typeof userConfig.preset !== 'string' || !COUNCIL_PRESETS[userConfig.preset]) {
+      const available = Object.keys(COUNCIL_PRESETS).join(', ');
+      throw new Error(`Unknown preset "${userConfig.preset}". Available presets: ${available}`);
+    }
+    presetDefinition = COUNCIL_PRESETS[userConfig.preset];
+  }
+
+  const defaultJudge = presetDefinition
+    ? { ...presetDefinition.judge }
+    : {
+        id: 'judge-astra',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'Impartial Proof Auditor: admits only scoped, sourced proofs and synthesizes context-partitioned candidates without adding personal claims.'
+      };
+
+  const defaultSeats = presetDefinition
+    ? presetDefinition.seats.map((s) => ({ ...s }))
+    : [
+        { id: 'astra-kernel', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems & Kernel Purist: focuses on container density, cgroups v2, and headless uptime.' },
+        { id: 'astra-gamer', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Desktop Gaming Enthusiast: focuses on DirectX 12, kernel anti-cheat, and frame pacing.' },
+        { id: 'argon-unix', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Staff Mobile & Full-Stack Dev: focuses on POSIX shell, Xcode/iOS SDKs, and ARM efficiency.' }
+      ];
+
   const merged = {
     ...DEFAULT_CONFIG,
     ...userConfig,
     judge: {
-      id: 'judge-astra',
-      harness: 'codex',
-      model: 'gpt-6-astra (max)',
-      soul: 'Impartial Proof Auditor: admits only scoped, sourced proofs and synthesizes context-partitioned candidates without adding personal claims.',
+      ...defaultJudge,
       ...(userConfig.judge || {})
     },
-    seats: userConfig.seats ? [...userConfig.seats] : [
-      { id: 'astra-kernel', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems & Kernel Purist: focuses on container density, cgroups v2, and headless uptime.' },
-      { id: 'astra-gamer', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Desktop Gaming Enthusiast: focuses on DirectX 12, kernel anti-cheat, and frame pacing.' },
-      { id: 'argon-unix', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Staff Mobile & Full-Stack Dev: focuses on POSIX shell, Xcode/iOS SDKs, and ARM efficiency.' }
-    ]
+    seats: userConfig.seats ? [...userConfig.seats] : defaultSeats
   };
 
   const validation = validateConfig(merged);

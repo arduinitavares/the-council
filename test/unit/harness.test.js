@@ -174,6 +174,63 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
   });
 
   describe('Provider Adapters (Codex, Antigravity, Cursor)', () => {
+    it('CodexAdapter, AntigravityAdapter, and CursorAdapter default this.spawnRunner to CLI runners', () => {
+      const codex = new CodexAdapter();
+      assert.equal(typeof codex.spawnRunner, 'function');
+      assert.equal(codex.executable, 'codex');
+
+      const agy = new AntigravityAdapter();
+      assert.equal(typeof agy.spawnRunner, 'function');
+      assert.equal(agy.executable, 'agy');
+
+      const cursor = new CursorAdapter();
+      assert.equal(typeof cursor.spawnRunner, 'function');
+      assert.equal(cursor.executable, 'cursor-agent');
+    });
+
+    it('delegates seat and judge prompt formatting to soul.js including candidate and proof IDs', () => {
+      const state = {
+        topic: 'Engine Architecture',
+        round: 1,
+        maxRounds: 3,
+        candidate: {
+          round: 1,
+          summary: 'Candidate recommendation',
+          clauses: [{ context: 'Server', conclusion: 'Deploy on Linux', citedProofIds: ['P1'] }]
+        },
+        proofs: [
+          { id: 'P1', kind: 'check', scope: 'Server', source: 'Kernel docs', statement: 'Linux namespaces isolate', status: 'admitted' },
+          { id: 'P2', kind: 'citation', scope: 'Desktop', source: 'Survey', statement: 'Windows gaming', status: 'rejected' }
+        ]
+      };
+
+      const adapters = [new CodexAdapter(), new AntigravityAdapter(), new CursorAdapter()];
+      for (const adapter of adapters) {
+        const votingPrompt = adapter.formatSeatPrompt({
+          seat: { id: 'seat-1', model: 'gpt-6.1-sol' },
+          soul: 'Pragmatic Engineer',
+          round: 1,
+          phase: 'VOTING',
+          state
+        });
+        assert.match(votingPrompt, /Candidate Summary: "Candidate recommendation"/);
+        assert.match(votingPrompt, /Clause C1 \[Server\]/);
+        assert.match(votingPrompt, /\[P1\] \(check\) \[Server\]/);
+
+        const judgePrompt = adapter.formatJudgePrompt({
+          judge: { id: 'judge-1', soul: 'Impartial Judge' },
+          round: 1,
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          proofs: state.proofs,
+          state
+        });
+        assert.match(judgePrompt, /\[P1\] \(check\) \[Server\]/);
+        assert.match(judgePrompt, /\[P2\] \(citation\) \[Desktop\]/);
+        assert.match(judgePrompt, /proofDecisions/);
+        assert.match(judgePrompt, /citedProofIds/);
+      }
+    });
+
     describe('CodexAdapter', () => {
       it('validates allowed models (gpt-6.1-sol, gpt-6-astra)', () => {
         const adapter = new CodexAdapter();

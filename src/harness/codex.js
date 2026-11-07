@@ -5,18 +5,24 @@
  */
 
 import { HarnessAdapter, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import { runCodexCli } from './cli-runner.js';
+import {
+  formatDeliberationPrompt,
+  formatVotingPrompt,
+  formatJudgePrompt as formatJudgeSoulPrompt
+} from '../seats/soul.js';
 
 export class CodexAdapter extends HarnessAdapter {
   /**
    * @param {Object} [config]
-   * @param {string} [config.executable='orca'] - Resolved Orca binary placeholder
+   * @param {string} [config.executable='codex'] - CLI executable name or path
    * @param {number} [config.timeoutMs=90000]
    * @param {Function} [config.spawnRunner] - Dependency injection for process execution
    */
   constructor(config = {}) {
     super({ name: 'codex', ...config });
-    this.executable = config.executable || process.env.ORCA_CLI_COMMAND || 'orca';
-    this.spawnRunner = config.spawnRunner || null;
+    this.executable = config.executable || process.env.CODEX_CLI_COMMAND || 'codex';
+    this.spawnRunner = config.spawnRunner || runCodexCli;
   }
 
   /**
@@ -75,7 +81,7 @@ export class CodexAdapter extends HarnessAdapter {
       async (signal) => {
         try {
           const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state });
-          const rawOutput = await this._dispatchOrcaCli({
+          const rawOutput = await this._dispatchCli({
             model: seat.model,
             prompt,
             signal,
@@ -104,7 +110,7 @@ export class CodexAdapter extends HarnessAdapter {
       async (signal) => {
         try {
           const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state });
-          const rawOutput = await this._dispatchOrcaCli({
+          const rawOutput = await this._dispatchCli({
             model: judge.model,
             prompt,
             signal,
@@ -125,47 +131,64 @@ export class CodexAdapter extends HarnessAdapter {
    * Formats seat prompt with soul temperament injection.
    */
   formatSeatPrompt({ seat, soul, round, phase, state }) {
-    return [
-      `### THE COUNCIL — DELIBERATION ROUND ${round}`,
-      `Topic: ${state?.topic || ''}`,
-      `Your Seat ID: ${seat.id}`,
-      `Your Soul: ${soul}`,
-      `Current Phase: ${phase}`,
-      '',
-      phase === 'VOTING' || phase === 'confirming'
-        ? `Evaluate the Judge's candidate statement:\n${JSON.stringify(state?.candidate, null, 2)}\nReturn JSON: { "vote": "accept" } OR { "vote": "object", "reason": "...", "proofId": "..." }`
-        : `Submit a structured Proof addressing the Topic based on your Soul.\nReturn JSON: { "scope": "...", "kind": "check|citation|benchmark|derivation", "source": "...", "statement": "..." }`
-    ].join('\n');
+    if (phase === 'VOTING' || phase === 'confirming') {
+      const admittedProofs = (state?.proofs || []).filter((p) => p.status === 'admitted');
+      const myOpenObjections = (state?.objections || []).filter(
+        (o) => o.seatId === seat.id && o.status === 'open'
+      );
+      return formatVotingPrompt({
+        soul,
+        seat,
+        candidate: state?.candidate,
+        admittedProofs,
+        myOpenObjections,
+        state
+      });
+    }
+
+    const openObjections = (state?.objections || []).filter((o) => o.status === 'open');
+    return formatDeliberationPrompt({
+      soul,
+      seat,
+      topic: state?.topic,
+      round,
+      maxRounds: state?.maxRounds,
+      clarifications: state?.clarifications,
+      previousCandidate: state?.candidate,
+      openObjections,
+      state
+    });
   }
 
   /**
    * Formats judge prompt for auditing and candidate synthesis.
    */
   formatJudgePrompt({ judge, round, phase, proofs, state }) {
-    return [
-      `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}`,
-      `Topic: ${state?.topic || ''}`,
-      `Judge ID: ${judge.id}`,
-      `Judge Soul: ${judge.soul}`,
-      `Submitted Proofs to Audit:\n${JSON.stringify(proofs, null, 2)}`,
-      '',
-      `Enforce: Every candidate clause MUST cite >= 1 admitted Proof IDs. No unsubstantiated opinions.`,
-      `Return JSON: { "summary": "...", "proofDecisions": { "P1": { "status": "admitted|rejected", "note": "..." } }, "clauses": [ { "context": "...", "conclusion": "...", "citedProofIds": ["P1"] } ] }`
-    ].join('\n');
+    return formatJudgeSoulPrompt({
+      judge,
+      topic: state?.topic,
+      round,
+      maxRounds: state?.maxRounds,
+      proofs,
+      state
+    });
   }
 
   /**
-   * Internal CLI execution via Orca.
+   * Internal CLI execution via direct runner.
    * @private
    */
-  async _dispatchOrcaCli({ model, prompt, signal, context }) {
+  async _dispatchCli({ model, prompt, signal, context }) {
     if (this.spawnRunner) {
       return this.spawnRunner({ executable: this.executable, model, prompt, signal, context });
     }
-    // Fallback stub: In production, spawns `orca worker` / CLI API without GUI.
-    throw new HarnessExecutionError('Orca CLI dispatcher runner not configured', {
+    throw new HarnessExecutionError('Codex CLI dispatcher runner not configured', {
       harness: this.name,
       ...context
     });
+  }
+
+  async _dispatchOrcaCli(params) {
+    return this._dispatchCli(params);
   }
 }

@@ -263,6 +263,7 @@ Respond with:
  * @param {Array<Object>} [params.clarifications=[]]
  * @param {Object|null} [params.previousCandidate=null]
  * @param {Array<Object>} [params.openObjections=[]]
+ * @param {Object|null} [params.state=null]
  * @returns {string}
  */
 export function formatDeliberationPrompt({
@@ -273,29 +274,41 @@ export function formatDeliberationPrompt({
   maxRounds,
   clarifications = [],
   previousCandidate = null,
-  openObjections = []
+  openObjections = [],
+  state = null
 }) {
   const s = createSoul(soul);
 
-  let contextBlock = `Topic: "${topic}"\n`;
+  const resolvedTopic = topic || state?.topic || '';
+  const resolvedRound = round || state?.round || 1;
+  const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
+  const resolvedClarifications = (clarifications && clarifications.length > 0)
+    ? clarifications
+    : (state?.clarifications || []);
+  const resolvedPrevCandidate = previousCandidate || state?.candidate || null;
+  const resolvedObjections = (openObjections && openObjections.length > 0)
+    ? openObjections
+    : (state?.objections || []).filter((o) => o.status === 'open');
 
-  if (clarifications.length > 0) {
+  let contextBlock = `Topic: "${resolvedTopic}"\n`;
+
+  if (resolvedClarifications.length > 0) {
     contextBlock += `\nBroadcast Clarifications:\n` +
-      clarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
+      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
   }
 
-  if (previousCandidate) {
-    contextBlock += `\nPrevious Candidate from Round ${previousCandidate.round}:\n` +
-      `Summary: ${previousCandidate.summary}\n` +
-      previousCandidate.clauses.map((c) => `- [${c.context}]: ${c.conclusion} (cites: ${c.citedProofIds.join(', ')})`).join('\n') + '\n';
+  if (resolvedPrevCandidate) {
+    contextBlock += `\nPrevious Candidate from Round ${resolvedPrevCandidate.round}:\n` +
+      `Summary: ${resolvedPrevCandidate.summary || ''}\n` +
+      (resolvedPrevCandidate.clauses || []).map((c) => `- [${c.context}]: ${c.conclusion} (cites: ${(c.citedProofIds || []).join(', ')})`).join('\n') + '\n';
   }
 
-  if (openObjections.length > 0) {
+  if (resolvedObjections.length > 0) {
     contextBlock += `\nUnresolved Objections to Address:\n` +
-      openObjections.map((o) => `- Objection ${o.id} (by ${o.seatId}, backed by ${o.proofId}): ${o.reason}`).join('\n') + '\n';
+      resolvedObjections.map((o) => `- Objection ${o.id} (by ${o.seatId}, backed by ${o.proofId}): ${o.reason}`).join('\n') + '\n';
   }
 
-  return `### Deliberation Round ${round}/${maxRounds} — Proof Submission
+  return `### Deliberation Round ${resolvedRound}/${resolvedMaxRounds} — Proof Submission
 ${contextBlock}
 As Seat "${seat.id}" embodying "${s.name}" (${s.lens}), submit a structured Proof substantiating your position.
 
@@ -313,9 +326,10 @@ OUTPUT CONTRACT (strict JSON):
  * @param {Object} params
  * @param {Soul | string} params.soul
  * @param {Object} params.seat
- * @param {Object} params.candidate
- * @param {Array<Object>} params.admittedProofs
+ * @param {Object} [params.candidate]
+ * @param {Array<Object>} [params.admittedProofs]
  * @param {Array<Object>} [params.myOpenObjections=[]]
+ * @param {Object|null} [params.state=null]
  * @returns {string}
  */
 export function formatVotingPrompt({
@@ -323,20 +337,27 @@ export function formatVotingPrompt({
   seat,
   candidate,
   admittedProofs,
-  myOpenObjections = []
+  myOpenObjections = [],
+  state = null
 }) {
   const s = createSoul(soul);
+  const cand = candidate || state?.candidate;
+  const proofs = admittedProofs || (state?.proofs || []).filter((p) => p.status === 'admitted');
 
-  const proofList = (admittedProofs || []).map((p) =>
-    `- [${p.id}] (${p.kind}) [${p.scope}]: ${p.statement} (source: ${p.source})`
-  ).join('\n');
+  const proofList = (proofs && proofs.length > 0)
+    ? proofs.map((p, idx) =>
+        `- [${p.id || `P${idx + 1}`}] (${p.kind || 'check'}) [${p.scope || 'general'}]: ${p.statement || ''} (source: ${p.source || 'unspecified'})`
+      ).join('\n')
+    : 'No admitted proofs for this round.';
 
-  const clauseList = (candidate?.clauses || []).map((c, idx) =>
-    `Clause C${idx + 1} [${c.context}]: ${c.conclusion} (cites: ${(c.citedProofIds || []).join(', ')})`
-  ).join('\n');
+  const clauseList = (cand?.clauses && cand.clauses.length > 0)
+    ? cand.clauses.map((c, idx) =>
+        `Clause C${idx + 1} [${c.context || 'General'}]: ${c.conclusion || ''} (cites: ${(c.citedProofIds || []).join(', ')})`
+      ).join('\n')
+    : 'No candidate clauses provided.';
 
-  return `### Voting on Round ${candidate?.round || 1} Candidate
-Candidate Summary: "${candidate?.summary || ''}"
+  return `### Voting on Round ${cand?.round || 1} Candidate
+Candidate Summary: "${cand?.summary || ''}"
 
 Candidate Clauses:
 ${clauseList}
@@ -355,3 +376,70 @@ If accepting:
 If objecting:
 { "vote": "object", "proofId": "<Admitted Proof ID>", "reason": "<Concrete reason why candidate is defective>" }`;
 }
+
+/**
+ * Formats a Judge Audit and Synthesis prompt.
+ *
+ * @param {Object} params
+ * @param {Object} params.judge
+ * @param {string} [params.topic]
+ * @param {number} params.round
+ * @param {number} [params.maxRounds]
+ * @param {Array<Object>} [params.proofs=[]]
+ * @param {Object|null} [params.state=null]
+ * @returns {string}
+ */
+export function formatJudgePrompt({
+  judge,
+  topic = '',
+  round = 1,
+  maxRounds,
+  proofs = [],
+  state = null
+}) {
+  const judgeSoul = typeof judge?.soul === 'object' && judge?.soul
+    ? judge.soul
+    : createSoul(judge?.soul || 'Impartial Proof Auditor');
+  const resolvedTopic = topic || state?.topic || '';
+  const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
+
+  const proofList = (proofs && proofs.length > 0)
+    ? proofs.map((p, idx) => {
+        const pid = p.id || `P${idx + 1}`;
+        const kind = p.kind || 'check';
+        const scope = p.scope || 'general';
+        const stmt = p.statement || '';
+        const src = p.source || 'unspecified';
+        return `- [${pid}] (${kind}) [${scope}]: ${stmt} (source: ${src})`;
+      }).join('\n')
+    : 'No proofs submitted for auditing.';
+
+  return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}
+Topic: "${resolvedTopic}"
+Judge: ${judge?.id || 'judge'} (${judge?.model || 'model'})
+Soul: ${judgeSoul.name || 'Impartial Proof Auditor'}: ${judgeSoul.lens || ''}
+
+Submitted Proofs for Auditing:
+${proofList}
+
+Judge Directives & Invariants:
+1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" with a concrete "note".
+2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]).
+3. Bare opinions or conclusions ungrounded in admitted proofs are strictly forbidden.
+
+OUTPUT CONTRACT (strict JSON):
+{
+  "summary": "<Context-partitioned consensus synthesis summary>",
+  "proofDecisions": {
+    "P1": { "status": "admitted", "note": "Verified source" }
+  },
+  "clauses": [
+    {
+      "context": "<context boundary, e.g. Production Cloud & Container Servers>",
+      "conclusion": "<falsifiable recommendation>",
+      "citedProofIds": ["P1"]
+    }
+  ]
+}`;
+}
+

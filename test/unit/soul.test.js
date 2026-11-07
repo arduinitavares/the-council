@@ -8,7 +8,8 @@ import {
   formatSoulSystemPrompt,
   formatClarificationPrompt,
   formatDeliberationPrompt,
-  formatVotingPrompt
+  formatVotingPrompt,
+  formatJudgePrompt
 } from '../../src/seats/soul.js';
 
 describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () => {
@@ -191,5 +192,41 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
       assert.match(prompt, /\{ "vote": "accept" \}/);
       assert.match(prompt, /\{ "vote": "object", "proofId": "<Admitted Proof ID>", "reason": "<Concrete reason why candidate is defective>" \}/);
     });
+
+    it('formatJudgePrompt formats structured prompt with all round proof IDs', () => {
+      const prompt = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Audit' },
+        topic: 'Test Topic',
+        round: 1,
+        proofs: [{ id: 'P1', scope: 'Cloud', statement: 'Statement', source: 'Source' }]
+      });
+      assert.match(prompt, /P1/);
+      assert.match(prompt, /proofDecisions/);
+      assert.match(prompt, /citedProofIds/);
+    });
+
+    it('formatJudgePrompt handles empty proofs gracefully', () => {
+      const prompt = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Audit' },
+        topic: 'Test Topic',
+        round: 1,
+        proofs: []
+      });
+      assert.match(prompt, /No proofs submitted for auditing/);
+      assert.match(prompt, /proofDecisions/);
+    });
+
+    it('formatVotingPrompt handles candidate clauses with empty summary', () => {
+      const prompt = formatVotingPrompt({
+        soul: 'Tester',
+        seat: seatContext,
+        candidate: { round: 1, summary: '', clauses: [{ context: 'C', conclusion: 'V', citedProofIds: ['P1'] }] },
+        admittedProofs: [{ id: 'P1', kind: 'check', scope: 'S', source: 'Src', statement: 'Stmt' }]
+      });
+      assert.match(prompt, /Candidate Summary: ""/);
+      assert.match(prompt, /Clause C1 \[C\]: V/);
+      assert.match(prompt, /P1/);
+    });
   });
 });
+

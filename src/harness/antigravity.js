@@ -5,6 +5,12 @@
  */
 
 import { HarnessAdapter, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import { runAntigravityCli } from './cli-runner.js';
+import {
+  formatDeliberationPrompt,
+  formatVotingPrompt,
+  formatJudgePrompt as formatJudgeSoulPrompt
+} from '../seats/soul.js';
 
 export class AntigravityAdapter extends HarnessAdapter {
   /**
@@ -12,8 +18,8 @@ export class AntigravityAdapter extends HarnessAdapter {
    */
   constructor(config = {}) {
     super({ name: 'antigravity', ...config });
-    this.executable = config.executable || process.env.ORCA_CLI_COMMAND || 'orca';
-    this.spawnRunner = config.spawnRunner || null;
+    this.executable = config.executable || process.env.AGY_CLI_COMMAND || 'agy';
+    this.spawnRunner = config.spawnRunner || runAntigravityCli;
   }
 
   validateModel(model) {
@@ -62,7 +68,7 @@ export class AntigravityAdapter extends HarnessAdapter {
       async (signal) => {
         try {
           const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state });
-          const rawOutput = await this._dispatchOrcaCli({
+          const rawOutput = await this._dispatchCli({
             model: seat.model,
             prompt,
             signal,
@@ -88,7 +94,7 @@ export class AntigravityAdapter extends HarnessAdapter {
       async (signal) => {
         try {
           const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state });
-          const rawOutput = await this._dispatchOrcaCli({
+          const rawOutput = await this._dispatchCli({
             model: judge.model,
             prompt,
             signal,
@@ -106,31 +112,47 @@ export class AntigravityAdapter extends HarnessAdapter {
   }
 
   formatSeatPrompt({ seat, soul, round, phase, state }) {
-    return [
-      `### THE COUNCIL (ANTIGRAVITY HARNESS) — ROUND ${round}`,
-      `Topic: ${state?.topic || ''}`,
-      `Seat: ${seat.id} (${seat.model})`,
-      `Soul: ${soul}`,
-      `Phase: ${phase}`,
-      '',
-      phase === 'VOTING' || phase === 'confirming'
-        ? `Review candidate and return JSON: { "vote": "accept" } OR { "vote": "object", "reason": "...", "proofId": "..." }`
-        : `Submit structured proof. Return JSON: { "scope": "...", "kind": "check|citation|benchmark|derivation", "source": "...", "statement": "..." }`
-    ].join('\n');
+    if (phase === 'VOTING' || phase === 'confirming') {
+      const admittedProofs = (state?.proofs || []).filter((p) => p.status === 'admitted');
+      const myOpenObjections = (state?.objections || []).filter(
+        (o) => o.seatId === seat.id && o.status === 'open'
+      );
+      return formatVotingPrompt({
+        soul,
+        seat,
+        candidate: state?.candidate,
+        admittedProofs,
+        myOpenObjections,
+        state
+      });
+    }
+
+    const openObjections = (state?.objections || []).filter((o) => o.status === 'open');
+    return formatDeliberationPrompt({
+      soul,
+      seat,
+      topic: state?.topic,
+      round,
+      maxRounds: state?.maxRounds,
+      clarifications: state?.clarifications,
+      previousCandidate: state?.candidate,
+      openObjections,
+      state
+    });
   }
 
   formatJudgePrompt({ judge, round, phase, proofs, state }) {
-    return [
-      `### THE COUNCIL (ANTIGRAVITY HARNESS) — JUDGE ROUND ${round}`,
-      `Topic: ${state?.topic || ''}`,
-      `Judge: ${judge.id}`,
-      `Soul: ${judge.soul}`,
-      `Proofs: ${JSON.stringify(proofs, null, 2)}`,
-      `Return JSON: { "summary": "...", "proofDecisions": { ... }, "clauses": [ ... ] }`
-    ].join('\n');
+    return formatJudgeSoulPrompt({
+      judge,
+      topic: state?.topic,
+      round,
+      maxRounds: state?.maxRounds,
+      proofs,
+      state
+    });
   }
 
-  async _dispatchOrcaCli({ model, prompt, signal, context }) {
+  async _dispatchCli({ model, prompt, signal, context }) {
     if (this.spawnRunner) {
       return this.spawnRunner({ executable: this.executable, model, prompt, signal, context });
     }
@@ -138,5 +160,9 @@ export class AntigravityAdapter extends HarnessAdapter {
       harness: this.name,
       ...context
     });
+  }
+
+  async _dispatchOrcaCli(params) {
+    return this._dispatchCli(params);
   }
 }

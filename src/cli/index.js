@@ -126,7 +126,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
   if (command === 'demo') {
     const demoId = positionals[0] || 'wt-better-os';
-    const wtPath = path.resolve(new URL('.', import.meta.url).pathname, '../../prototype/council-walkthroughs.js');
+    const wtPath = path.resolve(new URL('.', import.meta.url).pathname, '../visualizer/council-walkthroughs.js');
     const imported = await import(wtPath);
     const protoWalkthroughs = imported.default || globalThis.CouncilWalkthroughs || imported;
     const wts = protoWalkthroughs.WALKTHROUGHS || [];

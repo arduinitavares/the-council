@@ -1,4 +1,4 @@
-const imported = await import('../../prototype/council-walkthroughs.js');
+const imported = await import('../../src/visualizer/council-walkthroughs.js');
 const protoWalkthroughs = imported.default || globalThis.CouncilWalkthroughs || imported;
 
 export const WALKTHROUGHS = protoWalkthroughs.WALKTHROUGHS;

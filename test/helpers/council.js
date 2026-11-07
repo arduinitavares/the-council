@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const srcIndexPath = path.resolve(__dirname, '../../src/index.js');
-const protoPath = path.resolve(__dirname, '../../prototype/council-machine.js');
+const protoPath = path.resolve(__dirname, '../../src/visualizer/council-machine.js');
 
 export const VALID_PROOF_KINDS = ['check', 'citation', 'benchmark', 'derivation'];
 

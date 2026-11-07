@@ -1,0 +1,31 @@
+{
+  "providerExitCode": 0,
+  "elapsedSeconds": 190.466,
+  "failure": null,
+  "threadId": "01a19405-e153-7a11-b389-b0b3037b18e0",
+  "ownSessionPaths": [
+    "/Users/aaat/.codex/sessions/2026/10/31/rollout-2026-10-31T19-12-56-01a19405-e153-7a11-b389-b0b3037b18e0.jsonl"
+  ],
+  "effectiveContexts": [
+    {
+      "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/triage/2026-10-31-followups/astra-evidence",
+      "model": "gpt-6-astra",
+      "effort": "ultra",
+      "approval_policy": "never",
+      "sandbox_policy": {
+        "type": "read-only"
+      },
+      "collaboration_mode": {
+        "mode": "default",
+        "settings": {
+          "model": "gpt-6-astra",
+          "reasoning_effort": "ultra"
+        }
+      }
+    }
+  ],
+  "stderr": "",
+  "remainingPids": [],
+  "groupAbsent": true,
+  "protectedUnchanged": true
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+    "lines": 261,
+    "bytes": 14651
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md",
+    "lines": 91,
+    "bytes": 4646
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh-language.md",
+    "lines": 19,
+    "bytes": 1069
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/cli.ts",
+    "lines": 205,
+    "bytes": 9290
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts",
+    "lines": 101,
+    "bytes": 9214
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-controls.ts",
+    "lines": 296,
+    "bytes": 28752
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/control-audit.test.ts",
+    "lines": 128,
+    "bytes": 12971
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/provider-controls.test.ts",
+    "lines": 320,
+    "bytes": 22835
+  },
+  {
+    "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json",
+    "lines": 32,
+    "bytes": 1208
+  }
+]

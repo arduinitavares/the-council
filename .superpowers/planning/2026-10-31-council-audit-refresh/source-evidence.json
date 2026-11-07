@@ -1,0 +1,405 @@
+{
+  "baseline": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+  "runtime": "358a2aea-aee1-488e-8a94-7fa5ec557c6c",
+  "workspace": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+  "recordedRun": "os-question-20261031T114756Z-9249052da7bf",
+  "status": "prerequisites_not_verified",
+  "calls": {
+    "probes": 0,
+    "topic": 0
+  },
+  "initializations": 0,
+  "coordinatorContextBlocker": false,
+  "pendingAuditRoles": [
+    "openai",
+    "gemini",
+    "judge",
+    "xai"
+  ],
+  "currentMatchingSnapshotsOrDispositions": false,
+  "historicalSourceDrift": [
+    "Codex configuration bytes",
+    "AGY executable bytes/version",
+    "Cursor configuration bytes"
+  ],
+  "auditContract": "Snapshot hashes include sources, version, effects, unavailable inputs, loader order and recipe. Adoption requires native coordinator authority. Approval alone cannot cover unavailable inputs.",
+  "codePolicy": {
+    "astra": "gpt-6-astra/ultra; qualified exact route required",
+    "argon": "gemini-4-argon-high/high",
+    "planReviewer": "claude-opus-5-5-medium/medium"
+  },
+  "language": "Issue 9-oriented candidate; official dictionary and governed glossary unavailable",
+  "savedOutcomeSha256": "7dff7be2ccb964555d992796df960d566a44bf0b43576b4edd43c142480c41af",
+  "observedVersions": {
+    "orca": "1.4.245",
+    "codex": "codex-cli 0.164.0",
+    "antigravity": "1.4.12",
+    "cursor": "2026.10.22-27dcf5f"
+  },
+  "bootstrapByRole": [
+    {
+      "role": "openai",
+      "selection": {
+        "route": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "max"
+      },
+      "catalogState": "verified",
+      "bootstrap": {
+        "state": "unknown",
+        "source": "provider-specific control sources",
+        "detail": "[{\"detail\":\"codex-cli 0.164.0\",\"digest\":\"f9132bd493eab5b2ff596253372735f88e4ba9c91bd3a45e8c9fca23d5a1d880\",\"enforcement\":\"No inherited stale qualification\",\"name\":\"provider-version-contract\",\"source\":\"Installed exact provider version\",\"state\":\"verified\"},{\"detail\":\"c45272069305746def807625680ee74891c9b367bff346ff776206b98c79331a\",\"digest\":\"2bf4acf18473eb7b35b90c92655e37fe087fa24ef9cef65fe3ef9e202d6fb8c3\",\"enforcement\":\"Installed public CLI parameters, not effective configuration\",\"name\":\"installed-command-contract\",\"source\":\"codex --help / codex-cli 0.164.0\",\"state\":\"verified\"},{\"detail\":\"Owned notify=[], hooks=false and plugins=false suppress this kernel's notifier and hook sources; platform/runtime effects remain audited\",\"digest\":\"d6470a1484b76f8dda97fcbb7859b9c2eb206687dc975b8b1c2a0f1bbf160970\",\"enforcement\":\"Mandatory raw layer and managed-requirement checks before thread/start; flags alone do not verify startup/platform effects\",\"name\":\"ordinary-hooks-and-notify-suppression\",\"source\":\"Codex rust-v0.164.0 plugin manager, hook registry and engine\",\"state\":\"verified\"},{\"detail\":\"Implicit-deny filesystem with packet read, no writes, inherited Deny union and restricted network\",\"digest\":\"2c3316fb63541d96441f26483f719f0f4bcb8a9a749c03a1019a073351908d99\",\"enforcement\":\"Process-scoped default_permissions; no legacy sandbox override\",\"name\":\"named-permissions-kernel\",\"source\":\"Codex rust-v0.164.0 named permission/config contracts\",\"state\":\"verified\"},{\"detail\":\"AUDIT_DISPOSITION_PENDING:0ffd5c861559a3cdb686ab92a6ca8404afa8366342d9ae2a3ee8f70ab1e48d05\",\"digest\":\"0ffd5c861559a3cdb686ab92a6ca8404afa8366342d9ae2a3ee8f70ab1e48d05\",\"enforcement\":\"No initialization until startup effects are established within existing authority\",\"name\":\"startup-and-platform-exceptions\",\"source\":\"Source snapshot and authenticated coordinator disposition\",\"state\":\"unknown\"}]"
+      },
+      "controlFacts": [
+        {
+          "name": "provider-version-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Installed exact provider version",
+            "detail": "codex-cli 0.164.0"
+          }
+        },
+        {
+          "name": "installed-command-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "codex --help / codex-cli 0.164.0",
+            "detail": "c45272069305746def807625680ee74891c9b367bff346ff776206b98c79331a"
+          }
+        },
+        {
+          "name": "ordinary-hooks-and-notify-suppression",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Codex rust-v0.164.0 plugin manager, hook registry and engine",
+            "detail": "Owned notify=[], hooks=false and plugins=false suppress this kernel's notifier and hook sources; platform/runtime effects remain audited"
+          }
+        },
+        {
+          "name": "named-permissions-kernel",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Codex rust-v0.164.0 named permission/config contracts",
+            "detail": "Implicit-deny filesystem with packet read, no writes, inherited Deny union and restricted network"
+          }
+        },
+        {
+          "name": "startup-and-platform-exceptions",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "unknown",
+            "source": "Source snapshot and authenticated coordinator disposition",
+            "detail": "AUDIT_DISPOSITION_PENDING:0ffd5c861559a3cdb686ab92a6ca8404afa8366342d9ae2a3ee8f70ab1e48d05"
+          }
+        },
+        {
+          "name": "pre-input-effective-config",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "Codex 0.164.0 app-server config/read",
+            "detail": "Owned initialization must read effective merged config/layers before turn/start; startup config is requirements only"
+          }
+        },
+        {
+          "name": "all-tool-effects-and-packet-read-boundary",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "Codex named permissions, sandbox-aware image/patch handlers and view_image feature gate",
+            "detail": "Compare frozen merged kernel, requirements/catalogue and active profile identity before the first turn; registration need not be empty when effects are restricted"
+          }
+        }
+      ],
+      "runtimeControlsState": "unknown",
+      "blockers": [
+        {
+          "control": "controls",
+          "reason": "CONTROLS_UNKNOWN",
+          "source": "provider-specific control sources"
+        }
+      ]
+    },
+    {
+      "role": "gemini",
+      "selection": {
+        "route": "antigravity",
+        "model": "gemini-4-argon-high",
+        "effort": "high"
+      },
+      "catalogState": "verified",
+      "bootstrap": {
+        "state": "unknown",
+        "source": "provider-specific control sources",
+        "detail": "[{\"detail\":\"a1a8f506b58dbe7fa6770ff6ce0223f2e986fbf5196d7297e269e2834a2761cd\",\"digest\":\"a922cef0305a7163aa0030fc50d710d5470677a4c31526e76205326f5cf96160\",\"enforcement\":\"Installed public CLI parameters, not effective configuration\",\"name\":\"installed-command-contract\",\"source\":\"agy --help / 1.4.12\",\"state\":\"verified\"},{\"detail\":\"Required recipe flags exposed; help sha256=a1a8f506b58dbe7fa6770ff6ce0223f2e986fbf5196d7297e269e2834a2761cd\",\"digest\":\"41c8f61f544a46fde9677ba900c82db90f4538a4eb4e130f82d98ee3e9fdf70e\",\"enforcement\":\"Public launch syntax only; version, executable, sources and effective gates remain independently bound\",\"name\":\"public-cli-capability-contract\",\"source\":\"installed AGY --help / 1.4.12\",\"state\":\"verified\"},{\"detail\":\"Source acquisition rules inspected for 1.4.12; hook closure and effective controls remain independent\",\"digest\":\"b3683d9e5d1d5af8b22bd9a6e2cd1ce0a85bf71b772bbb2b3fc1bca82b05ad57\",\"enforcement\":\"Unreviewed versions cannot inherit loader/hook-source qualification\",\"name\":\"provider-startup-source-contract\",\"source\":\"Inspected AGY startup/source acquisition contract\",\"state\":\"verified\"},{\"detail\":\"AUDIT_DISPOSITION_PENDING:0f89ac10f3950b21dd8769cfefc7e8e9d6f8573ad318753238af3a305e41c467\",\"digest\":\"0f89ac10f3950b21dd8769cfefc7e8e9d6f8573ad318753238af3a305e41c467\",\"enforcement\":\"SessionStart precedes inference; settings hooks={} is insufficient\",\"name\":\"startup-hooks-and-plugins\",\"source\":\"Source snapshot and authenticated coordinator disposition\",\"state\":\"unknown\"},{\"detail\":\"052ce66a2d02e0290ba4f4fd95f5cbe6ae77731e627a133c5b1b583c4bf361cb\",\"digest\":\"a9dce9f36e5bc0567dacef8762d724e2d0450b7765ff7004c6f7f4ac8b11a9ef\",\"enforcement\":\"Definition metadata only; verify actual selected agent and empty init.tools before input\",\"name\":\"custom-agent-definition\",\"source\":\"Generated source-bound AGY main-agent definition\",\"state\":\"verified\"}]"
+      },
+      "controlFacts": [
+        {
+          "name": "installed-command-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "agy --help / 1.4.12",
+            "detail": "a1a8f506b58dbe7fa6770ff6ce0223f2e986fbf5196d7297e269e2834a2761cd"
+          }
+        },
+        {
+          "name": "public-cli-capability-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "installed AGY --help / 1.4.12",
+            "detail": "Required recipe flags exposed; help sha256=a1a8f506b58dbe7fa6770ff6ce0223f2e986fbf5196d7297e269e2834a2761cd"
+          }
+        },
+        {
+          "name": "provider-startup-source-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Inspected AGY startup/source acquisition contract",
+            "detail": "Source acquisition rules inspected for 1.4.12; hook closure and effective controls remain independent"
+          }
+        },
+        {
+          "name": "startup-hooks-and-plugins",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "unknown",
+            "source": "Source snapshot and authenticated coordinator disposition",
+            "detail": "AUDIT_DISPOSITION_PENDING:0f89ac10f3950b21dd8769cfefc7e8e9d6f8573ad318753238af3a305e41c467"
+          }
+        },
+        {
+          "name": "custom-agent-definition",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Generated source-bound AGY main-agent definition",
+            "detail": "052ce66a2d02e0290ba4f4fd95f5cbe6ae77731e627a133c5b1b583c4bf361cb"
+          }
+        },
+        {
+          "name": "effective-input-gate",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "AGY stream-json init",
+            "detail": "Require init before user input, exact model/agent/cwd/permission and empty tools"
+          }
+        }
+      ],
+      "runtimeControlsState": "unknown",
+      "blockers": [
+        {
+          "control": "controls",
+          "reason": "CONTROLS_UNKNOWN",
+          "source": "provider-specific control sources"
+        }
+      ]
+    },
+    {
+      "role": "xai",
+      "selection": {
+        "route": "cursor",
+        "model": "grok-4.7-xhigh",
+        "effort": "xhigh",
+        "effortEncoding": "model"
+      },
+      "catalogState": "verified",
+      "bootstrap": {
+        "state": "missing",
+        "source": "provider-specific control sources",
+        "detail": "[{\"detail\":\"2026.10.22-27dcf5f\",\"digest\":\"e512efe2558dbaca1e826e5e3a6210a3835677088ad662dd861fe1a4ce8bba6b\",\"enforcement\":\"No inherited stale qualification\",\"name\":\"provider-version-contract\",\"source\":\"Installed exact provider version\",\"state\":\"verified\"},{\"detail\":\"c24026e17118188478fcb47ed8113fa842f93df2043da5116660a368d3dc64b0\",\"digest\":\"a540d57dc3776527c49d083dabe5d8cf8c493465fd0c194d150448c6984ee1be\",\"enforcement\":\"Installed public CLI parameters, not effective configuration\",\"name\":\"installed-command-contract\",\"source\":\"cursor-agent --help / 2026.10.22-27dcf5f\",\"state\":\"verified\"},{\"detail\":\"No acquired eligible marker covers packet cwd\",\"digest\":\"010539c03baaeaf4c1ebdd64715ca5edc0856dcdcad277d9d853e1df88e12c49\",\"enforcement\":\"Existing trust; no marker creation\",\"name\":\"workspace-trust\",\"source\":\"Cursor native direct/eligible-ancestor existence semantics\",\"state\":\"missing\"},{\"detail\":\"{\\\"effectiveDeny\\\":[],\\\"readBoundary\\\":null}\",\"digest\":\"15c8992ad595705bfcb69cc55fe604647665b12af954d2f46253d1c55c0b1c4e\",\"enforcement\":\"Configuration input only; not effective containment\",\"name\":\"configured-read-boundary\",\"source\":\"Cursor ordered CLI configuration sources\",\"state\":\"missing\"},{\"detail\":\"Configured readBoundary and Deny cannot attest remote portal, team policy, effective sandbox or read-allow expansion\",\"digest\":\"e598ff0a48db3972d334fe6f05119b7b2ead077b1302ecaa0e473a7dc76fac6a\",\"enforcement\":\"Require qualified pre-established effective boundary\",\"name\":\"packet-read-boundary-and-deny-rules\",\"source\":\"Cursor sandbox portal/team/approval/read-allow inputs\",\"state\":\"unknown\"},{\"detail\":\"{\\\"detectedGitRoot\\\":\\\"/Users/aaat/.codex/worktrees/council-first-use/the-council\\\",\\\"packetCwd\\\":\\\"/Users/aaat/.codex/worktrees/council-first-use/the-council/.council/native-packets\\\"}\",\"digest\":\"06367cd236c4ab7b141703d96a8ff05093d6920b4cf7fc898774ede5b7968a38\",\"enforcement\":\"Task-owned helper guard is valid only when loader selects packet root; no Git/trust/workspace mutation\",\"name\":\"helper-loader-root\",\"source\":\"Cursor detected Git root or cwd fallback\",\"state\":\"missing\"},{\"detail\":\"AUDIT_DISPOSITION_PENDING:3fdfb7c3c0120a7f5f216e178a54db19f63d2ce695ab70138d1800715c1f6ff6\",\"digest\":\"3fdfb7c3c0120a7f5f216e178a54db19f63d2ce695ab70138d1800715c1f6ff6\",\"enforcement\":\"No prompt before complete pre-established controls\",\"name\":\"helper-and-startup-effect-enforcement\",\"source\":\"Source snapshot and authenticated coordinator disposition\",\"state\":\"unknown\"},{\"detail\":\"Included-only enforcement must come from the existing supported account constraint; plan, quota and extraUsage=false alone are insufficient.\",\"digest\":\"730fc8fb961000b41b1d13de5b2bd82bbea0486880a079338e0bd8cfc34a7e4b\",\"enforcement\":\"Existing enforced account cap/debit source, independent of quota\",\"name\":\"included-only-billing\",\"source\":\"No supported Cursor included-only debit source integrated\",\"state\":\"missing\"}]"
+      },
+      "controlFacts": [
+        {
+          "name": "provider-version-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Installed exact provider version",
+            "detail": "2026.10.22-27dcf5f"
+          }
+        },
+        {
+          "name": "installed-command-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "cursor-agent --help / 2026.10.22-27dcf5f",
+            "detail": "c24026e17118188478fcb47ed8113fa842f93df2043da5116660a368d3dc64b0"
+          }
+        },
+        {
+          "name": "workspace-trust",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "missing",
+            "source": "Cursor native direct/eligible-ancestor existence semantics",
+            "detail": "No acquired eligible marker covers packet cwd"
+          }
+        },
+        {
+          "name": "configured-read-boundary",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "missing",
+            "source": "Cursor ordered CLI configuration sources",
+            "detail": "{\"effectiveDeny\":[],\"readBoundary\":null}"
+          }
+        },
+        {
+          "name": "packet-read-boundary-and-deny-rules",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "unknown",
+            "source": "Cursor sandbox portal/team/approval/read-allow inputs",
+            "detail": "Configured readBoundary and Deny cannot attest remote portal, team policy, effective sandbox or read-allow expansion"
+          }
+        },
+        {
+          "name": "helper-loader-root",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "missing",
+            "source": "Cursor detected Git root or cwd fallback",
+            "detail": "{\"detectedGitRoot\":\"/Users/aaat/.codex/worktrees/council-first-use/the-council\",\"packetCwd\":\"/Users/aaat/.codex/worktrees/council-first-use/the-council/.council/native-packets\"}"
+          }
+        },
+        {
+          "name": "helper-and-startup-effect-enforcement",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "unknown",
+            "source": "Source snapshot and authenticated coordinator disposition",
+            "detail": "AUDIT_DISPOSITION_PENDING:3fdfb7c3c0120a7f5f216e178a54db19f63d2ce695ab70138d1800715c1f6ff6"
+          }
+        },
+        {
+          "name": "included-only-billing",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "missing",
+            "source": "No supported Cursor included-only debit source integrated",
+            "detail": "Included-only enforcement must come from the existing supported account constraint; plan, quota and extraUsage=false alone are insufficient."
+          }
+        },
+        {
+          "name": "effective-input-gate",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "Cursor one-way print and pre-established controls",
+            "detail": "Requires qualified complete controls before prompt; no public hold handshake is not a universal impossibility"
+          }
+        }
+      ],
+      "runtimeControlsState": "unknown",
+      "blockers": [
+        {
+          "control": "controls",
+          "reason": "CONTROLS_MISSING",
+          "source": "provider-specific control sources"
+        },
+        {
+          "control": "billing",
+          "reason": "BILLING_MISSING",
+          "source": "No supported Cursor included-only debit source integrated"
+        }
+      ]
+    },
+    {
+      "role": "judge",
+      "selection": {
+        "route": "codex",
+        "model": "gpt-6-astra",
+        "effort": "max"
+      },
+      "catalogState": "verified",
+      "bootstrap": {
+        "state": "unknown",
+        "source": "provider-specific control sources",
+        "detail": "[{\"detail\":\"codex-cli 0.164.0\",\"digest\":\"f9132bd493eab5b2ff596253372735f88e4ba9c91bd3a45e8c9fca23d5a1d880\",\"enforcement\":\"No inherited stale qualification\",\"name\":\"provider-version-contract\",\"source\":\"Installed exact provider version\",\"state\":\"verified\"},{\"detail\":\"c45272069305746def807625680ee74891c9b367bff346ff776206b98c79331a\",\"digest\":\"2bf4acf18473eb7b35b90c92655e37fe087fa24ef9cef65fe3ef9e202d6fb8c3\",\"enforcement\":\"Installed public CLI parameters, not effective configuration\",\"name\":\"installed-command-contract\",\"source\":\"codex --help / codex-cli 0.164.0\",\"state\":\"verified\"},{\"detail\":\"Owned notify=[], hooks=false and plugins=false suppress this kernel's notifier and hook sources; platform/runtime effects remain audited\",\"digest\":\"d6470a1484b76f8dda97fcbb7859b9c2eb206687dc975b8b1c2a0f1bbf160970\",\"enforcement\":\"Mandatory raw layer and managed-requirement checks before thread/start; flags alone do not verify startup/platform effects\",\"name\":\"ordinary-hooks-and-notify-suppression\",\"source\":\"Codex rust-v0.164.0 plugin manager, hook registry and engine\",\"state\":\"verified\"},{\"detail\":\"Implicit-deny filesystem with packet read, no writes, inherited Deny union and restricted network\",\"digest\":\"2c3316fb63541d96441f26483f719f0f4bcb8a9a749c03a1019a073351908d99\",\"enforcement\":\"Process-scoped default_permissions; no legacy sandbox override\",\"name\":\"named-permissions-kernel\",\"source\":\"Codex rust-v0.164.0 named permission/config contracts\",\"state\":\"verified\"},{\"detail\":\"AUDIT_DISPOSITION_PENDING:4040eab09a2b2a66291a5f8b28c2be9f7d268db5b4e86795612272a1e8782cbf\",\"digest\":\"4040eab09a2b2a66291a5f8b28c2be9f7d268db5b4e86795612272a1e8782cbf\",\"enforcement\":\"No initialization until startup effects are established within existing authority\",\"name\":\"startup-and-platform-exceptions\",\"source\":\"Source snapshot and authenticated coordinator disposition\",\"state\":\"unknown\"}]"
+      },
+      "controlFacts": [
+        {
+          "name": "provider-version-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Installed exact provider version",
+            "detail": "codex-cli 0.164.0"
+          }
+        },
+        {
+          "name": "installed-command-contract",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "codex --help / codex-cli 0.164.0",
+            "detail": "c45272069305746def807625680ee74891c9b367bff346ff776206b98c79331a"
+          }
+        },
+        {
+          "name": "ordinary-hooks-and-notify-suppression",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Codex rust-v0.164.0 plugin manager, hook registry and engine",
+            "detail": "Owned notify=[], hooks=false and plugins=false suppress this kernel's notifier and hook sources; platform/runtime effects remain audited"
+          }
+        },
+        {
+          "name": "named-permissions-kernel",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "verified",
+            "source": "Codex rust-v0.164.0 named permission/config contracts",
+            "detail": "Implicit-deny filesystem with packet read, no writes, inherited Deny union and restricted network"
+          }
+        },
+        {
+          "name": "startup-and-platform-exceptions",
+          "stage": "bootstrap",
+          "observation": {
+            "state": "unknown",
+            "source": "Source snapshot and authenticated coordinator disposition",
+            "detail": "AUDIT_DISPOSITION_PENDING:4040eab09a2b2a66291a5f8b28c2be9f7d268db5b4e86795612272a1e8782cbf"
+          }
+        },
+        {
+          "name": "pre-input-effective-config",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "Codex 0.164.0 app-server config/read",
+            "detail": "Owned initialization must read effective merged config/layers before turn/start; startup config is requirements only"
+          }
+        },
+        {
+          "name": "all-tool-effects-and-packet-read-boundary",
+          "stage": "effective",
+          "observation": {
+            "state": "unknown",
+            "source": "Codex named permissions, sandbox-aware image/patch handlers and view_image feature gate",
+            "detail": "Compare frozen merged kernel, requirements/catalogue and active profile identity before the first turn; registration need not be empty when effects are restricted"
+          }
+        }
+      ],
+      "runtimeControlsState": "unknown",
+      "blockers": [
+        {
+          "control": "controls",
+          "reason": "CONTROLS_UNKNOWN",
+          "source": "provider-specific control sources"
+        }
+      ]
+    }
+  ],
+  "limits": "These are dated bootstrap observations. Effective runtime controls remain unknown. Future version, source, catalog or policy changes require a new check. AGY version changes affect Gemini directly. The judge uses Codex."
+}

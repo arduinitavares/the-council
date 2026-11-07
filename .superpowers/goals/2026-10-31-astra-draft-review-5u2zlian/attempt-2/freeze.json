@@ -1,0 +1,11 @@
+{
+  "files": {
+    "runner.py": "a53970e9f1f99da0ec70845f8cc8988961437ba7bd1d2024b23f004c8f4ec3f4",
+    "issue-briefs.json": "12373a144f9a010c120dd40b436f3fdafc5a9ff342f02eb366056d8e357f640c",
+    "user-decisions.md": "5e360534bf196946a9f488586903f3c2c5d8c3eca226c9fc70bae318b18991fb",
+    "prompt.txt": "1d7d1cb18474f19efd1a17f7b5635f6d61f4cf17661e669abaa649bfe7c69921",
+    "goal-draft.txt": "ea86df8a75e6dba4789b2719ac71484a6298690bc1d388ea9be13d401f1062b7",
+    "marker.txt": "ce1bcf34cfc31e280d352a3349bd189164026d77fb95834535906cd04399fbf5",
+    "goal-guidance.md": "6b729d66c218eca86f7b97b589bc09e40c1d7b804dd1adc16ca33187d92b9591"
+  }
+}

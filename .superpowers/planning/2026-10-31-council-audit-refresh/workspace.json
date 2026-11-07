@@ -1,0 +1,57 @@
+{
+  "id": "73698e31-12cf-46e4-9379-aa4df959bcf0",
+  "ok": true,
+  "result": {
+    "worktree": {
+      "id": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "identity": {
+        "key": "wt2:local:d7400850-de96-47e6-9bc6-c70439a22b69",
+        "executionHostId": "local",
+        "instanceId": "d7400850-de96-47e6-9bc6-c70439a22b69"
+      },
+      "instanceId": "d7400850-de96-47e6-9bc6-c70439a22b69",
+      "repoId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6",
+      "hostId": "local",
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "head": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+      "branch": "refs/heads/dev/issue-1-first-use-reviewed",
+      "isBare": false,
+      "isMainWorktree": false,
+      "displayName": "dev/issue-1-first-use-reviewed",
+      "displayNameMode": "automatic",
+      "comment": "Reviewed partial repair; C1 and cancellation-proof gate open. Clean branch pushed; PR creation blocked by GitHub integration 403.",
+      "linkedIssue": null,
+      "linkedPR": null,
+      "linkedLinearIssue": null,
+      "linkedLinearIssueWorkspaceId": null,
+      "linkedLinearIssueOrganizationUrlKey": null,
+      "linkedGitLabMR": null,
+      "linkedGitLabIssue": null,
+      "linkedBitbucketPR": null,
+      "linkedAzureDevOpsPR": null,
+      "linkedGiteaPR": null,
+      "linkedWorkItem": null,
+      "linkedTaskSourceContext": null,
+      "isArchived": false,
+      "isUnread": true,
+      "isPinned": false,
+      "sortOrder": 1793307598091,
+      "lastActivityAt": 1793308321200,
+      "workspaceStatus": "in-review",
+      "parentWorktreeId": null,
+      "childWorktreeIds": [],
+      "lineage": null,
+      "git": {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+        "head": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+        "branch": "refs/heads/dev/issue-1-first-use-reviewed",
+        "isBare": false,
+        "isMainWorktree": false
+      },
+      "linkedItems": []
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

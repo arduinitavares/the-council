@@ -39,8 +39,8 @@ function agyHelpFlags(text: string): Set<string> | undefined {
   }
   return flags.size && (!subcommands || subcommandCount > 0) ? flags : undefined;
 }
-/** Read-only mirror of the inspected exact Cursor version's normalization and
- * eligible-ancestor trust checks. It never creates or copies a trust marker. */
+/** Legacy lookup compatibility only. A returned location supplies no exact
+ * identity or production qualification; discovery must not consume it as trust. */
 export const nonblankRoot = (value: string | undefined) => value?.trim() ? value : undefined;
 export function existingCursorTrust(cwd: string): string | null {
   const projects = join(nonblankRoot(process.env.CURSOR_DATA_DIR) ?? join(homedir(), ".cursor"), "projects");
@@ -251,10 +251,8 @@ export const inspectProviderControls: ProviderControlSource = async (selection, 
     let merged=global??{};const inheritedDeny:string[]=[...(global?.permissions?.deny??[])];
     for(const layer of layers){const value=read(layer);if(value){inheritedDeny.push(...(value.permissions?.deny??[]));merged=merge(merged,value);}}
     for(const file of [join(configRoot,"permissions.json"),join(root,".claude/settings.json"),join(homedir(),".claude/settings.json")]){const value=read(file);inheritedDeny.push(...(value?.permissions?.deny??value?.deny??[]));}
-    let trusted:string|null=null;
-    try{trusted=existingCursorTrust(cwd);if(trusted)track(trusted,"metadata");}
-    catch{unavailable.push("CURSOR_TRUST_METADATA_UNAVAILABLE");add("workspace-trust-metadata","unknown","Cursor existing marker metadata","Native trust metadata could not be acquired","No trust mutation");}
-    add("workspace-trust",trusted?"verified":"missing","Cursor native direct/eligible-ancestor existence semantics",trusted?"Existing marker covers exact packet cwd; contents are not read":"No acquired eligible marker covers packet cwd","Existing trust; no marker creation");
+    add("cursor-native-trust-admission","unsupported","Cursor source-derived admission evidence","CURSOR_TRUST_CONTRACT_UNSUPPORTED: Source-derived admission evidence lacks qualified build, registered workspace and stable namespace","Require independently qualified native admission; no trust mutation");
+    add("workspace-trust","unsupported","Council exact stored-path comparison","CURSOR_TRUST_CONTRACT_UNSUPPORTED: Direct and eligible-ancestor production coverage is not qualified","Require exact identity in addition to native admission; no trust mutation");
     const configured=merged?.sandbox?.readBoundary;
     add("configured-read-boundary",["workspace","system"].includes(configured)?"verified":"missing","Cursor ordered CLI configuration sources",canonicalJson({readBoundary:configured??null,effectiveDeny:merged?.permissions?.deny??[]}),"Configuration input only; not effective containment");
     for(const file of [join(homedir(),".cursor/sandbox.json"),join(root,".cursor/sandbox.json"),join(cwd,".cursor/sandbox.json")])read(file);

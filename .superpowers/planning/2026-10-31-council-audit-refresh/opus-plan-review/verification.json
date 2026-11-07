@@ -1,0 +1,7 @@
+{
+  "responseMatches": true,
+  "inputsUnchanged": true,
+  "settled": true,
+  "additionalRelevantRead": "skills/the-council/scripts/run-council.mjs",
+  "boundaryLimit": "Inherited Allow rules permitted this relevant read beyond the explicit list. No unrelated reads or mutating tools were observed. The next packet includes this file explicitly."
+}

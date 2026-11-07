@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "/opt/homebrew/bin/codex",
+    "exec",
+    "--model",
+    "gpt-6-astra",
+    "-c",
+    "model_reasoning_effort=\"ultra\"",
+    "--sandbox",
+    "read-only",
+    "--cd",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/goals/2026-10-31-astra-draft-review-5u2zlian/attempt-2",
+    "--json",
+    "--output-last-message",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/goals/2026-10-31-astra-draft-review-5u2zlian/attempt-2/report.md",
+    "-"
+  ],
+  "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/goals/2026-10-31-astra-draft-review-5u2zlian/attempt-2",
+  "model": "gpt-6-astra",
+  "effort": "ultra",
+  "permissionMode": "read-only sandbox; inherited approval policy",
+  "protectedBefore": {
+    "/Users/aaat/.agents/policies/model-policy.md": "6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0",
+    "/Users/aaat/.codex/config.toml": "e573ba99f61f92099e4d62430b189ba453cda5324bf779669766e3fe3ffe275a"
+  },
+  "wrapperPid": 48550,
+  "host": "local macOS",
+  "deadlineSeconds": 360
+}

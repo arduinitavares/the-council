@@ -1,0 +1,14 @@
+{
+  "commit": "9aff16ceb97e9420ab346552c04405c38d2ffde8",
+  "observedAt": "2026-10-31T22:13:53.854Z",
+  "currentInstalledRootExists": true,
+  "currentRootDirectoryCount": 8,
+  "hookManifestCount": 1,
+  "inventoriedCurrentManifests": 0,
+  "activePluginExecution": "not established",
+  "knownHookPolicyPresent": true,
+  "auditUnavailable": [],
+  "bootstrap": "unknown",
+  "controls": "unknown",
+  "providerInferenceCalls": 0
+}

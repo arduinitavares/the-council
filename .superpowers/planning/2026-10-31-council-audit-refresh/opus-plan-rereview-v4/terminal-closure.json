@@ -1,0 +1,35 @@
+{
+  "shown": {
+    "terminal": {
+      "handle": "term_d96fb12e-2fb9-418c-b8e3-67e5773c87a6",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@6b168780",
+      "incarnationId": "9c9bb5ea-30be-41c3-a892-89c203137d10",
+      "orphaned": true,
+      "recordedPaneKey": "ec7c4fe3-8f1d-4504-9330-da77dae28f8c:6c1d0719-40c5-42e1-b1f4-214f9aee49f1",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "worktreePath": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "branch": "refs/heads/dev/issue-1-first-use-reviewed",
+      "tabId": "ec7c4fe3-8f1d-4504-9330-da77dae28f8c",
+      "leafId": "6c1d0719-40c5-42e1-b1f4-214f9aee49f1",
+      "title": "Opus medium scoped plan review v4",
+      "connected": true,
+      "writable": true,
+      "lastOutputAt": 1793450317421,
+      "preview": "/review-runner.py opus-plan-rereview-v4\naaat@Alexandres-Mac-Studio the-council %",
+      "executionHostId": "local",
+      "paneRuntimeId": -1,
+      "rendererGraphEpoch": 0,
+      "agentWait": null
+    }
+  },
+  "closed": {
+    "close": {
+      "handle": "term_d96fb12e-2fb9-418c-b8e3-67e5773c87a6",
+      "tabId": "ec7c4fe3-8f1d-4504-9330-da77dae28f8c",
+      "ptyKilled": true
+    }
+  },
+  "providerExit": 0,
+  "terminalExit": "uncaptured",
+  "verifiedAt": "2026-10-31T12:40:03.158Z"
+}

@@ -1,0 +1,96 @@
+[
+  {
+    "key": "gemini_inventory",
+    "number": 3,
+    "url": "https://github.com/arduinitavares/the-council/issues/3",
+    "category": "bug",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/3#issuecomment-6550001133",
+    "dependencies": [],
+    "verified": true
+  },
+  {
+    "key": "gemini_live",
+    "number": 4,
+    "url": "https://github.com/arduinitavares/the-council/issues/4",
+    "category": "enhancement",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/4#issuecomment-6550001988",
+    "dependencies": [
+      3
+    ],
+    "verified": true
+  },
+  {
+    "key": "cursor_controls",
+    "number": 5,
+    "url": "https://github.com/arduinitavares/the-council/issues/5",
+    "category": "enhancement",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/5#issuecomment-6550002935",
+    "dependencies": [],
+    "verified": true
+  },
+  {
+    "key": "cursor_billing",
+    "number": 6,
+    "url": "https://github.com/arduinitavares/the-council/issues/6",
+    "category": "enhancement",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/6#issuecomment-6550003690",
+    "dependencies": [],
+    "verified": true
+  },
+  {
+    "key": "second_project",
+    "number": 7,
+    "url": "https://github.com/arduinitavares/the-council/issues/7",
+    "category": "enhancement",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/7#issuecomment-6550004826",
+    "dependencies": [
+      4,
+      5,
+      6
+    ],
+    "verified": true
+  },
+  {
+    "key": "parallel_tests",
+    "number": 8,
+    "url": "https://github.com/arduinitavares/the-council/issues/8",
+    "category": "bug",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/8#issuecomment-6550005675",
+    "dependencies": [],
+    "verified": true
+  },
+  {
+    "key": "cleanup_delay",
+    "number": 9,
+    "url": "https://github.com/arduinitavares/the-council/issues/9",
+    "category": "bug",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/9#issuecomment-6550006448",
+    "dependencies": [],
+    "verified": true
+  },
+  {
+    "key": "diagnostics",
+    "number": 10,
+    "url": "https://github.com/arduinitavares/the-council/issues/10",
+    "category": "enhancement",
+    "createExitCode": 0,
+    "createDiagnostic": "",
+    "briefUrl": "https://github.com/arduinitavares/the-council/issues/10#issuecomment-6550007298",
+    "dependencies": [],
+    "verified": true
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "scope": "local macOS/AGY1.4.12/claude-opus-5-5-medium/explicitmedium/plan/sandbox/native read_file/exact grants/isolated task cwd/owned Orca terminal",
+  "model": "claude-opus-5-5-medium",
+  "effort": "medium",
+  "backendEffort": "provider-managed; not exposed",
+  "permissionMode": "request-review",
+  "actualToolNames": [
+    "read_file"
+  ],
+  "providerExit0": true,
+  "groupAbsent": true,
+  "wrapperAbsent": true,
+  "protectedUnchanged": true,
+  "terminalClosed": true,
+  "codeEditingOrCouncilQualification": false
+}

@@ -1,0 +1,38 @@
+{
+  "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+  "host": "local macOS",
+  "wrapperPid": 67378,
+  "parentPid": 67361,
+  "node": "/opt/homebrew/opt/node@22/bin/node",
+  "nodeVersion": "v22.23.4",
+  "gitHead": "31bae7cec0f5691ad52495a829f1968285b10797",
+  "argv": [
+    "/opt/homebrew/opt/node@22/bin/node",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/skills/the-council/scripts/run-council.mjs",
+    "native",
+    "--workspace",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+    "--input",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/reproductions/os-question-20261031T052458Z-112603/request.json",
+    "--policy",
+    "/Users/aaat/.agents/policies/model-policy.md",
+    "--orca",
+    "/usr/local/bin/orca",
+    "--config",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/skills/the-council/references/first-use-roster.yaml",
+    "--json"
+  ],
+  "protectedBefore": {
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-controls.ts": "029ee9dd73a792cf66c6a3780eef95acb61e421ca1e5338f09526010f8bf665d",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-session.ts": "2df4e0c6492f50c23bb1da900f05b1e31196dbe1d21e512432ccfdcca353aada",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/dist/pilot/provider-controls.js": "454601565d787c400e743f5ce6fe7be13bbb608b82aa3b0a52dee2d24bd5eaf9",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/dist/pilot/provider-session.js": "8f39e135812243656d96e939ecc94bb60d0c3cf615541c38cd85a4972a376d71",
+    "/Users/aaat/.gemini/antigravity-cli/settings.json": "2c9121b1c2f404e9725bbc1d1efdfe3d83fd4a3ea906f1641a146a98bb577dc0",
+    "/Users/aaat/.agents/policies/model-policy.md": "6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0"
+  },
+  "injectedTerminalHandle": "term_2a0e9fa6-70de-47b0-b795-f83f0a2dac2a",
+  "injectedPaneKey": "2c8b55db-0fd0-4b7e-8357-5eb9ce351e0b:f014b014-739e-4e2a-a23f-928a22535768",
+  "runId": "os-question-20261031T052458Z-112603",
+  "question": "What is the best operating system in the world?",
+  "noGlobalSettingsChangesAuthorized": true
+}

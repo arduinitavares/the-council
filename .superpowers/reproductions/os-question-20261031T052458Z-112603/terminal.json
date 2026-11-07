@@ -1,0 +1,22 @@
+{
+  "id": "18331b5f-d8e8-42b3-b10a-f5817becf1f2",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 67354,
+      "handle": "term_2a0e9fa6-70de-47b0-b795-f83f0a2dac2a",
+      "tabId": "2c8b55db-0fd0-4b7e-8357-5eb9ce351e0b",
+      "paneKey": "2c8b55db-0fd0-4b7e-8357-5eb9ce351e0b:f014b014-739e-4e2a-a23f-928a22535768",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@87e2bd8b",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "Council OS question reproduction",
+      "executionHostId": "local",
+      "incarnationId": "828e3354-d3f1-459f-88eb-1f58f7956a1b",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

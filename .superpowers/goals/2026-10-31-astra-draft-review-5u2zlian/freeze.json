@@ -1,0 +1,16 @@
+{
+  "files": {
+    "runner.py": "9b4eb47eb6aefd71aa15a832b197e0c1c97e6586dc855d39999634178c2b53ab",
+    "issue-briefs.json": "12373a144f9a010c120dd40b436f3fdafc5a9ff342f02eb366056d8e357f640c",
+    "user-decisions.md": "5e360534bf196946a9f488586903f3c2c5d8c3eca226c9fc70bae318b18991fb",
+    "prompt.txt": "44288b446bedd0e4082c67f1c481959c14344e3c67ced1fbfa628653ecc35c58",
+    "goal-draft.txt": "ea86df8a75e6dba4789b2719ac71484a6298690bc1d388ea9be13d401f1062b7",
+    "goal-guidance.md": "6b729d66c218eca86f7b97b589bc09e40c1d7b804dd1adc16ca33187d92b9591"
+  },
+  "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+  "reviewCwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/goals/2026-10-31-astra-draft-review-5u2zlian",
+  "workspace": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+  "runtime": "358a2aea-aee1-488e-8a94-7fa5ec557c6c",
+  "kind": "ordinary custom terminal; no Run/Task/Dispatch authority",
+  "expressivenessGap": "worker-start has no read-only sandbox option; same qualified custom Codex exec route as preceding read-only review"
+}

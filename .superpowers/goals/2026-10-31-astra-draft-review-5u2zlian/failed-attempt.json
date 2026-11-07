@@ -1,0 +1,9 @@
+{
+  "verdict": null,
+  "error": "review launcher FileNotFoundError: marker.txt",
+  "nativeTurn": "interrupted",
+  "wrapperAbsent": true,
+  "matchingEntryProcesses": 0,
+  "ownedTerminalClosed": true,
+  "historicalDescendantCensus": "not retained by failed launcher; no universal settlement claim"
+}

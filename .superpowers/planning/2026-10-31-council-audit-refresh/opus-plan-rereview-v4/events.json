@@ -1,0 +1,1619 @@
+[
+  {
+    "event": "init",
+    "init": {
+      "model": "claude-opus-5-5-medium",
+      "agent": null,
+      "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview-v4",
+      "permission_mode": "request-review"
+    },
+    "advertisedToolCount": 60
+  },
+  {
+    "event": "step_update",
+    "stepType": "user_input",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "system_message",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 3,
+      "parameters": {
+        "Path": "/Users/aaat/.agents/policies/model-policy.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 3,
+      "parameters": {
+        "Path": "/Users/aaat/.agents/policies/model-policy.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 4,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview-v4/marker.txt"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 4,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview-v4/marker.txt"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 5,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview/report.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 5,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview/report.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 6,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v3.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 6,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v3.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 7,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/review-inventory-v4.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 7,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/review-inventory-v4.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 9,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 9,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 10,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/canonical-plan-v4.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 10,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/canonical-plan-v4.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 11,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 11,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 13,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 13,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 14,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v2.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 14,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v2.md"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 15,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 15,
+      "parameters": {
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json"
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "DONE"
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "ACTIVE",
+      "step_index": 17,
+      "parameters": {
+        "EndLine": 130,
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/workflow.ts",
+        "StartLine": 50
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "tool": {
+      "tool_name": "read_file",
+      "state": "DONE",
+      "step_index": 17,
+      "parameters": {
+        "EndLine": 130,
+        "Path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/workflow.ts",
+        "StartLine": 50
+      }
+    }
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "ACTIVE"
+  },
+  {
+    "event": "step_update",
+    "stepType": "agent_response",
+    "state": "DONE"
+  },
+  {
+    "event": "result",
+    "status": "SUCCESS"
+  }
+]

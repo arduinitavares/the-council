@@ -1,0 +1,22 @@
+{
+  "id": "c9140efa-8e5f-4af9-8b1f-48db30793bc6",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 36036,
+      "handle": "term_d96fb12e-2fb9-418c-b8e3-67e5773c87a6",
+      "tabId": "ec7c4fe3-8f1d-4504-9330-da77dae28f8c",
+      "paneKey": "ec7c4fe3-8f1d-4504-9330-da77dae28f8c:6c1d0719-40c5-42e1-b1f4-214f9aee49f1",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@6b168780",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "Opus medium scoped plan review v4",
+      "executionHostId": "local",
+      "incarnationId": "9c9bb5ea-30be-41c3-a892-89c203137d10",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

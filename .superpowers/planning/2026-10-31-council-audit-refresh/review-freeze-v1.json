@@ -1,0 +1,14 @@
+{
+  "baseline": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+  "files": {
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md": "6e34025e35c36e1c21d5fd4b032899dfdb6daf928dac43c4aae1dbd185d90a2c",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md": "4c13f0edcce7ec0e856cbf2cf84f08363ff233350c9dc76042b4348ad3d04d63",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh-language.md": "483d4d5275293b7bd8a6aaf8c16621fe09b817cde565fe36cf2dd6e5466a3b99",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/cli.ts": "78da782132a37ea4c14a8326e34172590555cd5b5cb459ab527458ff7061ba1c",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts": "7dd3a4fdb9c26fc668907282ea0faf6b61376606a98ec9db9c25bfe25e9c6f3b",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-controls.ts": "ff761fc05cfee422717cdc3c8f90535c2e86648ccbf98ee3a6e70a52fa1a088e",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/control-audit.test.ts": "fbc66846ccf535ce9f90a33306718205966ef57a8be6faeb5dfc95ca3fd7f922",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/provider-controls.test.ts": "7082a02650a5a1e32260646cdacc59fc8e115b78957730b5bbc0c88e5a95e80a",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json": "56fe1998e4434146e41464464dbfe01d3423bda6dd33dfde709d4e4973d71fe8"
+  }
+}

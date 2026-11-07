@@ -1,0 +1,11 @@
+{
+  "reason": "Bounded default-parallel triage run reached180s deadline; npm was already killed by subprocess timeout. Stop only positively owned test descendants.",
+  "observedOwnedPids": [
+    12689,
+    12700,
+    12731,
+    12740
+  ],
+  "signals": [],
+  "remainingPids": []
+}

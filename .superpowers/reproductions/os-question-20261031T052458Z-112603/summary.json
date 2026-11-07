@@ -1,0 +1,91 @@
+{
+  "question": "What is the best operating system in the world?",
+  "gitHead": "31bae7cec0f5691ad52495a829f1968285b10797",
+  "status": "prerequisites_not_verified",
+  "exitCode": 3,
+  "elapsedSeconds": 14.249,
+  "calls": {
+    "probes": 0,
+    "topic": 0
+  },
+  "initializations": 0,
+  "reviewerOrJudgeResults": 0,
+  "blockers": [
+    {
+      "role": "gemini",
+      "control": "controls",
+      "reason": "CONTROLS_MISSING",
+      "source": "provider-specific control sources",
+      "nonverifiedFacts": [
+        {
+          "name": "workspace-trust",
+          "state": "missing",
+          "detail": "Exact packet workspace enrollment not recorded; no enrollment change attempted",
+          "source": "Council-required AGY trustedWorkspaces enrollment metadata"
+        },
+        {
+          "name": "startup-hooks-and-plugins",
+          "state": "unknown",
+          "detail": "AUDIT_DISPOSITION_PENDING:0f89ac10f3950b21dd8769cfefc7e8e9d6f8573ad318753238af3a305e41c467",
+          "source": "Source snapshot and authenticated coordinator disposition"
+        }
+      ]
+    },
+    {
+      "role": "xai",
+      "control": "controls",
+      "reason": "CONTROLS_MISSING",
+      "source": "provider-specific control sources",
+      "nonverifiedFacts": [
+        {
+          "name": "workspace-trust",
+          "state": "missing",
+          "detail": "No acquired eligible marker covers packet cwd",
+          "source": "Cursor native direct/eligible-ancestor existence semantics"
+        },
+        {
+          "name": "configured-read-boundary",
+          "state": "missing",
+          "detail": "{\"effectiveDeny\":[],\"readBoundary\":null}",
+          "source": "Cursor ordered CLI configuration sources"
+        },
+        {
+          "name": "packet-read-boundary-and-deny-rules",
+          "state": "unknown",
+          "detail": "Configured readBoundary and Deny cannot attest remote portal, team policy, effective sandbox or read-allow expansion",
+          "source": "Cursor sandbox portal/team/approval/read-allow inputs"
+        },
+        {
+          "name": "helper-loader-root",
+          "state": "missing",
+          "detail": "{\"detectedGitRoot\":\"/Users/aaat/.codex/worktrees/council-first-use/the-council\",\"packetCwd\":\"/Users/aaat/.codex/worktrees/council-first-use/the-council/.council/native-packets\"}",
+          "source": "Cursor detected Git root or cwd fallback"
+        },
+        {
+          "name": "helper-and-startup-effect-enforcement",
+          "state": "unknown",
+          "detail": "AUDIT_DISPOSITION_PENDING:1f6d2a2abdf1e5e215795edf4aec1d2522746f95d0b0ba8f28fbc5bf4cd62467",
+          "source": "Source snapshot and authenticated coordinator disposition"
+        },
+        {
+          "name": "included-only-billing",
+          "state": "missing",
+          "detail": "Included-only enforcement must come from the existing supported account constraint; plan, quota and extraUsage=false alone are insufficient.",
+          "source": "No supported Cursor included-only debit source integrated"
+        }
+      ]
+    },
+    {
+      "role": "xai",
+      "control": "billing",
+      "reason": "BILLING_MISSING",
+      "source": "No supported Cursor included-only debit source integrated",
+      "nonverifiedFacts": []
+    }
+  ],
+  "cliError": null,
+  "stderrBytes": 0,
+  "protectedUnchanged": true,
+  "record": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.council/native/os-question-20261031T052458Z-112603/outcome.json",
+  "commandFile": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/reproductions/os-question-20261031T052458Z-112603/command.txt"
+}

@@ -1,0 +1,931 @@
+{
+  "findings": [
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan\u2026",
+      "line": 3,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Steps use checkbox (`- [ ]`) syntax for tracking.",
+      "line": 3,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "**Goal:** Restore valid current startup-audit evidence for `openai`, `gemini`, and `judge`.",
+      "line": 5,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "**Architecture:** Use the existing audit preparation and native adoption interfaces.",
+      "line": 7,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Keep Cursor and full Council qualification outside the ready work.",
+      "line": 7,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "**Architecture:** Use the existing audit preparation and native adoption interfaces.",
+      "line": 7,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Inspect current evidence before selecting any repair.",
+      "line": 7,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "4`, TypeScript, Zod, Vitest, Orca CLI/API, Adaptive Planning MCP.",
+      "line": 9,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "The current authorization is planning only.",
+      "line": 15,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "Do not execute the proposed tasks until execution is authorized.",
+      "line": 16,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Preserve the current checkout, old evidence, and unrelated sessions.",
+      "line": 17,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Do not change global settings, trust, permissions, accounts, or billing.",
+      "line": 20,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Use Astra `gpt-6-astra` at `ultra` and Argon `gemini-4-argon-high` at explicit `high` for code work.",
+      "line": 21,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Verify route qualification and effective settings before each assignment.",
+      "line": 22,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Keep model grants and service tokens in private records outside the repository.",
+      "line": 25,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Require complete source evidence and authenticated effect disposition.",
+      "line": 26,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Preserve current AGY behavior and all existing refusal checks.",
+      "line": 27,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Preserve current AGY behavior and all existing refusal checks.",
+      "line": 27,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "An unresolved dependency blocks approval even when every listed effect is accepted.",
+      "line": 32,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "A repaired audit does not establish effective tool containment or Cursor billing.",
+      "line": 34,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "A request needs a new run ID, a current deadline, and a genuine Orca terminal context.",
+      "line": 35,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Keep five upcoming tasks in the current horizon.",
+      "line": 40,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Treat its source, configuration observations, and audit hashes as dated evidence.",
+      "line": 45,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Read current service identity, plan ownership, holds, and evidence before execution.",
+      "line": 46,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Declare repository, isolated worker directory, and external resource claims.",
+      "line": 48,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "Keep obligations until stopped-use evidence is recorded.",
+      "line": 49,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Give each reviewer an isolated directory and read-only scope.",
+      "line": 51,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "At each checkpoint, reassess every pending task.",
+      "line": 54,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Keep accepted history and record invalidation separately.",
+      "line": 55,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Create: a private three-role comparison report and source-hash manifest.",
+      "line": 69,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: the current roster, provider versions, existing source files, and recorded historical snapshots.",
+      "line": 72,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: the current roster, provider versions, existing source files, and recorded historical snapshots.",
+      "line": 72,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Supplies: exact audit hashes, source differences, effects, and unresolved inputs to Tasks 2 and 3.",
+      "line": 74,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Verify the execution checkout and current code hashes.",
+      "line": 76,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Inspect current Astra Ultra and Argon high qualification receipts for the required future actions.",
+      "line": 77,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record any missing route proof without launching a qualification probe in this inventory task.",
+      "line": 78,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Run the public audit preparation command for `openai`, `gemini`, and `judge` separately.",
+      "line": 80,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Use the same command with `--role gemini` and `--role judge`.",
+      "line": 86,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record source, version, recipe, loader-order, effect, and unavailable-input differences separately.",
+      "line": 90,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Verify that no disposition was created by preparation.",
+      "line": 92,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record a checkpoint with the three reports and current source hashes.",
+      "line": 93,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "**Completion check:** Each role has a valid stored snapshot and a complete comparison report.",
+      "line": 96,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: Task 1 reports and exact failing input.",
+      "line": 113,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: Task 1 reports and exact failing input.",
+      "line": 113,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Classify each gap as source evidence, software behavior, or missing authority.",
+      "line": 116,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] If code is required, publish the exact defect, files, interface, test assertions, and expected failure.",
+      "line": 118,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "[ ] If code is required, publish the exact defect, files, interface, test assertions, and expected failure.",
+      "line": 118,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Run the changed behavior tests and directly affected safety tests.",
+      "line": 121,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Run typecheck and build when code changes.",
+      "line": 122,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Verify each review claim and record its disposition.",
+      "line": 125,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record the checkpoint and reassess every remaining task.",
+      "line": 127,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record the checkpoint and reassess every remaining task.",
+      "line": 127,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "That task requires an authorized disposable target and exact action checks.",
+      "line": 134,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "A missing code-route qualification requires a separate provisional qualification task before code assignment.",
+      "line": 134,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "A source repair requires verified RED/GREEN evidence and independent approval.",
+      "line": 140,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Read: the exact current snapshots and approved effect evidence.",
+      "line": 147,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Preserve: historical snapshots, dispositions, and native records.",
+      "line": 149,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: current snapshots with complete source closure and resolved Task 2 evidence.",
+      "line": 152,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Produces: authenticated dispositions bound to the exact snapshot and native coordinator identity.",
+      "line": 153,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "The owned coordinator is the task creator, dispatch assignee, and result reporter.",
+      "line": 155,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "The task and dispatch must complete with a successful native worker report.",
+      "line": 156,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Compare every required effect with existing task authority.",
+      "line": 170,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Reuse existing applicable authority without a routine permission request.",
+      "line": 171,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Stop only an effect that requires missing authority or violates an actual refusal.",
+      "line": 172,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Create the required native audit task and disposition through supported Orca operations.",
+      "line": 173,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Verify its workspace, coordinator, task, dispatch, and incarnation bindings.",
+      "line": 174,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Run the public `native audit adopt` command with its actual hash, run, and task IDs.",
+      "line": 175,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record the checkpoint with exact source and producer hashes.",
+      "line": 178,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Reassess Tasks 4 and 5 after the result.",
+      "line": 179,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "json` and native lifecycle records.",
+      "line": 189,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Create: a sanitized result comparison and stopped-resource receipts.",
+      "line": 190,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: Task 3 dispositions and the same frozen source inputs.",
+      "line": 193,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Produces: a fresh roster preflight result with separate role, audit, and operational states.",
+      "line": 194,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Start or reuse an owned Orca terminal in the requesting checkout.",
+      "line": 196,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Verify its actual cwd and genuine injected caller context.",
+      "line": 197,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Generate a new request with a future deadline and unchanged call bounds.",
+      "line": 198,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Run the existing helper once with `--run`.",
+      "line": 199,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Confirm zero provider initializations and zero probe/topic calls while Cursor still blocks the roster.",
+      "line": 203,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Inspect failure diagnostics and reconcile every owned resource.",
+      "line": 204,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record the checkpoint and reassess Task 5.",
+      "line": 205,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Expected scoped result: exit `3` with `prerequisites_not_verified` and only the separately retained Cursor prerequisites.",
+      "line": 207,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "A passing scoped result does not prove normal provider inference or full Council qualification.",
+      "line": 207,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Review: the complete scoped diff, source manifests, audit evidence, and Task 4 outcome.",
+      "line": 216,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Update after authorization: the relevant qualification records and existing draft PR.",
+      "line": 217,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Update after authorization: the relevant qualification records and existing draft PR.",
+      "line": 217,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Consumes: all accepted task artifacts and exact lifecycle evidence.",
+      "line": 220,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Produces: an evidence-checked scoped acceptance report and a revised roadmap.",
+      "line": 221,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Freeze the complete source and evidence artifact.",
+      "line": 223,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Obtain fresh Astra Ultra and Argon high whole-change reviews if production code changed.",
+      "line": 224,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Give both reviewers the same frozen inputs and independent read-only contexts.",
+      "line": 225,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Classify each finding as accepted, qualified, or rejected with evidence.",
+      "line": 227,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Use the preserved Superpowers fix budgets if source fixes are required.",
+      "line": 228,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Use one final fix wave and one scoped re-review at the whole-change gate.",
+      "line": 229,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Keep unresolved load-bearing findings visible after that budget.",
+      "line": 230,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Record the required checkpoint, review, acceptance, and resource evidence in the canonical service.",
+      "line": 233,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "[ ] Report source acceptance, audit acceptance, and operational qualification separately.",
+      "line": 234,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "**Completion check:** The report cites the exact verified artifact and every finding disposition.",
+      "line": 236,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "**Completion check:** The report cites the exact verified artifact and every finding disposition.",
+      "line": 236,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "No full Council success or issue closure is claimed from audit approval alone.",
+      "line": 236,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Cursor trust, read boundaries, helper loading, and included-only billing remain outside this bounded repair.",
+      "line": 240,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Expand them only after a separate scope decision and current evidence.",
+      "line": 240,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "ing-form",
+      "estimated_word_count": null,
+      "excerpt": "Cursor trust, read boundaries, helper loading, and included-only billing remain outside this bounded repair.",
+      "line": 240,
+      "message": "Review each -ing form for its permitted function."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "Keep both code model restrictions when that work is authorized.",
+      "line": 241,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Normal and cancellation qualification remain separate from audit adoption.",
+      "line": 244,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Expand those tasks only after their effective controls and required routes are established.",
+      "line": 244,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "Expand those tasks only after their effective controls and required routes are established.",
+      "line": 244,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Use a fresh Council question and a judge comparison only after the full roster passes its prerequisites.",
+      "line": 245,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Keep second-project acceptance and issue closure behind that evidence.",
+      "line": 246,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "The specification requirements map to Tasks 1 through 5 and the later roadmap.",
+      "line": 251,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "The exact preparation command and returned fields match the current public interfaces.",
+      "line": 252,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "The official dictionary and governed project glossary are unavailable.",
+      "line": 257,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Procedure and description structure were checked against the installed companion references.",
+      "line": 258,
+      "message": "Review whether this procedure sentence contains independent actions."
+    },
+    {
+      "classification": "candidate",
+      "code": "passive-voice",
+      "estimated_word_count": null,
+      "excerpt": "Procedure and description structure were checked against the installed companion references.",
+      "line": 258,
+      "message": "Sentence contains a probable passive construction."
+    },
+    {
+      "classification": "candidate",
+      "code": "coordinated-action",
+      "estimated_word_count": null,
+      "excerpt": "Commands, paths, model IDs, error text, limits, and schema fields remain protected literals.",
+      "line": 259,
+      "message": "Review whether this procedure sentence contains independent actions."
+    }
+  ],
+  "limitations": [
+    "Word counts are conservative estimates, not official ASD-STE100 counts.",
+    "The scanner does not fully collapse proper nouns, labels, headings, placards, or every abbreviation.",
+    "Passive voice, coordinated actions, contractions, and -ing forms are review candidates, not automatic violations.",
+    "The scanner does not check approved vocabulary, meaning, part of speech, technical terms, clarity, or technical accuracy."
+  ],
+  "schema_version": 1,
+  "sentence_word_limit": 20,
+  "summary": {
+    "estimated_over_limit_sentences": 0,
+    "findings": 114,
+    "paragraphs": 140,
+    "sentences": 218
+  },
+  "text_type": "procedure"
+}

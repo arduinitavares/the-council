@@ -1,0 +1,65 @@
+{
+  "baseline": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+  "files": [
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+      "lines": 459
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md",
+      "lines": 113
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh-language.md",
+      "lines": 39
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/cli.ts",
+      "lines": 205
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts",
+      "lines": 101
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-controls.ts",
+      "lines": 296
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/control-audit.test.ts",
+      "lines": 128
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/provider-controls.test.ts",
+      "lines": 320
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json",
+      "lines": 405
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v2.md",
+      "lines": 50
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/skills/the-council/scripts/run-council.mjs",
+      "lines": 32
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/workflow.ts",
+      "lines": 325
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/package.json",
+      "lines": 40
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v3.md",
+      "lines": 29
+    },
+    {
+      "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/canonical-plan-v4.json",
+      "lines": 232
+    }
+  ]
+}

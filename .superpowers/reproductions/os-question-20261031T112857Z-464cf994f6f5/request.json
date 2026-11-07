@@ -1,0 +1,10 @@
+{
+  "runId": "os-question-20261031T112857Z-464cf994f6f5",
+  "candidate": "There is no single best operating system for every user. The best choice depends on intended use, required software and hardware, ease of use, privacy, cost and support.",
+  "suppliedText": "User question: What is the best operating system in the world?\nEvaluate this question independently. No intended use, hardware or priorities were supplied. Identify assumptions and explain tradeoffs. The candidate is a coordinator-authored starting position, not a reviewer response.",
+  "maxProbeCalls": 8,
+  "maxTopicCalls": 10,
+  "workerTimeoutMs": 120000,
+  "proofTtlMs": 3600000,
+  "deadline": 1793447037742
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "type": "thread.started",
+    "itemType": "",
+    "thread_id": "01a19438-d2df-7ad1-9b90-7fe43f552d89"
+  },
+  {
+    "type": "item.completed",
+    "itemType": "error",
+    "diagnostic": {
+      "id": "item_0",
+      "message": "loading hooks from both /Users/aaat/.codex/hooks.json and /Users/aaat/.codex/config.toml; prefer a single representation for this layer"
+    }
+  },
+  {
+    "type": "turn.started",
+    "itemType": ""
+  },
+  {
+    "type": "item.completed",
+    "itemType": "agent_message"
+  }
+]

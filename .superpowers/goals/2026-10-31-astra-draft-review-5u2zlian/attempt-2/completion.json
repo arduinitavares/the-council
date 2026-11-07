@@ -1,0 +1,31 @@
+{
+  "providerExitCode": 0,
+  "elapsedSeconds": 253.203,
+  "failure": null,
+  "threadId": "01a1943e-6d21-76b3-845c-9282a9f27271",
+  "ownSessionPaths": [
+    "/Users/aaat/.codex/sessions/2026/10/31/rollout-2026-10-31T20-14-42-01a1943e-6d21-76b3-845c-9282a9f27271.jsonl"
+  ],
+  "effectiveContexts": [
+    {
+      "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/goals/2026-10-31-astra-draft-review-5u2zlian/attempt-2",
+      "model": "gpt-6-astra",
+      "effort": "ultra",
+      "approval_policy": "never",
+      "sandbox_policy": {
+        "type": "read-only"
+      },
+      "collaboration_mode": {
+        "mode": "default",
+        "settings": {
+          "model": "gpt-6-astra",
+          "reasoning_effort": "ultra"
+        }
+      }
+    }
+  ],
+  "stderr": "2026-10-31T23:15:32.289838Z ERROR codex_core::tools::router: error=collab spawn failed: no thread with id: 01a1943e-f00e-7ed1-a09b-8cf5bab1c58f\n2026-10-31T23:16:12.879253Z ERROR codex_core::tools::router: error=apply_patch verification failed: invalid patch: multiple operations target /Users/aaat/.codex/memories/MEMORY.md\n2026-10-31T23:16:40.319173Z ERROR codex_core::tools::router: error=apply_patch verification failed: invalid patch: multiple operations target /Users/aaat/.codex/memories/MEMORY.md\n2026-10-31T23:17:07.543075Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /Users/aaat/.codex/memories/MEMORY.md:\n- rollout_summaries/2026-10-16T14-05-52-6iO6-mueller6_round2_contract_rereview_not_ready.md (cwd=/Users/aaat/projects/reynaerts-profile-inspection-mueller6, rollout_path=/Users/aaat/.codex/sessions/2026/10/16/rollout-2026-10-16T11-05-52-01a14508-92a4-7e43-80be-6ad2e4d4ae5f.jsonl, updated_at=2026-10-16T14:18:22+00:00, thread_id=01a14508-92a4-7e43-80be-6ad2e4d4ae5f, Not Ready; session hash and HostWatchdog gaps)\n- rollout_summaries/2026-10-16T13-32-22-OEBF-step_01b_contract_sync_independent_rereview_not_ready.md (cwd=/Users/aaat/projects/reynaerts-profile-inspection-mueller6, rollout_path=/Users/aaat/.codex/archived_sessions/rollout-2026-10-16T10-32-22-01a144e9-e6a8-7e43-80be-6ad2e4d4ae5f.jsonl.zst, updated_at=2026-10-16T13:39:21+00:00, thread_id=01a144e9-e6a8-7e43-80be-6ad2e4d4ae5f, initial Not Ready; A1\u2013A3 open)\n2026-10-31T23:17:17.125415Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /Users/aaat/.codex/memories/MEMORY.md:\n- rollout_summaries/2026-10-16T14-05-52-6iO6-mueller6_round2_contract_rereview_not_ready.md (cwd=/Users/aaat/projects/reynaerts-profile-inspection-mueller6, rollout_path=/Users/aaat/.codex/sessions/2026/10/16/rollout-2026-10-16T11-05-52-01a14508-92a4-7e43-8ecb-002519a1860a.jsonl, updated_at=2026-10-16T14:18:22+00:00, thread_id=01a14508-92a4-7e43-8ecb-002519a1860a, Not Ready; session hash and HostWatchdog gaps)\n- rollout_summaries/2026-10-16T13-32-22-OEBF-step_01b_contract_sync_independent_rereview_not_ready.md (cwd=/Users/aaat/projects/reynaerts-profile-inspection-mueller6, rollout_path=/Users/aaat/.codex/archived_sessions/rollout-2026-10-16T10-32-22-01a144e9-e09a-7f51-8380-4a349d79e779.jsonl.zst, updated_at=2026-10-16T13:39:21+00:00, thread_id=01a144e9-e6a8-7e43-80be-6ad2e4d4ae5f, initial Not Ready; A1\u2013A3 open)\n",
+  "remainingPids": [],
+  "groupAbsent": true,
+  "protectedUnchanged": true
+}

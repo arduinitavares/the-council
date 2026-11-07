@@ -1,0 +1,21 @@
+
+> the-council@0.1.0 test
+> vitest run
+
+
+ RUN  v5.0.5 /Users/aaat/.codex/worktrees/council-first-use/the-council
+
+ ❯ test/pilot/cache-composition.test.ts (1 test | 1 failed) 7196ms
+   × composes inspector, durable cache, native wrapper proofs, historical PID reuse and bounded requalification 7195ms
+ ❯ test/pilot/context-cleanup.test.ts (5 tests | 1 failed) 14473ms
+   × does not promote connected to cleanup or duplicate close 3661ms
+ ❯ test/pilot/context-wrapper.test.ts (7 tests | 1 failed) 21591ms
+   × runs E4 through the shipped composition, actual wrapper processes and stateful native boundaries 3479ms
+ ❯ test/pilot/discovery.test.ts (13 tests | 7 failed) 44212ms
+   × inspects Orca 1.4.244 and retains required host checks 5004ms
+   × inspects Orca 1.4.245 and retains required host checks 5001ms
+   × inspects Orca 0.9.0 and retains required host checks 5001ms
+   × inspects Orca 2.0.0-dev+local and retains required host checks 5001ms
+   × inspects Orca  custom version  and retains required host checks 5001ms
+   × inspects Orca undefined and retains required host checks 5001ms
+   × inspects Orca null and retains required host checks 3697ms

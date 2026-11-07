@@ -1,0 +1,24 @@
+{
+  "at": "2026-10-31T22:24:11.798Z",
+  "status": "ok",
+  "buckets": [
+    {
+      "name": "Gemini Models · Weekly Limit Remaining",
+      "group": "Gemini Models",
+      "windowName": "Weekly Limit Remaining",
+      "usedPercent": 3,
+      "windowMinutes": 10080,
+      "resetsAt": 1794004539000,
+      "resetDescription": null
+    },
+    {
+      "name": "Gemini Models · Five Hour Limit Remaining",
+      "group": "Gemini Models",
+      "windowName": "Five Hour Limit Remaining",
+      "usedPercent": 3,
+      "windowMinutes": 300,
+      "resetsAt": 1793487134000,
+      "resetDescription": null
+    }
+  ]
+}

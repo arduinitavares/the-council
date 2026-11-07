@@ -1,0 +1,20 @@
+{
+  "baseline": "f0b89f9fa7d223acdffed4db932c45c96f3816f7",
+  "files": {
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md": "5e10e6fa0d5e27db580ea2a02183cc02af5ce06e2cde18d913ce8fc54c55bcdf",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md": "25f74fc2dd3db5e60264fc60e47a4b7f34bc7afcb7bf3f8464abd6f5ec8e72fc",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh-language.md": "71cab0f4b66ff29f31b523ea9ca209d3bbc9926573f7ba9d3c9bc93cebcc6fe5",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/cli.ts": "78da782132a37ea4c14a8326e34172590555cd5b5cb459ab527458ff7061ba1c",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/control-audit.ts": "7dd3a4fdb9c26fc668907282ea0faf6b61376606a98ec9db9c25bfe25e9c6f3b",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/provider-controls.ts": "ff761fc05cfee422717cdc3c8f90535c2e86648ccbf98ee3a6e70a52fa1a088e",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/control-audit.test.ts": "fbc66846ccf535ce9f90a33306718205966ef57a8be6faeb5dfc95ca3fd7f922",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/test/pilot/provider-controls.test.ts": "7082a02650a5a1e32260646cdacc59fc8e115b78957730b5bbc0c88e5a95e80a",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json": "aa4b73d3b0169983787e8cea6d32d5104c99c8f3a80b57eb419376cdf3110875",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v2.md": "c8779bb902f7bc0b77ce64ae160d97f7543592a0e7a910b3c417f2cee2cea293",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/skills/the-council/scripts/run-council.mjs": "9d678c53d272c06cd2c38609f8e9035d7115bd5a08cf7071b664e7f9b480bd67",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/src/pilot/workflow.ts": "c7ff82efdb26805e5d1276bb98d17304fbe838528c37f3abaf79597acd306f5a",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/package.json": "1b6f18369113f0891323f91515120a33ff93ac600c05c76e23db974d7058035f",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v3.md": "b2af547b183efdf2399d004088d664fe3b956003775291e1ff65e82311e89a61",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/canonical-plan-v4.json": "7735463997bf6504cf507bf3132844b3cb9b509466f79b9057ed6e1a68832af5"
+  }
+}

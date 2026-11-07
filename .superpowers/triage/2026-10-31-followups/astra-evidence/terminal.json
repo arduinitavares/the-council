@@ -1,0 +1,22 @@
+{
+  "id": "cdd42afb-6fc7-4bdb-b38e-4c2f571c1925",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 12680,
+      "handle": "term_d4bced53-afe5-45e8-8815-ca82304efc28",
+      "tabId": "2f121ae8-15f0-4680-845d-90192a66d3b7",
+      "paneKey": "2f121ae8-15f0-4680-845d-90192a66d3b7:5f40dd69-a58f-4952-97fd-93202a56ef22",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@7a7e4291",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "triage-lifecycle-evidence",
+      "executionHostId": "local",
+      "incarnationId": "a31ec9cb-1f18-467f-9df2-02fc76fcb2ed",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "at": "2026-10-31T22:11:37.332Z",
+  "codex": {
+    "status": "ok",
+    "session": null,
+    "weekly": {
+      "usedPercent": 98,
+      "windowMinutes": 10080,
+      "resetsAt": 1793775069000,
+      "resetDescription": "Wed 3:51 AM"
+    }
+  },
+  "argon": {
+    "status": "ok",
+    "buckets": [
+      {
+        "name": "Gemini Models · Weekly Limit Remaining",
+        "group": "Gemini Models",
+        "windowName": "Weekly Limit Remaining",
+        "usedPercent": 3,
+        "windowMinutes": 10080,
+        "resetsAt": 1794004539000,
+        "resetDescription": null
+      },
+      {
+        "name": "Gemini Models · Five Hour Limit Remaining",
+        "group": "Gemini Models",
+        "windowName": "Five Hour Limit Remaining",
+        "usedPercent": 3,
+        "windowMinutes": 300,
+        "resetsAt": 1793487134000,
+        "resetDescription": null
+      }
+    ]
+  }
+}

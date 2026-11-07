@@ -1,0 +1,35 @@
+{
+  "shown": {
+    "terminal": {
+      "handle": "term_fdf10f8c-eed1-4726-abee-0a04a992192c",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@0a7868c8",
+      "incarnationId": "fa5199a3-2f29-42d8-92b2-c600a3b292ef",
+      "orphaned": true,
+      "recordedPaneKey": "8f7d6d1e-d371-4386-8d28-48acb23135db:cb054987-5181-4994-9eba-a6ce31f9f43f",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "worktreePath": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "branch": "refs/heads/dev/issue-1-first-use-reviewed",
+      "tabId": "8f7d6d1e-d371-4386-8d28-48acb23135db",
+      "leafId": "cb054987-5181-4994-9eba-a6ce31f9f43f",
+      "title": "Opus 5.5 medium audit plan review",
+      "connected": true,
+      "writable": true,
+      "lastOutputAt": 1793448996837,
+      "preview": "py opus-plan-review\naaat@Alexandres-Mac-Studio the-council %",
+      "executionHostId": "local",
+      "paneRuntimeId": -1,
+      "rendererGraphEpoch": 0,
+      "agentWait": null
+    }
+  },
+  "closed": {
+    "close": {
+      "handle": "term_fdf10f8c-eed1-4726-abee-0a04a992192c",
+      "tabId": "8f7d6d1e-d371-4386-8d28-48acb23135db",
+      "ptyKilled": true
+    }
+  },
+  "providerExit": 0,
+  "terminalExit": "uncaptured",
+  "verifiedAt": "2026-10-31T12:23:45.029Z"
+}

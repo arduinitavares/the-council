@@ -1,0 +1,22 @@
+{
+  "id": "7344f03e-95d9-4cc6-8fc4-ddbd8ffa6779",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 22549,
+      "handle": "term_fdf10f8c-eed1-4726-abee-0a04a992192c",
+      "tabId": "8f7d6d1e-d371-4386-8d28-48acb23135db",
+      "paneKey": "8f7d6d1e-d371-4386-8d28-48acb23135db:cb054987-5181-4994-9eba-a6ce31f9f43f",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@0a7868c8",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "Opus 5.5 medium audit plan review",
+      "executionHostId": "local",
+      "incarnationId": "fa5199a3-2f29-42d8-92b2-c600a3b292ef",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

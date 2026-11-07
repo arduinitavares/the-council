@@ -1,0 +1,25 @@
+{
+  "identity": {
+    "processId": 21158,
+    "handle": "term_0aace9c0-79e3-40d1-9331-2983bb91ed5c",
+    "tabId": "7f6e362c-c465-41da-a6b0-cca619540c73",
+    "paneKey": "7f6e362c-c465-41da-a6b0-cca619540c73:654c0e63-3b28-46fa-8070-5183f17e38bd",
+    "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@e154bdc3",
+    "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+    "title": "Opus medium read-only qualification",
+    "executionHostId": "local",
+    "incarnationId": "a4144e9c-ca1b-4e54-a7b1-385ecf0ba39f",
+    "hostPlatform": "darwin",
+    "surface": "visible"
+  },
+  "wrapperAbsent": true,
+  "groupAbsent": true,
+  "closed": {
+    "close": {
+      "handle": "term_0aace9c0-79e3-40d1-9331-2983bb91ed5c",
+      "tabId": "7f6e362c-c465-41da-a6b0-cca619540c73",
+      "ptyKilled": true
+    }
+  },
+  "terminalExitReceipt": "not captured; no zero-exit claim"
+}

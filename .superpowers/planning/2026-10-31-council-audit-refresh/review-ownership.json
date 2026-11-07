@@ -1,0 +1,15 @@
+{
+  "kind": "ordinary owned custom Orca terminals; not native Dispatches",
+  "host": "local macOS",
+  "workspace": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+  "reviewerCwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-review",
+  "isolation": "Reviewer uses an isolated task directory and exact read grants. Global Deny rules are preserved. Writes, commands, network and MCP actions are denied.",
+  "model": "claude-opus-5-5-medium",
+  "effort": "medium",
+  "backendEffort": "provider-managed; not exposed",
+  "mode": "plan",
+  "sandbox": true,
+  "context": "standard; no context-limit override",
+  "deadlineSeconds": 500,
+  "qualification": "Fresh disposable exact-model read-only marker and settlement check precedes the plan review."
+}

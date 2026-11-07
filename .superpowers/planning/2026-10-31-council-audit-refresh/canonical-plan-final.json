@@ -1,0 +1,296 @@
+{
+  "metadata": {
+    "epoch": "epoch-11a866c27d53477d8a8dc25ca8c7460a",
+    "plan_id": "10187463-2592-4113-a0e1-e46a097f10e9",
+    "generation": "6accaac1-3c2f-4539-b7e5-8bda2c755e9c",
+    "revision": 6,
+    "ownership_version": 1,
+    "dashboard_url": "http://192.168.15.199:8790/plans/10187463-2592-4113-a0e1-e46a097f10e9"
+  },
+  "draft": {
+    "objective": "Restore current startup-audit evidence for the Council OpenAI, Gemini, and judge roles.",
+    "acceptance_criteria": [
+      "Prepare complete reports for all selected roles. Record exact blocked outcomes when preparation cannot complete.",
+      "Separate stale dispositions from demonstrated source or software gaps.",
+      "Independently review exact proposed effects before authenticated write-once adoption.",
+      "Verify all eligible roles in a fresh preflight. The full objective requires all three selected audits.",
+      "Keep Cursor and full Council qualification outside the accepted scope.",
+      "Use only Astra Ultra and Argon high for future code work. Verify every material review finding."
+    ],
+    "constraints": [
+      "Current authorization permits planning and the Opus medium plan review only.",
+      "Do not execute future tasks or approve audit effects in this phase.",
+      "Keep global settings, trust, permissions, billing, old evidence, and unrelated sessions unchanged.",
+      "Use the current checkout and isolated worker directories with explicit resource claims after execution authorization.",
+      "Use Orca CLI/API operations. Do not launch or focus its desktop.",
+      "Keep private grants outside repository files and public views.",
+      "Keep source acceptance, audit acceptance, and operational qualification separate.",
+      "The language note is an Issue 9-oriented candidate. The official dictionary and governed glossary are unavailable.",
+      "Keep the built producer bound to source, build inputs and tool versions.",
+      "Regenerate affected evidence after external drift or source fixes.",
+      "Retain native provenance records while dispositions remain in use.",
+      "Adopt only a complete approved effect set for each selected role.",
+      "Allow one repeated preparation and review cycle after first drift. A second drift blocks that role.",
+      "Keep the final acceptance gate unaccepted for a partial outcome.",
+      "The coordinator records a block reason at any unresolved required gate. Record a stop reason when no authorized eligible work remains, even if the final task cannot start."
+    ],
+    "facts": [
+      "Recorded run os-question-20261031T114756Z-9249052da7bf had a genuine Orca terminal context, zero provider initializations, and zero model calls.",
+      "All four roles had pending audit dispositions. None of the current hashes had a saved snapshot or disposition.",
+      "Historical Codex configuration, AGY executable, and Cursor configuration hashes differ from current sources.",
+      "A missing disposition can hide unresolved audit inputs. Approval alone does not establish complete source closure.",
+      "A separate older campaign belongs to another checkout: http://192.168.15.199:8790/plans/af97b843-8f9b-476d-958c-da3d7a2773cc. Its ownership and history remain unchanged.",
+      "The first Opus medium plan review returned Spec PASS and Quality Changes requested. Its eight Important and four Minor findings have verified dispositions.",
+      "The saved run had no other bootstrap blockers for the three selected roles. Their effective runtime controls remained unknown.",
+      "The judge uses Codex. AGY version drift affects Gemini directly.",
+      "Native self-dispatch remains a future qualification gate. Planning did not approve runtime effects.",
+      "The first scoped Opus re-review resolved the original findings and returned three further Important and six Minor integration findings. The coordinator verified and revised them.",
+      "The current graph has seven pending tasks. Native provenance and effect review route gates are explicit adoption dependencies.",
+      "The v4 Opus whole-plan review returned Spec PASS and Quality Approved with no Critical or Important findings. The coordinator verified its two Minor findings and added seven local planning lines.",
+      "The final scoped Opus 5.5 medium review returned Spec PASS and Quality Approved. The approved whole-plan and final scoped reviews have no Critical or Important findings.",
+      "The final remaining graph wording gap was synchronized to the already reviewed document rule. No new decision was introduced.",
+      "All 273 source, test and generated-code manifest files remain unchanged. All five owned qualification and review terminals are positively closed.",
+      "No future runtime audit task, effect approval or Council inference was executed during planning."
+    ],
+    "assumptions": [
+      "Current provider interfaces and task authority must be rechecked before execution.",
+      "Task 2 remains provisional until Task 1 produces a specific gap.",
+      "If no repair is required, retire Task 2 and revise Task 3 dependencies through material reassessment.",
+      "Missing required route qualification blocks only the affected assignment. Do not substitute a lower model effort."
+    ],
+    "next_check": "After execution authorization, prepare current evidence with the rebuilt producer. Classify each role before expanding repair, qualification or adoption work.",
+    "authorization": {
+      "mode": "plan-only",
+      "interval": "c09ad157-7618-4956-88ea-75bb978e9242",
+      "since_revision": 1,
+      "note": "The user requested Adaptive Planning and an Opus 5.5 medium review. Production execution is not authorized by this request.",
+      "baseline": [],
+      "claimed": null
+    },
+    "steps": [
+      {
+        "step_id": "prepare-audits",
+        "title": "Prepare the current audit reports",
+        "dependencies": [],
+        "completion_check": "Every role has a complete report or exact preparation failure. Bind the built producer and full bootstrap facts. Refine both qualification gates before assignment. No effect is approved.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "1"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "resolve-audit-gaps",
+        "title": "Resolve a demonstrated audit gap",
+        "dependencies": [
+          "prepare-audits"
+        ],
+        "completion_check": "Expand only proven repairs with RED before implementation and build before GREEN. Preserve blocked environmental inputs. Retire the no-gap repair while retaining both adoption qualification dependencies.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "2"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "verify-native-provenance",
+        "title": "Verify the native provenance gate",
+        "dependencies": [
+          "prepare-audits"
+        ],
+        "completion_check": "Matching current proof covers native self-dispatch, creator, assignee, reporter, pane, workspace, incarnation and retained readback. Missing proof requires concrete disposable qualification before execution. Adoption waits.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "2b"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "verify-effect-review-route",
+        "title": "Verify the effect review route",
+        "dependencies": [
+          "prepare-audits"
+        ],
+        "completion_check": "Record the actual packet author and exact independent reviewer route proof. OpenAI authors require Argon high. Gemini authors require Astra Ultra. Missing proof blocks review and adoption. For another permitted author family, select a qualified Astra Ultra or Argon high reviewer from a different family.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "2c"
+        },
+        "definition_version": "audit-refresh-v6",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "adopt-audits",
+        "title": "Review and adopt justified dispositions",
+        "dependencies": [
+          "resolve-audit-gaps",
+          "verify-native-provenance",
+          "verify-effect-review-route"
+        ],
+        "completion_check": "Require accepted native and review route gates on every path. Independently review the exact complete proposed effect set. Adopt only when it equals requiredDispositions and unavailable is empty. Recheck drift and retain authenticated native records. Recheck the frozen packet's actual contributors against the route gate. A mismatch reopens the gate through material reassessment and retains adoption holds.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "3"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "verify-preflight",
+        "title": "Verify the scoped roster result",
+        "dependencies": [
+          "adopt-audits"
+        ],
+        "completion_check": "One fresh owned-terminal run checks exact controlFacts observation states and complete blockers. Use a 15-minute helper deadline within the 30-minute limit. Report partial outcomes. No model calls occur while Cursor blocks the roster.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "4"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": false
+      },
+      {
+        "step_id": "accept-audit-refresh",
+        "title": "Review the complete artifact and report the result",
+        "dependencies": [
+          "verify-preflight"
+        ],
+        "completion_check": "Verify findings and current regenerated evidence after source fixes. Preserve native proof. Leave this final gate unaccepted for a partial result. Record exact block and stop reasons after independent eligible work finishes.",
+        "document": {
+          "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+          "branch": "dev/issue-1-first-use-reviewed",
+          "commit": null,
+          "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+          "task_id": "5"
+        },
+        "definition_version": "audit-refresh-v5",
+        "review_required": true,
+        "final_gate": true
+      }
+    ],
+    "documents": [
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:aa925850c8105d5f6ad0a248dcbcad6089bde4b468eaae685d5b84cead8c7a1c",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/specs/2026-10-31-council-audit-refresh.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:25f74fc2dd3db5e60264fc60e47a4b7f34bc7afcb7bf3f8464abd6f5ec8e72fc",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh-language.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:71cab0f4b66ff29f31b523ea9ca209d3bbc9926573f7ba9d3c9bc93cebcc6fe5",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview-v4/report.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:a1399cacf2f6a0cf5686d9dcfa633bdd98e77a3cea7d6e665c18e5257921e753",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-final-scope/report.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:c9eec8bc1a68fe0daeda95647cafd13e88e580f26ff01c966ad82f7b16adca42",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/final-review-disposition.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:41a8ba2a34d7e2b849e6691950f51e92af82449526f295e8ddec70fbb32180e9",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v2.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:c8779bb902f7bc0b77ce64ae160d97f7543592a0e7a910b3c417f2cee2cea293",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v3.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:b2af547b183efdf2399d004088d664fe3b956003775291e1ff65e82311e89a61",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/plan-review-disposition-v4.md",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:5299f49a811a90598b955b693d8b28102600fcc9bc394b1829aedd1af9d38e26",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/source-evidence.json",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:aa4b73d3b0169983787e8cea6d32d5104c99c8f3a80b57eb419376cdf3110875",
+        "task_id": null
+      },
+      {
+        "path": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/review-freeze-final-scope.json",
+        "branch": "dev/issue-1-first-use-reviewed",
+        "commit": null,
+        "version": "sha256:adad59e9f8a26f4c829187286b30cb140532b4309a3120c358e3cfbf248dfb1b",
+        "task_id": null
+      }
+    ],
+    "workspace_refs": [],
+    "workflow": {
+      "code_models": "gpt-6-astra ultra and gemini-4-argon-high high; qualified routes required",
+      "evidence": "Frozen task artifacts and native receipts with coordinator finding dispositions",
+      "execution": "superpowers:subagent-driven-development; future execution only",
+      "finding_dispositions": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/final-review-disposition.md",
+      "partial_outcomes": "Materially revise eligible and blocked role branches within the ten-step maximum. The full three-role objective remains incomplete if any selected role is blocked.",
+      "planning_approved_review": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview-v4/report.md",
+      "planning_final_review": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-final-scope/report.md",
+      "planning_rereview_report": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-rereview/report.md",
+      "planning_review": "Orca / AGY claude-opus-5-5-medium at explicit medium",
+      "planning_review_report": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-review/report.md",
+      "related_campaign": "http://192.168.15.199:8790/plans/af97b843-8f9b-476d-958c-da3d7a2773cc",
+      "roadmap": "/Users/aaat/.codex/worktrees/council-first-use/the-council/docs/superpowers/plans/2026-10-31-council-audit-refresh.md#later-roadmap"
+    },
+    "horizon": 10,
+    "stop_reason": "The requested plan and independent review are complete. Future execution remains outside this plan-only interval.",
+    "block_reason": null
+  }
+}

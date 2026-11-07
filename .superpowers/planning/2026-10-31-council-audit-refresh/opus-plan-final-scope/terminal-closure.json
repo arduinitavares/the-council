@@ -1,0 +1,35 @@
+{
+  "shown": {
+    "terminal": {
+      "handle": "term_f9849b4e-2f37-48cd-9fcf-adc3511093b8",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@f7dfc03b",
+      "incarnationId": "bccc767e-bec6-448f-a5bf-0cdc182dd67e",
+      "orphaned": true,
+      "recordedPaneKey": "17be0875-84a6-4634-b3c6-c8e0db81db90:541c0307-aa27-4753-a5fa-85cb50620985",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "worktreePath": "/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "branch": "refs/heads/dev/issue-1-first-use-reviewed",
+      "tabId": "17be0875-84a6-4634-b3c6-c8e0db81db90",
+      "leafId": "541c0307-aa27-4753-a5fa-85cb50620985",
+      "title": "Opus medium final planning corrections",
+      "connected": true,
+      "writable": true,
+      "lastOutputAt": 1793450548887,
+      "preview": "/review-runner.py opus-plan-final-scope\naaat@Alexandres-Mac-Studio the-council %",
+      "executionHostId": "local",
+      "paneRuntimeId": -1,
+      "rendererGraphEpoch": 0,
+      "agentWait": null
+    }
+  },
+  "closed": {
+    "close": {
+      "handle": "term_f9849b4e-2f37-48cd-9fcf-adc3511093b8",
+      "tabId": "17be0875-84a6-4634-b3c6-c8e0db81db90",
+      "ptyKilled": true
+    }
+  },
+  "providerExit": 0,
+  "terminalExit": "uncaptured",
+  "verifiedAt": "2026-10-31T12:43:30.302Z"
+}

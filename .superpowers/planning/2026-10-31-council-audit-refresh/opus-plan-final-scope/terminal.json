@@ -1,0 +1,22 @@
+{
+  "id": "caef1a04-f9a9-4b1f-bf12-6317a564289f",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 42604,
+      "handle": "term_f9849b4e-2f37-48cd-9fcf-adc3511093b8",
+      "tabId": "17be0875-84a6-4634-b3c6-c8e0db81db90",
+      "paneKey": "17be0875-84a6-4634-b3c6-c8e0db81db90:541c0307-aa27-4753-a5fa-85cb50620985",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@f7dfc03b",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "Opus medium final planning corrections",
+      "executionHostId": "local",
+      "incarnationId": "bccc767e-bec6-448f-a5bf-0cdc182dd67e",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

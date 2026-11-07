@@ -1,0 +1,37 @@
+{
+  "cwd": "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-final-scope",
+  "host": "local",
+  "wrapperPid": 42639,
+  "parentPid": 42613,
+  "model": "claude-opus-5-5-medium",
+  "effort": "medium",
+  "backendEffort": "provider-managed; not exposed",
+  "mode": "plan",
+  "sandbox": true,
+  "permissionBypass": false,
+  "argvWithoutPrompt": [
+    "/Users/aaat/.local/bin/agy",
+    "--model",
+    "claude-opus-5-5-medium",
+    "--effort",
+    "medium",
+    "--mode",
+    "plan",
+    "--sandbox",
+    "--settings",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-final-scope/session-settings.json",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "480s",
+    "--log-file",
+    "/Users/aaat/.codex/worktrees/council-first-use/the-council/.superpowers/planning/2026-10-31-council-audit-refresh/opus-plan-final-scope/provider-cli.log",
+    "-p"
+  ],
+  "protectedBefore": {
+    "/Users/aaat/.agents/policies/model-policy.md": "6665d27fa8fae4e8b66835799ec75f58e9e7c63a666119e07b0485f1f16f81a0",
+    "/Users/aaat/.gemini/antigravity-cli/settings.json": "2c9121b1c2f404e9725bbc1d1efdfe3d83fd4a3ea906f1641a146a98bb577dc0"
+  },
+  "promptSha256": "fa38c169786f8e6bee45fa363816db194a34ebc29236b2aa86b5c77e70a3635c",
+  "custody": "Owned Orca custom terminal/process; not a native Dispatch"
+}

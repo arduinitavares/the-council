@@ -1,0 +1,22 @@
+{
+  "id": "0d7075a8-0d84-4778-8b7d-07d85391736d",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "processId": 29931,
+      "handle": "term_ebe2bf51-9bdb-48b2-b460-7e17c26d7720",
+      "tabId": "1414fc92-0a89-4f5f-a1ca-05a2b58b40f6",
+      "paneKey": "1414fc92-0a89-4f5f-a1ca-05a2b58b40f6:49ea4b80-d40e-4e86-95a4-30d9517d8e09",
+      "ptyId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council@@c8cec703",
+      "worktreeId": "a7a80763-17f4-4250-9180-7cf8ddfad5a6::/Users/aaat/.codex/worktrees/council-first-use/the-council",
+      "title": "triage-agent-brief-review",
+      "executionHostId": "local",
+      "incarnationId": "3cfda277-beab-48b5-81b1-b488c83ba9b8",
+      "hostPlatform": "darwin",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "358a2aea-aee1-488e-8a94-7fa5ec557c6c"
+  }
+}

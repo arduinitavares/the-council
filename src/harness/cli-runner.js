@@ -84,7 +84,7 @@ export async function execCli(executable, args = [], options = {}) {
   };
 
   return new Promise((resolve, reject) => {
-    execFile(executable, args, execOptions, (error, stdout, stderr) => {
+    const child = execFile(executable, args, execOptions, (error, stdout, stderr) => {
       const out = stdout || '';
       const errOut = stderr || '';
 
@@ -102,6 +102,9 @@ export async function execCli(executable, args = [], options = {}) {
 
       reject(error);
     });
+
+    child.stdin?.on?.('error', () => {});
+    child.stdin?.end();
   });
 }
 

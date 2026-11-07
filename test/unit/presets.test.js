@@ -241,6 +241,22 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
       );
     });
 
+    it('rejects prototype properties (toString, valueOf, constructor) as preset names', () => {
+      for (const key of ['toString', 'valueOf', 'constructor', '__proto__']) {
+        assert.throws(
+          () => resolveConfig({ preset: key }),
+          new RegExp(`Unknown preset "${key}"\\. Available presets: architecture, product-comparison, security-audit, argon-only`)
+        );
+      }
+    });
+
+    it('rejects Symbol presets with clean Unknown preset error', () => {
+      assert.throws(
+        () => resolveConfig({ preset: Symbol('arch') }),
+        /Unknown preset "Symbol\(arch\)"\. Available presets: architecture, product-comparison, security-audit, argon-only/
+      );
+    });
+
     it('falls back to default roster and judge when preset is omitted', () => {
       const resolved = resolveConfig({});
       assert.equal(resolved.preset, undefined);

@@ -115,6 +115,31 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       }
     });
 
+    it('allows combining -c config file with -t, -p, -r, and -q overrides without mutating frozen config', async () => {
+      const tmpFile = path.join(os.tmpdir(), `cli-cfg-override-${Date.now()}.json`);
+      fs.writeFileSync(tmpFile, JSON.stringify({
+        topic: 'Base File Topic',
+        maxRounds: 8,
+        minQuorum: 2
+      }));
+
+      try {
+        const mockIO = createMockIO();
+        const code = await runCli(
+          ['run', '-c', tmpFile, '-t', 'Overridden Topic', '-r', '3', '-q', '2', '-p', 'architecture', '--json'],
+          mockIO.io
+        );
+        assert.equal(code, 0);
+        const parsed = JSON.parse(mockIO.getStdout());
+        assert.equal(parsed.state.topic, 'Overridden Topic');
+        assert.equal(parsed.state.maxRounds, 3);
+        assert.equal(parsed.state.minQuorum, 2);
+        assert.equal(parsed.state.seats.length, 4);
+      } finally {
+        fs.unlinkSync(tmpFile);
+      }
+    });
+
     it('runs deliberation with --preset architecture and resolves 4 preset seats', async () => {
       const mockIO = createMockIO();
       const code = await runCli(['run', '--preset', 'architecture', '--json'], mockIO.io);
@@ -159,6 +184,14 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
       assert.equal(code, 1);
       assert.match(mockIO.getStderr(), /Unknown preset "nonexistent-preset"/);
+    });
+
+    it('fails with code 1 and unknown preset error when --preset is empty string', async () => {
+      const mockIO = createMockIO();
+      const code = await runCli(['run', '--preset', ''], mockIO.io);
+
+      assert.equal(code, 1);
+      assert.match(mockIO.getStderr(), /Unknown preset ""/);
     });
 
     it('prints Submitted Proofs: section before Candidate Clauses: in text verdict output', async () => {

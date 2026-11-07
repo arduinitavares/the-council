@@ -221,9 +221,9 @@ export const COUNCIL_PRESETS = Object.freeze({
 export function resolveConfig(userConfig = {}) {
   let presetDefinition = null;
   if (userConfig.preset !== undefined && userConfig.preset !== null) {
-    if (typeof userConfig.preset !== 'string' || !COUNCIL_PRESETS[userConfig.preset]) {
+    if (typeof userConfig.preset !== 'string' || !Object.hasOwn(COUNCIL_PRESETS, userConfig.preset)) {
       const available = Object.keys(COUNCIL_PRESETS).join(', ');
-      throw new Error(`Unknown preset "${userConfig.preset}". Available presets: ${available}`);
+      throw new Error(`Unknown preset "${String(userConfig.preset)}". Available presets: ${available}`);
     }
     presetDefinition = COUNCIL_PRESETS[userConfig.preset];
   }

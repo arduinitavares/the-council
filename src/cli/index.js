@@ -195,23 +195,19 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
   }
 
   if (command === 'run') {
-    let cfg = {};
-    if (values.config) {
-      try {
-        cfg = loadConfigFile(values.config);
-      } catch (err) {
-        logErr(`Configuration error: ${err.message}`);
-        return await safeExit(1);
-      }
-    }
-    if (values.preset) cfg.preset = values.preset;
-    if (values.topic) cfg.topic = values.topic;
-    if (values.rounds) cfg.maxRounds = parseInt(values.rounds, 10);
-    if (values.quorum) cfg.minQuorum = parseInt(values.quorum, 10);
+    const overrides = {};
+    if (values.preset !== undefined) overrides.preset = values.preset;
+    if (values.topic !== undefined) overrides.topic = values.topic;
+    if (values.rounds !== undefined) overrides.maxRounds = parseInt(values.rounds, 10);
+    if (values.quorum !== undefined) overrides.minQuorum = parseInt(values.quorum, 10);
 
     let resolved;
     try {
-      resolved = resolveConfig(cfg);
+      if (values.config) {
+        resolved = loadConfigFile(values.config, overrides);
+      } else {
+        resolved = resolveConfig(overrides);
+      }
     } catch (err) {
       logErr(`Configuration error: ${err.message}`);
       return await safeExit(1);
@@ -295,6 +291,12 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 const currentFile = path.resolve(new URL(import.meta.url).pathname);
 const executedFile = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (currentFile === executedFile) {
+  process.stdout.on('error', (err) => {
+    if (err.code === 'EPIPE') process.exit(0);
+  });
+  process.stderr.on('error', (err) => {
+    if (err.code === 'EPIPE') process.exit(0);
+  });
   runCli().catch((err) => {
     console.error(`Fatal Council CLI error: ${err.stack || err.message}`);
     process.exit(1);

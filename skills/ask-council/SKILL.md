@@ -35,6 +35,12 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `security-audit` | 3 seats: `astra-secops` (Codex Astra Max), `opus-threat` (Antigravity Opus High), `argon-supplychain` (Antigravity Argon High) | `judge-astra` (Codex Astra Max) | Vulnerability analysis, threat modeling (STRIDE), injection vectors, supply chain and SBOM audits. |
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all Antigravity Gemini 4 Argon High with distinct Souls) | `judge-argon` (Antigravity Gemini 4 Argon High) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
+### Pre-Saved Custom Configurations (`configs/`)
+- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`). Run with:
+  ```bash
+  ./bin/council run --live -c configs/best-of-families.json -t "<question>" -v
+  ```
+
 ### When to Generate a Custom JSON Configuration (`-c <config.json>`)
 If the question demands domain-specific temperaments (Souls) that aren't covered by the presets, generate a custom JSON file.
 

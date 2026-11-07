@@ -54,7 +54,7 @@ The prototype logic was validated against three canonical walkthroughs ported fr
   - Verdict emitted: `Dissent Report (Preserved Excused-Seat Objection)`. False consensus successfully blocked.
 
 ## Access & Verification
-- **Branch Reference**: `git checkout prototype/council-state-machine`
-- **Master Files**: Per user instructions, prototype files remain functional on `master` under `prototype/`.
-- **Interactive UI**: Open `prototype/council-state-machine.html` in any modern web browser.
-- **Production Implementation**: Core logic is folded into `src/` (`src/machine/reducer.js`, `src/proofs/validator.js`, `src/engine/council-engine.js`).
+- **Branch Reference**: `git checkout prototype/council-state-machine` (frozen at commit `954e6ef`)
+- **Prototype Files**: Per `/prototype` Rule 6, the throwaway prototype files (`prototype/council-state-machine.html`, `prototype/council-machine.js`, `prototype/council-visualizer.js`, `prototype/council-walkthroughs.js`) live exclusively on the frozen `prototype/council-state-machine` branch (`954e6ef`). Note: a temporary copy extracted into `src/visualizer/` during `96e030b` is tracked as Rule 6 cleanup debt in Issues [#21](https://github.com/arduinitavares/the-council/issues/21) and [#22](https://github.com/arduinitavares/the-council/issues/22).
+- **Interactive UI**: Checkout `prototype/council-state-machine` and open `prototype/council-state-machine.html` in any modern web browser.
+- **Production Implementation**: Core logic is implemented cleanly on `main` in `src/` (`src/machine/reducer.js`, `src/proofs/validator.js`, `src/engine/council-engine.js`).

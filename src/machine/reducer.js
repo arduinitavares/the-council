@@ -55,7 +55,10 @@ function succeed(prevState, next, eventType, message) {
   next.previousPhase = prevState.phase;
   const subType = next.faultSeatId
     ? 'seat_fault'
-    : next.judge && next.judge.status === 'fault_quota'
+    : next.judge &&
+      (next.judge.status === 'fault_quota' ||
+        next.judge.status === 'fault_timeout' ||
+        next.judge.status === 'fault')
     ? 'judge_fault'
     : undefined;
   next.phaseAlias = toPrototypePhase(next.phase, subType);
@@ -461,7 +464,9 @@ export function transitionCouncil(state, event) {
       if (!seat || seat.status === 'excused') {
         return reject(state, event.type, 'Seat "' + event.seatId + '" is not active.');
       }
-      seat.status = 'fault_quota';
+      const isValidSeatFaultStatus =
+        event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
+      seat.status = isValidSeatFaultStatus ? event.status : 'fault_quota';
       next.returnPhase = state.phase;
       next.phase = 'seat_fault';
       next.faultSeatId = seat.id;
@@ -554,7 +559,7 @@ export function transitionCouncil(state, event) {
           state,
           next,
           event.type,
-          'Excused "' + seat.id + '". Active seats fell below quorum → Dissent Report.'
+          'Excused "' + seat.id + '" (' + seat.excusedReason + '). Active seats fell below quorum → Dissent Report.'
         );
       }
       return succeed(
@@ -563,7 +568,9 @@ export function transitionCouncil(state, event) {
         event.type,
         'Excused Seat "' +
           seat.id +
-          '" ("quota is reached, dude is off"). Other ' +
+          '" (' +
+          seat.excusedReason +
+          '). Other ' +
           remaining +
           ' Seats preserved.' +
           (lockedCount > 0 ? ' Locked ' + lockedCount + ' open Objection(s) as preserved_excused.' : '')
@@ -571,14 +578,69 @@ export function transitionCouncil(state, event) {
     }
 
     case 'JUDGE_FAULT': {
+      if (currentPhase === 'preflight' || currentPhase === 'completed') {
+        return reject(
+          state,
+          event.type,
+          'Judge cannot fault in "' + toPrototypePhase(state.phase) + '" phase.'
+        );
+      }
+      if (event.terminal === true && currentPhase !== 'judging' && currentPhase !== 'judge_fault') {
+        return reject(
+          state,
+          event.type,
+          'Terminal Judge fault is only valid during judging or judge_fault.'
+        );
+      }
+      const faultReason = event.reason || event.error || '';
+      const isValidJudgeFaultStatus =
+        event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
+      const faultStatus = isValidJudgeFaultStatus ? event.status : 'fault_quota';
+      next.judge.status = faultStatus;
+      if (event.terminal === true) {
+        const remaining = activeSeats(next).length;
+        next.phase = 'completed';
+        next.verdict = {
+          kind: 'Dissent Report (Judge Fault)',
+          candidate: next.candidate || null,
+          unresolvedObjections: (next.objections || []).filter((o) => o.status !== 'withdrawn'),
+          activeSeatCount: remaining,
+          excusedSeatCount: next.seats.length - remaining,
+          note: 'Judge candidate synthesis failed: ' + (faultReason || 'Judge fault')
+        };
+        return succeed(
+          state,
+          next,
+          event.type,
+          'Judge "' +
+            next.judge.id +
+            '" faulted' +
+            (faultReason ? ' (' + faultReason + ')' : '') +
+            ' → Dissent Report (Judge Fault).'
+        );
+      }
       next.returnPhase = state.phase;
       next.phase = 'judge_fault';
-      next.judge.status = 'fault_quota';
-      return succeed(state, next, event.type, 'Judge "' + next.judge.id + '" faulted. Entered judge_fault.');
+      return succeed(
+        state,
+        next,
+        event.type,
+        'Judge "' +
+          next.judge.id +
+          '" faulted' +
+          (faultReason ? ' (' + faultReason + ')' : '') +
+          '. Entered judge_fault.'
+      );
     }
 
     case 'RETRY_JUDGE': {
-      if (currentPhase !== 'judge_fault' && (currentPhase !== 'seat_fault' || next.judge.status !== 'fault_quota')) {
+      const isJudgeFaultStatus =
+        next.judge.status === 'fault_quota' ||
+        next.judge.status === 'fault_timeout' ||
+        next.judge.status === 'fault';
+      const isCanonicalRecoveryForJudge =
+        String(state.phase).toUpperCase() === 'RECOVERY' && isJudgeFaultStatus && !state.faultSeatId;
+      if (currentPhase !== 'judge_fault' && !isCanonicalRecoveryForJudge) {
         return reject(state, event.type, 'Can only retry Judge from judge_fault.');
       }
       next.judge.retries += 1;

@@ -157,8 +157,9 @@ export const STATE_EDGES = Object.freeze([
   { id: 'e-conf-sfault', from: 'confirming', to: 'seat_fault', event: 'SEAT_FAULT', label: 'Quota / Timeout', guard: 'Seat faulted' },
   { id: 'e-sfault-rev', from: 'seat_fault', to: 'reviewing', event: 'RETRY_SEAT / EXCUSE_SEAT', label: 'Retry or Excuse', guard: 'Retries <= cap or Quorum kept' },
   { id: 'e-sfault-conf', from: 'seat_fault', to: 'confirming', event: 'RETRY_SEAT / EXCUSE_SEAT', label: 'Retry or Excuse', guard: 'Locks open Objection if excused' },
-  { id: 'e-jud-jfault', from: 'judging', to: 'judge_fault', event: 'JUDGE_FAULT', label: 'Judge Quota', guard: 'Judge faulted' },
-  { id: 'e-jfault-jud', from: 'judge_fault', to: 'judging', event: 'RETRY_JUDGE', label: 'Retry Judge', guard: 'Judge cannot be excused' }
+  { id: 'e-jud-jfault', from: 'judging', to: 'judge_fault', event: 'JUDGE_FAULT', label: 'Judge Quota / Fault', guard: 'Judge faulted' },
+  { id: 'e-jfault-jud', from: 'judge_fault', to: 'judging', event: 'RETRY_JUDGE', label: 'Retry Judge', guard: 'Judge cannot be excused' },
+  { id: 'e-jfault-comp', from: 'judge_fault', to: 'completed', event: 'JUDGE_FAULT', label: 'Judge Fault Verdict', guard: 'Retries exhausted or non-retryable' }
 ]);
 
 /**

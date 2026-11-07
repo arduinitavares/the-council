@@ -374,5 +374,70 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
 
       watcher.stop();
     });
+
+    it('transitions through the state machine on terminal Judge fault so observers see phase completed, verdict, and isRunning false', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+
+      const mockAdapter = new MockAdapter();
+      mockAdapter.executeJudgeAuditAndSynthesis = async () => {
+        throw new Error('Harness "codex" execution timed out after 240000ms');
+      };
+
+      const config = {
+        topic: 'Judge Fault Observer Termination Test',
+        maxRounds: 2,
+        minQuorum: 2,
+        maxRetriesPerSeat: 1,
+        judge: {
+          id: 'judge-astra',
+          harness: 'codex',
+          model: 'gpt-6-astra',
+          soul: 'Impartial Proof Auditor'
+        },
+        seats: [
+          { id: 'seat-1', harness: 'codex', model: 'gpt-6-astra', soul: 'Systems Architect' },
+          { id: 'seat-2', harness: 'codex', model: 'gpt-6.1-sol', soul: 'Pragmatic Engineer' }
+        ]
+      };
+
+      const engine = new CouncilEngine(config, { harnessResolver: () => mockAdapter });
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: engine.getTelemetry(),
+        outputPath: tmpOut,
+        initialConfig: config
+      });
+
+      const result = await engine.run();
+
+      // Engine state and canonical phase must reflect terminal DISSENT_REPORT
+      assert.equal(result.ok, false);
+      assert.equal(result.state.phase, 'completed');
+      assert.equal(result.state.canonicalPhase, 'DISSENT_REPORT');
+      assert.equal(result.state.verdict?.kind, 'Dissent Report (Judge Fault)');
+      assert.match(result.state.history[0], /Dissent Report \(Judge Fault\)/);
+
+      // Telemetry snapshots must include the terminal completed snapshot
+      const lastSnapshot = result.snapshots[result.snapshots.length - 1];
+      assert.equal(lastSnapshot.stateSnapshot.phase, 'completed');
+      assert.equal(lastSnapshot.stateSnapshot.canonicalPhase, 'DISSENT_REPORT');
+      assert.equal(lastSnapshot.stateSnapshot.verdict?.kind, 'Dissent Report (Judge Fault)');
+
+      // Live watcher must observe the terminal state and mark isRunning = false
+      assert.equal(watcher.liveRun.isRunning, false, 'Watcher must mark isRunning as false on Judge fault termination');
+      assert.equal(watcher.liveRun.currentState.phase, 'completed');
+      assert.equal(watcher.liveRun.currentState.verdict?.kind, 'Dissent Report (Judge Fault)');
+
+      const diskContent = fs.readFileSync(tmpOut, 'utf8');
+      const mockWindow = {};
+      const evalFn = new Function('window', 'globalThis', diskContent);
+      evalFn(mockWindow, {});
+
+      assert.equal(mockWindow.CouncilLatestLiveRun.isRunning, false);
+      assert.equal(mockWindow.CouncilLatestLiveRun.currentState.phase, 'completed');
+      assert.equal(mockWindow.CouncilLatestLiveRun.currentState.verdict?.kind, 'Dissent Report (Judge Fault)');
+
+      watcher.stop();
+    });
   });
 });

@@ -40,8 +40,9 @@
     { id: 'e-conf-sfault', from: 'confirming', to: 'seat_fault', event: 'SEAT_FAULT', label: 'Quota / Timeout', guard: 'Seat faulted' },
     { id: 'e-sfault-rev', from: 'seat_fault', to: 'reviewing', event: 'RETRY_SEAT / EXCUSE_SEAT', label: 'Retry or Excuse', guard: 'Retries <= cap or Quorum kept' },
     { id: 'e-sfault-conf', from: 'seat_fault', to: 'confirming', event: 'RETRY_SEAT / EXCUSE_SEAT', label: 'Retry or Excuse', guard: 'Locks open Objection if excused' },
-    { id: 'e-jud-jfault', from: 'judging', to: 'judge_fault', event: 'JUDGE_FAULT', label: 'Judge Quota', guard: 'Judge faulted' },
-    { id: 'e-jfault-jud', from: 'judge_fault', to: 'judging', event: 'RETRY_JUDGE', label: 'Retry Judge', guard: 'Judge cannot be excused' }
+    { id: 'e-jud-jfault', from: 'judging', to: 'judge_fault', event: 'JUDGE_FAULT', label: 'Judge Quota / Fault', guard: 'Judge faulted' },
+    { id: 'e-jfault-jud', from: 'judge_fault', to: 'judging', event: 'RETRY_JUDGE', label: 'Retry Judge', guard: 'Judge cannot be excused' },
+    { id: 'e-jfault-comp', from: 'judge_fault', to: 'completed', event: 'JUDGE_FAULT', label: 'Judge Fault Verdict', guard: 'Retries exhausted or non-retryable' }
   ];
 
   function createInitialCouncilState(config) {
@@ -356,7 +357,9 @@
         if (!seat || seat.status === 'excused') {
           return reject(state, event.type, 'Seat "' + event.seatId + '" is not active.');
         }
-        seat.status = 'fault_quota';
+        const isValidSeatFaultStatus =
+          event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
+        seat.status = isValidSeatFaultStatus ? event.status : 'fault_quota';
         next.returnPhase = state.phase;
         next.phase = 'seat_fault';
         next.faultSeatId = seat.id;
@@ -411,26 +414,65 @@
             excusedSeatCount: next.seats.length - remaining,
             note: 'Active seats (' + remaining + ') dropped below minimum quorum (' + state.minQuorum + '). Consensus forbidden.'
           };
-          return succeed(state, next, event.type, 'Excused "' + seat.id + '". Active seats fell below quorum → Dissent Report.');
+          return succeed(state, next, event.type, 'Excused "' + seat.id + '" (' + seat.excusedReason + '). Active seats fell below quorum → Dissent Report.');
         }
         return succeed(
           state,
           next,
           event.type,
-          'Excused Seat "' + seat.id + '" ("quota is reached, dude is off"). Other ' + remaining + ' Seats preserved.' +
+          'Excused Seat "' + seat.id + '" (' + seat.excusedReason + '). Other ' + remaining + ' Seats preserved.' +
             (lockedCount > 0 ? ' Locked ' + lockedCount + ' open Objection(s) as preserved_excused.' : '')
         );
       }
 
       case 'JUDGE_FAULT': {
+        if (state.phase === 'preflight' || state.phase === 'completed') {
+          return reject(state, event.type, 'Judge cannot fault in "' + state.phase + '" phase.');
+        }
+        if (event.terminal === true && state.phase !== 'judging' && state.phase !== 'judge_fault') {
+          return reject(state, event.type, 'Terminal Judge fault is only valid during judging or judge_fault.');
+        }
+        const faultReason = event.reason || event.error || '';
+        const isValidJudgeFaultStatus =
+          event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
+        const faultStatus = isValidJudgeFaultStatus ? event.status : 'fault_quota';
+        next.judge.status = faultStatus;
+        if (event.terminal === true) {
+          const remaining = activeSeats(next).length;
+          next.phase = 'completed';
+          next.verdict = {
+            kind: 'Dissent Report (Judge Fault)',
+            candidate: next.candidate || null,
+            unresolvedObjections: (next.objections || []).filter(function (o) { return o.status !== 'withdrawn'; }),
+            activeSeatCount: remaining,
+            excusedSeatCount: next.seats.length - remaining,
+            note: 'Judge candidate synthesis failed: ' + (faultReason || 'Judge fault')
+          };
+          return succeed(
+            state,
+            next,
+            event.type,
+            'Judge "' + next.judge.id + '" faulted' + (faultReason ? ' (' + faultReason + ')' : '') + ' → Dissent Report (Judge Fault).'
+          );
+        }
         next.returnPhase = state.phase;
         next.phase = 'judge_fault';
-        next.judge.status = 'fault_quota';
-        return succeed(state, next, event.type, 'Judge "' + next.judge.id + '" faulted. Entered judge_fault.');
+        return succeed(
+          state,
+          next,
+          event.type,
+          'Judge "' + next.judge.id + '" faulted' + (faultReason ? ' (' + faultReason + ')' : '') + '. Entered judge_fault.'
+        );
       }
 
       case 'RETRY_JUDGE': {
-        if (state.phase !== 'judge_fault') {
+        const isJudgeFaultStatus =
+          next.judge.status === 'fault_quota' ||
+          next.judge.status === 'fault_timeout' ||
+          next.judge.status === 'fault';
+        const isCanonicalRecoveryForJudge =
+          String(state.phase).toUpperCase() === 'RECOVERY' && isJudgeFaultStatus && !state.faultSeatId;
+        if (state.phase !== 'judge_fault' && !isCanonicalRecoveryForJudge) {
           return reject(state, event.type, 'Can only retry Judge from judge_fault.');
         }
         next.judge.retries += 1;

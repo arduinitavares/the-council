@@ -24,12 +24,14 @@ export const VALID_SEAT_STATUSES = SEAT_STATUSES;
  * @type {Record<string, readonly string[]>}
  */
 export const LEGAL_SEAT_TRANSITIONS = Object.freeze({
-  idle: Object.freeze(['thinking', 'proof_submitted', 'fault_quota', 'excused']),
-  thinking: Object.freeze(['idle', 'proof_submitted', 'accepted', 'objected', 'fault_quota', 'excused']),
-  proof_submitted: Object.freeze(['idle', 'thinking', 'accepted', 'objected', 'fault_quota', 'excused']),
-  accepted: Object.freeze(['idle', 'thinking', 'fault_quota', 'excused']),
-  objected: Object.freeze(['idle', 'thinking', 'fault_quota', 'excused']),
+  idle: Object.freeze(['thinking', 'proof_submitted', 'fault_quota', 'fault_timeout', 'fault', 'excused']),
+  thinking: Object.freeze(['idle', 'proof_submitted', 'accepted', 'objected', 'fault_quota', 'fault_timeout', 'fault', 'excused']),
+  proof_submitted: Object.freeze(['idle', 'thinking', 'accepted', 'objected', 'fault_quota', 'fault_timeout', 'fault', 'excused']),
+  accepted: Object.freeze(['idle', 'thinking', 'fault_quota', 'fault_timeout', 'fault', 'excused']),
+  objected: Object.freeze(['idle', 'thinking', 'fault_quota', 'fault_timeout', 'fault', 'excused']),
   fault_quota: Object.freeze(['thinking', 'excused']),
+  fault_timeout: Object.freeze(['thinking', 'excused']),
+  fault: Object.freeze(['thinking', 'excused']),
   excused: Object.freeze([]) // Terminal state
 });
 
@@ -221,12 +223,13 @@ export class Seat {
   }
 
   /**
-   * Transitions seat to fault_quota state.
+   * Transitions seat to a fault state.
    * @param {string} [reason='Quota reached']
+   * @param {import('../types.js').SeatStatus} [status='fault_quota']
    * @returns {Seat}
    */
-  fault(reason = 'Quota reached') {
-    return this.transition('fault_quota', { reason });
+  fault(reason = 'Quota reached', status = 'fault_quota') {
+    return this.transition(status, { reason });
   }
 
   /**
@@ -235,8 +238,8 @@ export class Seat {
    * @returns {Seat}
    */
   retry(maxRetriesPerSeat = 1) {
-    if (this._status !== 'fault_quota') {
-      throw new Error(`Cannot retry Seat "${this._id}" from status "${this._status}". Must be in "fault_quota".`);
+    if (this._status !== 'fault_quota' && this._status !== 'fault_timeout' && this._status !== 'fault') {
+      throw new Error(`Cannot retry Seat "${this._id}" from status "${this._status}". Must be in "fault_quota", "fault_timeout", or "fault".`);
     }
 
     if (this._retries >= maxRetriesPerSeat) {

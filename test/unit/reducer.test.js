@@ -203,10 +203,19 @@ describe('Unit: Production State Machine Reducer (src/machine/reducer.js)', () =
     assert.equal(retryFail.lastTransition.ok, false);
     assert.match(retryFail.lastTransition.message, /Retry Cap Guard/);
 
-    // Excuse seat 3
-    state = transitionCouncil(state, { type: COUNCIL_EVENTS.EXCUSE_SEAT, seatId: 's3' });
+    // Excuse seat 3 with a specific timeout reason
+    state = transitionCouncil(state, {
+      type: COUNCIL_EVENTS.EXCUSE_SEAT,
+      seatId: 's3',
+      reason: 'Harness "cursor" execution timed out after 240000ms'
+    });
     assert.equal(state.phase, 'reviewing');
     assert.equal(state.seats[2].status, 'excused');
+    assert.equal(state.seats[2].excusedReason, 'Harness "cursor" execution timed out after 240000ms');
+    assert.match(state.lastTransition.message, /Harness "cursor" execution timed out after 240000ms/);
+    assert.match(state.history[0], /Harness "cursor" execution timed out after 240000ms/);
+    assert.doesNotMatch(state.lastTransition.message, /dude is off/);
+    assert.doesNotMatch(state.history[0], /dude is off/);
     assert.equal(activeSeats(state).length, 2);
     assert.equal(excusedSeats(state).length, 1);
   });
@@ -244,6 +253,57 @@ describe('Unit: Production State Machine Reducer (src/machine/reducer.js)', () =
     state = transitionCouncil(state, { type: COUNCIL_EVENTS.RETRY_JUDGE });
     assert.equal(state.phase, 'judging');
     assert.equal(state.judge.retries, 1);
+
+    // Non-fault status passed to SEAT_FAULT / JUDGE_FAULT is sanitized to fault_quota
+    const badSeatFault = transitionCouncil(state, {
+      type: COUNCIL_EVENTS.SEAT_FAULT,
+      seatId: 's1',
+      status: 'excused'
+    });
+    assert.equal(badSeatFault.seats.find((s) => s.id === 's1').status, 'fault_quota');
+
+    const badJudgeFault = transitionCouncil(state, {
+      type: COUNCIL_EVENTS.JUDGE_FAULT,
+      status: 'excused'
+    });
+    assert.equal(badJudgeFault.judge.status, 'fault_quota');
+
+    // Terminal JUDGE_FAULT cannot overwrite a completed Verdict or fire in preflight
+    const preflightState = createInitialCouncilState({ minQuorum: 2 });
+    const rejectedPreflightFault = transitionCouncil(preflightState, {
+      type: COUNCIL_EVENTS.JUDGE_FAULT,
+      terminal: true,
+      reason: 'Premature fault'
+    });
+    assert.equal(rejectedPreflightFault.lastTransition.ok, false);
+    assert.equal(rejectedPreflightFault.phase, 'preflight');
+
+    const termJudgeState = transitionCouncil(state, {
+      type: COUNCIL_EVENTS.JUDGE_FAULT,
+      terminal: true,
+      status: 'fault_timeout',
+      reason: 'Timed out'
+    });
+    assert.equal(termJudgeState.phase, 'completed');
+    const overwriteAttempt = transitionCouncil(termJudgeState, {
+      type: COUNCIL_EVENTS.JUDGE_FAULT,
+      terminal: true,
+      reason: 'Late fault'
+    });
+    assert.equal(overwriteAttempt.lastTransition.ok, false);
+    assert.equal(overwriteAttempt.verdict.note, 'Judge candidate synthesis failed: Timed out');
+
+    // RETRY_JUDGE is rejected when phase is seat_fault (even if judge previously faulted)
+    const judgeThenSeatFault = transitionCouncil(badJudgeFault, {
+      type: COUNCIL_EVENTS.SEAT_FAULT,
+      seatId: 's1',
+      status: 'fault_timeout'
+    });
+    assert.equal(judgeThenSeatFault.phase, 'seat_fault');
+    const retryJudgeFromSeatFault = transitionCouncil(judgeThenSeatFault, {
+      type: COUNCIL_EVENTS.RETRY_JUDGE
+    });
+    assert.equal(retryJudgeFromSeatFault.lastTransition.ok, false);
   });
 
   it('terminates with ROUND_TIMEOUT when round limit reached with open objections', () => {

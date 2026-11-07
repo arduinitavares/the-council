@@ -302,6 +302,41 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
         assert.ok(err instanceof QuotaExhaustionError);
         assert.equal(err.isQuotaFault, true);
       });
+
+      it('preserves existing HarnessError subclasses (e.g. InvalidResponseError, TimeoutError) even when message contains "429" or "rate_limit"', () => {
+        const adapters = [new CodexAdapter(), new AntigravityAdapter(), new CursorAdapter()];
+        for (const adapter of adapters) {
+          const invalidResp = new InvalidResponseError(
+            'Failed to parse "proof" JSON response: Unexpected token in "error 429 rate_limit_exceeded"',
+            { harness: adapter.name, seatId: 's1' }
+          );
+          const classifiedInvalid = adapter.classifyError(invalidResp, { seatId: 's1' });
+          assert.equal(classifiedInvalid, invalidResp);
+          assert.ok(classifiedInvalid instanceof InvalidResponseError);
+          assert.equal(classifiedInvalid instanceof QuotaExhaustionError, false);
+
+          const timeoutErr = new TimeoutError(
+            'Harness timed out after 42900ms while checking quota',
+            { harness: adapter.name, seatId: 's1', timeoutMs: 42900 }
+          );
+          const classifiedTimeout = adapter.classifyError(timeoutErr, { seatId: 's1' });
+          assert.equal(classifiedTimeout, timeoutErr);
+          assert.ok(classifiedTimeout instanceof TimeoutError);
+          assert.equal(classifiedTimeout instanceof QuotaExhaustionError, false);
+        }
+      });
+
+      it('base classifyError classifies raw ETIMEDOUT into TimeoutError and raw 401/403 into AuthenticationError', () => {
+        const adapter = new HarnessAdapter({ name: 'base' });
+        const rawTimeout = Object.assign(new Error('spawn ETIMEDOUT after 60000ms'), { code: 'ETIMEDOUT' });
+        const classifiedTimeout = adapter.classifyError(rawTimeout, { seatId: 's1' });
+        assert.ok(classifiedTimeout instanceof TimeoutError);
+
+        const rawAuth = new Error('HTTP 401 Unauthorized: invalid_api_key');
+        const classifiedAuth = adapter.classifyError(rawAuth, { seatId: 's1' });
+        assert.ok(classifiedAuth instanceof AuthenticationError);
+        assert.equal(classifiedAuth.isRetryable, false);
+      });
     });
   });
 

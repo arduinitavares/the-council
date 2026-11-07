@@ -507,12 +507,73 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
         (t) => t.seatId === 'quota-analyst' && t.status === 'fault_timeout'
       );
       assert.ok(seatTimeoutTelemetry, 'TimeoutError on seat "quota-analyst" (42900ms) must emit fault_timeout');
+      assert.equal(seatTimeoutTelemetry.metadata?.errorClass, 'TimeoutError');
+      assert.match(seatTimeoutTelemetry.metadata?.reason || '', /^\[TimeoutError\]/);
       assert.equal(
         telemetryStatuses.some((t) => t.seatId === 'quota-analyst' && t.status === 'fault_quota'),
         false,
         'TimeoutError must not be misclassified as fault_quota'
       );
       assert.equal(result.state.judge.status, 'fault_timeout');
+      assert.equal(result.state.judge.errorClass, 'TimeoutError');
+      assert.match(result.state.judge.faultReason, /^\[TimeoutError\]/);
+    });
+
+    it('includes error class name and collapses/bounds multi-line stderr to a single-line excerpt', async () => {
+      const mockHarness = new MockAdapter();
+      const longMultilineStderr =
+        'line 1: fatal CLI crash\nline 2: stack trace frame A\n' + 'x'.repeat(500);
+      mockHarness.executeSeat = async (ctx) => {
+        if (ctx.seat.id === 's3-noisy') {
+          throw new HarnessExecutionError('CLI exited unexpectedly', {
+            harness: 'codex',
+            seatId: 's3-noisy',
+            exitCode: 1,
+            stderr: longMultilineStderr
+          });
+        }
+        return {
+          scope: 'Scope',
+          kind: 'check',
+          source: 'Source',
+          statement: 'Valid proof statement'
+        };
+      };
+      mockHarness.executeJudgeAuditAndSynthesis = async () => {
+        // Return malformed candidate clauses (citing non-existent proof P999) to trigger InvalidResponseError guard
+        return {
+          summary: 'Bad synthesis',
+          proofDecisions: { P1: { status: 'admitted', note: 'ok' } },
+          clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P999'] }]
+        };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Bounded Single-Line Stderr & InvalidResponseError Guard Test',
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 's3-noisy', harness: 'mock', model: 'm', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      const result = await engine.run();
+      const noisySeat = result.state.seats.find((s) => s.id === 's3-noisy');
+      assert.equal(noisySeat.errorClass, 'HarnessExecutionError');
+      assert.match(noisySeat.excusedReason, /^\[HarnessExecutionError\] CLI exited unexpectedly \(exit code 1\) — stderr: line 1: fatal CLI crash line 2: stack trace frame A /);
+      assert.equal(noisySeat.excusedReason.includes('\n'), false, 'Formatted fault reason must be single-line');
+      assert.ok(noisySeat.excusedReason.endsWith('...'), 'Long stderr must be truncated with ellipsis');
+      assert.ok(noisySeat.excusedReason.length < 350, 'Formatted fault reason must be bounded');
+
+      // Judge candidate guard failure must be classified as InvalidResponseError
+      assert.equal(result.state.judge.status, 'fault');
+      assert.equal(result.state.judge.errorClass, 'InvalidResponseError');
+      assert.match(result.state.judge.faultReason, /^\[InvalidResponseError\]/);
     });
   });
 });

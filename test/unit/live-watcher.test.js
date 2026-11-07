@@ -427,6 +427,20 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(watcher.liveRun.isRunning, false, 'Watcher must mark isRunning as false on Judge fault termination');
       assert.equal(watcher.liveRun.currentState.phase, 'completed');
       assert.equal(watcher.liveRun.currentState.verdict?.kind, 'Dissent Report (Judge Fault)');
+      assert.equal(watcher.liveRun.currentState.judge.status, 'fault_timeout');
+      assert.equal(watcher.liveRun.currentState.judge.errorClass, 'TimeoutError');
+      assert.match(watcher.liveRun.currentState.judge.faultReason, /^\[TimeoutError\]/);
+
+      // Earlier step snapshots must NOT have been mutated in-place by later seat_telemetry events
+      const beginRoundStep = watcher.liveRun.steps.find((s) => s.event?.type === 'BEGIN_ROUND');
+      assert.ok(beginRoundStep);
+      assert.equal(beginRoundStep.stateSnapshot.judge.status, 'idle');
+      assert.equal(beginRoundStep.stateSnapshot.judge.faultReason, undefined);
+      assert.equal(
+        beginRoundStep.stateSnapshot.seats.every((s) => s.status === 'thinking'),
+        true,
+        'BEGIN_ROUND step snapshot seats must remain in their historical "thinking" state'
+      );
 
       const diskContent = fs.readFileSync(tmpOut, 'utf8');
       const mockWindow = {};
@@ -436,6 +450,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(mockWindow.CouncilLatestLiveRun.isRunning, false);
       assert.equal(mockWindow.CouncilLatestLiveRun.currentState.phase, 'completed');
       assert.equal(mockWindow.CouncilLatestLiveRun.currentState.verdict?.kind, 'Dissent Report (Judge Fault)');
+      assert.match(mockWindow.CouncilLatestLiveRun.currentState.judge.faultReason, /^\[TimeoutError\]/);
 
       watcher.stop();
     });

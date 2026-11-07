@@ -202,8 +202,12 @@ export function transitionCouncil(state, event) {
       next.round += 1;
       next.phase = 'reviewing';
       next.judge.status = 'idle';
+      delete next.judge.faultReason;
+      delete next.judge.errorClass;
       activeSeats(next).forEach((s) => {
         s.status = 'thinking';
+        delete s.faultReason;
+        delete s.errorClass;
       });
       return succeed(
         state,
@@ -256,6 +260,8 @@ export function transitionCouncil(state, event) {
       });
       if (currentPhase === 'reviewing') {
         seat.status = 'proof_submitted';
+        delete seat.faultReason;
+        delete seat.errorClass;
       }
       return succeed(
         state,
@@ -347,9 +353,13 @@ export function transitionCouncil(state, event) {
         }))
       };
       next.judge.status = 'idle';
+      delete next.judge.faultReason;
+      delete next.judge.errorClass;
       next.phase = 'confirming';
       activeSeats(next).forEach((s) => {
         s.status = 'thinking';
+        delete s.faultReason;
+        delete s.errorClass;
       });
       return succeed(
         state,
@@ -424,6 +434,8 @@ export function transitionCouncil(state, event) {
           }
         });
         seat.status = 'accepted';
+        delete seat.faultReason;
+        delete seat.errorClass;
         return succeed(
           state,
           next,
@@ -449,6 +461,8 @@ export function transitionCouncil(state, event) {
           status: 'open'
         });
         seat.status = 'objected';
+        delete seat.faultReason;
+        delete seat.errorClass;
         return succeed(
           state,
           next,
@@ -467,6 +481,10 @@ export function transitionCouncil(state, event) {
       const isValidSeatFaultStatus =
         event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
       seat.status = isValidSeatFaultStatus ? event.status : 'fault_quota';
+      seat.faultReason = event.reason || 'Quota reached';
+      if (event.errorClass) {
+        seat.errorClass = event.errorClass;
+      }
       next.returnPhase = state.phase;
       next.phase = 'seat_fault';
       next.faultSeatId = seat.id;
@@ -502,6 +520,8 @@ export function transitionCouncil(state, event) {
       }
       seat.retries += 1;
       seat.status = 'thinking';
+      delete seat.faultReason;
+      delete seat.errorClass;
       next.phase = state.returnPhase || 'reviewing';
       next.faultSeatId = null;
       return succeed(
@@ -528,6 +548,9 @@ export function transitionCouncil(state, event) {
       }
       seat.status = 'excused';
       seat.excusedReason = event.reason || 'Quota reached — excused mid-run';
+      if (event.errorClass) {
+        seat.errorClass = event.errorClass;
+      }
       let lockedCount = 0;
       next.objections.forEach((o) => {
         if (o.seatId === seat.id && o.status === 'open') {
@@ -597,6 +620,10 @@ export function transitionCouncil(state, event) {
         event.status === 'fault_quota' || event.status === 'fault_timeout' || event.status === 'fault';
       const faultStatus = isValidJudgeFaultStatus ? event.status : 'fault_quota';
       next.judge.status = faultStatus;
+      next.judge.faultReason = faultReason || 'Judge fault';
+      if (event.errorClass) {
+        next.judge.errorClass = event.errorClass;
+      }
       if (event.terminal === true) {
         const remaining = activeSeats(next).length;
         next.phase = 'completed';
@@ -645,6 +672,8 @@ export function transitionCouncil(state, event) {
       }
       next.judge.retries += 1;
       next.judge.status = 'thinking';
+      delete next.judge.faultReason;
+      delete next.judge.errorClass;
       next.phase = state.returnPhase || 'judging';
       return succeed(
         state,

@@ -5,7 +5,7 @@
  * Strictly adheres to model-policy: Premium weekly pool only, zero paid overflow.
  */
 
-import { HarnessAdapter, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
 import { runCursorCli } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
@@ -34,11 +34,15 @@ export class CursorAdapter extends HarnessAdapter {
   }
 
   classifyError(error, context = {}) {
+    if (error instanceof HarnessError) {
+      return error;
+    }
+
     const raw = (error?.message || '') + ' ' + (error?.stderr || '');
 
     // Cursor weekly included pool exhaustion signature (reproducing wt-10-seats-quota)
     const isPoolExhausted =
-      /429|weekly\s+included\s+pool\s+exhausted|weekly_pool_exhausted|subscription_pool_exhausted|rate_limit/i.test(
+      /\b429\b|weekly\s+included\s+pool\s+exhausted|weekly_pool_exhausted|subscription_pool_exhausted|rate_limit/i.test(
         raw
       );
 

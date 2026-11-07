@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createInitialCouncilState,
   transitionCouncil,
+  assertPhase,
   EVENTS
 } from '../../helpers/council.js';
 
@@ -21,7 +22,7 @@ describe('Tier 3: Cross-Feature — Clarifications + Multi-Round Deliberation + 
 
     // 1. Clarification Batch 1: Scope question
     state = transitionCouncil(state, { type: EVENTS.START_CLARIFYING });
-    assert.equal(state.phase, 'clarifying');
+    assertPhase(state, 'clarifying');
     assert.equal(state.clarificationBatch, 1);
     state = transitionCouncil(state, {
       type: EVENTS.PUBLISH_CLARIFICATION,
@@ -38,7 +39,7 @@ describe('Tier 3: Cross-Feature — Clarifications + Multi-Round Deliberation + 
 
     // 3. Begin Round 1
     state = transitionCouncil(state, { type: EVENTS.BEGIN_ROUND });
-    assert.equal(state.phase, 'reviewing');
+    assertPhase(state, 'reviewing');
     assert.equal(state.round, 1);
 
     // 4. Submit Proofs for Round 1
@@ -74,7 +75,7 @@ describe('Tier 3: Cross-Feature — Clarifications + Multi-Round Deliberation + 
         { context: 'Internal High-Throughput RPC', conclusion: 'Use Protobuf (P_PROTO).', citedProofIds: ['P_PROTO'] }
       ]
     });
-    assert.equal(state.phase, 'confirming');
+    assertPhase(state, 'confirming');
 
     // 6. Voting: proto-fan accepts; json-fan objects citing P_JSON
     state = transitionCouncil(state, { type: EVENTS.CAST_VOTE, seatId: 'proto-fan', vote: 'accept' });
@@ -90,7 +91,7 @@ describe('Tier 3: Cross-Feature — Clarifications + Multi-Round Deliberation + 
 
     // 7. Evaluate Round 1 -> Advances to Round 2
     state = transitionCouncil(state, { type: EVENTS.EVALUATE_ROUND });
-    assert.equal(state.phase, 'reviewing');
+    assertPhase(state, 'reviewing');
     assert.equal(state.round, 2);
 
     // 8. Round 2: json-fan submits compromise proof (reflection / JSON-mapping support)
@@ -129,7 +130,7 @@ describe('Tier 3: Cross-Feature — Clarifications + Multi-Round Deliberation + 
 
     // 11. Evaluate Round 2 -> Unanimous Consensus!
     state = transitionCouncil(state, { type: EVENTS.EVALUATE_ROUND });
-    assert.equal(state.phase, 'completed');
+    assertPhase(state, 'completed');
     assert.ok(state.verdict);
     assert.equal(state.verdict.kind, 'Unanimous Consensus');
     assert.equal(state.verdict.activeSeatCount, 2);

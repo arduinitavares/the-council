@@ -112,7 +112,8 @@ export const VERDICT_KINDS = Object.freeze({
   UNANIMOUS_CONSENSUS: 'Unanimous Consensus',
   DISSENT_PRESERVED_OBJECTION: 'Dissent Report (Preserved Excused-Seat Objection)',
   DISSENT_ROUND_LIMIT: 'Dissent Report (Round Limit Reached)',
-  DISSENT_BELOW_QUORUM: 'Dissent Report (Below Quorum)'
+  DISSENT_BELOW_QUORUM: 'Dissent Report (Below Quorum)',
+  DISSENT_JUDGE_FAULT: 'Dissent Report (Judge Fault)'
 });
 
 /**

@@ -71,6 +71,35 @@ describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', (
       const resRec = validateCandidateClauses(clauses, { P1: true, P2: true });
       assert.equal(resRec.valid, true);
     });
+
+    it('rejects candidate clause citing Object.prototype properties when admittedProofIds is a Record', () => {
+      const clauses = [
+        { context: 'Prototype Poisoning', conclusion: 'Invalid proof bypass', citedProofIds: ['toString', 'valueOf', 'constructor'] }
+      ];
+      // Empty plain object contains no admitted proofs, but inherits prototype methods
+      const res = validateCandidateClauses(clauses, {});
+      assert.equal(res.valid, false);
+      assert.equal(res.errors.length, 3);
+      assert.match(res.errors[0], /cites unverified Proof "toString"/);
+      assert.match(res.errors[1], /cites unverified Proof "valueOf"/);
+      assert.match(res.errors[2], /cites unverified Proof "constructor"/);
+    });
+
+    it('rejects candidate when clause elements are null, undefined, primitive, or array without throwing', () => {
+      const badClausesList = [
+        [null],
+        [undefined],
+        ['string clause'],
+        [123],
+        [['nested', 'array']]
+      ];
+
+      for (const badClauses of badClausesList) {
+        const res = validateCandidateClauses(badClauses, new Set(['P1']));
+        assert.equal(res.valid, false);
+        assert.equal(res.errors[0], 'Judge Candidate Guard: Clause 1 is malformed.');
+      }
+    });
   });
 
   describe('Objection Immutability and Ownership Guard (canWithdrawObjection)', () => {

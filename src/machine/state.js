@@ -89,7 +89,8 @@ export function cloneState(state) {
  * @returns {Array<Object>} active seats
  */
 export function activeSeats(state) {
-  return (state.seats || []).filter((s) => s.status !== 'excused');
+  if (!state || !Array.isArray(state.seats)) return [];
+  return state.seats.filter((s) => s && s.status !== 'excused');
 }
 
 /**
@@ -98,7 +99,8 @@ export function activeSeats(state) {
  * @returns {Array<Object>} excused seats
  */
 export function excusedSeats(state) {
-  return (state.seats || []).filter((s) => s.status === 'excused');
+  if (!state || !Array.isArray(state.seats)) return [];
+  return state.seats.filter((s) => s && s.status === 'excused');
 }
 
 /**
@@ -107,6 +109,7 @@ export function excusedSeats(state) {
  * @returns {boolean}
  */
 export function isQuorumSatisfied(state) {
+  if (!state) return false;
   return activeSeats(state).length >= (state.minQuorum ?? DEFAULT_COUNCIL_CONFIG.minQuorum);
 }
 
@@ -116,7 +119,8 @@ export function isQuorumSatisfied(state) {
  * @returns {Array<Object>}
  */
 export function getOpenObjections(state) {
-  return (state.objections || []).filter((o) => o.status === 'open');
+  if (!state || !Array.isArray(state.objections)) return [];
+  return state.objections.filter((o) => o && o.status === 'open');
 }
 
 /**
@@ -125,7 +129,8 @@ export function getOpenObjections(state) {
  * @returns {Array<Object>}
  */
 export function getPreservedObjections(state) {
-  return (state.objections || []).filter((o) => o.status === 'preserved_excused');
+  if (!state || !Array.isArray(state.objections)) return [];
+  return state.objections.filter((o) => o && o.status === 'preserved_excused');
 }
 
 /**
@@ -135,8 +140,9 @@ export function getPreservedObjections(state) {
  * @returns {Array<Object>}
  */
 export function getAdmittedProofs(state, round) {
-  return (state.proofs || []).filter(
-    (p) => p.status === 'admitted' && (round === undefined || p.round === round)
+  if (!state || !Array.isArray(state.proofs)) return [];
+  return state.proofs.filter(
+    (p) => p && p.status === 'admitted' && (round === undefined || p.round === round)
   );
 }
 
@@ -147,7 +153,8 @@ export function getAdmittedProofs(state, round) {
  * @returns {Object|undefined}
  */
 export function findSeat(state, seatId) {
-  return (state.seats || []).find((s) => s.id === seatId);
+  if (!state || !Array.isArray(state.seats) || !seatId) return undefined;
+  return state.seats.find((s) => s && s.id === seatId);
 }
 
 /**
@@ -157,7 +164,8 @@ export function findSeat(state, seatId) {
  * @returns {Object|undefined}
  */
 export function findProof(state, proofId) {
-  return (state.proofs || []).find((p) => p.id === proofId);
+  if (!state || !Array.isArray(state.proofs) || !proofId) return undefined;
+  return state.proofs.find((p) => p && p.id === proofId);
 }
 
 /**
@@ -167,15 +175,49 @@ export function findProof(state, proofId) {
  * @returns {Object|undefined}
  */
 export function findObjection(state, objectionId) {
-  return (state.objections || []).find((o) => o.id === objectionId);
+  if (!state || !Array.isArray(state.objections) || !objectionId) return undefined;
+  return state.objections.find((o) => o && o.id === objectionId);
 }
+
+const CANONICAL_TERMINAL_PHASES = new Set(['CONSENSUS_REACHED', 'DISSENT_REPORT', 'ROUND_TIMEOUT']);
 
 /**
  * Checks if current state phase matches the given phase name (canonical or alias).
+ * Disambiguates canonical terminal phases and recovery sub-states
+ * while supporting querying by either canonical phase or prototype alias.
  * @param {Object} state
  * @param {string} phaseName
  * @returns {boolean}
  */
 export function isPhase(state, phaseName) {
-  return isPhaseMatch(state.phase, phaseName);
+  if (!state || !phaseName) return false;
+  const target = String(phaseName).trim();
+  if (!target) return false;
+  const targetUpper = target.toUpperCase();
+
+  // 1. Direct match with canonicalPhase
+  if (state.canonicalPhase && state.canonicalPhase.toUpperCase() === targetUpper) {
+    return true;
+  }
+
+  // 2. Disambiguate terminal canonical phases:
+  // If target is specifically CONSENSUS_REACHED, DISSENT_REPORT, or ROUND_TIMEOUT,
+  // but state.canonicalPhase did not match it, return false.
+  if (CANONICAL_TERMINAL_PHASES.has(targetUpper)) {
+    return false;
+  }
+
+  // 3. Disambiguate recovery sub-phases: judge_fault vs seat_fault
+  if (target.toLowerCase() === 'judge_fault') {
+    return state.phase === 'judge_fault' || state.phaseAlias === 'judge_fault';
+  }
+  if (target.toLowerCase() === 'seat_fault') {
+    return state.phase === 'seat_fault' || state.phaseAlias === 'seat_fault';
+  }
+
+  // 4. General resolution via isPhaseMatch using state.phase or state.canonicalPhase
+  return (
+    isPhaseMatch(state.phase, phaseName) ||
+    Boolean(state.canonicalPhase && isPhaseMatch(state.canonicalPhase, phaseName))
+  );
 }

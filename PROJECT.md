@@ -92,9 +92,9 @@ Every feature from the Survey phase is mapped to an implementation milestone bel
 
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Core Consensus State Machine, Guards & Prototype Governance | `package.json`, layout, throwaway branch `prototype/council-state-machine`, `docs/prototype-context-pointer.md`, types, proof validator, guards (proof, candidate citations, objection immutability, quorum), pure reducer implementing all 9 phases and 17 events/transitions. | none | PLANNED |
-| M2 | Dynamic Seats, Multi-Harness Adapters, Telemetry & Runtime Engine | Dynamic seats with souls across Orca harnesses (`codex`, `antigravity`, `cursor`, `mock`), excusal & turn retention, real-time `SEAT_TELEMETRY` emitter, deterministic state snapshots, engine coordinator and CLI. | M1 | PLANNED |
-| M3 | Final Milestone: 100% E2E Test Pass & Adversarial Hardening | Phase 1: Pass 100% of E2E tests (Tiers 1-4) published in `TEST_READY.md`. Phase 2: Adversarial Coverage Hardening (Tier 5) with Challengers and coverage audit. | M2, E2E Track | PLANNED |
+| M1 | Core Consensus State Machine, Guards & Prototype Governance | `package.json`, layout, throwaway branch `prototype/council-state-machine`, `docs/prototype-context-pointer.md`, types, proof validator, guards (proof, candidate citations, objection immutability, quorum), pure reducer implementing all 9 phases and 17 events/transitions. Key outputs: `src/types.js`, `src/proofs/validator.js`, `src/machine/constants.js`, `src/machine/state.js`, `src/machine/guards.js`, `src/machine/reducer.js`, `src/index.js`, 258 passing tests. | none | DONE |
+| M2 | Dynamic Seats, Multi-Harness Adapters, Telemetry & Runtime Engine | Dynamic seats with souls across Orca harnesses (`codex`, `antigravity`, `cursor`, `mock`), excusal & turn retention, real-time `SEAT_TELEMETRY` emitter, deterministic state snapshots, engine coordinator and CLI. Key outputs: `src/seats/`, `src/harness/`, `src/telemetry/`, `src/engine/`, `src/cli/`, `bin/council`, 449 passing tests. | M1 | DONE |
+| M3 | Final Milestone: 100% E2E Test Pass & Adversarial Hardening | Phase 1: Pass 100% of E2E tests (Tiers 1-4) published in `TEST_READY.md`. Phase 2: Adversarial Coverage Hardening (Tier 5) with Challengers, Workers, and Reviewers. Key outputs: 507 passing tests across 139 suites, 5 coordinator & CLI hardening mitigations, clean forensic audit. | M2, E2E Track | DONE |
 
 ## Interface Contracts
 

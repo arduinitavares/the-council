@@ -4,6 +4,11 @@
  */
 
 /**
+ * Canonical domain definitions re-exported from types.js as single source of truth
+ */
+export { CANONICAL_PHASES, VALID_PROOF_KINDS } from '../types.js';
+
+/**
  * Canonical 9 Phases of The Council mapped to runtime phase identifiers
  * Preserves 100% compatibility with prototype visualizers, tests, and walkthroughs.
  * @readonly
@@ -27,23 +32,6 @@ export const COUNCIL_PHASES = Object.freeze({
   completed: 'completed',
   seat_fault: 'seat_fault',
   judge_fault: 'judge_fault'
-});
-
-/**
- * Canonical uppercase phase identifiers
- * @readonly
- * @enum {string}
- */
-export const CANONICAL_PHASES = Object.freeze({
-  ROSTER_CONFIGURATION: 'ROSTER_CONFIGURATION',
-  DISCOVERY: 'DISCOVERY',
-  DELIBERATION: 'DELIBERATION',
-  JUDGE_AUDIT_SYNTHESIS: 'JUDGE_AUDIT_SYNTHESIS',
-  VOTING: 'VOTING',
-  CONSENSUS_REACHED: 'CONSENSUS_REACHED',
-  DISSENT_REPORT: 'DISSENT_REPORT',
-  ROUND_TIMEOUT: 'ROUND_TIMEOUT',
-  RECOVERY: 'RECOVERY'
 });
 
 /**
@@ -101,12 +89,6 @@ export const COUNCIL_EVENTS = Object.freeze({
   EVALUATE_ROUND: 'EVALUATE_ROUND',
   RESET: 'RESET'
 });
-
-/**
- * Supported proof kinds
- * @readonly
- */
-export const VALID_PROOF_KINDS = Object.freeze(['check', 'citation', 'benchmark', 'derivation']);
 
 /**
  * Default configuration values
@@ -227,10 +209,44 @@ export function toPrototypePhase(phase, subType) {
 
 /**
  * Checks if two phase representations match (resolving aliases).
+ * Correctly matches recovery sub-types (judge_fault and seat_fault vs RECOVERY),
+ * distinct canonical terminal phases (CONSENSUS_REACHED vs DISSENT_REPORT vs ROUND_TIMEOUT),
+ * and generic prototype aliases ('completed', 'preflight', etc.).
  * @param {string} phaseA
  * @param {string} phaseB
  * @returns {boolean}
  */
 export function isPhaseMatch(phaseA, phaseB) {
-  return normalizePhase(phaseA) === normalizePhase(phaseB);
+  if (!phaseA || !phaseB) return false;
+  const strA = String(phaseA).trim();
+  const strB = String(phaseB).trim();
+  if (!strA || !strB) return false;
+  if (strA.toLowerCase() === strB.toLowerCase()) return true;
+
+  const upperA = strA.toUpperCase();
+  const upperB = strB.toUpperCase();
+
+  // Distinct canonical terminal phases should never match each other
+  const terminalPhases = new Set(['CONSENSUS_REACHED', 'DISSENT_REPORT', 'ROUND_TIMEOUT']);
+  if (terminalPhases.has(upperA) && terminalPhases.has(upperB)) {
+    return upperA === upperB;
+  }
+
+  // Recovery matching: RECOVERY matches seat_fault and judge_fault
+  if (upperA === 'RECOVERY') {
+    return strB.toLowerCase() === 'seat_fault' || strB.toLowerCase() === 'judge_fault' || upperB === 'RECOVERY';
+  }
+  if (upperB === 'RECOVERY') {
+    return strA.toLowerCase() === 'seat_fault' || strA.toLowerCase() === 'judge_fault' || upperA === 'RECOVERY';
+  }
+
+  // seat_fault and judge_fault are distinct sub-faults
+  if (
+    (strA.toLowerCase() === 'seat_fault' && strB.toLowerCase() === 'judge_fault') ||
+    (strA.toLowerCase() === 'judge_fault' && strB.toLowerCase() === 'seat_fault')
+  ) {
+    return false;
+  }
+
+  return normalizePhase(strA) === normalizePhase(strB);
 }

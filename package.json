@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./src/index.js",
   "bin": {
-    "council": "./src/cli/index.js"
+    "council": "./bin/council"
   },
   "engines": {
     "node": ">=22.0.0"

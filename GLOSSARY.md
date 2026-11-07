@@ -12,6 +12,10 @@ _Avoid_: Session, workflow, pipeline, committee
 The immutable problem statement, context, and constraints submitted to the Council at the start of a run.
 _Avoid_: Prompt, ticket, brief, input payload
 
+**Council Preset**:
+A named, reusable roster of Seats, Souls, and a Judge tailored to a recurring deliberation domain (such as architecture, product comparison, or security auditing).
+_Avoid_: Profile, mode, pack, template
+
 **Seat**:
 An individual voting participant in the Council, defined by a unique ID, a Harness, a Model, and a Soul. Multiple Seats may share the same underlying Model and Harness if they have distinct Souls.
 _Avoid_: Worker, agent, reviewer, member, slot

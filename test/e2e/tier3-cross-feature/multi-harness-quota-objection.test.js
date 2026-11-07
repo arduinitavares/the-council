@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createInitialCouncilState,
   transitionCouncil,
+  assertPhase,
   EVENTS
 } from '../../helpers/council.js';
 
@@ -28,12 +29,12 @@ describe('Tier 3: Cross-Feature — Multi-Harness + Quota Excusal + Preserved Ob
       ]
     });
 
-    assert.equal(state.phase, 'preflight');
+    assertPhase(state, 'preflight');
     assert.equal(state.seats.length, 4);
 
     // 2. Begin Round 1
     state = transitionCouncil(state, { type: EVENTS.BEGIN_ROUND });
-    assert.equal(state.phase, 'reviewing');
+    assertPhase(state, 'reviewing');
     assert.equal(state.round, 1);
 
     // 3. Codex and Antigravity seats submit proofs
@@ -81,7 +82,7 @@ describe('Tier 3: Cross-Feature — Multi-Harness + Quota Excusal + Preserved Ob
         { context: 'Local Execution', conclusion: 'Use SQLite WAL (P_CODEX, P_AGY)', citedProofIds: ['P_CODEX', 'P_AGY'] }
       ]
     });
-    assert.equal(state.phase, 'confirming');
+    assertPhase(state, 'confirming');
 
     // 6. Voting: Codex and Antigravity seats accept
     state = transitionCouncil(state, { type: EVENTS.CAST_VOTE, seatId: 'codex-arch', vote: 'accept' });
@@ -105,11 +106,11 @@ describe('Tier 3: Cross-Feature — Multi-Harness + Quota Excusal + Preserved Ob
       seatId: 'cursor-qa',
       reason: 'Cursor weekly pool exhausted (HTTP 429)'
     });
-    assert.equal(state.phase, 'seat_fault');
+    assertPhase(state, 'seat_fault');
 
     // 9. Retry once
     state = transitionCouncil(state, { type: EVENTS.RETRY_SEAT, seatId: 'cursor-qa' });
-    assert.equal(state.phase, 'confirming');
+    assertPhase(state, 'confirming');
 
     // 10. Faults again -> cap hit -> Excuse Seat
     state = transitionCouncil(state, {
@@ -125,11 +126,11 @@ describe('Tier 3: Cross-Feature — Multi-Harness + Quota Excusal + Preserved Ob
 
     // 11. Verify Cursor seat's objection is permanently locked as preserved_excused
     assert.equal(state.objections[0].status, 'preserved_excused');
-    assert.equal(state.phase, 'confirming');
+    assertPhase(state, 'confirming');
 
     // 12. Evaluate Round: remaining 3 active seats all accepted, but preserved_excused objection blocks false consensus!
     state = transitionCouncil(state, { type: EVENTS.EVALUATE_ROUND });
-    assert.equal(state.phase, 'completed');
+    assertPhase(state, 'completed');
     assert.ok(state.verdict);
     assert.equal(state.verdict.kind, 'Dissent Report (Preserved Excused-Seat Objection)');
     assert.equal(state.verdict.activeSeatCount, 3);

@@ -184,4 +184,37 @@ describe('Tier 2: Boundary & Corner Cases — Candidate Proof-Binding', () => {
     assert.equal(state.phase, 'confirming');
     assert.deepEqual(state.candidate.clauses[0].citedProofIds, ['P1', 'P2']);
   });
+
+  it('B2.7 should reject candidate with null or non-object clause element without throwing uncaught TypeError', () => {
+    const state = getJudgingState();
+    const badClausesList = [
+      [null],
+      [undefined],
+      ['string clause'],
+      [null, { context: 'Storage', conclusion: 'Use SQLite', citedProofIds: ['P1'] }]
+    ];
+
+    for (const clauses of badClausesList) {
+      const next = transitionCouncil(state, {
+        type: EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+        summary: 'Candidate',
+        clauses
+      });
+      assert.equal(next.lastTransition.ok, false);
+      assert.match(next.lastTransition.message, /Clause 1 is malformed/);
+    }
+  });
+
+  it('B2.8 should reject candidate clause citing Object.prototype property as unverified proof ID', () => {
+    const state = getJudgingState();
+    const next = transitionCouncil(state, {
+      type: EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+      summary: 'Candidate',
+      clauses: [
+        { context: 'Exploit', conclusion: 'Bypass', citedProofIds: ['toString'] }
+      ]
+    });
+    assert.equal(next.lastTransition.ok, false);
+    assert.match(next.lastTransition.message, /cites unverified Proof "toString"/);
+  });
 });

@@ -14,7 +14,8 @@ import { VALID_PROOF_KINDS, PHASE_MAP } from '../types.js';
  * @returns {import('../types.js').Seat[]}
  */
 export function getActiveSeats(state) {
-  return (state.seats || []).filter((s) => s.status !== 'excused');
+  if (!state || !Array.isArray(state.seats)) return [];
+  return state.seats.filter((s) => s && s.status !== 'excused');
 }
 
 /**
@@ -25,7 +26,9 @@ export function getActiveSeats(state) {
  * @returns {boolean}
  */
 export function matchesPhase(currentPhase, targetPhases) {
+  if (!currentPhase || !Array.isArray(targetPhases)) return false;
   for (const target of targetPhases) {
+    if (!target) continue;
     if (currentPhase === target) return true;
     if (PHASE_MAP[currentPhase] === target) return true;
     if (PHASE_MAP[target] === currentPhase) return true;
@@ -106,11 +109,19 @@ export function validateCandidateClauses(clauses, admittedProofIds) {
     if (!admittedProofIds) return false;
     if (admittedProofIds instanceof Set) return admittedProofIds.has(pid);
     if (Array.isArray(admittedProofIds)) return admittedProofIds.includes(pid);
-    return Boolean(admittedProofIds[pid]);
+    if (typeof admittedProofIds === 'object') {
+      return Object.hasOwn(admittedProofIds, pid) && Boolean(admittedProofIds[pid]);
+    }
+    return false;
   };
 
   for (let i = 0; i < clauses.length; i++) {
     const cl = clauses[i];
+    if (!cl || typeof cl !== 'object' || Array.isArray(cl)) {
+      errors.push(`Judge Candidate Guard: Clause ${i + 1} is malformed.`);
+      continue;
+    }
+
     const contextLabel = cl.context || `Clause ${i + 1}`;
 
     if (!cl.citedProofIds || !Array.isArray(cl.citedProofIds) || cl.citedProofIds.length === 0) {
@@ -223,7 +234,8 @@ export function guardCastVote(state, event) {
  * @returns {import('../types.js').ObjectionWithdrawalResult}
  */
 export function canWithdrawObjection(state, objectionId, seatId) {
-  const obj = (state.objections || []).find((o) => o.id === objectionId);
+  if (!state) return { allowed: false, reason: 'Invalid state.' };
+  const obj = (state.objections || []).find((o) => o && o.id === objectionId);
   if (!obj) {
     return {
       allowed: false,
@@ -298,6 +310,7 @@ export function guardWithdrawObjection(state, event) {
  * @returns {{ hasQuorum: boolean; activeCount: number; minQuorum: number }}
  */
 export function checkQuorum(state, minQuorum) {
+  if (!state) return { hasQuorum: false, activeCount: 0, minQuorum: minQuorum ?? 2 };
   const quorum = minQuorum ?? state.minQuorum ?? 2;
   const activeCount = getActiveSeats(state).length;
   return {
@@ -336,7 +349,8 @@ export function guardBeginRound(state) {
  * @returns {boolean} True if remaining active seats fall below minQuorum.
  */
 export function dropsBelowQuorumOnExcusal(state, excusedSeatId) {
-  const remaining = (state.seats || []).filter((s) => s.id !== excusedSeatId && s.status !== 'excused').length;
+  if (!state) return true;
+  const remaining = (state.seats || []).filter((s) => s && s.id !== excusedSeatId && s.status !== 'excused').length;
   return remaining < (state.minQuorum ?? 2);
 }
 
@@ -374,11 +388,12 @@ export function guardEvaluateRound(state) {
  * @returns {{ allowed: boolean; reason?: string }}
  */
 export function canRetrySeat(seat, maxRetriesPerSeat) {
+  if (!seat) return { allowed: false, reason: 'Seat not found.' };
   const cap = maxRetriesPerSeat ?? 1;
-  if (seat.retries >= cap) {
+  if ((seat.retries || 0) >= cap) {
     return {
       allowed: false,
-      reason: `Retry Cap Guard: Seat "${seat.id}" reached ${seat.retries}/${cap} retries. Excuse Seat instead.`
+      reason: `Retry Cap Guard: Seat "${seat.id}" reached ${seat.retries || 0}/${cap} retries. Excuse Seat instead.`
     };
   }
   return { allowed: true };

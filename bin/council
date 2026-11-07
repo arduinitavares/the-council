@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+
+/**
+ * @fileoverview The Council — CLI Binary Executable.
+ * ESM Module (Node >= 22).
+ */
+
+import { runCli } from '../src/cli/index.js';
+
+runCli().catch((err) => {
+  console.error(`Fatal Council CLI error: ${err.stack || err.message}`);
+  process.exit(1);
+});

@@ -300,17 +300,25 @@ export function transitionCouncil(state, event) {
         if (p.status === 'admitted') admittedIds.add(p.id);
       });
 
-      const clauses = event.clauses || [];
-      if (clauses.length === 0) {
+      const clauses = event.clauses;
+      if (!clauses || !Array.isArray(clauses) || clauses.length === 0) {
         return reject(state, event.type, 'Judge Candidate Guard: Candidate requires at least one clause.');
       }
       for (let i = 0; i < clauses.length; i++) {
         const cl = clauses[i];
-        if (!cl.citedProofIds || cl.citedProofIds.length === 0) {
+        if (!cl || typeof cl !== 'object' || Array.isArray(cl)) {
           return reject(
             state,
             event.type,
-            'Judge Candidate Guard: Clause "' + cl.context + '" cites no Proof IDs.'
+            'Judge Candidate Guard: Clause ' + (i + 1) + ' is malformed.'
+          );
+        }
+        const contextLabel = cl.context || ('Clause ' + (i + 1));
+        if (!cl.citedProofIds || !Array.isArray(cl.citedProofIds) || cl.citedProofIds.length === 0) {
+          return reject(
+            state,
+            event.type,
+            'Judge Candidate Guard: Clause "' + contextLabel + '" cites no Proof IDs.'
           );
         }
         for (let j = 0; j < cl.citedProofIds.length; j++) {
@@ -319,7 +327,7 @@ export function transitionCouncil(state, event) {
             return reject(
               state,
               event.type,
-              'Judge Candidate Guard: Clause "' + cl.context + '" cites unverified Proof "' + pid + '".'
+              'Judge Candidate Guard: Clause "' + contextLabel + '" cites unverified Proof "' + pid + '".'
             );
           }
         }

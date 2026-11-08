@@ -141,10 +141,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
   if (command === 'demo') {
     const demoId = positionals[0] || 'wt-better-os';
-    const wtPath = path.resolve(new URL('.', import.meta.url).pathname, '../visualizer/council-walkthroughs.js');
+    const wtPath = path.resolve(new URL('.', import.meta.url).pathname, '../fixtures/walkthrough-scenarios.js');
     const imported = await import(wtPath);
-    const protoWalkthroughs = imported.default || globalThis.CouncilWalkthroughs || imported;
-    const wts = protoWalkthroughs.WALKTHROUGHS || [];
+    const scenarios = imported.default || imported;
+    const wts = scenarios.WALKTHROUGHS || imported.WALKTHROUGHS || [];
     const wt = wts.find((w) => w.id === demoId);
     if (!wt) {
       logErr(`Unknown demo walkthrough "${demoId}". Available: wt-better-os, wt-10-seats-quota, wt-opus-guardrails`);

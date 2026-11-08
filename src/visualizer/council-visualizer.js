@@ -6,10 +6,18 @@
  * Uses SVG Cubic Beziers, Web Animations API (WAAPI), and Element-Scoped View Transitions.
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
-  } else {
-    root.CouncilVisualizer = factory();
+  const api = factory();
+  if (typeof module === 'object' && module && module.exports) {
+    module.exports = api;
+  }
+  if (typeof window !== 'undefined') {
+    window.CouncilVisualizer = api;
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.CouncilVisualizer = api;
+  }
+  if (root) {
+    root.CouncilVisualizer = api;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
@@ -39,7 +47,85 @@
   }
 
   /**
-   * Builds a smooth SVG cubic bezier path between two node centers
+   * Formats a Soul into clean readable text without [object Object] artifacts.
+   * @param {string|Object|null|undefined} soul
+   * @returns {string} Formatted soul text
+   */
+  function formatSoul(soul) {
+    if (!soul) return '';
+    if (typeof soul === 'string') return soul.trim();
+    if (typeof soul === 'object') {
+      const name = (soul.name || '').trim();
+      const lens = (soul.lens || '').trim();
+      if (name && lens) return name + ' — ' + lens;
+      if (name) return name;
+      if (lens) return lens;
+      if (soul.temperament) return String(soul.temperament).trim();
+      try {
+        return JSON.stringify(soul);
+      } catch {
+        return '';
+      }
+    }
+    return String(soul);
+  }
+
+  /**
+   * Renders structured HTML markup for participant cards without [object Object].
+   * @param {string|Object|null|undefined} soul
+   * @param {Function} [esc]
+   * @returns {string} HTML markup
+   */
+  function renderSoulCardHtml(soul, esc) {
+    const escape = typeof esc === 'function' ? esc : escapeHtml;
+    if (!soul) return '';
+    if (typeof soul === 'string') {
+      return '<div class="soul-text">' + escape(soul.trim()) + '</div>';
+    }
+    if (typeof soul === 'object') {
+      const name = (soul.name || '').trim();
+      const lens = (soul.lens || '').trim();
+      const temperament = (soul.temperament || '').trim();
+      const parts = [];
+      if (name) {
+        parts.push('<span class="soul-name">' + escape(name) + '</span>');
+      }
+      if (temperament) {
+        parts.push('<span class="soul-temperament">[' + escape(temperament) + ']</span>');
+      }
+      if (lens) {
+        parts.push('<span class="soul-lens">· ' + escape(lens) + '</span>');
+      }
+      if (parts.length > 0) {
+        return '<div class="soul-block">' + parts.join(' ') + '</div>';
+      }
+      try {
+        return '<div class="soul-text">' + escape(JSON.stringify(soul)) + '</div>';
+      } catch {
+        return '';
+      }
+    }
+    return '<div class="soul-text">' + escape(String(soul)) + '</div>';
+  }
+
+  /**
+   * Truncates a string at word boundaries and appends ellipsis ('…').
+   * @param {string|null|undefined} str
+   * @param {number} [maxLen=26]
+   * @returns {string} Truncated string
+   */
+  function truncateAtWord(str, maxLen = 26) {
+    if (str == null) return '';
+    const s = String(str).trim();
+    if (s.length <= maxLen) return s;
+    const sub = s.slice(0, maxLen);
+    const lastSpace = sub.lastIndexOf(' ');
+    const cutPoint = lastSpace > Math.floor(maxLen * 0.4) ? lastSpace : maxLen - 1;
+    return sub.slice(0, cutPoint).trimEnd() + '…';
+  }
+
+  /**
+   * Builds a smooth SVG cubic bezier path between two node centers.
    */
   function buildEdgePath(n1, n2, allNodesMap) {
     const from = allNodesMap[n1];
@@ -82,11 +168,16 @@
    */
   function renderStateMachineSVG(svgEl, state, graph) {
     if (!svgEl) return;
+    const g = graph || (state && state.graph) || { nodes: [], edges: [], outgoingEdges: [] };
+    const nodes = g.nodes || [];
+    const edges = g.edges || [];
+    const outgoingEdges = g.outgoingEdges || [];
+
     const nodeMap = {};
-    graph.nodes.forEach(function (n) { nodeMap[n.id] = n; });
+    nodes.forEach(function (n) { nodeMap[n.id] = n; });
 
     const outgoingMap = {};
-    graph.outgoingEdges.forEach(function (e) { outgoingMap[e.id] = e; });
+    outgoingEdges.forEach(function (e) { outgoingMap[e.id] = e; });
 
     const defs =
       '<defs>' +
@@ -104,9 +195,9 @@
         '</marker>' +
       '</defs>';
 
-    const edgesSvg = graph.edges.map(function (e) {
+    const edgesSvg = edges.map(function (e) {
       const d = buildEdgePath(e.from, e.to, nodeMap);
-      const isLastTraversed = e.id === graph.lastEdgeId;
+      const isLastTraversed = e.id === g.lastEdgeId;
       const outInfo = outgoingMap[e.id];
       const isNextUnlocked = outInfo && outInfo.unlocked;
       const isNextLocked = outInfo && !outInfo.unlocked;
@@ -140,8 +231,13 @@
         ? '<path d="' + d + '" fill="none" stroke="#a7f3d0" stroke-width="3.2" stroke-dasharray="10 180" class="waapi-pulse-edge" />'
         : '';
 
+      const edgeTitle = e.id + ': ' + e.from + ' → ' + e.to + ' (' + e.event + ')' +
+        '\nGuard: ' + (e.guard || 'none') +
+        (outInfo && outInfo.dynamicReason ? '\nStatus: ' + outInfo.dynamicReason : '');
+
       return (
-        '<g class="' + cls + '" data-edge-id="' + e.id + '">' +
+        '<g class="' + cls + '" data-edge-id="' + e.id + '" tabindex="0">' +
+          '<title>' + escapeHtml(edgeTitle) + '</title>' +
           '<path d="' + d + '" fill="none" stroke="' + stroke + '" stroke-width="' + width + '" ' +
             (dash ? 'stroke-dasharray="' + dash + '" ' : '') +
             'marker-end="' + marker + '" />' +
@@ -151,13 +247,13 @@
     }).join('');
 
     const nextTargetSet = {};
-    graph.outgoingEdges.forEach(function (e) {
+    outgoingEdges.forEach(function (e) {
       nextTargetSet[e.to] = e.unlocked ? 'unlocked' : 'locked';
     });
 
-    const nodesSvg = graph.nodes.map(function (n) {
-      const isActive = n.id === graph.activeNodeId;
-      const isPrevious = n.id === state.previousPhase && n.id !== graph.activeNodeId;
+    const nodesSvg = nodes.map(function (n) {
+      const isActive = n.id === g.activeNodeId;
+      const isPrevious = state && n.id === state.previousPhase && n.id !== g.activeNodeId;
       const nextStatus = nextTargetSet[n.id];
 
       let fill = '#131c29';
@@ -195,8 +291,13 @@
           '</text>'
         : '';
 
+      const nodeTitle = 'Phase: ' + n.label + ' (' + n.id + ')\n' +
+        n.subtitle +
+        (isActive ? '\nStatus: CURRENT' : (nextStatus ? '\nStatus: ' + nextStatus.toUpperCase() : ''));
+
       return (
-        '<g class="sm-node ' + (isActive ? 'sm-node-active' : '') + '" data-node-id="' + n.id + '">' +
+        '<g class="sm-node ' + (isActive ? 'sm-node-active' : '') + '" data-node-id="' + n.id + '" tabindex="0">' +
+          '<title>' + escapeHtml(nodeTitle) + '</title>' +
           '<rect x="' + rx + '" y="' + ry + '" width="124" height="50" rx="10" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + strokeWidth + '" />' +
           badgeSvg +
           '<text x="' + n.x + '" y="' + (n.y - 2) + '" text-anchor="middle" fill="#e6eef8" font-size="12.5" font-weight="700">' +
@@ -242,19 +343,80 @@
   }
 
   /**
+   * Helper to derive causal links directly from state when not provided in graph.
+   */
+  function deriveCausalLinks(state) {
+    if (!state) return [];
+    const causalLinks = [];
+    (state.proofs || []).forEach(function (p) {
+      causalLinks.push({
+        id: 'dep-seat-proof-' + p.id,
+        fromKind: 'seat',
+        fromId: p.seatId,
+        toKind: 'proof',
+        toId: p.id,
+        status: p.status,
+        label: p.kind
+      });
+    });
+
+    if (state.candidate && state.candidate.clauses) {
+      state.candidate.clauses.forEach(function (cl) {
+        (cl.citedProofIds || []).forEach(function (pid) {
+          causalLinks.push({
+            id: 'dep-proof-clause-' + pid + '-' + cl.id,
+            fromKind: 'proof',
+            fromId: pid,
+            toKind: 'clause',
+            toId: cl.id,
+            status: 'admitted',
+            label: 'cites ' + pid
+          });
+        });
+      });
+    }
+
+    (state.objections || []).forEach(function (o) {
+      if (o.status !== 'withdrawn') {
+        causalLinks.push({
+          id: 'dep-obj-seat-' + o.id,
+          fromKind: 'seat',
+          fromId: o.seatId,
+          toKind: 'objection',
+          toId: o.id,
+          status: o.status,
+          label: 'owns ' + o.id
+        });
+        causalLinks.push({
+          id: 'dep-obj-proof-' + o.id,
+          fromKind: 'proof',
+          fromId: o.proofId,
+          toKind: 'objection',
+          toId: o.id,
+          status: o.status,
+          label: 'backs ' + o.id
+        });
+      }
+    });
+    return causalLinks;
+  }
+
+  /**
    * Renders the Causal Artifact Dependency Graph SVG:
-   * Column 1: Seats (with Harness & Status)
+   * Column 1: Seats (with Harness, Model & Soul)
    * Column 2: Structured Proofs (P1..Pn)
    * Column 3: Judge & Candidate Clauses (C1..Cn)
    * Column 4: Blocking Objections (O1..On) & Verdict
    */
   function renderCausalDependencySVG(svgEl, state, graph) {
-    if (!svgEl) return;
+    if (!svgEl || !state) return;
 
+    const g = graph || state.graph || {};
     const seats = state.seats || [];
     const proofs = state.proofs || [];
     const clauses = (state.candidate && state.candidate.clauses) ? state.candidate.clauses : [];
     const objections = (state.objections || []).filter(function (o) { return o.status !== 'withdrawn'; });
+    const causalLinks = Array.isArray(g.causalLinks) ? g.causalLinks : deriveCausalLinks(state);
 
     const maxRows = Math.max(seats.length, proofs.length, clauses.length + 1, objections.length + 1, 3);
     const height = Math.max(230, maxRows * 48 + 44);
@@ -316,7 +478,7 @@
       '<text x="' + colObjX + '" y="20" text-anchor="middle" fill="#9cb0c9" font-size="11" font-weight="700">4. OBJECTIONS &amp; VERDICT GATE</text>';
 
     // Draw Dependency Arrows
-    const linksSvg = graph.causalLinks.map(function (lnk) {
+    const linksSvg = causalLinks.map(function (lnk) {
       const src = pos[lnk.fromKind + ':' + lnk.fromId];
       const dst = pos[lnk.toKind + ':' + lnk.toId];
       if (!src || !dst) return '';
@@ -354,11 +516,20 @@
       const isExcused = s.status === 'excused';
       const isFault = s.status === 'fault_quota' || s.status === 'fault_timeout' || s.status === 'fault';
       const stroke = isFault ? '#f87171' : (s.status === 'accepted' ? '#34d399' : (s.status === 'objected' ? '#fbbf24' : '#334763'));
+      const soulFormatted = formatSoul(s.soul);
+      const seatTitle = 'Seat: ' + s.id +
+        '\nHarness: ' + s.harness +
+        '\nModel: ' + (s.model || 'unspecified') +
+        '\nStatus: ' + s.status +
+        (soulFormatted ? '\nSoul: ' + soulFormatted : '') +
+        (s.faultReason ? '\nFault: ' + s.faultReason : '');
+
       return (
-        '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" opacity="' + (isExcused ? '0.5' : '1') + '">' +
+        '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" opacity="' + (isExcused ? '0.5' : '1') + '" class="seat-node" tabindex="0">' +
+          '<title>' + escapeHtml(seatTitle) + '</title>' +
           '<rect width="' + b.w + '" height="' + b.h + '" rx="8" fill="#141e2d" stroke="' + stroke + '" stroke-width="1.5" ' + (isExcused ? 'stroke-dasharray="4 3"' : '') + ' />' +
-          '<text x="10" y="14" fill="#e6eef8" font-size="11.5" font-weight="700">' + escapeHtml(s.id) + '</text>' +
-          '<text x="10" y="27" fill="#9cb0c9" font-size="9.5">' + escapeHtml(s.harness + ' · ' + s.status) + '</text>' +
+          '<text x="10" y="14" fill="#e6eef8" font-size="11.5" font-weight="700">' + escapeHtml(truncateAtWord(s.id, 20)) + '</text>' +
+          '<text x="10" y="27" fill="#9cb0c9" font-size="9.5">' + escapeHtml(truncateAtWord(s.harness + ' · ' + s.status, 24)) + '</text>' +
         '</g>'
       );
     }).join('');
@@ -369,31 +540,55 @@
       : proofs.map(function (p) {
           const b = pos['proof:' + p.id];
           const stroke = p.status === 'admitted' ? '#34d399' : (p.status === 'rejected' ? '#f87171' : '#38bdf8');
+          const proofTitle = 'Proof ' + p.id + ' [' + (p.kind || 'evidence').toUpperCase() + '] · ' + p.status +
+            '\nSeat: ' + p.seatId +
+            '\nScope: ' + (p.scope || 'unspecified') +
+            '\nSource: ' + (p.source || 'unspecified') +
+            '\nStatement: ' + (p.statement || '');
+
           return (
-            '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')">' +
+            '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" class="proof-node" tabindex="0">' +
+              '<title>' + escapeHtml(proofTitle) + '</title>' +
               '<rect width="' + b.w + '" height="' + b.h + '" rx="8" fill="#141e2d" stroke="' + stroke + '" stroke-width="1.6" />' +
               '<text x="10" y="15" fill="#e6eef8" font-size="11.5" font-weight="700">' + escapeHtml(p.id + ' [' + p.kind + '] · ' + p.status) + '</text>' +
-              '<text x="10" y="29" fill="#9cb0c9" font-size="9.5">' + escapeHtml(p.scope.slice(0, 28)) + '</text>' +
+              '<text x="10" y="29" fill="#9cb0c9" font-size="9.5">' + escapeHtml(truncateAtWord(p.scope, 26)) + '</text>' +
             '</g>'
           );
         }).join('');
 
     // Draw Judge + Clause Nodes
     const jb = pos['judge:main'];
+    const judge = state.judge || {};
+    const judgeSoulFormatted = formatSoul(judge.soul);
+    const judgeTitle = 'Judge: ' + (judge.id || 'judge') +
+      '\nHarness: ' + (judge.harness || 'unspecified') +
+      '\nModel: ' + (judge.model || 'unspecified') +
+      '\nStatus: ' + (judge.status || 'idle') +
+      (judgeSoulFormatted ? '\nSoul: ' + judgeSoulFormatted : '') +
+      (judge.faultReason ? '\nFault: ' + judge.faultReason : '');
+
     const judgeSvg =
-      '<g transform="translate(' + (jb.x - jb.w / 2) + ',' + (jb.y - jb.h / 2) + ')">' +
+      '<g transform="translate(' + (jb.x - jb.w / 2) + ',' + (jb.y - jb.h / 2) + ')" class="judge-node" tabindex="0">' +
+        '<title>' + escapeHtml(judgeTitle) + '</title>' +
         '<rect width="' + jb.w + '" height="' + jb.h + '" rx="8" fill="#13263a" stroke="#38bdf8" stroke-width="1.6" />' +
-        '<text x="10" y="15" fill="#e6eef8" font-size="11.5" font-weight="700">Judge: ' + escapeHtml(state.judge.id) + '</text>' +
-        '<text x="10" y="28" fill="#9cb0c9" font-size="9.5">' + escapeHtml(state.judge.harness + ' · ' + state.judge.status) + '</text>' +
+        '<text x="10" y="15" fill="#e6eef8" font-size="11.5" font-weight="700">Judge: ' + escapeHtml(truncateAtWord(judge.id || 'judge', 20)) + '</text>' +
+        '<text x="10" y="28" fill="#9cb0c9" font-size="9.5">' + escapeHtml(truncateAtWord((judge.harness || '') + ' · ' + (judge.status || ''), 24)) + '</text>' +
       '</g>';
 
     const clauseNodesSvg = clauses.map(function (cl) {
       const b = pos['clause:' + cl.id];
+      const cites = (cl.citedProofIds || []).join(', ');
+      const clauseTitle = 'Clause ' + cl.id +
+        '\nContext: ' + (cl.context || '') +
+        '\nConclusion: ' + (cl.conclusion || '') +
+        '\nCites Proofs: ' + (cites || 'none');
+
       return (
-        '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')">' +
+        '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" class="clause-node" tabindex="0">' +
+          '<title>' + escapeHtml(clauseTitle) + '</title>' +
           '<rect width="' + b.w + '" height="' + b.h + '" rx="8" fill="#122926" stroke="#34d399" stroke-width="1.6" />' +
-          '<text x="10" y="15" fill="#e6eef8" font-size="11" font-weight="700">' + escapeHtml(cl.id + ': ' + cl.context.slice(0, 24)) + '</text>' +
-          '<text x="10" y="30" fill="#a7f3d0" font-size="9.5">Cites Proof: ' + escapeHtml((cl.citedProofIds || []).join(', ')) + '</text>' +
+          '<text x="10" y="15" fill="#e6eef8" font-size="11" font-weight="700">' + escapeHtml(truncateAtWord(cl.id + ': ' + cl.context, 26)) + '</text>' +
+          '<text x="10" y="30" fill="#a7f3d0" font-size="9.5">Cites: ' + escapeHtml(truncateAtWord(cites || 'none', 20)) + '</text>' +
         '</g>'
       );
     }).join('');
@@ -405,11 +600,18 @@
           const b = pos['objection:' + o.id];
           const isLocked = o.status === 'preserved_excused';
           const stroke = isLocked ? '#f87171' : '#fbbf24';
+          const objTitle = 'Objection ' + o.id +
+            '\nSeat: ' + o.seatId +
+            '\nBacking Proof: ' + o.proofId +
+            '\nStatus: ' + o.status +
+            '\nReason: ' + (o.reason || 'unspecified');
+
           return (
-            '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')">' +
+            '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" class="objection-node" tabindex="0">' +
+              '<title>' + escapeHtml(objTitle) + '</title>' +
               '<rect width="' + b.w + '" height="' + b.h + '" rx="8" fill="#281d1d" stroke="' + stroke + '" stroke-width="1.8" />' +
-              '<text x="10" y="15" fill="#fef2f2" font-size="11" font-weight="700">' + escapeHtml(o.id + ' (' + o.seatId + ')') + '</text>' +
-              '<text x="10" y="30" fill="' + stroke + '" font-size="9.5">' + escapeHtml(isLocked ? 'LOCKED (Seat Excused)' : 'Open · Proof ' + o.proofId) + '</text>' +
+              '<text x="10" y="15" fill="#fef2f2" font-size="11" font-weight="700">' + escapeHtml(truncateAtWord(o.id + ' (' + o.seatId + ')', 22)) + '</text>' +
+              '<text x="10" y="30" fill="' + stroke + '" font-size="9.5">' + escapeHtml(isLocked ? 'LOCKED (Seat Excused)' : truncateAtWord('Open · Proof ' + o.proofId, 22)) + '</text>' +
             '</g>'
           );
         }).join('');
@@ -421,6 +623,9 @@
     runScopedTransition: runScopedTransition,
     renderStateMachineSVG: renderStateMachineSVG,
     renderCausalDependencySVG: renderCausalDependencySVG,
-    escapeHtml: escapeHtml
+    escapeHtml: escapeHtml,
+    formatSoul: formatSoul,
+    renderSoulCardHtml: renderSoulCardHtml,
+    truncateAtWord: truncateAtWord
   };
 });

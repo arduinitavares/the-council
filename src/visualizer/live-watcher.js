@@ -4,11 +4,104 @@
  *
  * Subscribes to CouncilTelemetryEmitter ('state_transition', 'seat_telemetry') without
  * mutating CouncilEngine or state machine logic. Atomically persists
- * window.CouncilLatestLiveRun to src/visualizer/live-run-latest.js.
+ * window.CouncilLatestLiveRun to src/visualizer/live-run-latest.js with production graph topology.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { getDependencyAndStateGraph } from '../machine/reducer.js';
+
+/**
+ * Resolves the primary actor identity responsible for a deliberation transition.
+ * @param {Object} [event]
+ * @param {Object} [state]
+ * @returns {string} Actor identifier (seat ID, judge ID, or system/engine)
+ */
+export function getTransitionActor(event, state) {
+  if (!event) return 'system';
+  if (event.seat?.id) return event.seat.id;
+  if (event.seatId) return event.seatId;
+  if (event.proof?.seatId) return event.proof.seatId;
+  if (event.vote?.seatId) return event.vote.seatId;
+  if (
+    event.type === 'START_JUDGING' ||
+    event.type === 'JUDGE_AUDIT_AND_SYNTHESIZE' ||
+    event.type === 'JUDGE_FAULT' ||
+    event.type === 'RETRY_JUDGE' ||
+    event.type === 'START_CLARIFYING' ||
+    event.type === 'PUBLISH_CLARIFICATION'
+  ) {
+    return state?.judge?.id || 'judge';
+  }
+  return 'engine';
+}
+
+/**
+ * Generates a human-readable action summary for deliberation transitions.
+ * @param {Object} [event]
+ * @param {Object} [state]
+ * @returns {string} Human-readable summary
+ */
+export function getTransitionSummary(event, state) {
+  if (!event || !event.type) {
+    return `Transition to ${state?.phase || 'unknown phase'}`;
+  }
+
+  switch (event.type) {
+    case 'ADD_SEAT': {
+      const s = event.seat;
+      return s ? `Added Seat "${s.id}" (${s.harness} / ${s.model})` : 'Added seat';
+    }
+    case 'START_CLARIFYING':
+      return 'Started discovery & clarification phase';
+    case 'PUBLISH_CLARIFICATION':
+      return `Published clarification answer for Batch ${event.batch ?? 1}`;
+    case 'BEGIN_ROUND':
+      return `Began Round ${state?.round ?? 1}/${state?.maxRounds ?? 3} proof collection`;
+    case 'SUBMIT_PROOF': {
+      const p = event.proof;
+      return p
+        ? `Seat "${p.seatId}" submitted Proof ${p.id || ''} [${p.kind || 'evidence'}]`
+        : 'Submitted proof';
+    }
+    case 'START_JUDGING':
+      return `Initiated Judge audit & candidate synthesis for Round ${state?.round ?? 1}`;
+    case 'JUDGE_AUDIT_AND_SYNTHESIZE': {
+      const count = state?.candidate?.clauses?.length ?? 0;
+      return `Judge audited proofs & synthesized Candidate with ${count} clause(s)`;
+    }
+    case 'CAST_VOTE': {
+      const v = event.vote;
+      if (!v) return 'Cast vote';
+      return v.vote === 'accept'
+        ? `Seat "${v.seatId}" voted ACCEPT (Round ${state?.round ?? 1})`
+        : `Seat "${v.seatId}" voted OBJECT (Round ${state?.round ?? 1}${v.proofId ? ', cites Proof ' + v.proofId : ''})`;
+    }
+    case 'WITHDRAW_OBJECTION':
+      return `Seat "${event.seatId}" withdrew Objection ${event.objectionId || ''}`;
+    case 'SEAT_FAULT':
+      return `Seat "${event.seatId}" faulted (${event.errorClass || 'Error'}: ${event.reason || 'unspecified'})`;
+    case 'RETRY_SEAT':
+      return `Retrying faulted Seat "${event.seatId}"`;
+    case 'EXCUSE_SEAT':
+      return `Excused Seat "${event.seatId}" (${event.reason || 'retries exhausted'})`;
+    case 'JUDGE_FAULT':
+      return `Judge faulted (${event.errorClass || 'Error'}: ${event.reason || 'unspecified'})`;
+    case 'RETRY_JUDGE':
+      return 'Retrying faulted Judge';
+    case 'EVALUATE_ROUND': {
+      if (state?.phase === 'completed') {
+        return `Evaluated Round ${state?.round ?? 1}: Verdict — ${state?.verdict?.kind || 'Completed'}`;
+      }
+      if (state?.phase === 'reviewing') {
+        return `Evaluated Round ${(state?.round ?? 2) - 1}: Open objections remain. Advanced to Round ${state?.round ?? 2}`;
+      }
+      return `Evaluated Round ${state?.round ?? 1} -> ${state?.phase || 'next'}`;
+    }
+    default:
+      return `Transition: ${event.type} -> ${state?.phase || 'unknown'}`;
+  }
+}
 
 export class VisualizerLiveWatcher {
   /**
@@ -36,6 +129,7 @@ export class VisualizerLiveWatcher {
         judge: this.initialConfig.judge || null,
         seats: Array.isArray(this.initialConfig.seats) ? [...this.initialConfig.seats] : []
       },
+      currentGraph: null,
       currentState: null,
       steps: []
     };
@@ -84,6 +178,34 @@ export class VisualizerLiveWatcher {
   }
 
   /**
+   * Safely computes production graph with defaults for partial states.
+   * @param {Object} state
+   * @returns {Object|null}
+   * @private
+   */
+  _computeGraph(state) {
+    if (!state) return null;
+    try {
+      const safeState = {
+        seats: [],
+        proofs: [],
+        objections: [],
+        candidate: null,
+        minQuorum: 2,
+        maxRounds: 3,
+        round: 1,
+        ...state
+      };
+      if (!Array.isArray(safeState.seats)) safeState.seats = [];
+      if (!Array.isArray(safeState.proofs)) safeState.proofs = [];
+      if (!Array.isArray(safeState.objections)) safeState.objections = [];
+      return getDependencyAndStateGraph(safeState);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Handles state machine transition event.
    * @private
    */
@@ -91,15 +213,31 @@ export class VisualizerLiveWatcher {
     if (this._stopped || !state) return;
 
     const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
-    this.liveRun.currentState = clone(state);
+    const clonedState = clone(state);
+    const graph = this._computeGraph(state);
+    const clonedGraph = graph ? clone(graph) : null;
+
+    if (clonedGraph) {
+      clonedState.graph = clonedGraph;
+      this.liveRun.currentGraph = clonedGraph;
+    }
+
+    this.liveRun.currentState = clonedState;
     this.liveRun.isRunning = state.phase !== 'completed';
     this.liveRun.updatedAt = timestamp || new Date().toISOString();
 
     const stepLabel = `${this.liveRun.steps.length + 1}. Transition: ${event?.type || 'EVENT'} -> ${state.phase} (Round ${state.round})`;
+    const actor = getTransitionActor(event, state);
+    const summary = getTransitionSummary(event, state);
+
     this.liveRun.steps.push({
       label: stepLabel,
+      actor,
+      summary,
       event: event ? clone(event) : null,
-      stateSnapshot: clone(state)
+      stateSnapshot: clonedState,
+      graph: clonedGraph,
+      timestamp: timestamp || new Date().toISOString()
     });
 
     this._writeAtomic();
@@ -144,6 +282,15 @@ export class VisualizerLiveWatcher {
       }
       if (this.liveRun.currentState.judge && this.liveRun.currentState.judge.id === seatId) {
         applyTelemetryToTarget(this.liveRun.currentState.judge);
+      }
+
+      // Re-derive graph topology with updated seat status
+      const graph = this._computeGraph(this.liveRun.currentState);
+      if (graph) {
+        const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
+        const clonedGraph = clone(graph);
+        this.liveRun.currentGraph = clonedGraph;
+        this.liveRun.currentState.graph = clonedGraph;
       }
     }
 

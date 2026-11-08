@@ -310,8 +310,10 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         judge: { id: 'live-judge', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Live Judge Soul' }
       }));
 
+      const tmpRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-live-runs-'));
       try {
         const mockIO = createMockIO();
+        mockIO.io.liveWatcherOptions = { outputDir: tmpRunsDir, runId: 'cli-test-run-1' };
         mockIO.io.harnessRegistry = new HarnessRegistry({
           spawnRunner: async ({ prompt }) => {
             if (prompt.includes('VOTING') || prompt.includes('"vote"')) {
@@ -339,14 +341,19 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         assert.equal(parsed.mode, 'live');
         assert.equal(parsed.state.topic, 'Live Flag Verification');
 
-        // Verify that live watcher created or updated live-run-latest.js
-        const liveFile = path.resolve(process.cwd(), 'src/visualizer/live-run-latest.js');
-        assert.ok(fs.existsSync(liveFile), 'live-run-latest.js must exist after --live run');
-        const content = fs.readFileSync(liveFile, 'utf8');
+        // Verify that live watcher created latest.js, index.js, and <runId>.js in isolated outputDir
+        const latestFile = path.join(tmpRunsDir, 'latest.js');
+        const runFile = path.join(tmpRunsDir, 'cli-test-run-1.js');
+        const indexFile = path.join(tmpRunsDir, 'index.js');
+        assert.ok(fs.existsSync(latestFile), 'latest.js must exist in outputDir after --live run');
+        assert.ok(fs.existsSync(runFile), 'run-scoped artifact must exist in outputDir after --live run');
+        assert.ok(fs.existsSync(indexFile), 'index.js manifest must exist in outputDir after --live run');
+        const content = fs.readFileSync(latestFile, 'utf8');
         assert.match(content, /CouncilLatestLiveRun/);
         assert.match(content, /Live Flag Verification/);
       } finally {
         fs.unlinkSync(tmpFile);
+        fs.rmSync(tmpRunsDir, { recursive: true, force: true });
       }
     });
 

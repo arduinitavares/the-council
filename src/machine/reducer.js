@@ -819,7 +819,8 @@ export function transitionCouncil(state, event) {
         topic: state.topic,
         minQuorum: state.minQuorum,
         maxRounds: state.maxRounds,
-        maxRetriesPerSeat: state.maxRetriesPerSeat
+        maxRetriesPerSeat: state.maxRetriesPerSeat,
+        evidence: state.evidence
       };
       const fresh = createInitialCouncilState(resetConfig);
       fresh.history = ['[RESET] Council state reset to initial configuration.'];

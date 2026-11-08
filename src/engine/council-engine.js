@@ -157,18 +157,43 @@ export class CouncilEngine {
 
   /**
    * Runs Discovery phase (Clarifications) if provided.
-   * @param {Array<{ answer: string }>} [clarifications=[]]
+   * @param {Array<{ answer?: string, label?: string, source?: string, text?: string } | string>} [clarifications=[]]
    */
   async runDiscovery(clarifications = []) {
-    if (!clarifications || clarifications.length === 0) return;
+    if (!clarifications || clarifications.length === 0 || this.aborted || this.isCompleted()) return;
+
+    if (this.state.clarificationBatch === 0 && Array.isArray(this.state.clarifications) && this.state.clarifications.length > 0) {
+      this.state = {
+        ...this.state,
+        clarifications: [],
+        maxClarificationBatches: Math.max(this.state.maxClarificationBatches, clarifications.length)
+      };
+    } else if (this.state.clarificationBatch + clarifications.length > this.state.maxClarificationBatches) {
+      this.state = {
+        ...this.state,
+        maxClarificationBatches: this.state.clarificationBatch + clarifications.length
+      };
+    }
 
     for (let i = 0; i < clarifications.length; i++) {
       if (this.aborted || this.isCompleted()) break;
       const item = clarifications[i];
+      let answer;
+      if (typeof item === 'object' && item !== null) {
+        if (typeof item.answer === 'string' && item.answer.trim()) {
+          answer = item.answer.trim();
+        } else if (typeof item.label === 'string' && typeof item.text === 'string') {
+          answer = `[${item.label.trim()}] (Source: ${String(item.source || '').trim()}): ${item.text.trim()}`;
+        } else {
+          answer = String(item);
+        }
+      } else {
+        answer = String(item);
+      }
       this._step({ type: 'START_CLARIFYING' });
       this._step({
         type: 'PUBLISH_CLARIFICATION',
-        answer: typeof item === 'object' && item.answer ? item.answer : String(item)
+        answer
       });
     }
   }

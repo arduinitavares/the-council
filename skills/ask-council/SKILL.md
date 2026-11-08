@@ -108,6 +108,39 @@ The Council includes a real-time, browser-based Observer Visualizer at `/Users/a
 
 ## 4. Execution Workflow
 
+### Step 0: Evidence Gathering & Grounding (`--evidence` / `evidence` config key)
+Before launching a Council deliberation on time-sensitive, retail, pricing, benchmark, or empirical questions, gather verified facts first (using web search, official documentation, or repository inspection) and pass them into The Council so every Seat and the Judge deliberate over a shared, immutable ground-truth packet rather than relying on stale training weights or redundant per-seat web searches.
+
+1. **Via `--evidence <file>` (`-e`, repeatable)**:
+   - Pass a JSON file containing an array of `{ "label", "source", "text" }` objects (or `{ "evidence": [...] }`), or pass a plain Markdown/text file (`--evidence notes.md`), which is automatically wrapped as a labeled evidence item:
+     ```bash
+     /Users/aaat/projects/the-council/bin/council run --live -p best-of-families \
+       -t "Which smartphone under R$ 1000 is the best buy in Brazil right now?" \
+       --evidence /tmp/brazil-phones-2026.json -v
+     ```
+2. **Via `evidence` and `clarifications` in custom JSON config**:
+   - `evidence`: Array of `{ "id"?: "E1", "label": string, "source": string, "text": string }` items (bounded to 20 items, 32,768 chars per item, 131,072 chars total). Frozen into `state.evidence` and injected into every Seat deliberation prompt (`[E1] <label> (Source: <source>): <text>`), Seat voting prompt, and Judge audit/synthesis prompt.
+   - `clarifications`: Optional array of `{ "batch"?: number, "question"?: string, "answer": string }` (or `{ "label", "source", "text" }`) items broadcast across Discovery batches before Round 1 begins.
+   ```json
+   {
+     "topic": "Which smartphone under R$ 1000 provides the best longevity and camera performance in Brazil?",
+     "preset": "best-of-families",
+     "evidence": [
+       {
+         "label": "Anatel & Retail Street Pricing (May 2026)",
+         "source": "Zoom / Buscapé Brazil retail tracker",
+         "text": "Moto G34 5G (8GB/128GB, Snapdragon 695, UFS 2.2) is R$ 899; Galaxy A15 4G (4GB/128GB, Helio G99, Super AMOLED 90Hz) is R$ 849."
+       }
+     ],
+     "clarifications": [
+       {
+         "question": "Are used or imported grey-market devices eligible?",
+         "answer": "No — only new, Anatel-certified devices with local 1-year warranty in Brazil under R$ 1000."
+       }
+     ]
+   }
+   ```
+
 ### Step 1: Formulate Command
 Using a built-in preset (works from any working directory):
 ```bash
@@ -121,6 +154,7 @@ Using a custom configuration file:
 
 ### CLI Flag Reference
 - `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`, or `best-of-families`).
+- `-e, --evidence <path>`: Path to a JSON or Markdown/text evidence file (repeatable). Merges with any `evidence` array in `-c <config.json>` and injects `[E1] <label> (Source: <source>): <text>` into all Seat and Judge prompts.
 - `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `/Users/aaat/projects/the-council/.council/runs/`. Sets `"mode": "live"` in `--json` output.
 - `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.

@@ -665,6 +665,122 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(telemetryErrors.length, 2);
     });
   });
+
+  describe('Issue #23: Validated evidence & clarifications and State Preservation', () => {
+    it('exports MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ITEM_CHARS, MAX_TOTAL_EVIDENCE_CHARS, and normalizeCouncilConfig', async () => {
+      const cfgMod = await import('../../src/engine/config.js');
+      assert.equal(cfgMod.MAX_EVIDENCE_ITEMS, 20);
+      assert.equal(cfgMod.MAX_EVIDENCE_ITEM_CHARS, 32768);
+      assert.equal(cfgMod.MAX_TOTAL_EVIDENCE_CHARS, 131072);
+      assert.equal(typeof cfgMod.normalizeCouncilConfig, 'function');
+    });
+
+    it('rejects malformed evidence and clarifications entries and oversized evidence in validateConfig', async () => {
+      const { MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ITEM_CHARS } = await import('../../src/engine/config.js');
+      const base = {
+        topic: 'Evidence Validation Topic',
+        maxRounds: 2,
+        minQuorum: 2,
+        maxClarificationBatches: 2,
+        maxRetriesPerSeat: 1
+      };
+
+      // Non-array evidence
+      assert.equal(validateConfig({ ...base, evidence: 'not-array' }).valid, false);
+      // Null / missing fields in evidence
+      assert.equal(validateConfig({ ...base, evidence: [null] }).valid, false);
+      assert.equal(validateConfig({ ...base, evidence: [{ label: '', source: 's', text: 't' }] }).valid, false);
+      assert.equal(validateConfig({ ...base, evidence: [{ label: 'l', source: '   ', text: 't' }] }).valid, false);
+      assert.equal(validateConfig({ ...base, evidence: [{ label: 'l', source: 's', text: '' }] }).valid, false);
+
+      // Too many evidence items
+      const tooMany = Array.from({ length: MAX_EVIDENCE_ITEMS + 1 }, (_, i) => ({
+        label: `L${i}`,
+        source: `S${i}`,
+        text: 'T'
+      }));
+      const resCount = validateConfig({ ...base, evidence: tooMany });
+      assert.equal(resCount.valid, false);
+      assert.match(resCount.errors.join(' '), /maximum of 20 items/i);
+
+      // Oversized single evidence item
+      const resOversizeItem = validateConfig({
+        ...base,
+        evidence: [{ label: 'Huge', source: 'src.txt', text: 'X'.repeat(MAX_EVIDENCE_ITEM_CHARS + 10) }]
+      });
+      assert.equal(resOversizeItem.valid, false);
+      assert.match(resOversizeItem.errors.join(' '), /exceeds maximum item size/i);
+
+      // Oversized total evidence
+      const fiveLarge = Array.from({ length: 5 }, (_, i) => ({
+        label: `Chunk ${i}`,
+        source: `part-${i}.txt`,
+        text: 'Y'.repeat(30000)
+      }));
+      const resOversizeTotal = validateConfig({ ...base, evidence: fiveLarge });
+      assert.equal(resOversizeTotal.valid, false);
+      assert.match(resOversizeTotal.errors.join(' '), /exceeds maximum of 131072/i);
+
+      // Malformed clarifications
+      assert.equal(validateConfig({ ...base, clarifications: 'not-array' }).valid, false);
+      assert.equal(validateConfig({ ...base, clarifications: [null] }).valid, false);
+      assert.equal(validateConfig({ ...base, clarifications: ['   '] }).valid, false);
+      assert.equal(validateConfig({ ...base, clarifications: [{}] }).valid, false);
+      assert.equal(validateConfig({ ...base, clarifications: [{ answer: '  ' }] }).valid, false);
+      assert.equal(validateConfig({ ...base, clarifications: [{ batch: 0, answer: 'bad batch' }] }).valid, false);
+    });
+
+    it('preserves frozen evidence and all pre-supplied clarifications (even when > maxClarificationBatches) across createInitialCouncilState, initRoster, and CouncilEngine.run()', async () => {
+      const { createInitialCouncilState } = await import('../../src/machine/state.js');
+      const { transitionCouncil } = await import('../../src/machine/reducer.js');
+
+      const configInput = {
+        topic: 'State Preservation Test',
+        minQuorum: 2,
+        maxClarificationBatches: 1,
+        evidence: [
+          { label: 'API Response', source: 'http://127.0.0.1:8790/health', text: '{"status":"ok","latencyMs":4}' },
+          { label: 'Schema Snippet', source: 'db/schema.sql:10', text: 'CREATE TABLE orders (id INT PRIMARY KEY);' }
+        ],
+        clarifications: [
+          { batch: 1, answer: 'Clarification 1: single region' },
+          { batch: 2, answer: 'Clarification 2: zero downtime' },
+          { label: 'Clarification 3 Label', source: 'ops-notes.md', text: 'Clarification 3: strict SLO' }
+        ],
+        seats: [
+          { id: 's1', harness: 'mock', model: 'm1', soul: 'S1' },
+          { id: 's2', harness: 'mock', model: 'm2', soul: 'S2' }
+        ]
+      };
+
+      const initial = createInitialCouncilState(configInput);
+      assert.equal(initial.evidence.length, 2);
+      assert.ok(Object.isFrozen(initial.evidence), 'state.evidence array must be frozen');
+      assert.ok(Object.isFrozen(initial.evidence[0]), 'state.evidence[0] must be frozen');
+      assert.equal(initial.evidence[0].id, 'E1');
+      assert.equal(initial.evidence[0].label, 'API Response');
+      assert.equal(initial.evidence[1].id, 'E2');
+      assert.equal(initial.clarifications.length, 3, 'Pre-supplied clarifications must not be truncated by maxClarificationBatches');
+
+      // Reducer transition preserves frozen evidence
+      const afterBegin = transitionCouncil(initial, { type: 'BEGIN_ROUND' });
+      assert.equal(afterBegin.evidence.length, 2);
+      assert.ok(Object.isFrozen(afterBegin.evidence));
+
+      // CouncilEngine initRoster and run() preserve evidence and all 3 clarifications
+      const engine = new CouncilEngine(configInput);
+      engine.initRoster();
+      assert.equal(engine.state.evidence.length, 2);
+      assert.ok(Object.isFrozen(engine.state.evidence));
+      assert.equal(engine.state.clarifications.length, 3);
+
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+      assert.equal(result.state.evidence.length, 2);
+      assert.equal(result.state.clarifications.length, 3);
+      assert.match(result.state.clarifications[2].answer, /Clarification 3/);
+    });
+  });
 });
 
 

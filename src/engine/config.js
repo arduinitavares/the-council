@@ -7,6 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
 
+export const MAX_EVIDENCE_ITEMS = 20;
+export const MAX_EVIDENCE_ITEM_CHARS = 32768;
+export const MAX_TOTAL_EVIDENCE_CHARS = 131072;
+
 /**
  * Validates a Council configuration object.
  * @param {Object} config
@@ -68,6 +72,114 @@ export function validateConfig(config) {
 
   if (config.ignoreUserConfig !== undefined && typeof config.ignoreUserConfig !== 'boolean') {
     errors.push('ignoreUserConfig must be a boolean.');
+  }
+
+  if (config.evidence !== undefined) {
+    if (!Array.isArray(config.evidence)) {
+      errors.push('evidence must be an array of { label, source, text } objects.');
+    } else {
+      if (config.evidence.length > MAX_EVIDENCE_ITEMS) {
+        errors.push(`evidence exceeds maximum of ${MAX_EVIDENCE_ITEMS} items (got ${config.evidence.length}).`);
+      }
+      let totalEvidenceChars = 0;
+      config.evidence.forEach((item, idx) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`evidence[${idx}] must be a non-null object with label, source, and text.`);
+          return;
+        }
+        if (typeof item.label !== 'string' || !item.label.trim()) {
+          errors.push(`evidence[${idx}] requires a non-empty string "label".`);
+        }
+        if (typeof item.source !== 'string' || !item.source.trim()) {
+          errors.push(`evidence[${idx}] requires a non-empty string "source".`);
+        }
+        if (typeof item.text !== 'string' || !item.text.trim()) {
+          errors.push(`evidence[${idx}] requires a non-empty string "text".`);
+        }
+        const itemChars =
+          (typeof item.label === 'string' ? item.label.length : 0) +
+          (typeof item.source === 'string' ? item.source.length : 0) +
+          (typeof item.text === 'string' ? item.text.length : 0);
+        if (itemChars > MAX_EVIDENCE_ITEM_CHARS) {
+          errors.push(
+            `evidence[${idx}] (${itemChars} chars) exceeds maximum item size of ${MAX_EVIDENCE_ITEM_CHARS} characters.`
+          );
+        }
+        totalEvidenceChars += itemChars;
+      });
+      if (totalEvidenceChars > MAX_TOTAL_EVIDENCE_CHARS) {
+        errors.push(
+          `evidence total size (${totalEvidenceChars} chars) exceeds maximum of ${MAX_TOTAL_EVIDENCE_CHARS} characters.`
+        );
+      }
+    }
+  }
+
+  if (config.clarifications !== undefined) {
+    if (!Array.isArray(config.clarifications)) {
+      errors.push('clarifications must be an array of clarification objects.');
+    } else {
+      if (config.clarifications.length > MAX_EVIDENCE_ITEMS) {
+        errors.push(
+          `clarifications exceeds maximum of ${MAX_EVIDENCE_ITEMS} items (got ${config.clarifications.length}).`
+        );
+      }
+      let totalClarificationChars = 0;
+      config.clarifications.forEach((item, idx) => {
+        if (typeof item === 'string') {
+          if (!item.trim()) {
+            errors.push(`clarifications[${idx}] string cannot be empty.`);
+          }
+          if (item.length > MAX_EVIDENCE_ITEM_CHARS) {
+            errors.push(
+              `clarifications[${idx}] (${item.length} chars) exceeds maximum item size of ${MAX_EVIDENCE_ITEM_CHARS} characters.`
+            );
+          }
+          totalClarificationChars += item.length;
+          return;
+        }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`clarifications[${idx}] must be a non-null object with "answer" or { label, source, text }.`);
+          return;
+        }
+        const hasAnswer = typeof item.answer === 'string' && item.answer.trim().length > 0;
+        const hasEvidenceShape =
+          typeof item.label === 'string' &&
+          item.label.trim().length > 0 &&
+          typeof item.source === 'string' &&
+          item.source.trim().length > 0 &&
+          typeof item.text === 'string' &&
+          item.text.trim().length > 0;
+        if (!hasAnswer && !hasEvidenceShape) {
+          errors.push(
+            `clarifications[${idx}] requires a non-empty string "answer" or non-empty "label", "source", and "text".`
+          );
+        }
+        if (item.batch !== undefined && (!Number.isInteger(item.batch) || item.batch < 1)) {
+          errors.push(`clarifications[${idx}].batch must be an integer >= 1.`);
+        }
+        if (item.question !== undefined && typeof item.question !== 'string') {
+          errors.push(`clarifications[${idx}].question must be a string.`);
+        }
+        const itemChars =
+          (typeof item.answer === 'string' ? item.answer.length : 0) +
+          (typeof item.question === 'string' ? item.question.length : 0) +
+          (typeof item.label === 'string' ? item.label.length : 0) +
+          (typeof item.source === 'string' ? item.source.length : 0) +
+          (typeof item.text === 'string' ? item.text.length : 0);
+        if (itemChars > MAX_EVIDENCE_ITEM_CHARS) {
+          errors.push(
+            `clarifications[${idx}] (${itemChars} chars) exceeds maximum item size of ${MAX_EVIDENCE_ITEM_CHARS} characters.`
+          );
+        }
+        totalClarificationChars += itemChars;
+      });
+      if (totalClarificationChars > MAX_TOTAL_EVIDENCE_CHARS) {
+        errors.push(
+          `clarifications total size (${totalClarificationChars} chars) exceeds maximum of ${MAX_TOTAL_EVIDENCE_CHARS} characters.`
+        );
+      }
+    }
   }
 
   if (config.judge) {
@@ -287,6 +399,44 @@ export const COUNCIL_PRESETS = Object.freeze({
 
 export const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..');
 
+function normalizeEvidenceList(evidence) {
+  if (!Array.isArray(evidence)) return Object.freeze([]);
+  return Object.freeze(
+    evidence.map((item, idx) =>
+      Object.freeze({
+        id: typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : `E${idx + 1}`,
+        label: String(item.label).trim(),
+        source: String(item.source).trim(),
+        text: String(item.text).trim()
+      })
+    )
+  );
+}
+
+function normalizeClarificationsList(clarifications) {
+  if (!Array.isArray(clarifications)) return undefined;
+  return clarifications.map((item, idx) => {
+    if (typeof item === 'string') {
+      return {
+        batch: idx + 1,
+        answer: item.trim()
+      };
+    }
+    const hasAnswer = typeof item.answer === 'string' && item.answer.trim().length > 0;
+    const answer = hasAnswer
+      ? item.answer.trim()
+      : `[${item.label.trim()}] (Source: ${item.source.trim()}): ${item.text.trim()}`;
+    return {
+      batch: Number.isInteger(item.batch) && item.batch >= 1 ? item.batch : idx + 1,
+      answer,
+      ...(typeof item.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(typeof item.label === 'string' && item.label.trim()
+        ? { label: item.label.trim(), source: item.source.trim(), text: item.text.trim() }
+        : {})
+    };
+  });
+}
+
 /**
  * Merges partial config with default values and normalizes options.
  * @param {Object} [userConfig={}]
@@ -378,8 +528,21 @@ export function resolveConfig(userConfig = {}) {
     throw new Error(`Invalid Council configuration: ${validation.errors.join('; ')}`);
   }
 
-  return Object.freeze(merged);
+  const normalizedEvidence = normalizeEvidenceList(merged.evidence);
+  const normalizedClarifications = normalizeClarificationsList(merged.clarifications);
+  const resolvedMaxClarificationBatches = Array.isArray(normalizedClarifications)
+    ? Math.max(merged.maxClarificationBatches, normalizedClarifications.length)
+    : merged.maxClarificationBatches;
+
+  return Object.freeze({
+    ...merged,
+    maxClarificationBatches: resolvedMaxClarificationBatches,
+    evidence: normalizedEvidence,
+    ...(normalizedClarifications !== undefined ? { clarifications: normalizedClarifications } : {})
+  });
 }
+
+export const normalizeCouncilConfig = resolveConfig;
 
 /**
  * Loads and resolves configuration from a JSON file.
@@ -412,5 +575,9 @@ export function loadConfigFile(filePath, overrides = {}) {
   } catch (err) {
     throw new Error(`Malformed JSON in configuration file "${resolvedPath}": ${err.message}`);
   }
-  return resolveConfig({ ...parsed, ...overrides });
+  const mergedInput = { ...parsed, ...overrides };
+  if (Array.isArray(parsed?.evidence) && Array.isArray(overrides?.evidence)) {
+    mergedInput.evidence = [...parsed.evidence, ...overrides.evidence];
+  }
+  return resolveConfig(mergedInput);
 }

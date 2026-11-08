@@ -260,8 +260,17 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 /**
  * @typedef {Object} Clarification
- * @property {number} batch - Batch number (1-based).
+ * @property {number} [batch] - Batch number (1-based).
  * @property {string} answer - Broadcast clarification answer.
+ * @property {string} [question] - Optional clarification question.
+ */
+
+/**
+ * @typedef {Object} EvidenceItem
+ * @property {string} [id] - Canonical evidence ID (e.g. 'E1', 'E2').
+ * @property {string} label - Short human-readable label for the evidence item.
+ * @property {string} source - Verifiable file path, URL, or command that produced the evidence.
+ * @property {string} text - Grounded evidence content.
  */
 
 /**
@@ -280,6 +289,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {number} [timeoutMs] - Optional global execution timeout in ms.
  * @property {number} [maxConcurrentSeats] - Max concurrent seats during deliberation/voting.
  * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
+ * @property {EvidenceItem[]} [evidence] - Pre-collected grounded evidence items passed to seats and judge.
+ * @property {Clarification[]} [clarifications] - Pre-supplied clarification answers broadcast to seats and judge.
  * @property {Partial<Judge>} [judge] - Optional judge configuration.
  * @property {Array<Partial<Seat>>} [seats] - Initial seat roster.
  */
@@ -299,6 +310,7 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {number} maxClarificationBatches
  * @property {number} minQuorum
  * @property {number} maxRetriesPerSeat
+ * @property {readonly EvidenceItem[]} evidence
  * @property {Clarification[]} clarifications
  * @property {Judge} judge
  * @property {Seat[]} seats

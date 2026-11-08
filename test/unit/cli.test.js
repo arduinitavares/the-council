@@ -838,4 +838,99 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       }
     });
   });
+
+  describe('Issue #23: --evidence CLI Flag, Merging & Prompt Grounding', () => {
+    it('supports --evidence (-e) with JSON and Markdown/text files, merges with config evidence, and injects [E1] label/source/text into seat and judge prompts', async () => {
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-evidence-'));
+      const jsonEvPath = path.join(tmpDir, 'api-evidence.json');
+      const mdEvPath = path.join(tmpDir, 'local-notes.md');
+      const cfgPath = path.join(tmpDir, 'council-cfg.json');
+
+      fs.writeFileSync(
+        jsonEvPath,
+        JSON.stringify([
+          {
+            label: 'Localhost Metrics Endpoint',
+            source: 'http://127.0.0.1:8790/metrics',
+            text: 'p99_latency_ms=11.4 queue_depth=0'
+          }
+        ])
+      );
+      fs.writeFileSync(mdEvPath, '# Benchmark Note\nSQLite WAL throughput reached 18,400 writes/sec.');
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          topic: 'Evaluate local service performance',
+          minQuorum: 2,
+          evidence: [
+            {
+              label: 'Config Inline Evidence',
+              source: 'config/service.yaml',
+              text: 'worker_threads: 4'
+            }
+          ],
+          seats: [
+            { id: 'seat-alpha', harness: 'mock', model: 'm1', soul: 'Systems Architect' },
+            { id: 'seat-beta', harness: 'mock', model: 'm2', soul: 'Performance Analyst' }
+          ],
+          judge: { id: 'judge-main', harness: 'mock', model: 'mj', soul: 'Auditor' }
+        })
+      );
+
+      try {
+        const mockAdapter = new MockAdapter();
+        const mockIO = createMockIO();
+        mockIO.io.harnessResolver = () => mockAdapter;
+
+        const code = await runCli(
+          ['run', '--mock', '-c', cfgPath, '-e', jsonEvPath, '--evidence', mdEvPath, '--json'],
+          mockIO.io
+        );
+        assert.equal(code, 0, `Expected exit 0, stderr: ${mockIO.getStderr()}`);
+
+        const parsed = JSON.parse(mockIO.getStdout());
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.state.evidence.length, 3);
+        assert.equal(parsed.state.evidence[0].id, 'E1');
+        assert.equal(parsed.state.evidence[0].label, 'Config Inline Evidence');
+        assert.equal(parsed.state.evidence[1].id, 'E2');
+        assert.equal(parsed.state.evidence[1].label, 'Localhost Metrics Endpoint');
+        assert.equal(parsed.state.evidence[2].id, 'E3');
+        assert.equal(parsed.state.evidence[2].label, 'local-notes.md');
+
+        // Verify seat deliberation & voting prompts and judge prompt all received the evidence
+        const seatDelibPrompts = mockAdapter.recordedPrompts.filter(
+          (p) => p.seatId === 'seat-alpha' && p.phase === 'DELIBERATION'
+        );
+        const seatVotePrompts = mockAdapter.recordedPrompts.filter(
+          (p) => p.seatId === 'seat-alpha' && p.phase === 'VOTING'
+        );
+        const judgePrompts = mockAdapter.recordedPrompts.filter((p) => p.seatId === 'judge-main');
+
+        assert.equal(seatDelibPrompts.length, 1);
+        assert.equal(seatVotePrompts.length, 1);
+        assert.equal(judgePrompts.length, 1);
+
+        for (const entry of [seatDelibPrompts[0], seatVotePrompts[0], judgePrompts[0]]) {
+          assert.match(entry.prompt, /\[E1\] Config Inline Evidence \(Source: config\/service\.yaml\): worker_threads: 4/);
+          assert.match(entry.prompt, /\[E2\] Localhost Metrics Endpoint \(Source: http:\/\/127\.0\.0\.1:8790\/metrics\): p99_latency_ms=11\.4/);
+          assert.match(entry.prompt, /\[E3\] local-notes\.md \(Source: .*local-notes\.md\): # Benchmark Note/);
+        }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('documents -e, --evidence and evidence / clarifications config keys in HELP_TEXT and skills/ask-council/SKILL.md', () => {
+      assert.match(HELP_TEXT, /-e, --evidence <path>/);
+      assert.match(HELP_TEXT, /evidence/i);
+
+      const skillPath = path.resolve(import.meta.dirname, '../../skills/ask-council/SKILL.md');
+      const skillContent = fs.readFileSync(skillPath, 'utf8');
+      assert.match(skillContent, /--evidence/);
+      assert.match(skillContent, /"evidence"/);
+      assert.match(skillContent, /Evidence Gathering & Grounding/);
+    });
+  });
 });

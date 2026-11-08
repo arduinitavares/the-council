@@ -6,6 +6,7 @@
  */
 
 import { HarnessAdapter, QuotaExhaustionError } from './adapter.js';
+import { formatDeliberationPrompt, formatVotingPrompt, formatJudgePrompt } from '../seats/soul.js';
 
 export class MockAdapter extends HarnessAdapter {
   constructor(config = {}) {
@@ -152,10 +153,17 @@ export class MockAdapter extends HarnessAdapter {
   async executeSeat({ seat, soul, round, phase, state }) {
     this.callCount.seats += 1;
 
-    // Record prompt for soul adherence verification
-    const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]`;
+    const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const resolvedSoul = soul || seat?.soul || 'General Seat: Evaluates claims empirically';
+    const renderedPrompt = isVoting
+      ? formatVotingPrompt({ soul: resolvedSoul, seat, candidate: state?.candidate, state })
+      : formatDeliberationPrompt({ soul: resolvedSoul, seat, topic: state?.topic, round, maxRounds: state?.maxRounds, state });
+
+    // Record prompt for soul adherence and evidence/clarifications verification
+    const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]\n${renderedPrompt}`;
     this.recordedPrompts.push({
       seatId: seat.id,
+      role: 'seat',
       soul,
       round,
       phase,
@@ -193,7 +201,7 @@ export class MockAdapter extends HarnessAdapter {
     }
 
     // Default deterministic fallback
-    if (phase === 'VOTING' || phase === 'confirming') {
+    if (isVoting) {
       return { vote: 'accept' };
     }
 
@@ -212,6 +220,24 @@ export class MockAdapter extends HarnessAdapter {
    */
   async executeJudge({ judge, round, phase, proofs, state }) {
     this.callCount.judge += 1;
+
+    const judgePrompt = formatJudgePrompt({
+      judge,
+      topic: state?.topic,
+      round,
+      maxRounds: state?.maxRounds,
+      proofs,
+      state
+    });
+    this.recordedPrompts.push({
+      seatId: judge?.id || 'judge',
+      role: 'judge',
+      soul: judge?.soul,
+      round,
+      phase: phase || 'JUDGE_AUDIT_SYNTHESIS',
+      prompt: `[JUDGE: ${judge?.id || 'judge'}] [ROUND: ${round}] [PHASE: ${phase || 'JUDGE_AUDIT_SYNTHESIS'}]\n${judgePrompt}`,
+      timestamp: new Date().toISOString()
+    });
 
     // Check judge fault injection
     const faultRule = this.judgeFaultInjections.get(round) || this.judgeFaultInjections.get('*');

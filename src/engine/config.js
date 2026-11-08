@@ -285,6 +285,8 @@ export const COUNCIL_PRESETS = Object.freeze({
   })
 });
 
+export const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..');
+
 /**
  * Merges partial config with default values and normalizes options.
  * @param {Object} [userConfig={}]
@@ -293,11 +295,18 @@ export const COUNCIL_PRESETS = Object.freeze({
 export function resolveConfig(userConfig = {}) {
   let presetDefinition = null;
   if (userConfig.preset !== undefined && userConfig.preset !== null) {
-    if (typeof userConfig.preset !== 'string' || !Object.hasOwn(COUNCIL_PRESETS, userConfig.preset)) {
+    if (typeof userConfig.preset === 'string' && Object.hasOwn(COUNCIL_PRESETS, userConfig.preset)) {
+      presetDefinition = COUNCIL_PRESETS[userConfig.preset];
+    } else if (typeof userConfig.preset === 'string' && /^[a-z0-9][a-z0-9-_]*$/i.test(userConfig.preset)) {
+      const configPresetPath = path.resolve(PACKAGE_ROOT, 'configs', `${userConfig.preset}.json`);
+      if (fs.existsSync(configPresetPath) && fs.statSync(configPresetPath).isFile()) {
+        presetDefinition = JSON.parse(fs.readFileSync(configPresetPath, 'utf8'));
+      }
+    }
+    if (!presetDefinition) {
       const available = Object.keys(COUNCIL_PRESETS).join(', ');
       throw new Error(`Unknown preset "${String(userConfig.preset)}". Available presets: ${available}`);
     }
-    presetDefinition = COUNCIL_PRESETS[userConfig.preset];
   }
 
   const defaultTools = userConfig.tools !== undefined ? userConfig.tools : 'read-only';
@@ -324,8 +333,15 @@ export function resolveConfig(userConfig = {}) {
     ? userConfig.maxConcurrentSeats
     : (userConfig.seats ? userConfig.seats.length : (presetDefinition ? presetDefinition.seats.length : 10));
 
+  const presetScalarDefaults = {};
+  if (presetDefinition) {
+    if (presetDefinition.maxRounds !== undefined) presetScalarDefaults.maxRounds = presetDefinition.maxRounds;
+    if (presetDefinition.minQuorum !== undefined) presetScalarDefaults.minQuorum = presetDefinition.minQuorum;
+  }
+
   const merged = {
     ...DEFAULT_CONFIG,
+    ...presetScalarDefaults,
     ...userConfig,
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
@@ -372,7 +388,20 @@ export function resolveConfig(userConfig = {}) {
  * @returns {Object} Normalized CouncilConfig
  */
 export function loadConfigFile(filePath, overrides = {}) {
-  const resolvedPath = path.resolve(process.cwd(), filePath);
+  let resolvedPath = path.resolve(process.cwd(), filePath);
+  if (!(fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) && !path.isAbsolute(filePath)) {
+    const fallbackCandidates = [
+      path.resolve(PACKAGE_ROOT, filePath),
+      path.resolve(PACKAGE_ROOT, 'configs', filePath),
+      ...(!filePath.endsWith('.json') ? [path.resolve(PACKAGE_ROOT, 'configs', `${filePath}.json`)] : [])
+    ];
+    for (const candidate of fallbackCandidates) {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        resolvedPath = candidate;
+        break;
+      }
+    }
+  }
   if (!fs.existsSync(resolvedPath)) {
     throw new Error(`Configuration file not found: "${resolvedPath}"`);
   }

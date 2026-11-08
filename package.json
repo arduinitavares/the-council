@@ -14,7 +14,8 @@
     "test": "node --test 'test/**/*.test.js'",
     "test:unit": "node --test 'test/unit/**/*.test.js'",
     "test:integration": "node --test 'test/integration/**/*.test.js'",
-    "test:e2e": "node --test 'test/e2e/**/*.test.js'"
+    "test:e2e": "node --test 'test/e2e/**/*.test.js'",
+    "install-skill": "node scripts/install-skill.js"
   },
   "private": true,
   "license": "MIT"

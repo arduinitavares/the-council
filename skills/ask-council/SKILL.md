@@ -36,9 +36,9 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`). Run with:
+- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
   ```bash
-  ./bin/council run --live -c configs/best-of-families.json -t "<question>" -v
+  /Users/aaat/projects/the-council/bin/council run --live -p best-of-families -t "<question>" -v
   ```
 
 ### When to Generate a Custom JSON Configuration (`-c <config.json>`)
@@ -89,15 +89,15 @@ If the question demands domain-specific temperaments (Souls) that aren't covered
 
 ## 3. Real-Time Live Visualizer
 
-The Council includes a real-time, browser-based Observer Visualizer at `src/visualizer/index.html`.
+The Council includes a real-time, browser-based Observer Visualizer at `/Users/aaat/projects/the-council/src/visualizer/index.html`.
 
-1. **Open the visualizer** in your browser:
+1. **Open the visualizer** in your browser (works from any working directory):
    ```bash
-   open src/visualizer/index.html
+   open /Users/aaat/projects/the-council/src/visualizer/index.html
    ```
-2. **Follow in Live Follow Mode**:
-   - The visualizer automatically detects active runs via `src/visualizer/live-run-latest.js`.
-   - Click the **"Live Follow (Auto-Sync)"** toggle in the top-right toolbar.
+2. **Follow in Live Follow Mode & Switch Runs**:
+   - The visualizer automatically detects active and historical runs in `/Users/aaat/projects/the-council/.council/runs/` (`latest.js`, `index.js`, and `<runId>.js`).
+   - Click the **"Live Follow (Auto-Sync)"** toggle or select any previous run in the `#run-selector` dropdown in the top-right toolbar.
    - The UI reloads live run telemetry every 1 second over `file://` without CORS issues.
    - You will see:
      - Real-time seat status badges (`THINKING`, `PROOF_SUBMITTED`, `ACCEPTED`, `OBJECTED`, `EXCUSED`).
@@ -109,22 +109,22 @@ The Council includes a real-time, browser-based Observer Visualizer at `src/visu
 ## 4. Execution Workflow
 
 ### Step 1: Formulate Command
-Using a built-in preset:
+Using a built-in preset (works from any working directory):
 ```bash
-./bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?" -v
+/Users/aaat/projects/the-council/bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?" -v
 ```
 
 Using a custom configuration file:
 ```bash
-./bin/council run --live -c phone-council.json -v
+/Users/aaat/projects/the-council/bin/council run --live -c phone-council.json -v
 ```
 
 ### CLI Flag Reference
-- `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`).
-- `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `src/visualizer/live-run-latest.js`. Sets `"mode": "live"` in `--json` output.
+- `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`, or `best-of-families`).
+- `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `/Users/aaat/projects/the-council/.council/runs/`. Sets `"mode": "live"` in `--json` output.
 - `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.
-- `-c, --config <path>`: Path to custom JSON configuration file.
+- `-c, --config <path>`: Path to custom JSON configuration file (resolved against current working directory first, then `<packageRoot>/` and `<packageRoot>/configs/`).
 - `-r, --rounds <number>`: Maximum deliberation rounds (default: 3).
 - `-q, --quorum <number>`: Minimum quorum of active seats (default: 2).
 - `-v, --verbose`: Stream real-time transition and seat telemetry to stderr.

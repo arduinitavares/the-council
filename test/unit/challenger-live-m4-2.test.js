@@ -106,7 +106,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
       // Generate a large payload deliberation (e.g. 100KB topic and snapshots)
       const bigTopic = 'High-Throughput Consensus Stress: ' + 'A'.repeat(80000);
-      const code = await runCli(['run', '--topic', bigTopic, '--json'], {
+      const code = await runCli(['run', '--mock', '--topic', bigTopic, '--json'], {
         stdout: backpressuredStdout,
         stderr: { write: () => true },
         exit: (c) => {
@@ -139,7 +139,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
       };
 
       const start = Date.now();
-      const code = await runCli(['run', '--topic', 'Fast Drain Test', '--json'], {
+      const code = await runCli(['run', '--mock', '--topic', 'Fast Drain Test', '--json'], {
         stdout: immediateStdout,
         stderr: { write: () => true },
         exit: (c) => c
@@ -153,7 +153,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
     it('1.3 real child process OS pipe execution with 500KB+ JSON output under throttled consumption completes with code 0', async () => {
       const hugeTopic = 'OS Pipe Buffer Stress: ' + 'Z'.repeat(120000);
-      const child = spawn(process.execPath, ['./bin/council', 'run', '--topic', hugeTopic, '--json']);
+      const child = spawn(process.execPath, ['./bin/council', 'run', '--mock', '--topic', hugeTopic, '--json']);
 
       let totalReceivedBytes = 0;
       let stdoutContent = '';
@@ -246,7 +246,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
           run: async () => ({ ok: true, state, verdict: state.verdict })
         };
         // Verify format rendering
-        const code = await runCli(['run', '-t', 'Zero Proofs'], {
+        const code = await runCli(['run', '--mock', '-t', 'Zero Proofs'], {
           ...mockIO.io,
           // Custom runner simulation
         });
@@ -254,7 +254,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
       // Built-in presets produce proofs by default. Let's verify that a normal run prints proofs:
       const normalIO = createMockIO();
-      await runCli(['run', '-t', 'Normal Proofs Test'], normalIO.io);
+      await runCli(['run', '--mock', '-t', 'Normal Proofs Test'], normalIO.io);
       assert.match(normalIO.getStdout(), /Submitted Proofs:/);
     });
 
@@ -290,7 +290,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
       }));
 
       try {
-        const code = await runCli(['run', '-c', tmpFile], mockIO.io);
+        const code = await runCli(['run', '--mock', '-c', tmpFile], mockIO.io);
         assert.equal(code, 0);
         const stdout = mockIO.getStdout();
         assert.match(stdout, /Submitted Proofs:/);
@@ -305,7 +305,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
     it('2.3 handles hostile proof content: newlines, quotes, emojis, ANSI escapes, backslashes', async () => {
       const mockIO = createMockIO();
       const complexTopic = 'Hostile Proofs: 🔬 Quotes "test" and \n Newlines and \u001b[31mRed ANSI\u001b[0m';
-      const code = await runCli(['run', '--topic', complexTopic], mockIO.io);
+      const code = await runCli(['run', '--mock', '--topic', complexTopic], mockIO.io);
 
       assert.equal(code, 0);
       const stdout = mockIO.getStdout();
@@ -317,7 +317,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
     it('2.4 handles long citation strings (5,000+ characters) without buffer overflow', async () => {
       const longCitationTopic = 'Long Citation Test: ' + 'Ref #'.repeat(1000);
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--topic', longCitationTopic], mockIO.io);
+      const code = await runCli(['run', '--mock', '--topic', longCitationTopic], mockIO.io);
 
       assert.equal(code, 0);
       const stdout = mockIO.getStdout();
@@ -328,7 +328,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
     it('2.5 --json mode preserves special characters and unicode in proofs losslessly', async () => {
       const mockIO = createMockIO();
       const unicodeTopic = 'Unicode 🚀 🛡️ 🏛️ & Backslash \\ and Quotes "double" \'single\'';
-      const code = await runCli(['run', '--topic', unicodeTopic, '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '--topic', unicodeTopic, '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -349,7 +349,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
     it('2.6 candidate clauses citation format matches admitted proof IDs', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'architecture'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'architecture'], mockIO.io);
 
       assert.equal(code, 0);
       const stdout = mockIO.getStdout();
@@ -553,7 +553,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
     it('4.1 -p preset with -t topic merges topic and preserves preset seats', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'architecture', '-t', 'Microservices vs Monolith', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'architecture', '-t', 'Microservices vs Monolith', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -568,7 +568,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
     it('4.2 -p preset with -r rounds and -q quorum overrides defaults', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'security-audit', '-r', '5', '-q', '3', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'security-audit', '-r', '5', '-q', '3', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -580,7 +580,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
     it('4.3 verbose mode with --json: stdout is pure parseable JSON and stderr receives telemetry', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'argon-only', '-v', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'argon-only', '-v', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       // stdout must be strictly valid JSON (zero telemetry leakage into stdout)
@@ -649,7 +649,7 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
 
       try {
         const mockIO = createMockIO();
-        const code = await runCli(['run', '-c', tmpFile, '-t', 'Overridden Topic', '--json'], mockIO.io);
+        const code = await runCli(['run', '--mock', '-c', tmpFile, '-t', 'Overridden Topic', '--json'], mockIO.io);
         assert.equal(code, 0);
         const parsed = JSON.parse(mockIO.getStdout());
         assert.equal(parsed.ok, true);

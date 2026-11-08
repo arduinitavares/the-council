@@ -767,7 +767,7 @@ describe('Milestone 3 Tier 5 Suite — Adversarial Coordinator, Telemetry & CLI 
       // Vector: User pipes `council run --json > output.json` and then executes `council inspect output.json`.
       // council run --json outputs { ok: true, verdict: {...}, state: {...}, snapshots: [...] }
       const mockRunIO = createMockIO();
-      await runCli(['run', '--json'], mockRunIO.io);
+      await runCli(['run', '--mock', '--json'], mockRunIO.io);
 
       const runOutput = mockRunIO.getStdout();
       const parsedRun = JSON.parse(runOutput);
@@ -835,7 +835,7 @@ describe('Milestone 3 Tier 5 Suite — Adversarial Coordinator, Telemetry & CLI 
 
       // council run consensus returns 0
       const mockRunIO = createMockIO();
-      const runCode = await runCli(['run', '--json'], mockRunIO.io);
+      const runCode = await runCli(['run', '--mock', '--json'], mockRunIO.io);
       assert.equal(runCode, 0, 'Consensus run returns exit code 0');
     });
 

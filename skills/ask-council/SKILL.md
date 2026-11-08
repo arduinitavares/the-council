@@ -121,13 +121,14 @@ Using a custom configuration file:
 
 ### CLI Flag Reference
 - `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`).
-- `-l, --live`: Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `src/visualizer/live-run-latest.js`.
+- `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `src/visualizer/live-run-latest.js`. Sets `"mode": "live"` in `--json` output.
+- `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.
 - `-c, --config <path>`: Path to custom JSON configuration file.
 - `-r, --rounds <number>`: Maximum deliberation rounds (default: 3).
 - `-q, --quorum <number>`: Minimum quorum of active seats (default: 2).
 - `-v, --verbose`: Stream real-time transition and seat telemetry to stderr.
-- `--json`: Emit full deliberation state, candidate, objections, and snapshots as JSON.
+- `--json`: Emit full deliberation state, execution `mode` (`"live"` or `"mock"`), candidate, objections, and snapshots as JSON.
 
 ---
 

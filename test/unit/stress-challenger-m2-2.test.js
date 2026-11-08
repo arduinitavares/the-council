@@ -576,7 +576,7 @@ describe('Adversarial Stress Test Suite — Challenger M2-2 (Telemetry, State Sn
 
     it('runs deliberation with custom options via CLI flags', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--topic', 'CLI Integration Stress Test', '--rounds', '2', '--quorum', '2'], mockIO.io);
+      const code = await runCli(['run', '--mock', '--topic', 'CLI Integration Stress Test', '--rounds', '2', '--quorum', '2'], mockIO.io);
 
       assert.equal(code, 0);
       assert.match(mockIO.getStdout(), /THE COUNCIL — VERDICT/);

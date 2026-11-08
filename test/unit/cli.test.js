@@ -62,30 +62,96 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
   });
 
   describe('Command: council run', () => {
-    it('runs deliberation and prints formatted verdict', async () => {
+    it('fails fast with exit code 1 when neither --live nor --mock is specified (Issue #17)', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--topic', 'Which editor?'], mockIO.io);
+      const code = await runCli(['run', '--topic', 'Missing Mode Test'], mockIO.io);
 
-      assert.equal(code, 0);
-      assert.match(mockIO.getStdout(), /THE COUNCIL — VERDICT/);
-      assert.match(mockIO.getStdout(), /Topic\s+: Which editor\?/);
-      assert.match(mockIO.getStdout(), /Verdict\s+: Unanimous Consensus/);
+      assert.equal(code, 1);
+      assert.match(mockIO.getStderr(), /--live.*--mock|--mock.*--live/i);
+      assert.equal(mockIO.getStdout(), '');
     });
 
-    it('runs deliberation with --json flag and outputs valid JSON', async () => {
+    it('fails fast with exit code 1 when both --live and --mock are specified (Issue #17)', async () => {
+      const { MockAdapter } = await import('../../src/harness/mock.js');
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--topic', 'JSON Test', '--json'], mockIO.io);
+      mockIO.io.harnessRegistry = { get: () => new MockAdapter() };
+      mockIO.io.liveWatcher = { attach: () => {}, stop: () => {} };
+      const code = await runCli(['run', '--live', '--mock', '--topic', 'Conflicting Mode Test'], mockIO.io);
+
+      assert.equal(code, 1);
+      assert.match(mockIO.getStderr(), /both.*--live.*--mock/i);
+    });
+
+    it('prints prominent SIMULATED banner at top and bottom of human output in --mock mode (Issue #17)', async () => {
+      const mockIO = createMockIO();
+      const code = await runCli(['run', '--mock', '--topic', 'Which editor?'], mockIO.io);
+
+      assert.equal(code, 0);
+      const out = mockIO.getStdout();
+      assert.match(out, /THE COUNCIL — VERDICT/);
+      assert.match(out, /Topic\s+: Which editor\?/);
+      assert.match(out, /Verdict\s+: Unanimous Consensus/);
+
+      const banner = 'SIMULATED (mock harness): not a real deliberation';
+      const firstIdx = out.indexOf(banner);
+      const lastIdx = out.lastIndexOf(banner);
+      const verdictHeaderIdx = out.indexOf('THE COUNCIL — VERDICT');
+
+      assert.ok(firstIdx !== -1, 'Mock run stdout must contain the simulated banner');
+      assert.ok(firstIdx < verdictHeaderIdx, 'Simulated banner must appear at the top before the verdict header');
+      assert.ok(lastIdx > verdictHeaderIdx, 'Simulated banner must also appear at the bottom after the verdict');
+    });
+
+    it('includes mode: "mock" in --mock --json output and mode: "live" in --live --json output (Issue #17)', async () => {
+      const mockIO = createMockIO();
+      const code = await runCli(['run', '--mock', '--topic', 'JSON Test', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
+      assert.equal(parsed.mode, 'mock');
       assert.equal(parsed.ok, true);
       assert.equal(parsed.verdict.kind, 'Unanimous Consensus');
       assert.ok(Array.isArray(parsed.snapshots));
+
+      const tmpFile = path.join(os.tmpdir(), `live-mode-json-${Date.now()}.json`);
+      fs.writeFileSync(tmpFile, JSON.stringify({
+        topic: 'Live JSON Mode Test',
+        seats: [
+          { id: 'live-seat-1', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 1' },
+          { id: 'live-seat-2', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 2' }
+        ],
+        judge: { id: 'live-judge', harness: 'mock', model: 'mock-model', soul: 'Live Judge Soul' }
+      }));
+
+      try {
+        const liveIO = createMockIO();
+        liveIO.io.liveWatcher = { attach: () => {}, stop: () => {} };
+        const liveCode = await runCli(['run', '--live', '-c', tmpFile, '--json'], liveIO.io);
+        assert.equal(liveCode, 0);
+        const liveParsed = JSON.parse(liveIO.getStdout());
+        assert.equal(liveParsed.mode, 'live');
+        assert.equal(liveParsed.ok, true);
+      } finally {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      }
+    });
+
+    it('documents explicit --live / --mock mode selection in HELP_TEXT and skills/ask-council/SKILL.md (Issue #17)', () => {
+      assert.match(HELP_TEXT, /council run \(--live \| --mock\)/);
+      assert.match(HELP_TEXT, /-l, --live.*required unless --mock/i);
+      assert.match(HELP_TEXT, /-m, --mock.*required unless --live/i);
+      assert.doesNotMatch(HELP_TEXT, /--mock.*\(default\)/i);
+
+      const skillPath = path.resolve(process.cwd(), 'skills/ask-council/SKILL.md');
+      const skillContent = fs.readFileSync(skillPath, 'utf8');
+      assert.match(skillContent, /--live/);
+      assert.match(skillContent, /--mock/);
+      assert.match(skillContent, /SIMULATED \(mock harness\): not a real deliberation/);
     });
 
     it('runs deliberation with --verbose and streams telemetry to stderr', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--verbose'], mockIO.io);
+      const code = await runCli(['run', '--mock', '--verbose'], mockIO.io);
 
       assert.equal(code, 0);
       assert.match(mockIO.getStderr(), /\[TELEMETRY\]/);
@@ -105,7 +171,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
       try {
         const mockIO = createMockIO();
-        const code = await runCli(['run', '-c', tmpFile, '--json'], mockIO.io);
+        const code = await runCli(['run', '--mock', '-c', tmpFile, '--json'], mockIO.io);
         assert.equal(code, 0);
         const parsed = JSON.parse(mockIO.getStdout());
         assert.equal(parsed.state.topic, 'CLI Loaded Config Topic');
@@ -126,7 +192,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       try {
         const mockIO = createMockIO();
         const code = await runCli(
-          ['run', '-c', tmpFile, '-t', 'Overridden Topic', '-r', '3', '-q', '2', '-p', 'architecture', '--json'],
+          ['run', '--mock', '-c', tmpFile, '-t', 'Overridden Topic', '-r', '3', '-q', '2', '-p', 'architecture', '--json'],
           mockIO.io
         );
         assert.equal(code, 0);
@@ -142,7 +208,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
     it('runs deliberation with --preset architecture and resolves 4 preset seats', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--preset', 'architecture', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '--preset', 'architecture', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -156,7 +222,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
     it('runs deliberation with -p product-comparison and resolves product-comparison seats', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'product-comparison', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'product-comparison', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -169,7 +235,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
     it('allows overriding topic with -t while using -p preset', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '-p', 'security-audit', '-t', 'Audit Auth Service', '--json'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'security-audit', '-t', 'Audit Auth Service', '--json'], mockIO.io);
 
       assert.equal(code, 0);
       const parsed = JSON.parse(mockIO.getStdout());
@@ -196,7 +262,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
     it('prints Submitted Proofs: section before Candidate Clauses: in text verdict output', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--topic', 'Proof Formatting Test'], mockIO.io);
+      const code = await runCli(['run', '--mock', '--topic', 'Proof Formatting Test'], mockIO.io);
 
       assert.equal(code, 0);
       const out = mockIO.getStdout();
@@ -228,6 +294,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         assert.equal(code, 0);
         const parsed = JSON.parse(mockIO.getStdout());
         assert.equal(parsed.ok, true);
+        assert.equal(parsed.mode, 'live');
         assert.equal(parsed.state.topic, 'Live Flag Verification');
 
         // Verify that live watcher created or updated live-run-latest.js
@@ -272,7 +339,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         return code;
       };
 
-      const code = await runCli(['run', '--topic', 'Drain Test', '--json'], {
+      const code = await runCli(['run', '--mock', '--topic', 'Drain Test', '--json'], {
         stdout: fakePipedStdout,
         stderr: { write: () => {} },
         exit: mockExit

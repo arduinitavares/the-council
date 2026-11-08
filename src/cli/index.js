@@ -24,7 +24,7 @@ export const HELP_TEXT = `
 The Council — Multi-Agent Consensus Deliberation Engine (v0.1.0)
 
 Usage:
-  council run [options]
+  council run (--live | --mock) [options]
   council demo [wt-better-os | wt-10-seats-quota | wt-opus-guardrails]
   council inspect <snapshot-file.json>
 
@@ -34,9 +34,9 @@ Options:
   -t, --topic <string>   Debate topic problem statement
   -r, --rounds <number>  Maximum deliberation rounds (default: 3)
   -q, --quorum <number>  Minimum quorum of active seats (default: 2)
-  -l, --live             Run with live CLI harnesses and visualizer stream
-  -m, --mock             Run in hermetic deterministic mock mode (default)
-      --json             Output result strictly as JSON
+  -l, --live             Run with live CLI harnesses and visualizer stream (required unless --mock)
+  -m, --mock             Run in hermetic deterministic simulated mock mode (required unless --live)
+      --json             Output result strictly as JSON (includes "mode": "live" | "mock")
   -v, --verbose          Print real-time observer telemetry events to stderr
   -h, --help             Show this help message
   -V, --version          Show version
@@ -83,7 +83,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         rounds: { type: 'string', short: 'r' },
         quorum: { type: 'string', short: 'q' },
         live: { type: 'boolean', short: 'l', default: false },
-        mock: { type: 'boolean', short: 'm', default: true },
+        mock: { type: 'boolean', short: 'm', default: false },
         json: { type: 'boolean', default: false },
         verbose: { type: 'boolean', short: 'v', default: false },
         help: { type: 'boolean', short: 'h', default: false },
@@ -215,6 +215,16 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       return await safeExit(1);
     }
 
+    if (values.live && values.mock) {
+      logErr('Execution mode error: Cannot specify both --live (-l) and --mock (-m). Choose one execution mode.');
+      return await safeExit(1);
+    }
+    if (!values.live && !values.mock) {
+      logErr('Execution mode error: Explicit mode selection required. Pass --live (-l) for real CLI harness deliberation or --mock (-m) for simulated mock mode.');
+      return await safeExit(1);
+    }
+
+    const mode = values.live ? 'live' : 'mock';
     const engineOptions = {};
     let liveWatcher = null;
 
@@ -250,12 +260,20 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       }
     }
 
+    const outputPayload = { mode, ...result };
+
     if (values.json) {
-      log(JSON.stringify(result, null, 2));
+      log(JSON.stringify(outputPayload, null, 2));
     } else {
+      if (mode === 'mock') {
+        log('\n============================================================');
+        log('  SIMULATED (mock harness): not a real deliberation');
+        log('============================================================');
+      }
       log('\n========================================');
       log('         THE COUNCIL — VERDICT          ');
       log('========================================');
+      log(`Mode    : ${mode === 'mock' ? 'SIMULATED (mock harness)' : 'LIVE'}`);
       log(`Topic   : ${resolved.topic}`);
       log(`Verdict : ${result.verdict?.kind || 'No verdict emitted'}`);
       log(`Rounds  : ${result.state.round}`);
@@ -290,6 +308,11 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       }
       log(`\nNote: ${result.verdict?.note || 'None'}`);
       log('========================================\n');
+      if (mode === 'mock') {
+        log('============================================================');
+        log('  SIMULATED (mock harness): not a real deliberation');
+        log('============================================================\n');
+      }
     }
 
     return await safeExit(result.ok ? 0 : 2);

@@ -804,11 +804,13 @@
       const runIndex = (typeof window !== 'undefined' && window.CouncilRunIndex) ||
                        (typeof globalThis !== 'undefined' && globalThis.CouncilRunIndex) || [];
       if (!Array.isArray(runIndex)) return;
-      const prevValue = sel.value || selectedRunId || 'latest';
+      const targetValue = selectedRunId || sel.value || 'latest';
+      let hasTargetOption = (targetValue === 'latest');
       let html = '<option value="latest">Latest Run (Live Follow)</option>';
       for (let i = 0; i < runIndex.length; i++) {
         const entry = runIndex[i];
         if (!entry || !entry.runId) continue;
+        if (entry.runId === targetValue) hasTargetOption = true;
         const label = (entry.topic || entry.title || entry.runId).slice(0, 48);
         const statusTag = entry.isRunning ? 'RUNNING' : (entry.verdictKind || 'DONE');
         html += '<option value="' + String(entry.runId).replace(/"/g, '&quot;') + '">' +
@@ -816,7 +818,7 @@
           '</option>';
       }
       sel.innerHTML = html;
-      sel.value = prevValue;
+      sel.value = hasTargetOption ? targetValue : 'latest';
     }
 
     function selectRun(runId) {
@@ -825,7 +827,12 @@
       const badgeTag = document.getElementById('badge-live-tag');
       if (selectedRunId === 'latest') {
         if (badgeTag) badgeTag.textContent = 'Latest Live Run';
+        const latestRun = getLiveRun();
+        if (latestRun && latestRun.currentState) {
+          councilState = latestRun.currentState;
+        }
         startLiveFollow();
+        renderAll();
         return;
       }
       stopLiveFollow();
@@ -893,6 +900,10 @@
         clearInterval(liveFollowTimer);
         liveFollowTimer = null;
       }
+      const oldScript = document.getElementById('script-live-reload');
+      if (oldScript) oldScript.remove();
+      const oldIndex = document.getElementById('script-index-reload');
+      if (oldIndex) oldIndex.remove();
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
       if (btn) btn.classList.remove('active');
@@ -928,6 +939,7 @@
 
       const onRunLoaded = function () {
         updateRunSelector();
+        if (selectedRunId !== 'latest') return;
         const liveRun = getLiveRun();
         if (liveRun && liveRun.currentState) {
           if (currentStepIdx === -1 || currentStepIdx === (liveRun.steps || []).length - 1) {
@@ -991,6 +1003,7 @@
     }
 
     function renderAll() {
+      updateRunSelector();
       const liveRun = getLiveRun();
       const esc = (CouncilVisualizer && CouncilVisualizer.escapeHtml) || function (s) { return String(s || ''); };
 
@@ -1149,7 +1162,10 @@
       seatsGrid.innerHTML = judgeHtml + seatsHtml;
 
       // 6. Deliberation Graphs
-      const graph = councilState.graph || (liveRun && liveRun.currentGraph) || {
+      const stepGraph = (currentStepIdx >= 0 && liveRun && Array.isArray(liveRun.steps) && liveRun.steps[currentStepIdx])
+        ? liveRun.steps[currentStepIdx].graph
+        : null;
+      const graph = stepGraph || councilState.graph || (liveRun && liveRun.currentGraph) || {
         nodes: [],
         edges: [],
         activeNodeId: councilState.phase,

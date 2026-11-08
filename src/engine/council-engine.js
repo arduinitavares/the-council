@@ -162,23 +162,28 @@ export class CouncilEngine {
   async runDiscovery(clarifications = []) {
     if (!clarifications || clarifications.length === 0 || this.aborted || this.isCompleted()) return;
 
+    let itemsToPublish = clarifications;
     if (this.state.clarificationBatch === 0 && Array.isArray(this.state.clarifications) && this.state.clarifications.length > 0) {
+      if (clarifications !== this.config.clarifications && Array.isArray(this.config.clarifications) && this.config.clarifications.length > 0) {
+        itemsToPublish = [...this.config.clarifications, ...clarifications];
+      }
       this.state = {
         ...this.state,
         clarifications: [],
-        maxClarificationBatches: Math.max(this.state.maxClarificationBatches, clarifications.length)
+        maxClarificationBatches: Math.max(this.state.maxClarificationBatches, itemsToPublish.length)
       };
-    } else if (this.state.clarificationBatch + clarifications.length > this.state.maxClarificationBatches) {
+    } else if (this.state.clarificationBatch + itemsToPublish.length > this.state.maxClarificationBatches) {
       this.state = {
         ...this.state,
-        maxClarificationBatches: this.state.clarificationBatch + clarifications.length
+        maxClarificationBatches: this.state.clarificationBatch + itemsToPublish.length
       };
     }
 
-    for (let i = 0; i < clarifications.length; i++) {
+    for (let i = 0; i < itemsToPublish.length; i++) {
       if (this.aborted || this.isCompleted()) break;
-      const item = clarifications[i];
+      const item = itemsToPublish[i];
       let answer;
+      let extraMeta = {};
       if (typeof item === 'object' && item !== null) {
         if (typeof item.answer === 'string' && item.answer.trim()) {
           answer = item.answer.trim();
@@ -187,13 +192,19 @@ export class CouncilEngine {
         } else {
           answer = String(item);
         }
+        if (Number.isInteger(item.batch) && item.batch >= 1) extraMeta.batch = item.batch;
+        if (typeof item.question === 'string' && item.question.trim()) extraMeta.question = item.question.trim();
+        if (typeof item.label === 'string' && item.label.trim()) extraMeta.label = item.label.trim();
+        if (typeof item.source === 'string' && item.source.trim()) extraMeta.source = item.source.trim();
+        if (typeof item.text === 'string' && item.text.trim()) extraMeta.text = item.text.trim();
       } else {
         answer = String(item);
       }
       this._step({ type: 'START_CLARIFYING' });
       this._step({
         type: 'PUBLISH_CLARIFICATION',
-        answer
+        answer,
+        ...extraMeta
       });
     }
   }

@@ -932,5 +932,28 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       assert.match(skillContent, /"evidence"/);
       assert.match(skillContent, /Evidence Gathering & Grounding/);
     });
+
+    it('resolves relative --evidence path against PACKAGE_ROOT when invoked from an external working directory', async () => {
+      const prevCwd = process.cwd();
+      const tmpExtCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-ev-ext-cwd-'));
+      try {
+        process.chdir(tmpExtCwd);
+        const mockIO = createMockIO();
+        // Reference package.json relative to PACKAGE_ROOT (which does not exist in tmpExtCwd)
+        const code = await runCli(
+          ['run', '--mock', '-t', 'External CWD Evidence Fallback', '-e', 'README.md', '--json'],
+          mockIO.io
+        );
+        assert.equal(code, 0, `Expected exit 0, stderr: ${mockIO.getStderr()}`);
+        const parsed = JSON.parse(mockIO.getStdout());
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.state.evidence.length, 1);
+        assert.equal(parsed.state.evidence[0].id, 'E1');
+        assert.equal(parsed.state.evidence[0].label, 'README.md');
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(tmpExtCwd, { recursive: true, force: true });
+      }
+    });
   });
 });

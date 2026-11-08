@@ -164,10 +164,15 @@ export function transitionCouncil(state, event) {
       if (!event.answer || !String(event.answer).trim()) {
         return reject(state, event.type, 'Clarification answer cannot be empty.');
       }
-      next.clarifications.push({
-        batch: state.clarificationBatch,
+      const entry = {
+        batch: Number.isInteger(event.batch) && event.batch >= 1 ? event.batch : state.clarificationBatch,
         answer: String(event.answer).trim()
-      });
+      };
+      if (typeof event.question === 'string' && event.question.trim()) entry.question = event.question.trim();
+      if (typeof event.label === 'string' && event.label.trim()) entry.label = event.label.trim();
+      if (typeof event.source === 'string' && event.source.trim()) entry.source = event.source.trim();
+      if (typeof event.text === 'string' && event.text.trim()) entry.text = event.text.trim();
+      next.clarifications.push(entry);
       activeSeats(next).forEach((s) => {
         s.status = 'idle';
       });
@@ -820,7 +825,8 @@ export function transitionCouncil(state, event) {
         minQuorum: state.minQuorum,
         maxRounds: state.maxRounds,
         maxRetriesPerSeat: state.maxRetriesPerSeat,
-        evidence: state.evidence
+        evidence: state.evidence,
+        clarifications: state.clarifications
       };
       const fresh = createInitialCouncilState(resetConfig);
       fresh.history = ['[RESET] Council state reset to initial configuration.'];

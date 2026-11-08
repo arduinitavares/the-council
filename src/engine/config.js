@@ -87,6 +87,9 @@ export function validateConfig(config) {
           errors.push(`evidence[${idx}] must be a non-null object with label, source, and text.`);
           return;
         }
+        if (item.id !== undefined && (typeof item.id !== 'string' || !item.id.trim())) {
+          errors.push(`evidence[${idx}].id must be a non-empty string when provided.`);
+        }
         if (typeof item.label !== 'string' || !item.label.trim()) {
           errors.push(`evidence[${idx}] requires a non-empty string "label".`);
         }

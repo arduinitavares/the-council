@@ -8,6 +8,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
 
 export const MAX_EVIDENCE_ITEMS = 20;
+export const MAX_EVIDENCE_ID_CHARS = 64;
 export const MAX_EVIDENCE_ITEM_CHARS = 32768;
 export const MAX_TOTAL_EVIDENCE_CHARS = 131072;
 
@@ -82,13 +83,29 @@ export function validateConfig(config) {
         errors.push(`evidence exceeds maximum of ${MAX_EVIDENCE_ITEMS} items (got ${config.evidence.length}).`);
       }
       let totalEvidenceChars = 0;
+      const seenEvidenceIds = new Set();
       config.evidence.forEach((item, idx) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
           errors.push(`evidence[${idx}] must be a non-null object with label, source, and text.`);
           return;
         }
-        if (item.id !== undefined && (typeof item.id !== 'string' || !item.id.trim())) {
-          errors.push(`evidence[${idx}].id must be a non-empty string when provided.`);
+        let resolvedId = `E${idx + 1}`;
+        if (item.id !== undefined) {
+          if (typeof item.id !== 'string' || !item.id.trim()) {
+            errors.push(`evidence[${idx}].id must be a non-empty string when provided.`);
+          } else {
+            resolvedId = item.id.trim();
+            if (resolvedId.length > MAX_EVIDENCE_ID_CHARS) {
+              errors.push(
+                `evidence[${idx}].id (${resolvedId.length} chars) exceeds maximum id length of ${MAX_EVIDENCE_ID_CHARS} characters.`
+              );
+            }
+          }
+        }
+        if (seenEvidenceIds.has(resolvedId)) {
+          errors.push(`Duplicate evidence id "${resolvedId}" at evidence[${idx}].`);
+        } else {
+          seenEvidenceIds.add(resolvedId);
         }
         if (typeof item.label !== 'string' || !item.label.trim()) {
           errors.push(`evidence[${idx}] requires a non-empty string "label".`);
@@ -99,7 +116,9 @@ export function validateConfig(config) {
         if (typeof item.text !== 'string' || !item.text.trim()) {
           errors.push(`evidence[${idx}] requires a non-empty string "text".`);
         }
+        const idChars = typeof item.id === 'string' && item.id.trim() ? item.id.trim().length : `E${idx + 1}`.length;
         const itemChars =
+          idChars +
           (typeof item.label === 'string' ? item.label.length : 0) +
           (typeof item.source === 'string' ? item.source.length : 0) +
           (typeof item.text === 'string' ? item.text.length : 0);
@@ -145,7 +164,11 @@ export function validateConfig(config) {
           errors.push(`clarifications[${idx}] must be a non-null object with "answer" or { label, source, text }.`);
           return;
         }
+        if (item.answer !== undefined && (typeof item.answer !== 'string' || !item.answer.trim())) {
+          errors.push(`clarifications[${idx}].answer must be a non-empty string when provided.`);
+        }
         const hasAnswer = typeof item.answer === 'string' && item.answer.trim().length > 0;
+        const hasAnyEvidenceField = item.label !== undefined || item.source !== undefined || item.text !== undefined;
         const hasEvidenceShape =
           typeof item.label === 'string' &&
           item.label.trim().length > 0 &&
@@ -156,6 +179,10 @@ export function validateConfig(config) {
         if (!hasAnswer && !hasEvidenceShape) {
           errors.push(
             `clarifications[${idx}] requires a non-empty string "answer" or non-empty "label", "source", and "text".`
+          );
+        } else if (hasAnyEvidenceField && !hasEvidenceShape) {
+          errors.push(
+            `clarifications[${idx}] with "label", "source", or "text" requires all three ("label", "source", and "text") to be non-empty strings.`
           );
         }
         if (item.batch !== undefined && (!Number.isInteger(item.batch) || item.batch < 1)) {
@@ -404,15 +431,26 @@ export const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..');
 
 function normalizeEvidenceList(evidence) {
   if (!Array.isArray(evidence)) return Object.freeze([]);
+  const seenIds = new Set();
   return Object.freeze(
-    evidence.map((item, idx) =>
-      Object.freeze({
-        id: typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : `E${idx + 1}`,
+    evidence.map((item, idx) => {
+      const id = typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : `E${idx + 1}`;
+      if (id.length > MAX_EVIDENCE_ID_CHARS) {
+        throw new Error(
+          `evidence[${idx}].id (${id.length} chars) exceeds maximum id length of ${MAX_EVIDENCE_ID_CHARS} characters.`
+        );
+      }
+      if (seenIds.has(id)) {
+        throw new Error(`Duplicate evidence id "${id}" at evidence[${idx}].`);
+      }
+      seenIds.add(id);
+      return Object.freeze({
+        id,
         label: String(item.label).trim(),
         source: String(item.source).trim(),
         text: String(item.text).trim()
-      })
-    )
+      });
+    })
   );
 }
 
@@ -425,17 +463,18 @@ function normalizeClarificationsList(clarifications) {
         answer: item.trim()
       };
     }
-    const hasAnswer = typeof item.answer === 'string' && item.answer.trim().length > 0;
-    const answer = hasAnswer
-      ? item.answer.trim()
-      : `[${item.label.trim()}] (Source: ${item.source.trim()}): ${item.text.trim()}`;
+    const labelStr = typeof item?.label === 'string' ? item.label.trim() : '';
+    const sourceStr = typeof item?.source === 'string' ? item.source.trim() : '';
+    const textStr = typeof item?.text === 'string' ? item.text.trim() : '';
+    const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
+    const answer = hasAnswer ? item.answer.trim() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
     return {
-      batch: Number.isInteger(item.batch) && item.batch >= 1 ? item.batch : idx + 1,
+      batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
       answer,
-      ...(typeof item.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
-      ...(typeof item.label === 'string' && item.label.trim()
-        ? { label: item.label.trim(), source: item.source.trim(), text: item.text.trim() }
-        : {})
+      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(labelStr ? { label: labelStr } : {}),
+      ...(sourceStr ? { source: sourceStr } : {}),
+      ...(textStr ? { text: textStr } : {})
     };
   });
 }

@@ -253,6 +253,31 @@ Respond with:
 }
 
 /**
+ * Formats pre-gathered grounding evidence and broadcast clarifications with clear data delimiters.
+ * @param {Array<Object>} [evidence=[]]
+ * @param {Array<Object>} [clarifications=[]]
+ * @returns {string}
+ */
+export function formatGroundingSection(evidence = [], clarifications = []) {
+  let section = '';
+
+  if (Array.isArray(evidence) && evidence.length > 0) {
+    section += `\nPre-Gathered Grounding Evidence:\n` +
+      evidence.map((e, i) => {
+        const eid = e.id || `E${i + 1}`;
+        return `--- BEGIN EVIDENCE [${eid}] ${e.label} (Source: ${e.source}) ---\n[${eid}] ${e.label} (Source: ${e.source}): ${e.text}\n--- END EVIDENCE [${eid}] ---`;
+      }).join('\n') + '\n';
+  }
+
+  if (Array.isArray(clarifications) && clarifications.length > 0) {
+    section += `\nBroadcast Clarifications:\n` +
+      clarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
+  }
+
+  return section;
+}
+
+/**
  * Formats a Deliberation Proof Submission prompt for a Seat.
  * @param {Object} params
  * @param {Soul | string} params.soul
@@ -297,16 +322,7 @@ export function formatDeliberationPrompt({
     : (state?.objections || []).filter((o) => o.status === 'open');
 
   let contextBlock = `Topic: "${resolvedTopic}"\n`;
-
-  if (resolvedEvidence.length > 0) {
-    contextBlock += `\nPre-Gathered Grounding Evidence:\n` +
-      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
-  }
-
-  if (resolvedClarifications.length > 0) {
-    contextBlock += `\nBroadcast Clarifications:\n` +
-      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
-  }
+  contextBlock += formatGroundingSection(resolvedEvidence, resolvedClarifications);
 
   if (resolvedPrevCandidate) {
     contextBlock += `\nPrevious Candidate from Round ${resolvedPrevCandidate.round}:\n` +
@@ -385,15 +401,7 @@ export function formatVotingPrompt({
       ).join('\n')
     : 'No candidate clauses provided.';
 
-  let groundingSection = '';
-  if (resolvedEvidence.length > 0) {
-    groundingSection += `\nPre-Gathered Grounding Evidence:\n` +
-      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
-  }
-  if (resolvedClarifications.length > 0) {
-    groundingSection += `\nBroadcast Clarifications:\n` +
-      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
-  }
+  const groundingSection = formatGroundingSection(resolvedEvidence, resolvedClarifications);
 
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
@@ -460,15 +468,7 @@ export function formatJudgePrompt({
     ? clarifications
     : (state?.clarifications || []);
 
-  let groundingSection = '';
-  if (resolvedEvidence.length > 0) {
-    groundingSection += `\nPre-Gathered Grounding Evidence:\n` +
-      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
-  }
-  if (resolvedClarifications.length > 0) {
-    groundingSection += `\nBroadcast Clarifications:\n` +
-      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
-  }
+  const groundingSection = formatGroundingSection(resolvedEvidence, resolvedClarifications);
 
   const proofList = (proofs && proofs.length > 0)
     ? proofs.map((p, idx) => {

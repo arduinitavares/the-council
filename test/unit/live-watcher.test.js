@@ -2035,7 +2035,354 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       controller.selectRun('latest');
       assert.equal(getEl('heading-topic').textContent, 'Run 2 Newer Latest Run');
     });
+
+    it('matches original deep-cloned state at every transition (ADD_SEAT, BEGIN_ROUND, SUBMIT_PROOF, START_JUDGING, JUDGE_AUDIT_AND_SYNTHESIZE, CAST_VOTE, EVALUATE_ROUND) without leaking future seats or future judgeNote', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+
+      const runsDir = path.join(tmpDir, 'rehydrate-fidelity');
+      const mockAdapter = new MockAdapter();
+      // Script seat-2 to object in round 1 so objections and multi-round proof judgeNote transitions are also exercised
+      mockAdapter.scriptSeatResponse({
+        seatId: 'seat-2',
+        round: 1,
+        phase: 'VOTING',
+        response: { vote: 'object', reason: 'Needs round 2 refinement', proofId: 'P2' }
+      });
+
+      const config = {
+        topic: 'Step-by-Step Rehydration Fidelity Test',
+        maxRounds: 2,
+        minQuorum: 2,
+        clarifications: [{ question: 'Env?', answer: 'Linux containers' }],
+        judge: { id: 'judge-1', harness: 'mock', model: 'm-judge', soul: 'Judge' },
+        seats: [
+          { id: 'seat-1', harness: 'mock', model: 'm-1', soul: 'S1' },
+          { id: 'seat-2', harness: 'mock', model: 'm-2', soul: 'S2' }
+        ]
+      };
+
+      const engine = new CouncilEngine(config, { harnessResolver: () => mockAdapter });
+      const capturedSnapshots = [];
+      engine.getTelemetry().on('state_transition', ({ event, state }) => {
+        capturedSnapshots.push({
+          eventType: event?.type,
+          state: structuredClone(state)
+        });
+      });
+
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: engine.getTelemetry(),
+        outputDir: runsDir,
+        runId: 'run-fidelity-check',
+        initialConfig: config
+      });
+
+      await engine.run();
+      watcher.stop();
+
+      const win = {};
+      const bundleCode = fs.readFileSync(path.join(runsDir, 'run-fidelity-check.js'), 'utf8');
+      new Function('window', 'globalThis', bundleCode)(win, win);
+      const rehydratedRun = win.CouncilRuns['run-fidelity-check'];
+
+      assert.equal(rehydratedRun.steps.length, capturedSnapshots.length);
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'ADD_SEAT'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'BEGIN_ROUND'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'SUBMIT_PROOF'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'START_JUDGING'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'JUDGE_AUDIT_AND_SYNTHESIZE'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'CAST_VOTE'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'EVALUATE_ROUND'));
+
+      // Specifically check Step 0 (ADD_SEAT for seat-1): seat-2 must NOT leak into Step 0
+      assert.equal(capturedSnapshots[0].eventType, 'ADD_SEAT');
+      assert.equal(rehydratedRun.steps[0].stateSnapshot.seats.length, 1);
+      assert.equal(rehydratedRun.steps[0].stateSnapshot.seats[0].id, 'seat-1');
+      assert.equal(rehydratedRun.steps[0].stateSnapshot.seats[0].status, 'idle');
+
+      // Specifically check pending proof before judging: judgeNote must be null, not leaked from future JUDGE_AUDIT_AND_SYNTHESIZE
+      const firstSubmitIdx = capturedSnapshots.findIndex((s) => s.eventType === 'SUBMIT_PROOF');
+      assert.ok(firstSubmitIdx >= 0);
+      assert.equal(rehydratedRun.steps[firstSubmitIdx].stateSnapshot.proofs.length, 1);
+      assert.equal(rehydratedRun.steps[firstSubmitIdx].stateSnapshot.proofs[0].status, 'pending');
+      assert.equal(rehydratedRun.steps[firstSubmitIdx].stateSnapshot.proofs[0].judgeNote, null);
+
+      for (let i = 0; i < capturedSnapshots.length; i++) {
+        const expected = capturedSnapshots[i].state;
+        const actualDisk = rehydratedRun.steps[i].stateSnapshot;
+        const actualMem = watcher.liveRun.steps[i].stateSnapshot;
+
+        for (const actual of [actualDisk, actualMem]) {
+          assert.equal(actual.phase, expected.phase, `Step ${i} (${capturedSnapshots[i].eventType}) phase mismatch`);
+          assert.equal(actual.previousPhase, expected.previousPhase, `Step ${i} previousPhase mismatch`);
+          assert.equal(actual.round, expected.round, `Step ${i} round mismatch`);
+          assert.deepEqual(actual.seats, expected.seats, `Step ${i} (${capturedSnapshots[i].eventType}) seats mismatch`);
+          assert.deepEqual(actual.proofs, expected.proofs, `Step ${i} (${capturedSnapshots[i].eventType}) proofs mismatch`);
+          assert.deepEqual(actual.objections, expected.objections, `Step ${i} (${capturedSnapshots[i].eventType}) objections mismatch`);
+          assert.deepEqual(actual.candidate, expected.candidate, `Step ${i} (${capturedSnapshots[i].eventType}) candidate mismatch`);
+          assert.deepEqual(actual.verdict, expected.verdict, `Step ${i} (${capturedSnapshots[i].eventType}) verdict mismatch`);
+        }
+      }
+    });
+
+    it('records O(1) incremental step deltas (seatChanges, proofChanges, objectionChanges) without retaining eager clonedState/clonedGraph values in memory, and preserves concurrent runs via <runId>.meta.json', () => {
+      const runsDir = path.join(tmpDir, 'concurrent-and-incremental');
+      const emitterA = createTelemetryEmitter();
+      const emitterB = createTelemetryEmitter();
+
+      const watcherA = new VisualizerLiveWatcher({
+        telemetry: emitterA,
+        outputDir: runsDir,
+        runId: 'run-concurrent-A',
+        initialConfig: {
+          topic: 'Concurrent Run A',
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm1', soul: 'Soul 1' },
+            { id: 's2', harness: 'mock', model: 'm2', soul: 'Soul 2' }
+          ]
+        }
+      });
+
+      const watcherB = new VisualizerLiveWatcher({
+        telemetry: emitterB,
+        outputDir: runsDir,
+        runId: 'run-concurrent-B',
+        initialConfig: {
+          topic: 'Concurrent Run B',
+          seats: [
+            { id: 's1', harness: 'mock', model: 'm1', soul: 'Soul 1' },
+            { id: 's2', harness: 'mock', model: 'm2', soul: 'Soul 2' }
+          ]
+        }
+      });
+
+      // Interleave state transitions across watcherA and watcherB
+      const proofsA = [];
+      for (let i = 1; i <= 10; i++) {
+        proofsA.push({
+          id: `P${i}`,
+          seatId: i % 2 === 0 ? 's2' : 's1',
+          round: 1,
+          kind: 'check',
+          scope: 'Scope',
+          source: 'src.js',
+          statement: `Stmt ${i}`,
+          status: 'pending',
+          judgeNote: null
+        });
+        emitterA.emitStateTransition(
+          { type: 'SUBMIT_PROOF', seatId: 's1', id: `P${i}`, kind: 'check' },
+          {
+            phase: 'reviewing',
+            round: 1,
+            topic: 'Concurrent Run A',
+            seats: [
+              { id: 's1', harness: 'mock', model: 'm1', soul: 'Soul 1', status: 'proof_submitted', retries: 0, excusedReason: null },
+              { id: 's2', harness: 'mock', model: 'm2', soul: 'Soul 2', status: 'thinking', retries: 0, excusedReason: null }
+            ],
+            judge: { id: 'j1', status: 'idle' },
+            proofs: structuredClone(proofsA),
+            objections: [],
+            history: [`Step ${i}`]
+          }
+        );
+      }
+
+      emitterB.emitStateTransition(
+        { type: 'EVALUATE_ROUND' },
+        {
+          phase: 'completed',
+          round: 1,
+          topic: 'Concurrent Run B',
+          verdict: { kind: 'Unanimous Consensus', note: 'Done B' },
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: ['Done B']
+        }
+      );
+
+      watcherA.stop();
+      watcherB.stop();
+
+      // 1. Each step in watcherA only records the newly added proof in proofChanges (1 per step = 10 total, not 10*11/2 = 55)
+      const totalProofDeltaEntries = watcherA.liveRun.steps.reduce(
+        (acc, st) => acc + (st.stateDelta.proofChanges || []).length,
+        0
+      );
+      assert.equal(totalProofDeltaEntries, 10, 'Incremental proofChanges across 10 proof steps must be linear (10), not quadratic (55)');
+
+      // Seats did not change after step 0, so steps 1..9 must have empty seatChanges
+      for (let i = 1; i < watcherA.liveRun.steps.length; i++) {
+        assert.equal(watcherA.liveRun.steps[i].stateDelta.seatChanges.length, 0);
+      }
+
+      // 2. stepRecord.stateSnapshot and stepRecord.graph must be lazy non-enumerable getters, not retained value properties
+      const step0Desc = Object.getOwnPropertyDescriptor(watcherA.liveRun.steps[0], 'stateSnapshot');
+      const graph0Desc = Object.getOwnPropertyDescriptor(watcherA.liveRun.steps[0], 'graph');
+      assert.ok(step0Desc && typeof step0Desc.get === 'function', 'stateSnapshot must be a lazy getter on stepRecord');
+      assert.equal(step0Desc.enumerable, false);
+      assert.ok(graph0Desc && typeof graph0Desc.get === 'function', 'graph must be a lazy getter on stepRecord');
+      assert.equal(graph0Desc.enumerable, false);
+
+      // 3. Both concurrent runs have their own <runId>.meta.json and <runId>.js and both are preserved in index.js
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-concurrent-A.meta.json')));
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-concurrent-B.meta.json')));
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-concurrent-A.js')));
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-concurrent-B.js')));
+
+      const win = {};
+      new Function('window', 'globalThis', fs.readFileSync(path.join(runsDir, 'index.js'), 'utf8'))(win, win);
+      const indexedIds = win.CouncilRunIndex.map((e) => e.runId);
+      assert.ok(indexedIds.includes('run-concurrent-A'), 'CouncilRunIndex must preserve run-concurrent-A');
+      assert.ok(indexedIds.includes('run-concurrent-B'), 'CouncilRunIndex must preserve run-concurrent-B');
+    });
+
+    it('getLiveRun() returns null while historical run is still loading and selectRun ignores out-of-order stale script.onload', () => {
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      const inlineScriptMatch = html.match(/<script>\s*([\s\S]*?)\s*<\/script>\s*<\/body>/);
+      assert.ok(inlineScriptMatch);
+
+      const elements = new Map();
+      const getEl = (id) => {
+        if (!elements.has(id)) {
+          elements.set(id, {
+            id,
+            textContent: '',
+            innerHTML: '',
+            value: id === 'run-selector' ? 'latest' : '',
+            className: '',
+            style: {},
+            classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+            remove: function () {
+              elements.delete(this.id);
+            }
+          });
+        }
+        return elements.get(id);
+      };
+
+      const appendedScripts = [];
+      const mockDoc = {
+        getElementById: (id) => getEl(id),
+        createElement: (tag) => ({
+          tagName: tag.toUpperCase(),
+          id: '',
+          src: '',
+          onload: null,
+          onerror: null,
+          remove: function () {
+            if (this.id) elements.delete(this.id);
+          }
+        }),
+        head: {
+          appendChild: (el) => {
+            appendedScripts.push(el);
+          }
+        }
+      };
+
+      const mockVisualizer = {
+        escapeHtml: (s) => String(s ?? ''),
+        formatSoul: (s) => String(s ?? ''),
+        renderSoulCardHtml: (s) => `<div>${String(s ?? '')}</div>`,
+        renderStateMachineSVG: () => {},
+        renderCausalDependencySVG: () => {}
+      };
+
+      const domWin = {
+        CouncilRunIndex: [
+          { runId: 'run-2', topic: 'Topic Run 2', isRunning: false },
+          { runId: 'run-1', topic: 'Topic Run 1', isRunning: false }
+        ],
+        CouncilLatestLiveRun: {
+          runId: 'run-latest',
+          currentState: {
+            topic: 'Latest Topic',
+            phase: 'reviewing',
+            round: 1,
+            maxRounds: 3,
+            minQuorum: 2,
+            seats: [],
+            proofs: [],
+            objections: [],
+            history: []
+          },
+          steps: []
+        },
+        CouncilRuns: {}
+      };
+
+      const controllerFn = new Function(
+        'window',
+        'globalThis',
+        'document',
+        'CouncilVisualizer',
+        'setInterval',
+        'clearInterval',
+        inlineScriptMatch[1] + '\nreturn { selectRun, getLiveRun };'
+      );
+      const controller = controllerFn(domWin, domWin, mockDoc, mockVisualizer, () => 123, () => {});
+
+      // Select 'run-1' (not yet in CouncilRuns) -> appends script1
+      controller.selectRun('run-1');
+      const script1 = appendedScripts[appendedScripts.length - 1];
+      assert.match(script1.src, /run-1\.js/);
+
+      // While 'run-1' is still loading (not in CouncilRuns), getLiveRun() must return null, NOT CouncilLatestLiveRun
+      assert.equal(controller.getLiveRun(), null, 'getLiveRun() must return null when selected historical run is not loaded yet');
+
+      // Before script1 finishes loading, user switches to 'run-2' -> appends script2
+      controller.selectRun('run-2');
+      const script2 = appendedScripts[appendedScripts.length - 1];
+      assert.match(script2.src, /run-2\.js/);
+
+      // script2 loads first
+      domWin.CouncilRuns['run-2'] = {
+        runId: 'run-2',
+        currentState: {
+          topic: 'Topic Run 2 Loaded',
+          phase: 'completed',
+          round: 1,
+          maxRounds: 3,
+          minQuorum: 2,
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: []
+        },
+        steps: []
+      };
+      script2.onload();
+      assert.equal(getEl('heading-topic').textContent, 'Topic Run 2 Loaded');
+
+      // Now stale script1 for 'run-1' finishes loading late -> must be ignored!
+      domWin.CouncilRuns['run-1'] = {
+        runId: 'run-1',
+        currentState: {
+          topic: 'Stale Topic Run 1',
+          phase: 'completed',
+          round: 1,
+          maxRounds: 3,
+          minQuorum: 2,
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: []
+        },
+        steps: []
+      };
+      script1.onload();
+      assert.equal(
+        getEl('heading-topic').textContent,
+        'Topic Run 2 Loaded',
+        'Out-of-order onload for run-1 must not clobber currently selected run-2'
+      );
+    });
   });
 });
+
 
 

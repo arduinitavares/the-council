@@ -181,9 +181,13 @@ export class VisualizerLiveWatcher {
       ? path.resolve(options.outputPath)
       : path.join(this.outputDir, 'latest.js');
     this.runFilePath = path.join(this.outputDir, `${this.runId}.js`);
+    this.metaFilePath = path.join(this.outputDir, `${this.runId}.meta.json`);
     this.indexFilePath = path.join(this.outputDir, 'index.js');
     this.initialConfig = options.initialConfig || {};
     this._stopped = false;
+    this._prevSeatMap = new Map();
+    this._prevProofMap = new Map();
+    this._prevObjMap = new Map();
 
     const nowIso = new Date().toISOString();
     this.liveRun = {
@@ -310,6 +314,229 @@ export class VisualizerLiveWatcher {
   }
 
   /**
+   * Rehydrates stateSnapshot and graph for a target step record on demand by accumulating incremental deltas.
+   * @param {Object} targetStep
+   * @returns {{ stateSnapshot: Object|null, graph: Object|null }}
+   * @private
+   */
+  _rehydrateStepAt(targetStep) {
+    const data = this.liveRun;
+    if (!data || !Array.isArray(data.steps)) {
+      return { stateSnapshot: null, graph: null };
+    }
+    const targetIdx = data.steps.indexOf(targetStep);
+    if (targetIdx < 0) {
+      return { stateSnapshot: null, graph: null };
+    }
+
+    const baseSeats =
+      data.currentState && Array.isArray(data.currentState.seats)
+        ? data.currentState.seats
+        : data.initialConfig && Array.isArray(data.initialConfig.seats)
+          ? data.initialConfig.seats
+          : [];
+    const baseSeatIds = new Set(baseSeats.map((bs) => bs.id));
+    const baseJudge =
+      data.currentState && data.currentState.judge
+        ? data.currentState.judge
+        : (data.initialConfig && data.initialConfig.judge) || null;
+    const allProofs = data.currentState && Array.isArray(data.currentState.proofs) ? data.currentState.proofs : [];
+    const allObjections =
+      data.currentState && Array.isArray(data.currentState.objections) ? data.currentState.objections : [];
+    const clarifications =
+      data.currentState && Array.isArray(data.currentState.clarifications) ? data.currentState.clarifications : [];
+    const evidence =
+      data.currentState && Array.isArray(data.currentState.evidence)
+        ? data.currentState.evidence
+        : data.initialConfig && Array.isArray(data.initialConfig.evidence)
+          ? data.initialConfig.evidence
+          : [];
+    const fullHistory = data.currentState && Array.isArray(data.currentState.history) ? data.currentState.history : [];
+    const accHistory = fullHistory.length > data.steps.length ? fullHistory.slice(data.steps.length) : [];
+
+    const seatMap = new Map();
+    const proofMap = new Map();
+    const objMap = new Map();
+
+    let resultSnapshot = null;
+    let resultGraph = null;
+
+    for (let i = 0; i <= targetIdx; i++) {
+      const st = data.steps[i];
+      const d = st && st.stateDelta;
+      if (!d) continue;
+
+      if (d.historyEntry && accHistory[0] !== d.historyEntry) {
+        accHistory.unshift(d.historyEntry);
+      }
+      if (Array.isArray(d.removedSeatIds)) {
+        for (const id of d.removedSeatIds) seatMap.delete(id);
+      }
+      for (const s of d.seatChanges || d.seatStates || []) {
+        seatMap.set(s.id, s);
+      }
+      if (Array.isArray(d.removedProofIds)) {
+        for (const id of d.removedProofIds) proofMap.delete(id);
+      }
+      for (const p of d.proofChanges || d.proofStatuses || []) {
+        proofMap.set(p.id, p);
+      }
+      if (Array.isArray(d.removedObjectionIds)) {
+        for (const id of d.removedObjectionIds) objMap.delete(id);
+      }
+      for (const o of d.objectionChanges || d.objectionStatuses || []) {
+        objMap.set(o.id, o);
+      }
+
+      if (i === targetIdx) {
+        const seats = baseSeats
+          .filter((bs) => seatMap.has(bs.id))
+          .map((bs) => {
+            const ds = seatMap.get(bs.id);
+            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? bs.retries ?? 0 });
+            if (ds.faultReason !== undefined) merged.faultReason = ds.faultReason;
+            else delete merged.faultReason;
+            if (ds.errorClass !== undefined) merged.errorClass = ds.errorClass;
+            else delete merged.errorClass;
+            if (ds.excusedReason !== undefined) merged.excusedReason = ds.excusedReason;
+            else delete merged.excusedReason;
+            return merged;
+          });
+        seatMap.forEach((ds, id) => {
+          if (!baseSeatIds.has(id)) {
+            seats.push(Object.assign({}, ds));
+          }
+        });
+
+        let judge = baseJudge ? Object.assign({}, baseJudge) : null;
+        if (judge && d.judgeState) {
+          judge.status = d.judgeState.status;
+          if (d.judgeState.retries !== undefined) judge.retries = d.judgeState.retries;
+          if (d.judgeState.faultReason !== undefined) judge.faultReason = d.judgeState.faultReason;
+          else delete judge.faultReason;
+          if (d.judgeState.errorClass !== undefined) judge.errorClass = d.judgeState.errorClass;
+          else delete judge.errorClass;
+        }
+
+        const proofs = allProofs
+          .filter((p) => proofMap.has(p.id))
+          .map((p) => {
+            const dp = proofMap.get(p.id);
+            const mergedProof = Object.assign({}, p, {
+              status: dp.status,
+              judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
+            });
+            if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote;
+            else delete mergedProof.auditNote;
+            return mergedProof;
+          });
+
+        const objections = allObjections
+          .filter((o) => objMap.has(o.id))
+          .map((o) => Object.assign({}, o, { status: objMap.get(o.id).status }));
+
+        const stepClarifications =
+          typeof d.clarificationCount === 'number' ? clarifications.slice(0, d.clarificationCount) : clarifications;
+
+        if (data.currentGraph) {
+          const activeNodeId = d.activeNodeId || d.phase;
+          const outgoingEdges = Array.isArray(d.outgoingEdges)
+            ? d.outgoingEdges
+            : Array.isArray(data.currentGraph.edges)
+              ? data.currentGraph.edges.filter((e) => e.from === activeNodeId)
+              : [];
+          const causalLinks = [];
+          proofs.forEach((p) => {
+            causalLinks.push({
+              id: 'dep-seat-proof-' + p.id,
+              fromKind: 'seat',
+              fromId: p.seatId,
+              toKind: 'proof',
+              toId: p.id,
+              status: p.status,
+              label: p.kind
+            });
+          });
+          if (d.candidate && Array.isArray(d.candidate.clauses)) {
+            d.candidate.clauses.forEach((cl) => {
+              (cl.citedProofIds || []).forEach((pid) => {
+                causalLinks.push({
+                  id: 'dep-proof-clause-' + pid + '-' + cl.id,
+                  fromKind: 'proof',
+                  fromId: pid,
+                  toKind: 'clause',
+                  toId: cl.id,
+                  status: 'admitted',
+                  label: 'cites ' + pid
+                });
+              });
+            });
+          }
+          objections.forEach((o) => {
+            if (o.status !== 'withdrawn') {
+              causalLinks.push({
+                id: 'dep-obj-seat-' + o.id,
+                fromKind: 'seat',
+                fromId: o.seatId,
+                toKind: 'objection',
+                toId: o.id,
+                status: o.status,
+                label: 'owns ' + o.id
+              });
+              causalLinks.push({
+                id: 'dep-obj-proof-' + o.id,
+                fromKind: 'proof',
+                fromId: o.proofId,
+                toKind: 'objection',
+                toId: o.id,
+                status: o.status,
+                label: 'backs ' + o.id
+              });
+            }
+          });
+          resultGraph = Object.assign({}, data.currentGraph, {
+            activeNodeId,
+            activeAlias: activeNodeId,
+            canonicalPhase: d.canonicalPhase || data.currentGraph.canonicalPhase,
+            lastEdgeId: d.lastEdgeId !== undefined ? d.lastEdgeId : data.currentGraph.lastEdgeId,
+            outgoingEdges,
+            causalLinks
+          });
+        }
+
+        resultSnapshot = {
+          phase: d.phase,
+          previousPhase: d.previousPhase !== undefined ? d.previousPhase : null,
+          canonicalPhase: d.canonicalPhase,
+          round: d.round,
+          maxRounds: d.maxRounds,
+          minQuorum: d.minQuorum,
+          clarificationBatch: d.clarificationBatch,
+          topic: d.topic,
+          lastTransition: d.lastTransition,
+          candidate: d.candidate,
+          verdict: d.verdict,
+          seats,
+          judge,
+          proofs,
+          objections,
+          clarifications: stepClarifications,
+          evidence,
+          history: accHistory.slice()
+        };
+        Object.defineProperty(resultSnapshot, 'graph', {
+          value: resultGraph || data.currentGraph || null,
+          enumerable: false,
+          configurable: true,
+          writable: true
+        });
+      }
+    }
+
+    return { stateSnapshot: resultSnapshot, graph: resultGraph };
+  }
+
+  /**
    * Handles state machine transition event.
    * @private
    */
@@ -339,6 +566,93 @@ export class VisualizerLiveWatcher {
     const actor = getTransitionActor(event, state);
     const summary = getTransitionSummary(event, state);
 
+    const nextSeatMap = new Map();
+    const seatChanges = [];
+    if (Array.isArray(clonedState.seats)) {
+      for (const s of clonedState.seats) {
+        const entry = {
+          id: s.id,
+          status: s.status,
+          retries: s.retries ?? 0,
+          ...(s.faultReason !== undefined ? { faultReason: s.faultReason } : {}),
+          ...(s.errorClass !== undefined ? { errorClass: s.errorClass } : {}),
+          ...(s.excusedReason !== undefined ? { excusedReason: s.excusedReason } : {})
+        };
+        nextSeatMap.set(s.id, entry);
+        const prev = this._prevSeatMap.get(s.id);
+        if (
+          !prev ||
+          prev.status !== entry.status ||
+          prev.retries !== entry.retries ||
+          prev.faultReason !== entry.faultReason ||
+          prev.errorClass !== entry.errorClass ||
+          prev.excusedReason !== entry.excusedReason
+        ) {
+          seatChanges.push(entry);
+        }
+      }
+    }
+    const removedSeatIds = [];
+    for (const prevId of this._prevSeatMap.keys()) {
+      if (!nextSeatMap.has(prevId)) {
+        removedSeatIds.push(prevId);
+      }
+    }
+    this._prevSeatMap = nextSeatMap;
+
+    const nextProofMap = new Map();
+    const proofChanges = [];
+    if (Array.isArray(clonedState.proofs)) {
+      for (const p of clonedState.proofs) {
+        const entry = {
+          id: p.id,
+          status: p.status,
+          judgeNote: p.judgeNote ?? null,
+          ...(p.auditNote !== undefined ? { auditNote: p.auditNote } : {})
+        };
+        nextProofMap.set(p.id, entry);
+        const prev = this._prevProofMap.get(p.id);
+        if (
+          !prev ||
+          prev.status !== entry.status ||
+          prev.judgeNote !== entry.judgeNote ||
+          prev.auditNote !== entry.auditNote
+        ) {
+          proofChanges.push(entry);
+        }
+      }
+    }
+    const removedProofIds = [];
+    for (const prevId of this._prevProofMap.keys()) {
+      if (!nextProofMap.has(prevId)) {
+        removedProofIds.push(prevId);
+      }
+    }
+    this._prevProofMap = nextProofMap;
+
+    const nextObjMap = new Map();
+    const objectionChanges = [];
+    if (Array.isArray(clonedState.objections)) {
+      for (const o of clonedState.objections) {
+        const entry = {
+          id: o.id,
+          status: o.status
+        };
+        nextObjMap.set(o.id, entry);
+        const prev = this._prevObjMap.get(o.id);
+        if (!prev || prev.status !== entry.status) {
+          objectionChanges.push(entry);
+        }
+      }
+    }
+    const removedObjectionIds = [];
+    for (const prevId of this._prevObjMap.keys()) {
+      if (!nextObjMap.has(prevId)) {
+        removedObjectionIds.push(prevId);
+      }
+    }
+    this._prevObjMap = nextObjMap;
+
     const stateDelta = {
       phase: clonedState.phase,
       previousPhase: clonedState.previousPhase ?? null,
@@ -352,34 +666,21 @@ export class VisualizerLiveWatcher {
       lastTransition: clonedState.lastTransition || null,
       candidate: clonedState.candidate || null,
       verdict: clonedState.verdict || null,
-      seatStates: Array.isArray(clonedState.seats)
-        ? clonedState.seats.map((s) => ({
-            id: s.id,
-            status: s.status,
-            retries: s.retries,
-            ...(s.faultReason !== undefined ? { faultReason: s.faultReason } : {}),
-            ...(s.errorClass !== undefined ? { errorClass: s.errorClass } : {}),
-            ...(s.excusedReason !== undefined ? { excusedReason: s.excusedReason } : {})
-          }))
-        : [],
+      seatChanges,
+      ...(removedSeatIds.length > 0 ? { removedSeatIds } : {}),
       judgeState: clonedState.judge
         ? {
             id: clonedState.judge.id,
             status: clonedState.judge.status,
+            retries: clonedState.judge.retries ?? 0,
             ...(clonedState.judge.faultReason !== undefined ? { faultReason: clonedState.judge.faultReason } : {}),
             ...(clonedState.judge.errorClass !== undefined ? { errorClass: clonedState.judge.errorClass } : {})
           }
         : null,
-      proofStatuses: Array.isArray(clonedState.proofs)
-        ? clonedState.proofs.map((p) => ({
-            id: p.id,
-            status: p.status,
-            ...(p.auditNote !== undefined ? { auditNote: p.auditNote } : {})
-          }))
-        : [],
-      objectionStatuses: Array.isArray(clonedState.objections)
-        ? clonedState.objections.map((o) => ({ id: o.id, status: o.status }))
-        : [],
+      proofChanges,
+      ...(removedProofIds.length > 0 ? { removedProofIds } : {}),
+      objectionChanges,
+      ...(removedObjectionIds.length > 0 ? { removedObjectionIds } : {}),
       historyEntry: Array.isArray(clonedState.history) && clonedState.history.length > 0 ? clonedState.history[0] : null,
       activeNodeId: clonedGraph?.activeNodeId || clonedState.phase,
       lastEdgeId: clonedGraph?.lastEdgeId ?? null,
@@ -396,16 +697,14 @@ export class VisualizerLiveWatcher {
     };
 
     Object.defineProperty(stepRecord, 'stateSnapshot', {
-      value: clonedState,
+      get: () => this._rehydrateStepAt(stepRecord).stateSnapshot,
       enumerable: false,
-      configurable: true,
-      writable: true
+      configurable: true
     });
     Object.defineProperty(stepRecord, 'graph', {
-      value: clonedGraph,
+      get: () => this._rehydrateStepAt(stepRecord).graph,
       enumerable: false,
-      configurable: true,
-      writable: true
+      configurable: true
     });
 
     this.liveRun.steps.push(stepRecord);
@@ -547,6 +846,7 @@ export class VisualizerLiveWatcher {
     const baseSeats = (data.currentState && Array.isArray(data.currentState.seats))
       ? data.currentState.seats
       : ((data.initialConfig && Array.isArray(data.initialConfig.seats)) ? data.initialConfig.seats : []);
+    const baseSeatIds = new Set(baseSeats.map(function (bs) { return bs.id; }));
     const baseJudge = (data.currentState && data.currentState.judge)
       ? data.currentState.judge
       : ((data.initialConfig && data.initialConfig.judge) || null);
@@ -558,35 +858,65 @@ export class VisualizerLiveWatcher {
       : ((data.initialConfig && Array.isArray(data.initialConfig.evidence)) ? data.initialConfig.evidence : []);
     const fullHistory = (data.currentState && Array.isArray(data.currentState.history)) ? data.currentState.history : [];
     const accHistory = fullHistory.length > data.steps.length ? fullHistory.slice(data.steps.length) : [];
+    const seatMap = new Map();
+    const proofMap = new Map();
+    const objMap = new Map();
     for (let i = 0; i < data.steps.length; i++) {
       const st = data.steps[i];
       const d = st && st.stateDelta;
       if (d) {
         if (d.historyEntry && accHistory[0] !== d.historyEntry) accHistory.unshift(d.historyEntry);
-        const seatMap = new Map((d.seatStates || []).map(function (s) { return [s.id, s]; }));
-        const seats = baseSeats.map(function (bs) {
-          const ds = seatMap.get(bs.id);
-          if (!ds) return Object.assign({}, bs);
-          const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? bs.retries ?? 0 });
-          if (ds.faultReason !== undefined) merged.faultReason = ds.faultReason; else delete merged.faultReason;
-          if (ds.errorClass !== undefined) merged.errorClass = ds.errorClass; else delete merged.errorClass;
-          if (ds.excusedReason !== undefined) merged.excusedReason = ds.excusedReason; else delete merged.excusedReason;
-          return merged;
+        if (Array.isArray(d.removedSeatIds)) {
+          d.removedSeatIds.forEach(function (id) { seatMap.delete(id); });
+        }
+        (d.seatChanges || d.seatStates || []).forEach(function (s) {
+          seatMap.set(s.id, s);
+        });
+        const seats = baseSeats
+          .filter(function (bs) { return seatMap.has(bs.id); })
+          .map(function (bs) {
+            const ds = seatMap.get(bs.id);
+            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? bs.retries ?? 0 });
+            if (ds.faultReason !== undefined) merged.faultReason = ds.faultReason; else delete merged.faultReason;
+            if (ds.errorClass !== undefined) merged.errorClass = ds.errorClass; else delete merged.errorClass;
+            if (ds.excusedReason !== undefined) merged.excusedReason = ds.excusedReason; else delete merged.excusedReason;
+            return merged;
+          });
+        seatMap.forEach(function (ds, id) {
+          if (!baseSeatIds.has(id)) {
+            seats.push(Object.assign({}, ds));
+          }
         });
         let judge = baseJudge ? Object.assign({}, baseJudge) : null;
         if (judge && d.judgeState) {
           judge.status = d.judgeState.status;
+          if (d.judgeState.retries !== undefined) judge.retries = d.judgeState.retries;
           if (d.judgeState.faultReason !== undefined) judge.faultReason = d.judgeState.faultReason; else delete judge.faultReason;
           if (d.judgeState.errorClass !== undefined) judge.errorClass = d.judgeState.errorClass; else delete judge.errorClass;
         }
-        const proofMap = new Map((d.proofStatuses || []).map(function (p) { return [p.id, p]; }));
+        if (Array.isArray(d.removedProofIds)) {
+          d.removedProofIds.forEach(function (id) { proofMap.delete(id); });
+        }
+        (d.proofChanges || d.proofStatuses || []).forEach(function (p) {
+          proofMap.set(p.id, p);
+        });
         const proofs = allProofs
           .filter(function (p) { return proofMap.has(p.id); })
           .map(function (p) {
             const dp = proofMap.get(p.id);
-            return Object.assign({}, p, { status: dp.status }, dp.auditNote !== undefined ? { auditNote: dp.auditNote } : {});
+            const mergedProof = Object.assign({}, p, {
+              status: dp.status,
+              judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
+            });
+            if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote; else delete mergedProof.auditNote;
+            return mergedProof;
           });
-        const objMap = new Map((d.objectionStatuses || []).map(function (o) { return [o.id, o]; }));
+        if (Array.isArray(d.removedObjectionIds)) {
+          d.removedObjectionIds.forEach(function (id) { objMap.delete(id); });
+        }
+        (d.objectionChanges || d.objectionStatuses || []).forEach(function (o) {
+          objMap.set(o.id, o);
+        });
         const objections = allObjections
           .filter(function (o) { return objMap.has(o.id); })
           .map(function (o) { return Object.assign({}, o, { status: objMap.get(o.id).status }); });
@@ -677,9 +1007,14 @@ export class VisualizerLiveWatcher {
             objections: objections,
             clarifications: stepClarifications,
             evidence: evidence,
-            history: accHistory.slice(),
-            graph: st.graph || data.currentGraph || null
+            history: accHistory.slice()
           };
+          Object.defineProperty(st.stateSnapshot, 'graph', {
+            value: st.graph || data.currentGraph || null,
+            enumerable: false,
+            configurable: true,
+            writable: true
+          });
         }
       }
     }
@@ -716,7 +1051,7 @@ export class VisualizerLiveWatcher {
   }
 
   /**
-   * Atomically writes current liveRun to runFilePath, outputPath (latest.js), and updates index.js.
+   * Atomically writes current liveRun to runFilePath, outputPath (latest.js), <runId>.meta.json, and updates index.js.
    * Wrapped in try/catch for observer safety so disk faults never crash deliberation.
    * @private
    */
@@ -733,7 +1068,6 @@ export class VisualizerLiveWatcher {
         this._atomicWriteFile(this.runFilePath, runContent);
       }
 
-      const existingIndex = this._readExistingIndex().filter((entry) => entry && entry.runId !== this.runId);
       const currentEntry = {
         id: this.runId,
         runId: this.runId,
@@ -745,7 +1079,43 @@ export class VisualizerLiveWatcher {
         isRunning: this.liveRun.isRunning,
         verdictKind: this.liveRun.currentState?.verdict?.kind || null
       };
-      const updatedIndex = [currentEntry, ...existingIndex];
+      this._atomicWriteFile(this.metaFilePath, JSON.stringify(currentEntry, null, 2));
+
+      const byRunId = new Map();
+      byRunId.set(this.runId, currentEntry);
+      for (const entry of this._readExistingIndex()) {
+        if (entry && entry.runId && !byRunId.has(entry.runId)) {
+          byRunId.set(entry.runId, entry);
+        }
+      }
+      if (fs.existsSync(this.outputDir)) {
+        const files = fs.readdirSync(this.outputDir);
+        for (const name of files) {
+          if (!name.endsWith('.meta.json')) continue;
+          try {
+            const parsed = JSON.parse(fs.readFileSync(path.join(this.outputDir, name), 'utf8'));
+            if (parsed && parsed.runId) {
+              byRunId.set(parsed.runId, parsed);
+            }
+          } catch {
+            // Ignore unreadable or partially written meta files
+          }
+        }
+      }
+      byRunId.set(this.runId, currentEntry);
+
+      const updatedIndex = Array.from(byRunId.values()).sort((a, b) => {
+        const timeA = String(a.updatedAt || a.startedAt || '');
+        const timeB = String(b.updatedAt || b.startedAt || '');
+        if (timeA !== timeB) return timeB.localeCompare(timeA);
+        const startA = String(a.startedAt || '');
+        const startB = String(b.startedAt || '');
+        if (startA !== startB) return startB.localeCompare(startA);
+        if (a.runId === this.runId) return -1;
+        if (b.runId === this.runId) return 1;
+        return 0;
+      });
+
       const indexJson = JSON.stringify(updatedIndex, null, 2);
       const indexContent = `/**
  * Auto-generated Run Manifest by The Council VisualizerLiveWatcher.

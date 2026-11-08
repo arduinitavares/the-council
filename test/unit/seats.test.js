@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import {
   formatDeliberationPrompt,
   formatVotingPrompt,
-  formatJudgePrompt
+  formatJudgePrompt,
+  formatGroundingSection
 } from '../../src/seats/soul.js';
 
 describe('Unit: Seat & Judge Evidence and Clarification Prompt Grounding (#23)', () => {
-  it('injects state.evidence ([E1] <label> (Source: <source>): <text>) and state.clarifications into deliberation, voting, and judge prompts', () => {
+  it('exports formatGroundingSection with clear data delimiters and injects state.evidence and state.clarifications into deliberation, voting, and judge prompts', () => {
+    assert.equal(typeof formatGroundingSection, 'function');
+    assert.equal(formatGroundingSection([], []), '');
+
     const state = {
       topic: 'Database Sharding vs Read Replicas',
       round: 1,
@@ -56,6 +60,12 @@ describe('Unit: Seat & Judge Evidence and Clarification Prompt Grounding (#23)',
       objections: []
     };
 
+    const grounding = formatGroundingSection(state.evidence, state.clarifications);
+    assert.match(grounding, /--- BEGIN EVIDENCE \[E1\] PgStatStatements Dump \(Source: psql:\/\/127\.0\.0\.1:5432\/metrics\) ---/);
+    assert.match(grounding, /--- END EVIDENCE \[E1\] ---/);
+    assert.match(grounding, /--- BEGIN EVIDENCE \[E2\] Replica Lag Benchmark \(Source: benchmarks\/replica-lag\.json\) ---/);
+    assert.match(grounding, /--- END EVIDENCE \[E2\] ---/);
+
     const seat = { id: 'seat-db', harness: 'codex', model: 'gpt-6-astra (max)' };
     const delib = formatDeliberationPrompt({ soul: 'DB Architect', seat, state });
     const voting = formatVotingPrompt({ soul: 'DB Architect', seat, state });
@@ -67,9 +77,14 @@ describe('Unit: Seat & Judge Evidence and Clarification Prompt Grounding (#23)',
     });
 
     for (const prompt of [delib, voting, judge]) {
+      assert.match(prompt, /--- BEGIN EVIDENCE \[E1\] PgStatStatements Dump \(Source: psql:\/\/127\.0\.0\.1:5432\/metrics\) ---/);
       assert.match(prompt, /\[E1\] PgStatStatements Dump \(Source: psql:\/\/127\.0\.0\.1:5432\/metrics\): SELECT Ratio=94%, INSERT\/UPDATE Ratio=6%/);
+      assert.match(prompt, /--- END EVIDENCE \[E1\] ---/);
+      assert.match(prompt, /--- BEGIN EVIDENCE \[E2\] Replica Lag Benchmark \(Source: benchmarks\/replica-lag\.json\) ---/);
       assert.match(prompt, /\[E2\] Replica Lag Benchmark \(Source: benchmarks\/replica-lag\.json\): p99 replication lag is 12ms under 10k RPS/);
+      assert.match(prompt, /--- END EVIDENCE \[E2\] ---/);
       assert.match(prompt, /Read-after-write consistency is only required for session auth tokens\./);
     }
   });
 });
+

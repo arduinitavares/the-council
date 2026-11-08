@@ -5,14 +5,12 @@
  */
 
 import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
-import { runAntigravityCli, parseModelAndEffort } from './cli-runner.js';
+import { runAntigravityCli, extractCanonicalBaseModel } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
   formatVotingPrompt,
   formatJudgePrompt as formatJudgeSoulPrompt
 } from '../seats/soul.js';
-
-const EFFORT_SUFFIXES = ['-max', '-xhigh', '-high', '-medium', '-low'];
 
 export class AntigravityAdapter extends HarnessAdapter {
   /**
@@ -25,23 +23,13 @@ export class AntigravityAdapter extends HarnessAdapter {
   }
 
   validateModel(model) {
-    let parsed;
+    let baseModel;
     try {
-      parsed = parseModelAndEffort(model, 'high');
+      baseModel = extractCanonicalBaseModel(model, 'high');
     } catch (err) {
       throw new HarnessExecutionError(err.message, { harness: this.name, model, cause: err });
     }
 
-    const hasParens = /\([^)]*\)\s*$/.test(String(model || '').trim());
-    let baseModel = parsed.model.trim().toLowerCase();
-    if (!hasParens) {
-      for (const suffix of EFFORT_SUFFIXES) {
-        if (baseModel.endsWith(suffix)) {
-          baseModel = baseModel.slice(0, -suffix.length);
-          break;
-        }
-      }
-    }
     if (/^claude-(sonnet|opus)-5-5-\d{8}$/.test(baseModel)) {
       baseModel = baseModel.slice(0, -9);
     }

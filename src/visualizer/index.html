@@ -791,8 +791,8 @@
     function getLiveRun() {
       const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
                    (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
-      if (selectedRunId !== 'latest' && runs && runs[selectedRunId]) {
-        return runs[selectedRunId];
+      if (selectedRunId !== 'latest') {
+        return (runs && runs[selectedRunId]) ? runs[selectedRunId] : null;
       }
       return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
              (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
@@ -843,10 +843,12 @@
         renderAll();
         return;
       }
+      const requestedRunId = selectedRunId;
       const script = document.createElement('script');
-      script.src = '../../.council/runs/' + encodeURIComponent(selectedRunId) + '.js?t=' + Date.now();
+      script.src = '../../.council/runs/' + encodeURIComponent(requestedRunId) + '.js?t=' + Date.now();
       script.onload = function () {
         script.remove();
+        if (selectedRunId !== requestedRunId) return;
         const loadedRun = getLiveRun();
         if (loadedRun && loadedRun.currentState) {
           councilState = loadedRun.currentState;
@@ -855,6 +857,7 @@
       };
       script.onerror = function () {
         script.remove();
+        if (selectedRunId !== requestedRunId) return;
       };
       document.head.appendChild(script);
     }

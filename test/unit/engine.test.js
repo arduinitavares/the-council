@@ -667,16 +667,17 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
   });
 
   describe('Issue #23: Validated evidence & clarifications and State Preservation', () => {
-    it('exports MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ITEM_CHARS, MAX_TOTAL_EVIDENCE_CHARS, and normalizeCouncilConfig', async () => {
+    it('exports MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ID_CHARS, MAX_EVIDENCE_ITEM_CHARS, MAX_TOTAL_EVIDENCE_CHARS, and normalizeCouncilConfig', async () => {
       const cfgMod = await import('../../src/engine/config.js');
       assert.equal(cfgMod.MAX_EVIDENCE_ITEMS, 20);
+      assert.equal(cfgMod.MAX_EVIDENCE_ID_CHARS, 64);
       assert.equal(cfgMod.MAX_EVIDENCE_ITEM_CHARS, 32768);
       assert.equal(cfgMod.MAX_TOTAL_EVIDENCE_CHARS, 131072);
       assert.equal(typeof cfgMod.normalizeCouncilConfig, 'function');
     });
 
     it('rejects malformed evidence and clarifications entries and oversized evidence in validateConfig', async () => {
-      const { MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ITEM_CHARS } = await import('../../src/engine/config.js');
+      const { MAX_EVIDENCE_ITEMS, MAX_EVIDENCE_ID_CHARS, MAX_EVIDENCE_ITEM_CHARS } = await import('../../src/engine/config.js');
       const base = {
         topic: 'Evidence Validation Topic',
         maxRounds: 2,
@@ -729,6 +730,20 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(validateConfig({ ...base, clarifications: [{ answer: '  ' }] }).valid, false);
       assert.equal(validateConfig({ ...base, clarifications: [{ batch: 0, answer: 'bad batch' }] }).valid, false);
 
+      // Partial/mixed clarification objects (e.g. { answer: "Keep existing API", label: "Context" } missing source/text)
+      const mixedClar1 = validateConfig({
+        ...base,
+        clarifications: [{ answer: 'Keep existing API', label: 'Context' }]
+      });
+      assert.equal(mixedClar1.valid, false, 'Partial label without source/text must be rejected');
+      assert.throws(() => resolveConfig({ ...base, clarifications: [{ answer: 'Keep existing API', label: 'Context' }] }));
+
+      const mixedClar2 = validateConfig({
+        ...base,
+        clarifications: [{ answer: 'Keep existing API', source: 'doc.md' }]
+      });
+      assert.equal(mixedClar2.valid, false, 'Partial source without label/text must be rejected');
+
       // Invalid evidence[i].id
       assert.equal(
         validateConfig({
@@ -744,9 +759,48 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
         }).valid,
         false
       );
+
+      // Oversized evidence[i].id (> MAX_EVIDENCE_ID_CHARS = 64)
+      const oversizedIdRes = validateConfig({
+        ...base,
+        evidence: [{ id: 'E_' + 'X'.repeat(MAX_EVIDENCE_ID_CHARS), label: 'L', source: 'S', text: 'T' }]
+      });
+      assert.equal(oversizedIdRes.valid, false, 'Oversized evidence[i].id must be rejected');
+      assert.match(oversizedIdRes.errors.join(' '), /maximum id length/i);
+
+      // Duplicate explicit evidence IDs
+      const dupExplicitRes = validateConfig({
+        ...base,
+        evidence: [
+          { id: 'custom-1', label: 'A', source: 'S', text: 'T' },
+          { id: 'custom-1', label: 'B', source: 'S', text: 'T' }
+        ]
+      });
+      assert.equal(dupExplicitRes.valid, false);
+      assert.match(dupExplicitRes.errors.join(' '), /Duplicate evidence id "custom-1" at evidence\[1\]\./);
+
+      // Duplicate explicit-vs-auto evidence ID (index 0 explicitly claims "E2", index 1 auto-assigns "E2")
+      const dupAutoRes = validateConfig({
+        ...base,
+        evidence: [
+          { id: 'E2', label: 'A', source: 'S', text: 'T' },
+          { label: 'B', source: 'S', text: 'T' }
+        ]
+      });
+      assert.equal(dupAutoRes.valid, false);
+      assert.match(dupAutoRes.errors.join(' '), /Duplicate evidence id "E2" at evidence\[1\]\./);
+      assert.throws(() =>
+        resolveConfig({
+          ...base,
+          evidence: [
+            { id: 'E2', label: 'A', source: 'S', text: 'T' },
+            { label: 'B', source: 'S', text: 'T' }
+          ]
+        })
+      );
     });
 
-    it('preserves frozen evidence and all pre-supplied clarifications (including question/label/source/text metadata and across RESET / dynamic runDiscovery) across createInitialCouncilState, initRoster, and CouncilEngine.run()', async () => {
+    it('preserves frozen evidence and all pre-supplied clarifications (including question/label/source/text metadata and across RESET / dynamic runDiscovery) across createInitialCouncilState, initRoster, and CouncilEngine.run() without direct state mutation', async () => {
       const { createInitialCouncilState } = await import('../../src/machine/state.js');
       const { transitionCouncil } = await import('../../src/machine/reducer.js');
 
@@ -786,12 +840,13 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(afterReset.evidence.length, 2);
       assert.equal(afterReset.clarifications.length, 3);
 
-      // CouncilEngine initRoster and run() preserve evidence and all 3 clarifications with full metadata
+      // CouncilEngine initRoster and run() preserve evidence and publish all 3 clarifications via transitions
       const engine = new CouncilEngine(configInput);
       engine.initRoster();
       assert.equal(engine.state.evidence.length, 2);
       assert.ok(Object.isFrozen(engine.state.evidence));
-      assert.equal(engine.state.clarifications.length, 3);
+      assert.equal(engine.config.clarifications.length, 3);
+      assert.equal(engine.state.clarifications.length, 0, 'Before run/runDiscovery, state.clarifications starts empty and is populated purely via transitions');
 
       const result = await engine.run();
       assert.equal(result.ok, true);
@@ -804,15 +859,17 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.match(result.state.clarifications[2].answer, /Clarification 3/);
 
       // Calling runDiscovery(extraClarifications) on a fresh engine with pre-supplied config.clarifications
-      // must append extraClarifications rather than wiping the pre-supplied clarifications
+      // must append extraClarifications rather than wiping the pre-supplied clarifications, purely via _step transitions
       const engineWithExtra = new CouncilEngine(configInput);
       engineWithExtra.initRoster();
       await engineWithExtra.runDiscovery([{ question: 'Dynamic Q?', answer: 'Dynamic A' }]);
       assert.equal(engineWithExtra.state.clarifications.length, 4);
+      assert.equal(engineWithExtra.state.maxClarificationBatches, 4);
       assert.equal(engineWithExtra.state.clarifications[3].question, 'Dynamic Q?');
       assert.equal(engineWithExtra.state.clarifications[3].answer, 'Dynamic A');
     });
   });
 });
+
 
 

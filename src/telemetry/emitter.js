@@ -23,7 +23,8 @@ export class CouncilTelemetryEmitter extends EventEmitter {
   constructor(options = {}) {
     super();
     this.clock = options.clock || (() => new Date().toISOString());
-    this.maxHistory = options.maxHistory || 500;
+    this.maxHistory =
+      Number.isInteger(options.maxHistory) && options.maxHistory >= 0 ? options.maxHistory : 500;
     this.telemetryHistory = [];
     this.providerCalls = [];
     this.recorder = options.recordSnapshots !== false ? createSnapshotRecorder({ clock: this.clock }) : null;
@@ -94,9 +95,13 @@ export class CouncilTelemetryEmitter extends EventEmitter {
       timestamp: this.clock()
     });
 
-    this.telemetryHistory.push(payload);
-    if (this.telemetryHistory.length > this.maxHistory) {
-      this.telemetryHistory.shift();
+    if (this.maxHistory === 0) {
+      this.telemetryHistory.length = 0;
+    } else {
+      this.telemetryHistory.push(payload);
+      if (this.telemetryHistory.length > this.maxHistory) {
+        this.telemetryHistory.shift();
+      }
     }
 
     this._safeEmit('seat_telemetry', payload);
@@ -192,9 +197,13 @@ export class CouncilTelemetryEmitter extends EventEmitter {
       ...callRecord,
       timestamp: this.clock()
     });
-    this.providerCalls.push(record);
-    if (this.providerCalls.length > this.maxHistory) {
-      this.providerCalls.shift();
+    if (this.maxHistory === 0) {
+      this.providerCalls.length = 0;
+    } else {
+      this.providerCalls.push(record);
+      if (this.providerCalls.length > this.maxHistory) {
+        this.providerCalls.shift();
+      }
     }
     this._safeEmit('provider_call', record);
     return record;

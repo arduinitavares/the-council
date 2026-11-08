@@ -232,11 +232,28 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
     });
 
     describe('CodexAdapter', () => {
-      it('validates allowed models (gpt-6.1-sol, gpt-6-astra)', () => {
+      it('validates allowed models (gpt-6.1-sol, gpt-6-astra) and rejects invalid effort tiers or substring spoofs', () => {
         const adapter = new CodexAdapter();
         assert.doesNotThrow(() => adapter.validateModel('gpt-6.1-sol (max)'));
         assert.doesNotThrow(() => adapter.validateModel('gpt-6-astra (high)'));
+        assert.doesNotThrow(() => adapter.validateModel('gpt-6-astra-max'));
         assert.throws(() => adapter.validateModel('claude-sonnet-5-5'), /not permitted under Codex route/);
+        assert.throws(
+          () => adapter.validateModel('gpt-6-astra (ultra)'),
+          (err) => err instanceof HarnessExecutionError && /Unsupported reasoning effort "ultra"/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('not-gpt-6-astra-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Codex route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('gpt-6-astra-bogus (max)'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Codex route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('gpt-6-astra-high (max)'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Codex route/.test(err.message)
+        );
       });
 
       it('classifies OpenAI quota and rate limit errors', () => {
@@ -270,12 +287,24 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
     });
 
     describe('AntigravityAdapter', () => {
-      it('validates allowed models (gemini-4-argon, claude-sonnet-5-5, claude-opus-5-5)', () => {
+      it('validates allowed models (gemini-4-argon, claude-sonnet-5-5, claude-opus-5-5) and rejects invalid effort tiers or substring spoofs', () => {
         const adapter = new AntigravityAdapter();
         assert.doesNotThrow(() => adapter.validateModel('gemini-4-argon-high'));
         assert.doesNotThrow(() => adapter.validateModel('claude-sonnet-5-5-high'));
         assert.doesNotThrow(() => adapter.validateModel('claude-opus-5-5-high'));
         assert.throws(() => adapter.validateModel('gpt-6.1-sol'), /not permitted under Antigravity route/);
+        assert.throws(
+          () => adapter.validateModel('gemini-4-argon (bogus)'),
+          (err) => err instanceof HarnessExecutionError && /Unsupported reasoning effort "bogus"/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('not-gemini-4-argon-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('claude-opus-5-5-bogus (high)'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
+        );
       });
 
       it('classifies Gemini and Claude quota and resource errors', () => {
@@ -289,11 +318,27 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
     });
 
     describe('CursorAdapter', () => {
-      it('validates allowed models (grok-4.7, composer-2.5)', () => {
+      it('validates allowed models (grok-4.7, composer-2.5) and rejects invalid effort tiers, substring spoofs, and invented composer effort', () => {
         const adapter = new CursorAdapter();
         assert.doesNotThrow(() => adapter.validateModel('grok-4.7-high'));
         assert.doesNotThrow(() => adapter.validateModel('composer-2.5'));
         assert.throws(() => adapter.validateModel('gpt-6-astra'), /not permitted under Cursor route/);
+        assert.throws(
+          () => adapter.validateModel('grok-4.7 (ultra)'),
+          (err) => err instanceof HarnessExecutionError && /Unsupported reasoning effort "ultra"/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('not-grok-4.7-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Cursor route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('composer-2.5 (high)'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Cursor route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('composer-2.5-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Cursor route/.test(err.message)
+        );
       });
 
       it('classifies Cursor weekly included pool exhaustion signature', () => {

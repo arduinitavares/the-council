@@ -113,19 +113,40 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       assert.equal(parsed.verdict.kind, 'Unanimous Consensus');
       assert.ok(Array.isArray(parsed.snapshots));
 
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
       const tmpFile = path.join(os.tmpdir(), `live-mode-json-${Date.now()}.json`);
       fs.writeFileSync(tmpFile, JSON.stringify({
         topic: 'Live JSON Mode Test',
         seats: [
-          { id: 'live-seat-1', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 1' },
-          { id: 'live-seat-2', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 2' }
+          { id: 'live-seat-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Live Test Soul 1' },
+          { id: 'live-seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Live Test Soul 2' }
         ],
-        judge: { id: 'live-judge', harness: 'mock', model: 'mock-model', soul: 'Live Judge Soul' }
+        judge: { id: 'live-judge', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Live Judge Soul' }
       }));
 
       try {
         const liveIO = createMockIO();
         liveIO.io.liveWatcher = { attach: () => {}, stop: () => {} };
+        liveIO.io.harnessRegistry = new HarnessRegistry({
+          spawnRunner: async ({ prompt }) => {
+            if (prompt.includes('VOTING') || prompt.includes('"vote"')) {
+              return JSON.stringify({ vote: 'accept' });
+            }
+            if (prompt.includes('proofDecisions') || prompt.includes('clauses')) {
+              return JSON.stringify({
+                summary: 'Synthesized live candidate',
+                proofDecisions: { P1: { status: 'admitted' }, P2: { status: 'admitted' } },
+                clauses: [{ context: 'General', conclusion: 'Verified live mode', citedProofIds: ['P1'] }]
+              });
+            }
+            return JSON.stringify({
+              scope: 'General',
+              kind: 'check',
+              source: 'Live harness check',
+              statement: 'Verified statement'
+            });
+          }
+        });
         const liveCode = await runCli(['run', '--live', '-c', tmpFile, '--json'], liveIO.io);
         assert.equal(liveCode, 0);
         const liveParsed = JSON.parse(liveIO.getStdout());
@@ -278,18 +299,39 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
     });
 
     it('runs deliberation with --live flag, attaching VisualizerLiveWatcher and HarnessRegistry', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
       const tmpFile = path.join(os.tmpdir(), `live-cfg-${Date.now()}.json`);
       fs.writeFileSync(tmpFile, JSON.stringify({
         topic: 'Live Flag Verification',
         seats: [
-          { id: 'live-seat-1', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 1' },
-          { id: 'live-seat-2', harness: 'mock', model: 'mock-model', soul: 'Live Test Soul 2' }
+          { id: 'live-seat-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Live Test Soul 1' },
+          { id: 'live-seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Live Test Soul 2' }
         ],
-        judge: { id: 'live-judge', harness: 'mock', model: 'mock-model', soul: 'Live Judge Soul' }
+        judge: { id: 'live-judge', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Live Judge Soul' }
       }));
 
       try {
         const mockIO = createMockIO();
+        mockIO.io.harnessRegistry = new HarnessRegistry({
+          spawnRunner: async ({ prompt }) => {
+            if (prompt.includes('VOTING') || prompt.includes('"vote"')) {
+              return JSON.stringify({ vote: 'accept' });
+            }
+            if (prompt.includes('proofDecisions') || prompt.includes('clauses')) {
+              return JSON.stringify({
+                summary: 'Live candidate summary',
+                proofDecisions: { P1: { status: 'admitted' }, P2: { status: 'admitted' } },
+                clauses: [{ context: 'Core', conclusion: 'Live verified', citedProofIds: ['P1'] }]
+              });
+            }
+            return JSON.stringify({
+              scope: 'Core',
+              kind: 'check',
+              source: 'Harness runner',
+              statement: 'Verified live proof'
+            });
+          }
+        });
         const code = await runCli(['run', '--live', '-c', tmpFile, '--json'], mockIO.io);
         assert.equal(code, 0);
         const parsed = JSON.parse(mockIO.getStdout());
@@ -308,10 +350,72 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       }
     });
 
-    it('rejects unknown or rejected models up front in --live mode before spawning any provider, naming participant and model (Issue #16)', async () => {
+    it('rejects harness: "mock" on a seat or judge in --live mode with exit code 1 and zero watcher attachment (Issue #17)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const tmpMockSeat = path.join(os.tmpdir(), `live-mock-seat-${Date.now()}.json`);
+      const tmpMockJudge = path.join(os.tmpdir(), `live-mock-judge-${Date.now()}.json`);
+
+      fs.writeFileSync(tmpMockSeat, JSON.stringify({
+        topic: 'Mock Seat Spoof in Live Mode',
+        seats: [
+          { id: 'astra-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Valid Seat' },
+          { id: 'spoof-mock-seat', harness: 'mock', model: 'mock-model', soul: 'Spoofed Seat' }
+        ],
+        judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Valid Judge' }
+      }));
+
+      fs.writeFileSync(tmpMockJudge, JSON.stringify({
+        topic: 'Mock Judge Spoof in Live Mode',
+        seats: [
+          { id: 'astra-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Valid Seat 1' },
+          { id: 'argon-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Valid Seat 2' }
+        ],
+        judge: { id: 'spoof-mock-judge', harness: 'mock', model: 'mock-model', soul: 'Spoofed Judge' }
+      }));
+
+      try {
+        let spawnCalls = 0;
+        let watcherAttached = 0;
+        const trackingRegistry = new HarnessRegistry({
+          spawnRunner: async () => {
+            spawnCalls += 1;
+            return '{}';
+          }
+        });
+        const trackingWatcher = {
+          attach: () => { watcherAttached += 1; },
+          stop: () => {}
+        };
+
+        const seatIO = createMockIO();
+        seatIO.io.harnessRegistry = trackingRegistry;
+        seatIO.io.liveWatcher = trackingWatcher;
+        const seatCode = await runCli(['run', '--live', '-c', tmpMockSeat], seatIO.io);
+        assert.equal(seatCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when seat uses mock harness in --live mode');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when seat uses mock harness in --live mode');
+        assert.match(seatIO.getStderr(), /Cannot use "mock" harness for seat "spoof-mock-seat" in --live mode/i);
+
+        const judgeIO = createMockIO();
+        judgeIO.io.harnessRegistry = trackingRegistry;
+        judgeIO.io.liveWatcher = trackingWatcher;
+        const judgeCode = await runCli(['run', '--live', '-c', tmpMockJudge], judgeIO.io);
+        assert.equal(judgeCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when judge uses mock harness in --live mode');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when judge uses mock harness in --live mode');
+        assert.match(judgeIO.getStderr(), /Cannot use "mock" harness for judge "spoof-mock-judge" in --live mode/i);
+      } finally {
+        if (fs.existsSync(tmpMockSeat)) fs.unlinkSync(tmpMockSeat);
+        if (fs.existsSync(tmpMockJudge)) fs.unlinkSync(tmpMockJudge);
+      }
+    });
+
+    it('rejects unknown or rejected models, invalid effort tiers, and substring-spoofed models up front in --live mode before attaching watcher or spawning any provider (Issue #16)', async () => {
       const { HarnessRegistry } = await import('../../src/harness/index.js');
       const tmpSeatBad = path.join(os.tmpdir(), `live-bad-seat-model-${Date.now()}.json`);
       const tmpJudgeBad = path.join(os.tmpdir(), `live-bad-judge-model-${Date.now()}.json`);
+      const tmpBadEffort = path.join(os.tmpdir(), `live-bad-effort-${Date.now()}.json`);
+      const tmpSpoofModel = path.join(os.tmpdir(), `live-spoof-model-${Date.now()}.json`);
 
       fs.writeFileSync(tmpSeatBad, JSON.stringify({
         topic: 'Preflight Bad Seat Model',
@@ -331,33 +435,81 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         judge: { id: 'judge-bad-cursor', harness: 'cursor', model: 'grok-4-skeptic', soul: 'Invalid Judge' }
       }));
 
+      fs.writeFileSync(tmpBadEffort, JSON.stringify({
+        topic: 'Preflight Bad Effort Tier',
+        seats: [
+          { id: 'astra-ultra', harness: 'codex', model: 'gpt-6-astra (ultra)', soul: 'Bad Effort Seat' },
+          { id: 'argon-valid', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Valid Seat' }
+        ],
+        judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Valid Judge' }
+      }));
+
+      fs.writeFileSync(tmpSpoofModel, JSON.stringify({
+        topic: 'Preflight Substring Spoof Model',
+        seats: [
+          { id: 'astra-valid', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Valid Seat' },
+          { id: 'spoof-seat', harness: 'codex', model: 'not-gpt-6-astra-high', soul: 'Spoof Seat' }
+        ],
+        judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Valid Judge' }
+      }));
+
       try {
         let spawnCalls = 0;
+        let watcherAttached = 0;
         const trackingRegistry = new HarnessRegistry({
           spawnRunner: async () => {
             spawnCalls += 1;
             return '{}';
           }
         });
+        const trackingWatcher = {
+          attach: () => { watcherAttached += 1; },
+          stop: () => {}
+        };
 
         const seatIO = createMockIO();
         seatIO.io.harnessRegistry = trackingRegistry;
+        seatIO.io.liveWatcher = trackingWatcher;
         const seatCode = await runCli(['run', '--live', '-c', tmpSeatBad], seatIO.io);
         assert.equal(seatCode, 1);
         assert.equal(spawnCalls, 0, 'Must not spawn any provider when seat model is invalid');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when seat model is invalid');
         assert.match(seatIO.getStderr(), /sol-invalid-seat/);
         assert.match(seatIO.getStderr(), /gpt-5-sol \(high\)/);
 
         const judgeIO = createMockIO();
         judgeIO.io.harnessRegistry = trackingRegistry;
+        judgeIO.io.liveWatcher = trackingWatcher;
         const judgeCode = await runCli(['run', '--live', '-c', tmpJudgeBad], judgeIO.io);
         assert.equal(judgeCode, 1);
         assert.equal(spawnCalls, 0, 'Must not spawn any provider when judge model is invalid');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when judge model is invalid');
         assert.match(judgeIO.getStderr(), /judge-bad-cursor/);
         assert.match(judgeIO.getStderr(), /grok-4-skeptic/);
+
+        const effortIO = createMockIO();
+        effortIO.io.harnessRegistry = trackingRegistry;
+        effortIO.io.liveWatcher = trackingWatcher;
+        const effortCode = await runCli(['run', '--live', '-c', tmpBadEffort], effortIO.io);
+        assert.equal(effortCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when effort tier is invalid');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when effort tier is invalid');
+        assert.match(effortIO.getStderr(), /astra-ultra/);
+        assert.match(effortIO.getStderr(), /Unsupported reasoning effort "ultra"/);
+
+        const spoofIO = createMockIO();
+        spoofIO.io.harnessRegistry = trackingRegistry;
+        spoofIO.io.liveWatcher = trackingWatcher;
+        const spoofCode = await runCli(['run', '--live', '-c', tmpSpoofModel], spoofIO.io);
+        assert.equal(spoofCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when model is substring-spoofed');
+        assert.equal(watcherAttached, 0, 'Must not attach watcher when model is substring-spoofed');
+        assert.match(spoofIO.getStderr(), /spoof-seat/);
+        assert.match(spoofIO.getStderr(), /not-gpt-6-astra-high/);
       } finally {
-        if (fs.existsSync(tmpSeatBad)) fs.unlinkSync(tmpSeatBad);
-        if (fs.existsSync(tmpJudgeBad)) fs.unlinkSync(tmpJudgeBad);
+        for (const f of [tmpSeatBad, tmpJudgeBad, tmpBadEffort, tmpSpoofModel]) {
+          if (fs.existsSync(f)) fs.unlinkSync(f);
+        }
       }
     });
 
@@ -437,8 +589,8 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         minQuorum: 2,
         maxRetriesPerSeat: 0,
         seats: [
-          { id: 'seat-ok-1', harness: 'mock', model: 'm1', soul: 'S1' },
-          { id: 'seat-ok-2', harness: 'mock', model: 'm2', soul: 'S2' },
+          { id: 'seat-ok-1', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S1' },
+          { id: 'seat-ok-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2' },
           { id: 'seat-cli-fail', harness: 'codex', model: 'gpt-6-astra', soul: 'S3' }
         ],
         judge: { id: 'judge-main', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge' }

@@ -1020,9 +1020,9 @@
             '</div>' +
             '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(judge.model) + ' · non-voting</div>' +
             renderSoulCardHtml(judge.soul, esc) +
-            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+            '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
               '<span style="color:var(--accent);">Status: ' + esc((judge.status || 'idle').toUpperCase()) + '</span>' +
-              (judge.faultReason ? '<span style="color:var(--red);">' + esc(judge.faultReason) + '</span>' : '') +
+              (judge.faultReason ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(judge.faultReason) + '</span>' : '') +
             '</div>' +
           '</div>';
       }
@@ -1037,9 +1037,9 @@
             '</div>' +
             '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (s.retries || 0) + '/' + (councilState.maxRetriesPerSeat || 1) + '</div>' +
             renderSoulCardHtml(s.soul, esc) +
-            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+            '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
               '<span style="color:var(--accent);">Status: ' + esc((s.status || 'idle').toUpperCase()) + '</span>' +
-              (seatFault ? '<span style="color:var(--red);">' + esc(seatFault) + '</span>' : '') +
+              (seatFault ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(seatFault) + '</span>' : '') +
             '</div>' +
           '</div>'
         );

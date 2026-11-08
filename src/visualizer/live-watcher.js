@@ -55,14 +55,27 @@ export function getTransitionSummary(event, state) {
     case 'START_CLARIFYING':
       return 'Started discovery & clarification phase';
     case 'PUBLISH_CLARIFICATION':
-      return `Published clarification answer for Batch ${event.batch ?? 1}`;
+      return `Published clarification answer for Batch ${event.batch ?? state?.clarificationBatch ?? 1}`;
     case 'BEGIN_ROUND':
       return `Began Round ${state?.round ?? 1}/${state?.maxRounds ?? 3} proof collection`;
     case 'SUBMIT_PROOF': {
-      const p = event.proof;
-      return p
-        ? `Seat "${p.seatId}" submitted Proof ${p.id || ''} [${p.kind || 'evidence'}]`
-        : 'Submitted proof';
+      const latestProof =
+        Array.isArray(state?.proofs) && state.proofs.length > 0
+          ? state.proofs[state.proofs.length - 1]
+          : null;
+      const p =
+        event.proof && typeof event.proof === 'object'
+          ? event.proof
+          : event.seatId || event.kind || event.id
+            ? {
+                id: event.id || (latestProof?.seatId === event.seatId ? latestProof.id : ''),
+                seatId: event.seatId || latestProof?.seatId,
+                kind: event.kind || latestProof?.kind
+              }
+            : null;
+      if (!p || !p.seatId) return 'Submitted proof';
+      const proofIdPart = p.id ? `Proof ${p.id} ` : 'Proof ';
+      return `Seat "${p.seatId}" submitted ${proofIdPart}[${p.kind || 'evidence'}]`;
     }
     case 'START_JUDGING':
       return `Initiated Judge audit & candidate synthesis for Round ${state?.round ?? 1}`;
@@ -71,11 +84,22 @@ export function getTransitionSummary(event, state) {
       return `Judge audited proofs & synthesized Candidate with ${count} clause(s)`;
     }
     case 'CAST_VOTE': {
-      const v = event.vote;
-      if (!v) return 'Cast vote';
+      const v =
+        event.vote && typeof event.vote === 'object'
+          ? event.vote
+          : typeof event.vote === 'string'
+            ? {
+                seatId: event.seatId,
+                vote: event.vote,
+                proofId: event.proofId,
+                reason: event.reason
+              }
+            : null;
+      if (!v || !v.vote) return 'Cast vote';
+      const seatLabel = v.seatId || 'unknown';
       return v.vote === 'accept'
-        ? `Seat "${v.seatId}" voted ACCEPT (Round ${state?.round ?? 1})`
-        : `Seat "${v.seatId}" voted OBJECT (Round ${state?.round ?? 1}${v.proofId ? ', cites Proof ' + v.proofId : ''})`;
+        ? `Seat "${seatLabel}" voted ACCEPT (Round ${state?.round ?? 1})`
+        : `Seat "${seatLabel}" voted OBJECT (Round ${state?.round ?? 1}${v.proofId ? ', cites Proof ' + v.proofId : ''})`;
     }
     case 'WITHDRAW_OBJECTION':
       return `Seat "${event.seatId}" withdrew Objection ${event.objectionId || ''}`;
@@ -86,7 +110,7 @@ export function getTransitionSummary(event, state) {
     case 'EXCUSE_SEAT':
       return `Excused Seat "${event.seatId}" (${event.reason || 'retries exhausted'})`;
     case 'JUDGE_FAULT':
-      return `Judge faulted (${event.errorClass || 'Error'}: ${event.reason || 'unspecified'})`;
+      return `Judge faulted (${event.errorClass || 'Error'}: ${event.reason || event.error || 'unspecified'})`;
     case 'RETRY_JUDGE':
       return 'Retrying faulted Judge';
     case 'EVALUATE_ROUND': {

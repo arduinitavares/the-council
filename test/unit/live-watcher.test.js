@@ -547,6 +547,70 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(watcher.liveRun.steps[2].actor, 'seat-1');
       assert.match(watcher.liveRun.steps[2].summary, /Seat "seat-1" voted ACCEPT/);
 
+      // Also verify flat event shapes actually emitted by CouncilEngine & transitionCouncil (#40)
+      emitter.emitStateTransition(
+        {
+          type: 'PUBLISH_CLARIFICATION',
+          answer: 'Use Node >= 22'
+        },
+        { phase: 'clarifying', clarificationBatch: 2, seats: [], judge: { id: 'judge-1' } }
+      );
+      assert.equal(watcher.liveRun.steps[3].summary, 'Published clarification answer for Batch 2');
+
+      emitter.emitStateTransition(
+        {
+          type: 'SUBMIT_PROOF',
+          seatId: 'astra-voter',
+          kind: 'check',
+          scope: 'package.json',
+          source: 'package.json:11',
+          statement: 'engines.node >=22.0.0'
+        },
+        {
+          phase: 'reviewing',
+          round: 1,
+          seats: [{ id: 'astra-voter', status: 'proof_submitted' }],
+          judge: { id: 'judge-1' },
+          proofs: [{ id: 'P1', seatId: 'astra-voter', kind: 'check' }]
+        }
+      );
+      assert.equal(watcher.liveRun.steps[4].actor, 'astra-voter');
+      assert.equal(watcher.liveRun.steps[4].summary, 'Seat "astra-voter" submitted Proof P1 [check]');
+
+      emitter.emitStateTransition(
+        {
+          type: 'CAST_VOTE',
+          seatId: 'astra-voter',
+          vote: 'accept'
+        },
+        {
+          phase: 'confirming',
+          round: 1,
+          seats: [{ id: 'astra-voter', status: 'accepted' }],
+          judge: { id: 'judge-1' }
+        }
+      );
+      assert.equal(watcher.liveRun.steps[5].actor, 'astra-voter');
+      assert.equal(watcher.liveRun.steps[5].summary, 'Seat "astra-voter" voted ACCEPT (Round 1)');
+
+      emitter.emitStateTransition(
+        {
+          type: 'CAST_VOTE',
+          seatId: 'sol-voter',
+          vote: 'object',
+          reason: 'Missing citation',
+          proofId: 'P2'
+        },
+        {
+          phase: 'confirming',
+          round: 1,
+          seats: [{ id: 'sol-voter', status: 'objected' }],
+          judge: { id: 'judge-1' }
+        }
+      );
+      assert.equal(watcher.liveRun.steps[6].actor, 'sol-voter');
+      assert.equal(watcher.liveRun.steps[6].summary, 'Seat "sol-voter" voted OBJECT (Round 1, cites Proof P2)');
+
       watcher.stop();
     });
 
@@ -994,6 +1058,18 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(calls.length, 5);
       assert.equal(result.providerCalls.length, 5);
       assert.equal(watcher.liveRun.providerCalls.length, 5);
+
+      for (const step of watcher.liveRun.steps) {
+        assert.doesNotMatch(step.summary, /undefined/, `Step summary must not contain "undefined": ${step.summary}`);
+      }
+      const castVoteSteps = watcher.liveRun.steps.filter((s) => s.event?.type === 'CAST_VOTE');
+      assert.equal(castVoteSteps.length, 2);
+      assert.equal(castVoteSteps[0].summary, 'Seat "astra-voter" voted ACCEPT (Round 1)');
+      assert.equal(castVoteSteps[1].summary, 'Seat "argon-voter" voted ACCEPT (Round 1)');
+      const submitProofSteps = watcher.liveRun.steps.filter((s) => s.event?.type === 'SUBMIT_PROOF');
+      assert.equal(submitProofSteps.length, 2);
+      assert.equal(submitProofSteps[0].summary, 'Seat "astra-voter" submitted Proof P1 [check]');
+      assert.equal(submitProofSteps[1].summary, 'Seat "argon-voter" submitted Proof P2 [citation]');
 
       const codexCalls = calls.filter((c) => c.provider === 'codex');
       assert.equal(codexCalls.length, 3);

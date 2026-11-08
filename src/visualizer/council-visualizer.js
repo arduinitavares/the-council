@@ -47,27 +47,78 @@
   }
 
   /**
+   * Safely coerces a soul property to a trimmed string without [object Object] artifacts.
+   * @param {*} val
+   * @returns {string} Safe string value
+   */
+  function toSafePropertyString(val) {
+    if (val == null) return '';
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      return trimmed === '[object Object]' ? '' : trimmed;
+    }
+    if (typeof val === 'number' || typeof val === 'boolean' || typeof val === 'bigint') {
+      return String(val).trim();
+    }
+    if (Array.isArray(val)) {
+      const joined = val
+        .map(function (v) {
+          if (typeof v === 'string') return v.trim();
+          if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v).trim();
+          return '';
+        })
+        .filter(Boolean)
+        .join(', ');
+      return joined.trim();
+    }
+    if (typeof val === 'object') {
+      try {
+        const json = JSON.stringify(val);
+        if (json && json !== '{}' && json !== '[]' && !json.includes('[object Object]')) {
+          return json;
+        }
+      } catch {}
+      return '';
+    }
+    return '';
+  }
+
+  /**
    * Formats a Soul into clean readable text without [object Object] artifacts.
    * @param {string|Object|null|undefined} soul
    * @returns {string} Formatted soul text
    */
   function formatSoul(soul) {
     if (!soul) return '';
-    if (typeof soul === 'string') return soul.trim();
+    if (typeof soul === 'string') {
+      const trimmed = soul.trim();
+      return trimmed === '[object Object]' ? '' : trimmed;
+    }
+    if (typeof soul === 'number' || typeof soul === 'boolean' || typeof soul === 'bigint') {
+      return String(soul).trim();
+    }
+    if (Array.isArray(soul)) {
+      return toSafePropertyString(soul);
+    }
     if (typeof soul === 'object') {
-      const name = (soul.name || '').trim();
-      const lens = (soul.lens || '').trim();
+      const name = toSafePropertyString(soul.name);
+      const lens = toSafePropertyString(soul.lens);
+      const temperament = toSafePropertyString(soul.temperament);
+
       if (name && lens) return name + ' — ' + lens;
       if (name) return name;
       if (lens) return lens;
-      if (soul.temperament) return String(soul.temperament).trim();
+      if (temperament) return temperament;
+
       try {
-        return JSON.stringify(soul);
-      } catch {
-        return '';
-      }
+        const json = JSON.stringify(soul);
+        if (json && json !== '{}' && !json.includes('[object Object]')) {
+          return json;
+        }
+      } catch {}
+      return '';
     }
-    return String(soul);
+    return '';
   }
 
   /**
@@ -80,12 +131,21 @@
     const escape = typeof esc === 'function' ? esc : escapeHtml;
     if (!soul) return '';
     if (typeof soul === 'string') {
-      return '<div class="soul-text">' + escape(soul.trim()) + '</div>';
+      const trimmed = soul.trim();
+      if (!trimmed || trimmed === '[object Object]') return '';
+      return '<div class="soul-text">' + escape(trimmed) + '</div>';
+    }
+    if (typeof soul === 'number' || typeof soul === 'boolean' || typeof soul === 'bigint') {
+      return '<div class="soul-text">' + escape(String(soul).trim()) + '</div>';
+    }
+    if (Array.isArray(soul)) {
+      const str = toSafePropertyString(soul);
+      return str ? '<div class="soul-text">' + escape(str) + '</div>' : '';
     }
     if (typeof soul === 'object') {
-      const name = (soul.name || '').trim();
-      const lens = (soul.lens || '').trim();
-      const temperament = (soul.temperament || '').trim();
+      const name = toSafePropertyString(soul.name);
+      const lens = toSafePropertyString(soul.lens);
+      const temperament = toSafePropertyString(soul.temperament);
       const parts = [];
       if (name) {
         parts.push('<span class="soul-name">' + escape(name) + '</span>');
@@ -100,28 +160,37 @@
         return '<div class="soul-block">' + parts.join(' ') + '</div>';
       }
       try {
-        return '<div class="soul-text">' + escape(JSON.stringify(soul)) + '</div>';
-      } catch {
-        return '';
-      }
+        const json = JSON.stringify(soul);
+        if (json && json !== '{}' && !json.includes('[object Object]')) {
+          return '<div class="soul-text">' + escape(json) + '</div>';
+        }
+      } catch {}
+      return '';
     }
-    return '<div class="soul-text">' + escape(String(soul)) + '</div>';
+    return '';
   }
 
   /**
    * Truncates a string at word boundaries and appends ellipsis ('…').
+   * Prevents surrogate pair splitting and guards against non-positive maxLen.
    * @param {string|null|undefined} str
    * @param {number} [maxLen=26]
    * @returns {string} Truncated string
    */
   function truncateAtWord(str, maxLen = 26) {
-    if (str == null) return '';
+    if (str == null || typeof maxLen !== 'number' || Number.isNaN(maxLen) || maxLen <= 0) return '';
     const s = String(str).trim();
-    if (s.length <= maxLen) return s;
-    const sub = s.slice(0, maxLen);
-    const lastSpace = sub.lastIndexOf(' ');
+    if (!s) return '';
+    const chars = Array.from(s);
+    if (chars.length <= maxLen) return s;
+    const subChars = chars.slice(0, maxLen);
+    const lastSpace = subChars.lastIndexOf(' ');
     const cutPoint = lastSpace > Math.floor(maxLen * 0.4) ? lastSpace : maxLen - 1;
-    return sub.slice(0, cutPoint).trimEnd() + '…';
+    const resultChars = subChars.slice(0, Math.max(0, cutPoint));
+    while (resultChars.length > 0 && /\s/.test(resultChars[resultChars.length - 1])) {
+      resultChars.pop();
+    }
+    return resultChars.join('') + '…';
   }
 
   /**

@@ -162,20 +162,42 @@ export async function execCli(executable, args = [], options = {}) {
 
 /**
  * Helper to safely record provider call telemetry.
+ * Observer errors in onCallRecord, context.onCallRecord, or telemetry.emitProviderCall
+ * are isolated so they never alter provider execution outcomes or trigger duplicate recording.
  */
-export function recordProviderCall({ context, onCallRecord, record }) {
-  const enrichedRecord = {
-    ...record,
-    tools: record.tools || context?.tools || 'read-only'
-  };
-  if (typeof onCallRecord === 'function') {
-    onCallRecord(enrichedRecord);
+export function recordProviderCall({ context, onCallRecord, record } = {}) {
+  if (!record || typeof record !== 'object') {
+    return;
   }
-  if (typeof context?.onCallRecord === 'function') {
-    context.onCallRecord(enrichedRecord);
+  let enrichedRecord;
+  try {
+    enrichedRecord = {
+      ...record,
+      tools: record.tools || context?.tools || 'read-only'
+    };
+  } catch {
+    return;
   }
-  if (context?.telemetry && typeof context.telemetry.emitProviderCall === 'function') {
-    context.telemetry.emitProviderCall(enrichedRecord);
+  try {
+    if (typeof onCallRecord === 'function') {
+      onCallRecord(enrichedRecord);
+    }
+  } catch {
+    // Isolate direct observer callback failure
+  }
+  try {
+    if (typeof context?.onCallRecord === 'function') {
+      context.onCallRecord(enrichedRecord);
+    }
+  } catch {
+    // Isolate context observer callback failure
+  }
+  try {
+    if (context?.telemetry && typeof context.telemetry.emitProviderCall === 'function') {
+      context.telemetry.emitProviderCall(enrichedRecord);
+    }
+  } catch {
+    // Isolate telemetry emitter failure
   }
 }
 

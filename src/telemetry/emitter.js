@@ -32,18 +32,44 @@ export class CouncilTelemetryEmitter extends EventEmitter {
   }
 
   /**
+   * Emits a diagnostic error payload to 'error' listeners with per-listener isolation
+   * and without recursive error reporting or unhandled-error crashes.
+   * @private
+   */
+  _emitDiagnosticError(errorPayload) {
+    const errorListeners = [...this.rawListeners('error')];
+    for (const errListener of errorListeners) {
+      try {
+        errListener.call(this, errorPayload);
+      } catch {
+        // Isolate diagnostic error listener failures without recursive error emission
+      }
+    }
+  }
+
+  /**
    * Safely emits an event without throwing if an observer listener fails.
+   * Each listener is invoked in its own synchronous try/catch so a throwing
+   * listener cannot prevent sibling listeners from receiving the event.
    * @private
    */
   _safeEmit(eventName, data) {
-    try {
-      this.emit(eventName, data);
-    } catch (err) {
-      this.emit('error', {
-        eventName,
-        error: err instanceof Error ? err.message : String(err),
-        timestamp: this.clock()
-      });
+    if (eventName === 'error') {
+      this._emitDiagnosticError(data);
+      return;
+    }
+
+    const listeners = [...this.rawListeners(eventName)];
+    for (const listener of listeners) {
+      try {
+        listener.call(this, data);
+      } catch (err) {
+        this._emitDiagnosticError({
+          eventName,
+          error: err instanceof Error ? err.message : String(err),
+          timestamp: this.clock()
+        });
+      }
     }
   }
 
@@ -141,6 +167,18 @@ export class CouncilTelemetryEmitter extends EventEmitter {
     this._safeEmit('verdict', { verdict, timestamp: this.clock() });
   }
 
+  emitGuardRejected(eventOrPayload, message, state) {
+    const payload =
+      eventOrPayload &&
+      typeof eventOrPayload === 'object' &&
+      message === undefined &&
+      state === undefined &&
+      ('event' in eventOrPayload || 'message' in eventOrPayload || 'state' in eventOrPayload)
+        ? { ...eventOrPayload, timestamp: eventOrPayload.timestamp ?? this.clock() }
+        : { event: eventOrPayload, message, state, timestamp: this.clock() };
+    this._safeEmit('guard_rejected', payload);
+  }
+
   /**
    * Emits and buffers provider call telemetry.
    * @param {Object} callRecord
@@ -155,6 +193,9 @@ export class CouncilTelemetryEmitter extends EventEmitter {
       timestamp: this.clock()
     });
     this.providerCalls.push(record);
+    if (this.providerCalls.length > this.maxHistory) {
+      this.providerCalls.shift();
+    }
     this._safeEmit('provider_call', record);
     return record;
   }

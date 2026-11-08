@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   parseModelAndEffort,
   execCli,
+  recordProviderCall,
   runAntigravityCli,
   runCodexCli,
   runCursorCli,
@@ -767,5 +768,156 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(redacted2[1], '--other');
     });
   });
+
+  describe('recordProviderCall: Observer Isolation (Issue #36)', () => {
+    it('isolates throwing onCallRecord, context.onCallRecord, and context.telemetry.emitProviderCall independently', () => {
+      const calls = [];
+      assert.doesNotThrow(() => {
+        recordProviderCall({
+          onCallRecord: (rec) => {
+            calls.push(`onCallRecord:${rec.provider}`);
+            throw new Error('onCallRecord failed');
+          },
+          context: {
+            tools: 'read-only',
+            onCallRecord: (rec) => {
+              calls.push(`context.onCallRecord:${rec.provider}`);
+              throw new Error('context.onCallRecord failed');
+            },
+            telemetry: {
+              emitProviderCall: (rec) => {
+                calls.push(`telemetry.emitProviderCall:${rec.provider}`);
+                throw new Error('emitProviderCall failed');
+              }
+            }
+          },
+          record: {
+            participantId: 's1',
+            provider: 'codex',
+            argv: ['exec'],
+            exitCode: 0,
+            durationMs: 12
+          }
+        });
+      });
+
+      assert.deepEqual(calls, [
+        'onCallRecord:codex',
+        'context.onCallRecord:codex',
+        'telemetry.emitProviderCall:codex'
+      ]);
+    });
+
+    it('prevents observer errors from failing successful runAntigravityCli, runCodexCli, or runCursorCli calls or double-recording', async () => {
+      const runners = [
+        { name: 'antigravity', fn: runAntigravityCli, model: 'gemini-3.1-pro (high)', stdout: '{"response":"ok-agy"}' },
+        { name: 'codex', fn: runCodexCli, model: 'gpt-6-astra (max)', stdout: 'ok-codex' },
+        { name: 'cursor', fn: runCursorCli, model: 'grok-4.7-high', stdout: 'ok-cursor' }
+      ];
+
+      for (const r of runners) {
+        const records = [];
+        let execCount = 0;
+        const out = await r.fn({
+          model: r.model,
+          prompt: 'Prompt',
+          exec: async () => {
+            execCount += 1;
+            return { stdout: r.stdout, stderr: '', exitCode: 0 };
+          },
+          onCallRecord: (rec) => {
+            records.push({ source: 'direct', exitCode: rec.exitCode });
+            throw new Error(`observer crash in ${r.name}`);
+          },
+          context: {
+            seatId: 's1',
+            onCallRecord: (rec) => {
+              records.push({ source: 'context', exitCode: rec.exitCode });
+              throw new Error(`context observer crash in ${r.name}`);
+            },
+            telemetry: {
+              emitProviderCall: (rec) => {
+                records.push({ source: 'telemetry', exitCode: rec.exitCode });
+                throw new Error(`telemetry crash in ${r.name}`);
+              }
+            }
+          }
+        });
+
+        assert.equal(out, `ok-${r.name === 'antigravity' ? 'agy' : r.name}`);
+        assert.equal(execCount, 1, `${r.name} must only execute once`);
+        assert.deepEqual(records, [
+          { source: 'direct', exitCode: 0 },
+          { source: 'context', exitCode: 0 },
+          { source: 'telemetry', exitCode: 0 }
+        ]);
+      }
+    });
+
+    it('preserves original CLI error when exec fails and observer callbacks throw', async () => {
+      const runners = [
+        { name: 'antigravity', fn: runAntigravityCli, model: 'gemini-3.1-pro (high)' },
+        { name: 'codex', fn: runCodexCli, model: 'gpt-6-astra (max)' },
+        { name: 'cursor', fn: runCursorCli, model: 'grok-4.7-high' }
+      ];
+
+      for (const r of runners) {
+        const originalError = new Error(`${r.name} execution failure`);
+        originalError.exitCode = 42;
+
+        await assert.rejects(
+          async () =>
+            r.fn({
+              model: r.model,
+              prompt: 'Prompt',
+              exec: async () => {
+                throw originalError;
+              },
+              onCallRecord: () => {
+                throw new Error('observer failure should not mask original CLI error');
+              },
+              context: {
+                onCallRecord: () => {
+                  throw new Error('context observer failure should not mask original CLI error');
+                },
+                telemetry: {
+                  emitProviderCall: () => {
+                    throw new Error('telemetry failure should not mask original CLI error');
+                  }
+                }
+              }
+            }),
+          (err) => {
+            assert.strictEqual(err, originalError);
+            return true;
+          }
+        );
+      }
+    });
+
+    it('does not break runCursorCli ENOENT fallback when observer callbacks throw', async () => {
+      const bins = [];
+      const out = await runCursorCli({
+        model: 'grok-4.7-high',
+        prompt: 'Fallback prompt',
+        exec: async (bin) => {
+          bins.push(bin);
+          if (bin === 'cursor-agent') {
+            const err = new Error('spawn cursor-agent ENOENT');
+            err.code = 'ENOENT';
+            throw err;
+          }
+          return { stdout: 'fallback-ok', stderr: '', exitCode: 0 };
+        },
+        onCallRecord: () => {
+          throw new Error('fallback observer crash');
+        }
+      });
+
+      assert.equal(out, 'fallback-ok');
+      assert.deepEqual(bins, ['cursor-agent', 'agent']);
+    });
+  });
 });
+
 

@@ -1016,5 +1016,209 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         assert.equal(c.tools, 'read-only');
       }
     });
+
+    it('wires CursorAdapter into CouncilEngine providerCalls and preserves disableHooks / ignoreUserConfig across state (#37)', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { CodexAdapter } = await import('../../src/harness/codex.js');
+      const { CursorAdapter } = await import('../../src/harness/cursor.js');
+      const { runCodexCli, runCursorCli } = await import('../../src/harness/cli-runner.js');
+
+      const codexAdapter = new CodexAdapter({
+        spawnRunner: (opts) =>
+          runCodexCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              const prompt = args.at(-1) || '';
+              if (prompt.includes('JUDGE AUDIT AND SYNTHESIS')) {
+                return {
+                  stdout: JSON.stringify({
+                    summary: 'Synthesized candidate with Cursor & Codex',
+                    proofDecisions: {
+                      P1: { status: 'admitted', note: 'Verified P1' },
+                      P2: { status: 'admitted', note: 'Verified P2' }
+                    },
+                    clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1', 'P2'] }]
+                  }),
+                  stderr: '',
+                  exitCode: 0
+                };
+              }
+              if (prompt.includes('### Voting on Round')) {
+                return { stdout: JSON.stringify({ vote: 'accept' }), stderr: '', exitCode: 0 };
+              }
+              return {
+                stdout: JSON.stringify({
+                  scope: 'CodexSeat',
+                  kind: 'check',
+                  source: 'src/harness/codex.js',
+                  statement: 'Codex seat statement'
+                }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      const cursorAdapter = new CursorAdapter({
+        spawnRunner: (opts) =>
+          runCursorCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              const prompt = args.at(-1) || '';
+              if (prompt.includes('### Voting on Round')) {
+                return { stdout: JSON.stringify({ vote: 'accept' }), stderr: '', exitCode: 0 };
+              }
+              return {
+                stdout: JSON.stringify({
+                  scope: 'CursorSeat',
+                  kind: 'citation',
+                  source: 'src/harness/cursor.js',
+                  statement: 'Cursor seat statement'
+                }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Preserve disableHooks and ignoreUserConfig in state',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxConcurrentSeats: 2,
+          judge: {
+            id: 'judge-astra',
+            harness: 'codex',
+            model: 'gpt-6-astra (max)',
+            soul: 'Impartial Judge',
+            disableHooks: false,
+            ignoreUserConfig: true
+          },
+          seats: [
+            {
+              id: 'astra-voter',
+              harness: 'codex',
+              model: 'gpt-6-astra (max)',
+              soul: 'Rigorous Architect',
+              disableHooks: false,
+              ignoreUserConfig: true
+            },
+            {
+              id: 'grok-voter',
+              harness: 'cursor',
+              model: 'grok-4.7-high',
+              soul: 'Skeptical Reviewer',
+              tools: 'none'
+            }
+          ]
+        },
+        {
+          telemetry: emitter,
+          harnessResolver: (name) => (name === 'codex' ? codexAdapter : cursorAdapter)
+        }
+      );
+
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut,
+        initialConfig: engine.config
+      });
+
+      const result = await engine.run();
+      watcher.stop();
+
+      assert.equal(result.ok, true);
+      const calls = emitter.getProviderCalls();
+      assert.equal(calls.length, 5);
+      assert.equal(result.providerCalls.length, 5);
+      assert.equal(watcher.liveRun.providerCalls.length, 5);
+
+      const codexCalls = calls.filter((c) => c.provider === 'codex');
+      assert.equal(codexCalls.length, 3);
+      for (const c of codexCalls) {
+        assert.ok(c.argv.includes('--ephemeral'));
+        assert.ok(
+          c.argv.includes('--ignore-user-config'),
+          `Expected --ignore-user-config in ${JSON.stringify(c.argv)}`
+        );
+        assert.equal(
+          c.argv.includes('--disable'),
+          false,
+          `Expected disableHooks: false to omit --disable hooks in ${JSON.stringify(c.argv)}`
+        );
+      }
+
+      const cursorCalls = calls.filter((c) => c.provider === 'cursor');
+      assert.equal(cursorCalls.length, 2);
+      for (const c of cursorCalls) {
+        assert.equal(c.participantId, 'grok-voter');
+        assert.equal(c.exitCode, 0);
+        assert.equal(c.tools, 'none');
+        assert.ok(c.argv.some((a) => a.startsWith('[REDACTED prompt:')));
+      }
+
+      // Also verify top-level config propagation and CodexAdapter constructor fallback
+      const adapterWithDefaults = new CodexAdapter({
+        disableHooks: false,
+        ignoreUserConfig: true,
+        spawnRunner: codexAdapter.spawnRunner
+      });
+      const emitter2 = createTelemetryEmitter();
+      const engine2 = new CouncilEngine(
+        {
+          topic: 'Adapter constructor defaults',
+          maxRounds: 1,
+          minQuorum: 2,
+          judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+            { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'S2' }
+          ]
+        },
+        {
+          telemetry: emitter2,
+          harnessResolver: () => adapterWithDefaults
+        }
+      );
+      const res2 = await engine2.run();
+      assert.equal(res2.ok, true);
+      assert.equal(res2.providerCalls.length, 5);
+      for (const c of res2.providerCalls) {
+        assert.ok(c.argv.includes('--ignore-user-config'));
+        assert.equal(c.argv.includes('--disable'), false);
+      }
+
+      const emitter3 = createTelemetryEmitter();
+      const engine3 = new CouncilEngine(
+        {
+          topic: 'Top-level config defaults',
+          maxRounds: 1,
+          minQuorum: 2,
+          disableHooks: false,
+          ignoreUserConfig: true,
+          judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+            { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'S2' }
+          ]
+        },
+        {
+          telemetry: emitter3,
+          harnessResolver: () => codexAdapter
+        }
+      );
+      const res3 = await engine3.run();
+      assert.equal(res3.ok, true);
+      assert.equal(res3.providerCalls.length, 5);
+      for (const c of res3.providerCalls) {
+        assert.ok(c.argv.includes('--ignore-user-config'));
+        assert.equal(c.argv.includes('--disable'), false);
+      }
+    });
   });
 });
+
+

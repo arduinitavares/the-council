@@ -126,6 +126,8 @@ export class CouncilEngine {
         const seatTimeoutMs = typeof seat.timeoutMs === 'number' && seat.timeoutMs > 0
           ? seat.timeoutMs
           : (typeof this.config.timeoutMs === 'number' && this.config.timeoutMs > 0 ? this.config.timeoutMs : undefined);
+        const seatDisableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.config.disableHooks;
+        const seatIgnoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.config.ignoreUserConfig;
         this._step({
           type: 'ADD_SEAT',
           seat: {
@@ -134,7 +136,9 @@ export class CouncilEngine {
             model: seat.model,
             soul: typeof seat.soul === 'object' && seat.soul !== null && seat.soul.toJSON ? seat.soul.toJSON() : seat.soul,
             tools: seatTools,
-            ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {})
+            ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
+            ...(seatDisableHooks !== undefined ? { disableHooks: Boolean(seatDisableHooks) } : {}),
+            ...(seatIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(seatIgnoreUserConfig) } : {})
           }
         });
       }

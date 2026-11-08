@@ -313,11 +313,23 @@ export function resolveConfig(userConfig = {}) {
       ...(userConfig.judge || {}),
       tools: userConfig.judge?.tools !== undefined
         ? userConfig.judge.tools
-        : (defaultJudge.tools || defaultTools)
+        : (defaultJudge.tools || defaultTools),
+      ...(userConfig.judge?.disableHooks !== undefined
+        ? { disableHooks: Boolean(userConfig.judge.disableHooks) }
+        : (userConfig.disableHooks !== undefined ? { disableHooks: Boolean(userConfig.disableHooks) } : {})),
+      ...(userConfig.judge?.ignoreUserConfig !== undefined
+        ? { ignoreUserConfig: Boolean(userConfig.judge.ignoreUserConfig) }
+        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(userConfig.ignoreUserConfig) } : {}))
     },
     seats: rawSeats.map((s) => ({
       ...s,
-      tools: s.tools !== undefined ? s.tools : defaultTools
+      tools: s.tools !== undefined ? s.tools : defaultTools,
+      ...(s.disableHooks !== undefined
+        ? { disableHooks: Boolean(s.disableHooks) }
+        : (userConfig.disableHooks !== undefined ? { disableHooks: Boolean(userConfig.disableHooks) } : {})),
+      ...(s.ignoreUserConfig !== undefined
+        ? { ignoreUserConfig: Boolean(s.ignoreUserConfig) }
+        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(userConfig.ignoreUserConfig) } : {}))
     }))
   };
 

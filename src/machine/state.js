@@ -26,6 +26,8 @@ export function createInitialCouncilState(config = {}) {
   const judgeTimeoutMs = typeof rawJudge.timeoutMs === 'number' && rawJudge.timeoutMs > 0
     ? rawJudge.timeoutMs
     : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
+  const judgeDisableHooks = rawJudge.disableHooks !== undefined ? rawJudge.disableHooks : cfg.disableHooks;
+  const judgeIgnoreUserConfig = rawJudge.ignoreUserConfig !== undefined ? rawJudge.ignoreUserConfig : cfg.ignoreUserConfig;
   const judge = {
     id: rawJudge.id || defaultJudge.id,
     harness: rawJudge.harness || defaultJudge.harness,
@@ -34,7 +36,9 @@ export function createInitialCouncilState(config = {}) {
     status: 'idle',
     retries: 0,
     tools: judgeTools,
-    ...(judgeTimeoutMs !== undefined ? { timeoutMs: judgeTimeoutMs } : {})
+    ...(judgeTimeoutMs !== undefined ? { timeoutMs: judgeTimeoutMs } : {}),
+    ...(judgeDisableHooks !== undefined ? { disableHooks: Boolean(judgeDisableHooks) } : {}),
+    ...(judgeIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(judgeIgnoreUserConfig) } : {})
   };
 
   const seats = (cfg.seats || []).map((s) => {
@@ -42,6 +46,8 @@ export function createInitialCouncilState(config = {}) {
     const seatTimeoutMs = typeof s.timeoutMs === 'number' && s.timeoutMs > 0
       ? s.timeoutMs
       : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
+    const seatDisableHooks = s.disableHooks !== undefined ? s.disableHooks : cfg.disableHooks;
+    const seatIgnoreUserConfig = s.ignoreUserConfig !== undefined ? s.ignoreUserConfig : cfg.ignoreUserConfig;
     return {
       id: s.id,
       harness: s.harness,
@@ -51,7 +57,9 @@ export function createInitialCouncilState(config = {}) {
       retries: 0,
       excusedReason: null,
       tools: seatTools,
-      ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {})
+      ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
+      ...(seatDisableHooks !== undefined ? { disableHooks: Boolean(seatDisableHooks) } : {}),
+      ...(seatIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(seatIgnoreUserConfig) } : {})
     };
   });
 

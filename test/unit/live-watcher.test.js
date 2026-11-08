@@ -846,4 +846,175 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       );
     });
   });
+
+  describe('Provider Call Telemetry & End-to-End Engine Wiring (#18, #37)', () => {
+    it('captures provider_call events in liveRun.providerCalls and persists to window.CouncilLatestLiveRun', () => {
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut,
+        initialConfig: { topic: 'Provider call persistence' }
+      });
+
+      assert.deepEqual(watcher.liveRun.providerCalls, []);
+
+      emitter.emitProviderCall({
+        participantId: 'astra-voter',
+        provider: 'codex',
+        argv: ['exec', '--ephemeral', '--disable', 'hooks', '[REDACTED prompt: length=42, sha256=deadbeefcafe]'],
+        tools: 'read-only',
+        exitCode: 0,
+        durationMs: 1234
+      });
+
+      assert.equal(watcher.liveRun.providerCalls.length, 1);
+      assert.equal(watcher.liveRun.providerCalls[0].participantId, 'astra-voter');
+      assert.equal(watcher.liveRun.providerCalls[0].exitCode, 0);
+      assert.equal(watcher.liveRun.providerCalls[0].durationMs, 1234);
+
+      const fileContent = fs.readFileSync(tmpOut, 'utf8');
+      const mockWindow = {};
+      const runner = new Function('window', 'globalThis', fileContent);
+      runner(mockWindow, mockWindow);
+      assert.equal(mockWindow.CouncilLatestLiveRun.providerCalls.length, 1);
+      assert.equal(mockWindow.CouncilLatestLiveRun.providerCalls[0].provider, 'codex');
+
+      watcher.stop();
+      emitter.emitProviderCall({
+        participantId: 'ignored-after-stop',
+        provider: 'codex',
+        argv: [],
+        exitCode: 0,
+        durationMs: 10
+      });
+      assert.equal(watcher.liveRun.providerCalls.length, 1);
+    });
+
+    it('wires CouncilEngine + CodexAdapter + AntigravityAdapter + VisualizerLiveWatcher end-to-end', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { CodexAdapter } = await import('../../src/harness/codex.js');
+      const { AntigravityAdapter } = await import('../../src/harness/antigravity.js');
+      const { runCodexCli, runAntigravityCli } = await import('../../src/harness/cli-runner.js');
+
+      const codexAdapter = new CodexAdapter({
+        spawnRunner: (opts) =>
+          runCodexCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              const prompt = args.at(-1) || '';
+              if (prompt.includes('JUDGE AUDIT AND SYNTHESIS')) {
+                return {
+                  stdout: JSON.stringify({
+                    summary: 'Synthesized candidate',
+                    proofDecisions: {
+                      P1: { status: 'admitted', note: 'Verified P1' },
+                      P2: { status: 'admitted', note: 'Verified P2' }
+                    },
+                    clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1', 'P2'] }]
+                  }),
+                  stderr: '',
+                  exitCode: 0
+                };
+              }
+              if (prompt.includes('### Voting on Round')) {
+                return { stdout: JSON.stringify({ vote: 'accept' }), stderr: '', exitCode: 0 };
+              }
+              return {
+                stdout: JSON.stringify({
+                  scope: 'Engine',
+                  kind: 'check',
+                  source: 'src/engine/council-engine.js',
+                  statement: 'Codex verified statement'
+                }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      const agyAdapter = new AntigravityAdapter({
+        spawnRunner: (opts) =>
+          runAntigravityCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              const printArg = args.find((a) => a.startsWith('--print=')) || '';
+              if (printArg.includes('### Voting on Round')) {
+                return {
+                  stdout: JSON.stringify({ response: JSON.stringify({ vote: 'accept' }) }),
+                  stderr: '',
+                  exitCode: 0
+                };
+              }
+              return {
+                stdout: JSON.stringify({
+                  response: JSON.stringify({
+                    scope: 'Watcher',
+                    kind: 'citation',
+                    source: 'src/visualizer/live-watcher.js',
+                    statement: 'AGY verified statement'
+                  })
+                }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'End-to-end provider call telemetry check',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxConcurrentSeats: 2,
+          judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Impartial Judge' },
+          seats: [
+            { id: 'astra-voter', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Rigorous Architect' },
+            { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Empirical Verifier' }
+          ]
+        },
+        {
+          telemetry: emitter,
+          harnessResolver: (name) => (name === 'codex' ? codexAdapter : agyAdapter)
+        }
+      );
+
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut,
+        initialConfig: engine.config
+      });
+
+      const result = await engine.run();
+      watcher.stop();
+
+      assert.equal(result.ok, true);
+      // 2 seat proofs + 1 judge synthesis + 2 seat votes = 5 provider calls
+      const calls = emitter.getProviderCalls();
+      assert.equal(calls.length, 5);
+      assert.equal(result.providerCalls.length, 5);
+      assert.equal(watcher.liveRun.providerCalls.length, 5);
+
+      const codexCalls = calls.filter((c) => c.provider === 'codex');
+      assert.equal(codexCalls.length, 3);
+      for (const c of codexCalls) {
+        assert.ok(c.argv.includes('--ephemeral'));
+        assert.ok(c.argv.includes('--disable'));
+        assert.ok(c.argv.includes('hooks'));
+        assert.equal(c.exitCode, 0);
+        assert.equal(typeof c.durationMs, 'number');
+        assert.equal(c.tools, 'read-only');
+        assert.ok(c.argv.some((a) => a.startsWith('[REDACTED prompt:')));
+      }
+
+      const agyCalls = calls.filter((c) => c.provider === 'antigravity');
+      assert.equal(agyCalls.length, 2);
+      for (const c of agyCalls) {
+        assert.equal(c.participantId, 'argon-voter');
+        assert.equal(c.exitCode, 0);
+        assert.equal(typeof c.durationMs, 'number');
+        assert.equal(c.tools, 'read-only');
+      }
+    });
+  });
 });

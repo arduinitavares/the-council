@@ -236,6 +236,8 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(captured.args, [
         'exec',
         '--ephemeral',
+        '--disable',
+        'hooks',
         '--skip-git-repo-check',
         '--sandbox',
         'read-only',
@@ -515,6 +517,8 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(captured.args, [
         'exec',
         '--ephemeral',
+        '--disable',
+        'hooks',
         '--skip-git-repo-check',
         '--sandbox',
         'read-only',
@@ -524,6 +528,32 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'model_reasoning_effort="max"',
         'Execute round'
       ]);
+    });
+
+    it('disables user hooks by default (--disable hooks) while allowing opt-in disableHooks: false (#37)', async () => {
+      let capturedArgs = null;
+      const mockExec = async (bin, args) => {
+        capturedArgs = args;
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      };
+
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'prompt',
+        exec: mockExec
+      });
+      const disableIdx = capturedArgs.indexOf('--disable');
+      assert.ok(disableIdx !== -1, 'Arguments must include --disable by default');
+      assert.equal(capturedArgs[disableIdx + 1], 'hooks', '--disable must target hooks feature');
+
+      // Opt-in to allow hooks if explicitly requested
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'prompt',
+        disableHooks: false,
+        exec: mockExec
+      });
+      assert.equal(capturedArgs.includes('--disable'), false, 'disableHooks: false must omit --disable hooks');
     });
 
     it('supports opt-in strict isolation (--ignore-user-config)', async () => {

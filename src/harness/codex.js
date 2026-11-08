@@ -77,9 +77,17 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute seat turn on Codex.
    */
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(seat.model);
-    const context = { seatId: seat.id, model: seat.model, tools: seat.tools || 'read-only' };
+    const context = {
+      seatId: seat.id,
+      model: seat.model,
+      tools: seat.tools || 'read-only',
+      ...(telemetry ? { telemetry } : {}),
+      ...(onCallRecord ? { onCallRecord } : {}),
+      ...(seat.disableHooks !== undefined ? { disableHooks: seat.disableHooks } : {}),
+      ...(seat.ignoreUserConfig !== undefined ? { ignoreUserConfig: seat.ignoreUserConfig } : {})
+    };
 
     return this.executeWithTimeout(
       async (signal) => {
@@ -106,9 +114,17 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute judge turn on Codex.
    */
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(judge.model);
-    const context = { seatId: judge.id, model: judge.model, tools: judge.tools || 'read-only' };
+    const context = {
+      seatId: judge.id,
+      model: judge.model,
+      tools: judge.tools || 'read-only',
+      ...(telemetry ? { telemetry } : {}),
+      ...(onCallRecord ? { onCallRecord } : {}),
+      ...(judge.disableHooks !== undefined ? { disableHooks: judge.disableHooks } : {}),
+      ...(judge.ignoreUserConfig !== undefined ? { ignoreUserConfig: judge.ignoreUserConfig } : {})
+    };
 
     return this.executeWithTimeout(
       async (signal) => {

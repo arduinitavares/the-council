@@ -276,7 +276,7 @@ export async function runAntigravityCli({
 
 /**
  * Provider Dispatcher: Codex (codex exec)
- * Args: ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
+ * Args: ['exec', '--ephemeral', '--disable', 'hooks', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
  *
  * @param {Object} params
  * @param {string} [params.executable='codex']
@@ -290,6 +290,7 @@ export async function runAntigravityCli({
  * @param {Object} [params.context]
  * @param {Function} [params.onCallRecord]
  * @param {boolean} [params.ignoreUserConfig=false]
+ * @param {boolean} [params.disableHooks=true]
  * @returns {Promise<string>}
  */
 export async function runCodexCli({
@@ -303,12 +304,16 @@ export async function runCodexCli({
   exec = execCli,
   context,
   onCallRecord,
-  ignoreUserConfig = false
+  ignoreUserConfig = false,
+  disableHooks
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const shouldDisableHooks =
+    disableHooks !== undefined ? Boolean(disableHooks) : context?.disableHooks !== false;
   const args = [
     'exec',
     '--ephemeral',
+    ...(shouldDisableHooks ? ['--disable', 'hooks'] : []),
     '--skip-git-repo-check',
     '--sandbox', 'read-only',
     '-m', parsed.model,
@@ -316,7 +321,7 @@ export async function runCodexCli({
     prompt
   ];
 
-  if (ignoreUserConfig) {
+  if (ignoreUserConfig || context?.ignoreUserConfig) {
     args.splice(args.indexOf('--ephemeral') + 1, 0, '--ignore-user-config');
   }
 

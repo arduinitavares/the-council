@@ -131,11 +131,13 @@ export class VisualizerLiveWatcher {
       },
       currentGraph: null,
       currentState: null,
-      steps: []
+      steps: [],
+      providerCalls: []
     };
 
     this._boundStateTransition = this._handleStateTransition.bind(this);
     this._boundSeatTelemetry = this._handleSeatTelemetry.bind(this);
+    this._boundProviderCall = this._handleProviderCall.bind(this);
 
     if (this.telemetry) {
       this.attach(this.telemetry);
@@ -157,6 +159,7 @@ export class VisualizerLiveWatcher {
     this._stopped = false;
     this.telemetry.on('state_transition', this._boundStateTransition);
     this.telemetry.on('seat_telemetry', this._boundSeatTelemetry);
+    this.telemetry.on('provider_call', this._boundProviderCall);
   }
 
   /**
@@ -167,6 +170,7 @@ export class VisualizerLiveWatcher {
     if (this.telemetry && typeof this.telemetry.off === 'function') {
       this.telemetry.off('state_transition', this._boundStateTransition);
       this.telemetry.off('seat_telemetry', this._boundSeatTelemetry);
+      this.telemetry.off('provider_call', this._boundProviderCall);
     }
   }
 
@@ -295,6 +299,23 @@ export class VisualizerLiveWatcher {
     }
 
     this.liveRun.updatedAt = timestamp || new Date().toISOString();
+    this._writeAtomic();
+  }
+
+  /**
+   * Handles provider CLI invocation telemetry records.
+   * @param {Object} [record]
+   * @private
+   */
+  _handleProviderCall(record) {
+    if (this._stopped || !record || typeof record !== 'object') return;
+
+    const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
+    if (!Array.isArray(this.liveRun.providerCalls)) {
+      this.liveRun.providerCalls = [];
+    }
+    this.liveRun.providerCalls.push(clone(record));
+    this.liveRun.updatedAt = record.timestamp || new Date().toISOString();
     this._writeAtomic();
   }
 

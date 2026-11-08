@@ -351,7 +351,8 @@ export class CouncilEngine {
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: turnTimeoutMs
+            timeoutMs: turnTimeoutMs,
+            telemetry: this.telemetry
           });
         } else if (typeof harness.executeSeat === 'function') {
           proofInput = await harness.executeSeat({
@@ -361,7 +362,8 @@ export class CouncilEngine {
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: turnTimeoutMs
+            timeoutMs: turnTimeoutMs,
+            telemetry: this.telemetry
           });
         } else {
           throw new Error(`Harness for "${seat.harness}" does not implement executeSeatProof or executeSeat`);
@@ -400,7 +402,8 @@ export class CouncilEngine {
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: turnTimeoutMs
+                timeoutMs: turnTimeoutMs,
+                telemetry: this.telemetry
               });
             } else if (typeof harness.executeSeat === 'function') {
               proofInput = await harness.executeSeat({
@@ -410,7 +413,8 @@ export class CouncilEngine {
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: turnTimeoutMs
+                timeoutMs: turnTimeoutMs,
+                telemetry: this.telemetry
               });
             }
             res = { seat, proofInput, error: null };
@@ -478,7 +482,8 @@ export class CouncilEngine {
             proofs: roundProofs,
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: judgeTimeoutMs
+            timeoutMs: judgeTimeoutMs,
+            telemetry: this.telemetry
           });
         } else if (typeof judgeHarness.executeJudge === 'function') {
           synthesisResult = await judgeHarness.executeJudge({
@@ -488,7 +493,8 @@ export class CouncilEngine {
             proofs: roundProofs,
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: judgeTimeoutMs
+            timeoutMs: judgeTimeoutMs,
+            telemetry: this.telemetry
           });
         } else {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
@@ -565,7 +571,8 @@ export class CouncilEngine {
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
-            timeoutMs: voteTimeoutMs
+            timeoutMs: voteTimeoutMs,
+            telemetry: this.telemetry
           });
         } else if (typeof seatHarness.executeSeat === 'function') {
           voteResult = await seatHarness.executeSeat({
@@ -575,7 +582,8 @@ export class CouncilEngine {
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
-            timeoutMs: voteTimeoutMs
+            timeoutMs: voteTimeoutMs,
+            telemetry: this.telemetry
           });
         } else {
           throw new Error(`Harness for "${seat.harness}" does not implement executeSeatVote or executeSeat`);
@@ -614,7 +622,8 @@ export class CouncilEngine {
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: voteTimeoutMs
+                timeoutMs: voteTimeoutMs,
+                telemetry: this.telemetry
               });
             } else if (typeof seatHarness.executeSeat === 'function') {
               voteResult = await seatHarness.executeSeat({
@@ -624,7 +633,8 @@ export class CouncilEngine {
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: voteTimeoutMs
+                timeoutMs: voteTimeoutMs,
+                telemetry: this.telemetry
               });
             }
             res = { seat, voteResult, error: null };
@@ -700,7 +710,7 @@ export class CouncilEngine {
 
   /**
    * Runs the entire deliberation to completion.
-   * @returns {Promise<{ ok: boolean, verdict: Object, state: Object, snapshots: Array }>}
+   * @returns {Promise<{ ok: boolean, verdict: Object, state: Object, snapshots: Array, providerCalls: Array }>}
    */
   async run() {
     this.initRoster();
@@ -717,7 +727,8 @@ export class CouncilEngine {
       ok: Boolean(this.state.verdict && this.state.verdict.kind === 'Unanimous Consensus'),
       verdict: this.state.verdict,
       state: this.state,
-      snapshots: this.telemetry.getSnapshots()
+      snapshots: this.telemetry.getSnapshots(),
+      providerCalls: typeof this.telemetry.getProviderCalls === 'function' ? this.telemetry.getProviderCalls() : []
     };
   }
 

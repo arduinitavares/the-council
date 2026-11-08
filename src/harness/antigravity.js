@@ -64,9 +64,15 @@ export class AntigravityAdapter extends HarnessAdapter {
     return super.classifyError(error, context);
   }
 
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(seat.model);
-    const context = { seatId: seat.id, model: seat.model, tools: seat.tools || 'read-only' };
+    const context = {
+      seatId: seat.id,
+      model: seat.model,
+      tools: seat.tools || 'read-only',
+      ...(telemetry ? { telemetry } : {}),
+      ...(onCallRecord ? { onCallRecord } : {})
+    };
 
     return this.executeWithTimeout(
       async (signal) => {
@@ -90,9 +96,15 @@ export class AntigravityAdapter extends HarnessAdapter {
     );
   }
 
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(judge.model);
-    const context = { seatId: judge.id, model: judge.model, tools: judge.tools || 'read-only' };
+    const context = {
+      seatId: judge.id,
+      model: judge.model,
+      tools: judge.tools || 'read-only',
+      ...(telemetry ? { telemetry } : {}),
+      ...(onCallRecord ? { onCallRecord } : {})
+    };
 
     return this.executeWithTimeout(
       async (signal) => {

@@ -182,15 +182,15 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
 *Note on `max` Preservation*: The Council passes `max` directly to Codex CLI without downscaling. If an unsupported effort tier is specified (e.g., `ultra`, `turbo`), the engine immediately throws a configuration error:
 `Unsupported reasoning effort "<effort>". Allowed: low, medium, high, xhigh, max.`
 
-### Ephemeral Run Isolation & Hook Inheritance
+### Ephemeral Run Isolation & Hook Suppression
 1. **Disk Session Isolation (`--ephemeral`)**:
    During `--live` execution, each seat turn and judge turn is executed with `codex exec --ephemeral`. This prevents persistent session files from accumulating in `~/.codex/sessions` across multi-round deliberations.
-2. **Hook Inheritance & Authentication**:
-   `--ephemeral` prevents session storage on disk while preserving configuration loading from `$CODEX_HOME/config.toml`. This ensures existing user authentication and custom model profiles remain available without manual credential passing. Any user-configured hooks in `config.toml` (such as session monitors) will still be invoked unless `--ignore-user-config` is explicitly configured.
-3. **Strict Isolation (`--ignore-user-config`)**:
-   If user hooks must not run during deliberation, `--ignore-user-config` can be enabled, provided authentication is exported via environment variables (such as `CODEX_API_KEY` or `OPENAI_API_KEY`).
+2. **Hook Suppression (`--disable hooks`) & Authentication Preservation**:
+   `runCodexCli` also passes `--disable hooks` (equivalent to `-c features.hooks=false`) by default. This suppresses user hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) from firing on internal Council prompts and tool calls while preserving `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json` authentication. Hooks can be re-enabled if desired via `disableHooks: false`.
+3. **Full Config Isolation (`--ignore-user-config`)**:
+   For environments that also want to skip `$CODEX_HOME/config.toml` entirely, `ignoreUserConfig: true` passes `--ignore-user-config` (requiring credentials via `CODEX_API_KEY` or `OPENAI_API_KEY`).
 4. **Telemetry & Sanitization**:
-   Live runs record provider call telemetry including `durationMs`, `exitCode`, and sanitized `argv` where sensitive deliberation prompts are redacted and represented by length and SHA-256 hash.
+   Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash.
 
 ---
 

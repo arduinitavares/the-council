@@ -366,7 +366,18 @@ export class VisualizerLiveWatcher {
       const d = st && st.stateDelta;
       if (!d) continue;
 
-      if (d.historyEntry && accHistory[0] !== d.historyEntry) {
+      if (typeof d.historyLength === 'number') {
+        if (d.historyLength === 0) {
+          accHistory.length = 0;
+        } else if (d.historyEntry) {
+          if (d.historyLength === 1) {
+            accHistory.length = 0;
+            accHistory.push(d.historyEntry);
+          } else if (accHistory.length < d.historyLength) {
+            accHistory.unshift(d.historyEntry);
+          }
+        }
+      } else if (d.historyEntry && accHistory[0] !== d.historyEntry) {
         accHistory.unshift(d.historyEntry);
       }
       if (Array.isArray(d.removedSeatIds)) {
@@ -508,10 +519,16 @@ export class VisualizerLiveWatcher {
           phase: d.phase,
           previousPhase: d.previousPhase !== undefined ? d.previousPhase : null,
           canonicalPhase: d.canonicalPhase,
+          ...(d.phaseAlias !== undefined ? { phaseAlias: d.phaseAlias } : {}),
+          ...(d.lastEventName !== undefined ? { lastEventName: d.lastEventName } : {}),
+          ...(d.returnPhase !== undefined ? { returnPhase: d.returnPhase } : {}),
+          ...(d.faultSeatId !== undefined ? { faultSeatId: d.faultSeatId } : {}),
           round: d.round,
           maxRounds: d.maxRounds,
           minQuorum: d.minQuorum,
+          ...(d.maxRetriesPerSeat !== undefined ? { maxRetriesPerSeat: d.maxRetriesPerSeat } : {}),
           clarificationBatch: d.clarificationBatch,
+          ...(d.maxClarificationBatches !== undefined ? { maxClarificationBatches: d.maxClarificationBatches } : {}),
           topic: d.topic,
           lastTransition: d.lastTransition,
           candidate: d.candidate,
@@ -657,10 +674,18 @@ export class VisualizerLiveWatcher {
       phase: clonedState.phase,
       previousPhase: clonedState.previousPhase ?? null,
       canonicalPhase: clonedState.canonicalPhase,
+      ...(clonedState.phaseAlias !== undefined ? { phaseAlias: clonedState.phaseAlias } : {}),
+      ...(clonedState.lastEventName !== undefined ? { lastEventName: clonedState.lastEventName } : {}),
+      ...(clonedState.returnPhase !== undefined ? { returnPhase: clonedState.returnPhase } : {}),
+      ...(clonedState.faultSeatId !== undefined ? { faultSeatId: clonedState.faultSeatId } : {}),
       round: clonedState.round,
       maxRounds: clonedState.maxRounds,
       minQuorum: clonedState.minQuorum,
+      ...(clonedState.maxRetriesPerSeat !== undefined ? { maxRetriesPerSeat: clonedState.maxRetriesPerSeat } : {}),
       clarificationBatch: clonedState.clarificationBatch,
+      ...(clonedState.maxClarificationBatches !== undefined
+        ? { maxClarificationBatches: clonedState.maxClarificationBatches }
+        : {}),
       clarificationCount: Array.isArray(clonedState.clarifications) ? clonedState.clarifications.length : 0,
       topic: clonedState.topic,
       lastTransition: clonedState.lastTransition || null,
@@ -682,6 +707,7 @@ export class VisualizerLiveWatcher {
       objectionChanges,
       ...(removedObjectionIds.length > 0 ? { removedObjectionIds } : {}),
       historyEntry: Array.isArray(clonedState.history) && clonedState.history.length > 0 ? clonedState.history[0] : null,
+      historyLength: Array.isArray(clonedState.history) ? clonedState.history.length : 0,
       activeNodeId: clonedGraph?.activeNodeId || clonedState.phase,
       lastEdgeId: clonedGraph?.lastEdgeId ?? null,
       outgoingEdges: Array.isArray(clonedGraph?.outgoingEdges) ? clonedGraph.outgoingEdges : []
@@ -865,7 +891,20 @@ export class VisualizerLiveWatcher {
       const st = data.steps[i];
       const d = st && st.stateDelta;
       if (d) {
-        if (d.historyEntry && accHistory[0] !== d.historyEntry) accHistory.unshift(d.historyEntry);
+        if (typeof d.historyLength === 'number') {
+          if (d.historyLength === 0) {
+            accHistory.length = 0;
+          } else if (d.historyEntry) {
+            if (d.historyLength === 1) {
+              accHistory.length = 0;
+              accHistory.push(d.historyEntry);
+            } else if (accHistory.length < d.historyLength) {
+              accHistory.unshift(d.historyEntry);
+            }
+          }
+        } else if (d.historyEntry && accHistory[0] !== d.historyEntry) {
+          accHistory.unshift(d.historyEntry);
+        }
         if (Array.isArray(d.removedSeatIds)) {
           d.removedSeatIds.forEach(function (id) { seatMap.delete(id); });
         }
@@ -993,10 +1032,16 @@ export class VisualizerLiveWatcher {
             phase: d.phase,
             previousPhase: d.previousPhase !== undefined ? d.previousPhase : null,
             canonicalPhase: d.canonicalPhase,
+            ...(d.phaseAlias !== undefined ? { phaseAlias: d.phaseAlias } : {}),
+            ...(d.lastEventName !== undefined ? { lastEventName: d.lastEventName } : {}),
+            ...(d.returnPhase !== undefined ? { returnPhase: d.returnPhase } : {}),
+            ...(d.faultSeatId !== undefined ? { faultSeatId: d.faultSeatId } : {}),
             round: d.round,
             maxRounds: d.maxRounds,
             minQuorum: d.minQuorum,
+            ...(d.maxRetriesPerSeat !== undefined ? { maxRetriesPerSeat: d.maxRetriesPerSeat } : {}),
             clarificationBatch: d.clarificationBatch,
+            ...(d.maxClarificationBatches !== undefined ? { maxClarificationBatches: d.maxClarificationBatches } : {}),
             topic: d.topic,
             lastTransition: d.lastTransition,
             candidate: d.candidate,

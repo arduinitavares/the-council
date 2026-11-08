@@ -950,7 +950,7 @@ export function getDependencyAndStateGraph(state, options = {}) {
     edges: STATE_EDGES,
     activeNodeId: currentPhase,
     activeAlias: currentPhase,
-    canonicalPhase: toCanonicalPhase(currentPhase),
+    canonicalPhase: toCanonicalPhase(currentPhase, undefined, state.verdict ? state.verdict.kind : undefined),
     lastEdgeId: lastEdge ? lastEdge.id : null,
     outgoingEdges,
     causalLinks

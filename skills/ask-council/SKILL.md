@@ -121,7 +121,7 @@ Using a custom configuration file:
 
 ### CLI Flag Reference
 - `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`).
-- `-l, --live`: Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`) and stream telemetry to `src/visualizer/live-run-latest.js`.
+- `-l, --live`: Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `src/visualizer/live-run-latest.js`.
 - `-t, --topic <string>`: Problem statement or topic handoff.
 - `-c, --config <path>`: Path to custom JSON configuration file.
 - `-r, --rounds <number>`: Maximum deliberation rounds (default: 3).
@@ -163,3 +163,31 @@ Note: All 4 active Seats accepted the Proof-bound Candidate in Round 1 with zero
 - **Dissent Report (Preserved Excused-Seat Objection)**: Active seats reached consensus, but an excused seat hit a quota limit with an open objection that was locked into the verdict.
 - **Dissent Report (Round Limit Reached)**: Open objections remained after reaching `--rounds` limit. Inspect `Unresolved Objections:` to understand the technical divide.
 - **Dissent Report (Below Quorum)**: Seat quota excusals dropped active seats below `--quorum`.
+
+---
+
+## 6. Model Reasoning Effort & Session Isolation
+
+### Supported Reasoning Effort Tiers
+Council seat models on the Codex harness support explicit reasoning effort tiers specified either in parentheses (e.g., `gpt-6-astra (max)`) or with a recognized suffix (e.g., `model-name-high`):
+
+| Effort Tier | Codex Flag Applied | Use Case |
+|---|---|---|
+| `max` | `-c model_reasoning_effort="max"` | Deepest analytical proofs, complex security audits, high-stakes trade-off consensus. |
+| `xhigh` | `-c model_reasoning_effort="xhigh"` | Extended reasoning for intricate multi-component architectural decisions. |
+| `high` | `-c model_reasoning_effort="high"` | Standard default for balanced speed and reasoning depth. |
+| `medium` | `-c model_reasoning_effort="medium"` | Faster deliberation cycles for moderate complexity topics. |
+| `low` | `-c model_reasoning_effort="low"` | Fast consensus exploration or token-conserving runs. |
+
+*Note on `max` Preservation*: The Council passes `max` directly to Codex CLI without downscaling. If an unsupported effort tier is specified (e.g., `ultra`, `turbo`), the engine immediately throws a configuration error:
+`Unsupported reasoning effort "<effort>". Allowed: low, medium, high, xhigh, max.`
+
+### Ephemeral Run Isolation & Hook Inheritance
+1. **Disk Session Isolation (`--ephemeral`)**:
+   During `--live` execution, each seat turn and judge turn is executed with `codex exec --ephemeral`. This prevents persistent session files from accumulating in `~/.codex/sessions` across multi-round deliberations.
+2. **Hook Inheritance & Authentication**:
+   `--ephemeral` prevents session storage on disk while preserving configuration loading from `$CODEX_HOME/config.toml`. This ensures existing user authentication and custom model profiles remain available without manual credential passing. Any user-configured hooks in `config.toml` (such as session monitors) will still be invoked unless `--ignore-user-config` is explicitly configured.
+3. **Strict Isolation (`--ignore-user-config`)**:
+   If user hooks must not run during deliberation, `--ignore-user-config` can be enabled, provided authentication is exported via environment variables (such as `CODEX_API_KEY` or `OPENAI_API_KEY`).
+4. **Telemetry & Sanitization**:
+   Live runs record provider call telemetry including `durationMs`, `exitCode`, and sanitized `argv` where sensitive deliberation prompts are redacted and represented by length and SHA-256 hash.

@@ -25,6 +25,7 @@ export class CouncilTelemetryEmitter extends EventEmitter {
     this.clock = options.clock || (() => new Date().toISOString());
     this.maxHistory = options.maxHistory || 500;
     this.telemetryHistory = [];
+    this.providerCalls = [];
     this.recorder = options.recordSnapshots !== false ? createSnapshotRecorder({ clock: this.clock }) : null;
     // Default no-op error listener to ensure observer safety and prevent unhandled error crashes
     this.on('error', () => {});
@@ -141,6 +142,36 @@ export class CouncilTelemetryEmitter extends EventEmitter {
   }
 
   /**
+   * Emits and buffers provider call telemetry.
+   * @param {Object} callRecord
+   * @returns {Readonly<Object>}
+   */
+  emitProviderCall(callRecord) {
+    if (!callRecord || typeof callRecord !== 'object') {
+      throw new Error('emitProviderCall requires a valid callRecord object.');
+    }
+    const record = Object.freeze({
+      ...callRecord,
+      timestamp: this.clock()
+    });
+    this.providerCalls.push(record);
+    this._safeEmit('provider_call', record);
+    return record;
+  }
+
+  /**
+   * Returns recorded provider call history.
+   * @param {string} [participantId]
+   * @returns {Array<Object>}
+   */
+  getProviderCalls(participantId) {
+    if (participantId) {
+      return this.providerCalls.filter((c) => c.participantId === participantId);
+    }
+    return [...this.providerCalls];
+  }
+
+  /**
    * Returns all recorded snapshots.
    * @returns {import('./snapshot.js').CouncilSnapshot[]}
    */
@@ -165,6 +196,7 @@ export class CouncilTelemetryEmitter extends EventEmitter {
    */
   clear() {
     this.telemetryHistory = [];
+    this.providerCalls = [];
     if (this.recorder) {
       this.recorder.clear();
     }

@@ -261,7 +261,7 @@ describe('Adversarial Stress Test Suite — Challenger 2 (Milestone 2)', () => {
       assert.deepEqual(parseModelAndEffort('gpt-6-astra (max)'), {
         model: 'gpt-6-astra',
         effort: 'max',
-        codexEffort: 'xhigh'
+        codexEffort: 'max'
       });
       assert.deepEqual(parseModelAndEffort('gpt-6-astra (xhigh)'), {
         model: 'gpt-6-astra',
@@ -293,7 +293,7 @@ describe('Adversarial Stress Test Suite — Challenger 2 (Milestone 2)', () => {
       assert.deepEqual(parseModelAndEffort('model-max'), {
         model: 'model-max',
         effort: 'max',
-        codexEffort: 'xhigh'
+        codexEffort: 'max'
       });
 
       // Default fallback
@@ -303,11 +303,11 @@ describe('Adversarial Stress Test Suite — Challenger 2 (Milestone 2)', () => {
         codexEffort: 'high'
       });
 
-      // Unrecognized parenthesized effort falls back to codexEffort 'high'
-      const unk = parseModelAndEffort('custom (unknown_level)', 'high');
-      assert.equal(unk.model, 'custom');
-      assert.equal(unk.effort, 'unknown_level');
-      assert.equal(unk.codexEffort, 'high');
+      // Unrecognized parenthesized effort is rejected with configuration error
+      assert.throws(
+        () => parseModelAndEffort('custom (unknown_level)', 'high'),
+        /Unsupported reasoning effort "unknown_level"/i
+      );
     });
 
     it('runAntigravityCli formats required CLI flags, unwraps JSON envelope, and handles fallback', async () => {
@@ -371,13 +371,14 @@ describe('Adversarial Stress Test Suite — Challenger 2 (Milestone 2)', () => {
 
       assert.equal(captured.exe, 'codex');
       assert.equal(captured.args[0], 'exec');
+      assert.ok(captured.args.includes('--ephemeral'));
       assert.ok(captured.args.includes('--skip-git-repo-check'));
       assert.ok(captured.args.includes('--sandbox'));
       assert.ok(captured.args.includes('read-only'));
       assert.ok(captured.args.includes('-m'));
       assert.ok(captured.args.includes('gpt-6-astra'));
       assert.ok(captured.args.includes('-c'));
-      assert.ok(captured.args.includes('model_reasoning_effort="xhigh"'));
+      assert.ok(captured.args.includes('model_reasoning_effort="max"'));
       assert.equal(captured.args[captured.args.length - 1], 'vote prompt');
       assert.equal(res, '{"vote": "accept"}');
     });

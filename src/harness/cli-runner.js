@@ -5,23 +5,55 @@
  */
 
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 
-const CODEX_EFFORT_MAP = Object.freeze({
-  max: 'xhigh',
+export const CODEX_EFFORT_MAP = Object.freeze({
+  max: 'max',
   xhigh: 'xhigh',
   high: 'high',
   medium: 'medium',
   low: 'low'
 });
 
+export const ALLOWED_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
 const RECOGNIZED_EFFORT_SUFFIXES = ['-max', '-xhigh', '-high', '-medium', '-low'];
+
+/**
+ * Redacts prompt string in CLI argv for telemetry logging, replacing it with length and sha256 hash.
+ * Handles exact prompt arguments and --print=<prompt> flags.
+ *
+ * @param {string[]} args
+ * @param {string} [prompt='']
+ * @returns {string[]}
+ */
+export function redactArgv(args, prompt = '') {
+  if (!Array.isArray(args)) {
+    return [];
+  }
+  const promptStr = typeof prompt === 'string' ? prompt : String(prompt || '');
+  const hash = createHash('sha256').update(promptStr).digest('hex').slice(0, 12);
+  const length = promptStr.length;
+  const summary = `[REDACTED prompt: length=${length}, sha256=${hash}]`;
+
+  return args.map((arg) => {
+    if (arg === prompt) {
+      return summary;
+    }
+    if (typeof arg === 'string' && prompt && arg === `--print=${prompt}`) {
+      return `--print=${summary}`;
+    }
+    return arg;
+  });
+}
 
 /**
  * Parses model name and reasoning effort level.
  * Handles parenthesis format "gpt-6-astra (max)" and hyphenated suffixes "gemini-4-argon-high".
- * Maps 'max' to Codex 'xhigh'.
+ * Preserves 'max' for Codex reasoning effort.
+ * Throws a configuration error on unsupported efforts naming allowed values.
  *
  * @param {string} modelString
  * @param {'high'|'medium'|'low'|'max'|'xhigh'|string} [defaultEffort='high']
@@ -38,12 +70,22 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
   const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
   if (parenMatch) {
     const model = parenMatch[1].trim();
-    const effort = parenMatch[2].trim().toLowerCase();
-    const codexEffort = CODEX_EFFORT_MAP[effort] || CODEX_EFFORT_MAP[defaultEffort] || 'high';
-    return { model, effort, codexEffort };
+    const rawEffort = parenMatch[2].trim();
+    if (!rawEffort) {
+      const defaultEff = (defaultEffort || 'high').toLowerCase();
+      const codexEffort = CODEX_EFFORT_MAP[defaultEff] || 'high';
+      return { model, effort: '', codexEffort };
+    }
+    const effort = rawEffort.toLowerCase();
+    if (!CODEX_EFFORT_MAP[effort]) {
+      throw new Error(
+        `Configuration error: Unsupported reasoning effort "${rawEffort}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
+      );
+    }
+    return { model, effort, codexEffort: CODEX_EFFORT_MAP[effort] };
   }
 
-  // 2. Suffix effort format: e.g. "gemini-4-argon-high", "grok-4.7-xhigh"
+  // 2. Suffix effort format: e.g. "gemini-4-argon-high", "grok-4.7-xhigh", "model-max"
   for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
     if (trimmed.toLowerCase().endsWith(suffix)) {
       const effort = suffix.slice(1);
@@ -53,9 +95,14 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
   }
 
   // 3. Fallback to default effort
-  const effort = (defaultEffort || 'high').toLowerCase();
-  const codexEffort = CODEX_EFFORT_MAP[effort] || 'high';
-  return { model: trimmed, effort, codexEffort };
+  const defaultEff = (defaultEffort || 'high').toLowerCase();
+  if (!CODEX_EFFORT_MAP[defaultEff]) {
+    throw new Error(
+      `Configuration error: Unsupported reasoning effort "${defaultEffort}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
+    );
+  }
+  const codexEffort = CODEX_EFFORT_MAP[defaultEff];
+  return { model: trimmed, effort: defaultEff, codexEffort };
 }
 
 /**
@@ -114,6 +161,22 @@ export async function execCli(executable, args = [], options = {}) {
 }
 
 /**
+ * Helper to safely record provider call telemetry.
+ * @private
+ */
+function recordProviderCall({ context, onCallRecord, record }) {
+  if (typeof onCallRecord === 'function') {
+    onCallRecord(record);
+  }
+  if (typeof context?.onCallRecord === 'function') {
+    context.onCallRecord(record);
+  }
+  if (context?.telemetry && typeof context.telemetry.emitProviderCall === 'function') {
+    context.telemetry.emitProviderCall(record);
+  }
+}
+
+/**
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
  * Unwraps { response: "..." } JSON envelope if present.
@@ -127,6 +190,8 @@ export async function execCli(executable, args = [], options = {}) {
  * @param {string} [params.cwd]
  * @param {NodeJS.ProcessEnv} [params.env]
  * @param {Function} [params.exec=execCli]
+ * @param {Object} [params.context]
+ * @param {Function} [params.onCallRecord]
  * @returns {Promise<string>}
  */
 export async function runAntigravityCli({
@@ -137,7 +202,9 @@ export async function runAntigravityCli({
   timeoutMs,
   cwd,
   env,
-  exec = execCli
+  exec = execCli,
+  context,
+  onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
   const args = [
@@ -150,24 +217,63 @@ export async function runAntigravityCli({
     '--print=' + prompt
   ];
 
-  const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
-  const raw = result.stdout || '';
+  const startTime = Date.now();
+  let exitCode = 0;
 
   try {
-    const json = JSON.parse(raw);
-    if (json && typeof json.response === 'string') {
-      return json.response;
-    }
-  } catch {
-    // If not JSON envelope, fallback to raw output
-  }
+    const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
+    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
+    const durationMs = Date.now() - startTime;
 
-  return raw.trim();
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'antigravity',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
+    const raw = result?.stdout || '';
+
+    try {
+      const json = JSON.parse(raw);
+      if (json && typeof json.response === 'string') {
+        return json.response;
+      }
+    } catch {
+      // If not JSON envelope, fallback to raw output
+    }
+
+    return raw.trim();
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    exitCode = typeof err.exitCode === 'number'
+      ? err.exitCode
+      : (typeof err.code === 'number' ? err.code : 1);
+
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'antigravity',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
+    throw err;
+  }
 }
 
 /**
  * Provider Dispatcher: Codex (codex exec)
- * Args: ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
+ * Args: ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
  *
  * @param {Object} params
  * @param {string} [params.executable='codex']
@@ -178,6 +284,9 @@ export async function runAntigravityCli({
  * @param {string} [params.cwd]
  * @param {NodeJS.ProcessEnv} [params.env]
  * @param {Function} [params.exec=execCli]
+ * @param {Object} [params.context]
+ * @param {Function} [params.onCallRecord]
+ * @param {boolean} [params.ignoreUserConfig=false]
  * @returns {Promise<string>}
  */
 export async function runCodexCli({
@@ -188,11 +297,15 @@ export async function runCodexCli({
   timeoutMs,
   cwd,
   env,
-  exec = execCli
+  exec = execCli,
+  context,
+  onCallRecord,
+  ignoreUserConfig = false
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
   const args = [
     'exec',
+    '--ephemeral',
     '--skip-git-repo-check',
     '--sandbox', 'read-only',
     '-m', parsed.model,
@@ -200,8 +313,51 @@ export async function runCodexCli({
     prompt
   ];
 
-  const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
-  return (result.stdout || '').trim();
+  if (ignoreUserConfig) {
+    args.splice(args.indexOf('--ephemeral') + 1, 0, '--ignore-user-config');
+  }
+
+  const startTime = Date.now();
+  let exitCode = 0;
+
+  try {
+    const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
+    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
+    const durationMs = Date.now() - startTime;
+
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'codex',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
+    return (result?.stdout || '').trim();
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    exitCode = typeof err.exitCode === 'number'
+      ? err.exitCode
+      : (typeof err.code === 'number' ? err.code : 1);
+
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'codex',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
+    throw err;
+  }
 }
 
 /**
@@ -218,6 +374,8 @@ export async function runCodexCli({
  * @param {string} [params.cwd]
  * @param {NodeJS.ProcessEnv} [params.env]
  * @param {Function} [params.exec=execCli]
+ * @param {Object} [params.context]
+ * @param {Function} [params.onCallRecord]
  * @returns {Promise<string>}
  */
 export async function runCursorCli({
@@ -228,7 +386,9 @@ export async function runCursorCli({
   timeoutMs,
   cwd,
   env,
-  exec = execCli
+  exec = execCli,
+  context,
+  onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
   const args = [
@@ -238,15 +398,86 @@ export async function runCursorCli({
     prompt
   ];
 
+  const startTime = Date.now();
+  let exitCode = 0;
+
   try {
     const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
-    return (result.stdout || '').trim();
+    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
+    const durationMs = Date.now() - startTime;
+
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'cursor',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
+    return (result?.stdout || '').trim();
   } catch (err) {
     if (err && err.code === 'ENOENT' && executable === 'cursor-agent') {
-      const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd, env });
-      return (fallbackResult.stdout || '').trim();
+      try {
+        const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd, env });
+        exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
+        const durationMs = Date.now() - startTime;
+
+        recordProviderCall({
+          context,
+          onCallRecord,
+          record: {
+            participantId: context?.seatId || context?.participantId || 'unknown',
+            provider: 'cursor',
+            argv: redactArgv(args, prompt),
+            exitCode,
+            durationMs
+          }
+        });
+
+        return (fallbackResult?.stdout || '').trim();
+      } catch (fallbackErr) {
+        const durationMs = Date.now() - startTime;
+        exitCode = typeof fallbackErr.exitCode === 'number'
+          ? fallbackErr.exitCode
+          : (typeof fallbackErr.code === 'number' ? fallbackErr.code : 1);
+
+        recordProviderCall({
+          context,
+          onCallRecord,
+          record: {
+            participantId: context?.seatId || context?.participantId || 'unknown',
+            provider: 'cursor',
+            argv: redactArgv(args, prompt),
+            exitCode,
+            durationMs
+          }
+        });
+
+        throw fallbackErr;
+      }
     }
+
+    const durationMs = Date.now() - startTime;
+    exitCode = typeof err.exitCode === 'number'
+      ? err.exitCode
+      : (typeof err.code === 'number' ? err.code : 1);
+
+    recordProviderCall({
+      context,
+      onCallRecord,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: 'cursor',
+        argv: redactArgv(args, prompt),
+        exitCode,
+        durationMs
+      }
+    });
+
     throw err;
   }
 }
-

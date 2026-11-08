@@ -188,7 +188,7 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
 2. **Hook Suppression (`--disable hooks`) & Authentication Preservation**:
    `runCodexCli` also passes `--disable hooks` (equivalent to `-c features.hooks=false`) by default. This suppresses user hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) from firing on internal Council prompts and tool calls while preserving `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json` authentication. Hooks can be re-enabled if desired via `disableHooks: false`.
 3. **Full Config Isolation (`--ignore-user-config`)**:
-   For environments that also want to skip `$CODEX_HOME/config.toml` entirely, `ignoreUserConfig: true` passes `--ignore-user-config` (requiring credentials via `CODEX_API_KEY` or `OPENAI_API_KEY`).
+   For environments that also want to skip `$CODEX_HOME/config.toml` entirely, `ignoreUserConfig: true` passes `--ignore-user-config` (skipping `config.toml` while authentication still uses `CODEX_HOME`).
 4. **Telemetry & Sanitization**:
    Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash.
 

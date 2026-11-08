@@ -23,6 +23,8 @@ export class CodexAdapter extends HarnessAdapter {
     super({ name: 'codex', ...config });
     this.executable = config.executable || process.env.CODEX_CLI_COMMAND || 'codex';
     this.spawnRunner = config.spawnRunner || runCodexCli;
+    this.disableHooks = config.disableHooks;
+    this.ignoreUserConfig = config.ignoreUserConfig;
   }
 
   /**
@@ -79,14 +81,16 @@ export class CodexAdapter extends HarnessAdapter {
    */
   async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(seat.model);
+    const disableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.disableHooks;
+    const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
     const context = {
       seatId: seat.id,
       model: seat.model,
       tools: seat.tools || 'read-only',
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
-      ...(seat.disableHooks !== undefined ? { disableHooks: seat.disableHooks } : {}),
-      ...(seat.ignoreUserConfig !== undefined ? { ignoreUserConfig: seat.ignoreUserConfig } : {})
+      ...(disableHooks !== undefined ? { disableHooks } : {}),
+      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {})
     };
 
     return this.executeWithTimeout(
@@ -116,14 +120,16 @@ export class CodexAdapter extends HarnessAdapter {
    */
   async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord }) {
     this.validateModel(judge.model);
+    const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
+    const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
     const context = {
       seatId: judge.id,
       model: judge.model,
       tools: judge.tools || 'read-only',
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
-      ...(judge.disableHooks !== undefined ? { disableHooks: judge.disableHooks } : {}),
-      ...(judge.ignoreUserConfig !== undefined ? { ignoreUserConfig: judge.ignoreUserConfig } : {})
+      ...(disableHooks !== undefined ? { disableHooks } : {}),
+      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {})
     };
 
     return this.executeWithTimeout(

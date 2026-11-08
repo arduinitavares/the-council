@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const srcIndexPath = path.resolve(__dirname, '../../src/index.js');
-const protoPath = path.resolve(__dirname, '../../src/visualizer/council-machine.js');
 
 export const VALID_PROOF_KINDS = ['check', 'citation', 'benchmark', 'derivation'];
 
@@ -50,20 +49,17 @@ export const EVENTS = {
 };
 
 let productionModule = null;
-let prototypeModule = null;
 
 if (fs.existsSync(srcIndexPath)) {
   try {
     productionModule = await import(srcIndexPath);
   } catch (err) {
-    // If syntax/compilation error in src, let it throw or fall back
     console.warn('[council-loader] Warning: failed to load src/index.js:', err.message);
   }
 }
 
 if (!productionModule) {
-  const imported = await import(protoPath);
-  prototypeModule = imported.default || globalThis.CouncilMachine || imported;
+  throw new Error('[council-loader] src/index.js failed to load and prototype fallback has been removed.');
 }
 
 export const isUsingProductionSrc = Boolean(productionModule);
@@ -177,7 +173,7 @@ export function createInitialCouncilState(config) {
   if (productionModule && typeof productionModule.createInitialCouncilState === 'function') {
     return productionModule.createInitialCouncilState(config);
   }
-  return prototypeModule.createInitialCouncilState(config);
+  throw new Error('[council-loader] createInitialCouncilState is unavailable');
 }
 
 /**
@@ -187,40 +183,7 @@ export function transitionCouncil(state, event) {
   if (productionModule && typeof productionModule.transitionCouncil === 'function') {
     return productionModule.transitionCouncil(state, event);
   }
-
-  // Fallback to prototype with ADR 0003 guards applied
-  if (event.type === 'WITHDRAW_OBJECTION') {
-    const check = canWithdrawObjection(state, event.objectionId, event.seatId);
-    if (!check.allowed) {
-      const next = JSON.parse(JSON.stringify(state));
-      next.lastEventName = event.type;
-      next.lastTransition = { ok: false, message: 'Guard rejected ' + event.type + ': ' + check.reason };
-      next.history.unshift('[REJECTED] ' + check.reason);
-      return next;
-    }
-  }
-
-  if (event.type === 'EVALUATE_ROUND') {
-    const activeSeats = (state.seats || []).filter((s) => s.status !== 'excused');
-    if (activeSeats.length < (state.minQuorum || 2)) {
-      const next = JSON.parse(JSON.stringify(state));
-      next.phase = 'completed';
-      next.verdict = {
-        kind: 'Dissent Report (Below Quorum)',
-        candidate: next.candidate,
-        unresolvedObjections: next.objections.filter((o) => o.status !== 'withdrawn'),
-        activeSeatCount: activeSeats.length,
-        excusedSeatCount: (state.seats || []).length - activeSeats.length,
-        note: 'Active seats (' + activeSeats.length + ') dropped below minimum quorum (' + state.minQuorum + '). Consensus forbidden.'
-      };
-      next.lastEventName = event.type;
-      next.lastTransition = { ok: true, message: 'Active seats fell below quorum → Dissent Report.' };
-      next.history.unshift('[OK] Active seats fell below quorum → Dissent Report.');
-      return next;
-    }
-  }
-
-  return prototypeModule.transitionCouncil(state, event);
+  throw new Error('[council-loader] transitionCouncil is unavailable');
 }
 
 /**
@@ -230,5 +193,5 @@ export function getDependencyAndStateGraph(state) {
   if (productionModule && typeof productionModule.getDependencyAndStateGraph === 'function') {
     return productionModule.getDependencyAndStateGraph(state);
   }
-  return prototypeModule.getDependencyAndStateGraph(state);
+  throw new Error('[council-loader] getDependencyAndStateGraph is unavailable');
 }

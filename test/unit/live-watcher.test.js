@@ -4,7 +4,7 @@
  * and visualizer HTML integration for file:// Live Follow mode.
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -453,6 +453,234 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(mockWindow.CouncilLatestLiveRun.currentState.judge.faultReason, /^\[TimeoutError\]/);
 
       watcher.stop();
+    });
+  });
+
+  describe('Production Graph Introspection in Live Snapshots (#21)', () => {
+    it('attaches getDependencyAndStateGraph to currentGraph, currentState.graph, and step.graph on state_transition', () => {
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut,
+        initialConfig: { topic: 'Graph attachment test' }
+      });
+
+      const fakeState = {
+        phase: 'reviewing',
+        canonicalPhase: 'DELIBERATION',
+        round: 1,
+        maxRounds: 3,
+        minQuorum: 2,
+        topic: 'Graph attachment test',
+        seats: [
+          { id: 'seat-1', status: 'thinking', harness: 'codex' },
+          { id: 'seat-2', status: 'thinking', harness: 'antigravity' }
+        ],
+        judge: { id: 'judge-1', status: 'idle', harness: 'codex' },
+        proofs: [],
+        candidate: null,
+        objections: [],
+        history: []
+      };
+
+      emitter.emitStateTransition({ type: 'BEGIN_ROUND' }, fakeState);
+
+      assert.ok(watcher.liveRun.currentGraph, 'currentGraph should be defined');
+      assert.ok(Array.isArray(watcher.liveRun.currentGraph.nodes), 'nodes should be an array');
+      assert.ok(Array.isArray(watcher.liveRun.currentGraph.edges), 'edges should be an array');
+      assert.ok(watcher.liveRun.currentState.graph, 'currentState.graph should be defined');
+      assert.equal(watcher.liveRun.steps[0].graph.nodes.length, watcher.liveRun.currentGraph.nodes.length);
+
+      // Verify reviewing node is marked active in graph
+      const reviewingNode = watcher.liveRun.currentGraph.nodes.find((n) => n.id === 'reviewing');
+      assert.ok(reviewingNode, 'Should include reviewing phase node');
+      assert.equal(watcher.liveRun.currentGraph.activeNodeId, 'reviewing');
+
+      watcher.stop();
+    });
+
+    it('enriches steps with actor and human-readable action summaries', () => {
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut
+      });
+
+      const state1 = {
+        phase: 'clarifying',
+        round: 1,
+        seats: [],
+        judge: { id: 'judge-1' }
+      };
+      emitter.emitStateTransition({ type: 'START_CLARIFYING' }, state1);
+      assert.equal(watcher.liveRun.steps[0].actor, 'judge-1');
+      assert.equal(watcher.liveRun.steps[0].summary, 'Started discovery & clarification phase');
+
+      const state2 = {
+        phase: 'reviewing',
+        round: 1,
+        seats: [{ id: 'seat-1', status: 'thinking' }],
+        judge: { id: 'judge-1' },
+        proofs: []
+      };
+      emitter.emitStateTransition(
+        {
+          type: 'SUBMIT_PROOF',
+          proof: { id: 'P1', seatId: 'seat-1', kind: 'check', scope: 'Containers' }
+        },
+        state2
+      );
+      assert.equal(watcher.liveRun.steps[1].actor, 'seat-1');
+      assert.match(watcher.liveRun.steps[1].summary, /Seat "seat-1" submitted Proof P1 \[check\]/);
+
+      const state3 = {
+        phase: 'confirming',
+        round: 1,
+        seats: [{ id: 'seat-1', status: 'accepted' }],
+        judge: { id: 'judge-1' }
+      };
+      emitter.emitStateTransition(
+        {
+          type: 'CAST_VOTE',
+          vote: { seatId: 'seat-1', vote: 'accept' }
+        },
+        state3
+      );
+      assert.equal(watcher.liveRun.steps[2].actor, 'seat-1');
+      assert.match(watcher.liveRun.steps[2].summary, /Seat "seat-1" voted ACCEPT/);
+
+      watcher.stop();
+    });
+
+    it('handles partial states without throwing in _computeGraph', () => {
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut
+      });
+
+      assert.doesNotThrow(() => {
+        const graph = watcher._computeGraph({ phase: 'reviewing' });
+        assert.ok(graph === null || typeof graph === 'object');
+      });
+
+      watcher.stop();
+    });
+  });
+
+  describe('Soul Formatting Helpers (#19)', () => {
+    let formatSoul;
+    let renderSoulCardHtml;
+
+    before(async () => {
+      const visualizerMod = await import('../../src/visualizer/council-visualizer.js');
+      const api = visualizerMod.default || globalThis.CouncilVisualizer || visualizerMod;
+      formatSoul = api.formatSoul;
+      renderSoulCardHtml = api.renderSoulCardHtml;
+    });
+
+    it('formats string soul as-is', () => {
+      assert.equal(formatSoul('Systems & Kernel Purist'), 'Systems & Kernel Purist');
+    });
+
+    it('formats structured soul with name and lens cleanly without [object Object]', () => {
+      const soul = {
+        name: 'Pragmatic Systems Architect',
+        temperament: 'pragmatic',
+        lens: 'Operational simplicity and proven engineering patterns',
+        rules: ['Demands single-binary deployment']
+      };
+      const formatted = formatSoul(soul);
+      assert.equal(formatted, 'Pragmatic Systems Architect — Operational simplicity and proven engineering patterns');
+      assert.doesNotMatch(formatted, /\[object Object\]/);
+    });
+
+    it('formats soul with name only, lens only, or temperament only', () => {
+      assert.equal(formatSoul({ name: 'Systems Architect' }), 'Systems Architect');
+      assert.equal(formatSoul({ lens: 'Security auditing' }), 'Security auditing');
+      assert.equal(formatSoul({ temperament: 'adversarial' }), 'adversarial');
+    });
+
+    it('handles null, undefined, empty, or fallback object gracefully', () => {
+      assert.equal(formatSoul(null), '');
+      assert.equal(formatSoul(undefined), '');
+      assert.equal(formatSoul(''), '');
+      const fallback = formatSoul({ customKey: 'customValue' });
+      assert.doesNotMatch(fallback, /\[object Object\]/);
+    });
+
+    it('renders structured soul card HTML without [object Object]', () => {
+      const esc = (s) => String(s);
+      const html = renderSoulCardHtml({
+        name: 'Pragmatic Architect',
+        lens: 'Simplicity'
+      }, esc);
+      assert.match(html, /Pragmatic Architect/);
+      assert.match(html, /Simplicity/);
+      assert.doesNotMatch(html, /\[object Object\]/);
+    });
+  });
+
+  describe('Graph Label Truncation Helper (#19)', () => {
+    let truncateAtWord;
+
+    before(async () => {
+      const visualizerMod = await import('../../src/visualizer/council-visualizer.js');
+      const api = visualizerMod.default || globalThis.CouncilVisualizer || visualizerMod;
+      truncateAtWord = api.truncateAtWord;
+    });
+
+    it('preserves strings within length limit without ellipsis', () => {
+      assert.equal(truncateAtWord('Short label', 20), 'Short label');
+    });
+
+    it('truncates at word boundary before maxLen and appends ellipsis', () => {
+      const input = 'Adaptive execution in high throughput networking';
+      const truncated = truncateAtWord(input, 24);
+      assert.ok(truncated.endsWith('…'));
+      assert.ok(truncated.length <= 25);
+      assert.equal(truncated, 'Adaptive execution in…');
+    });
+
+    it('falls back to hard cut with ellipsis if no space exists before maxLen', () => {
+      const input = 'Supercalifragilisticexpialidocious';
+      const truncated = truncateAtWord(input, 15);
+      assert.ok(truncated.endsWith('…'));
+      assert.equal(truncated.length, 15);
+    });
+
+    it('handles null, undefined, and empty string safely', () => {
+      assert.equal(truncateAtWord(null), '');
+      assert.equal(truncateAtWord(undefined), '');
+      assert.equal(truncateAtWord(''), '');
+    });
+  });
+
+  describe('Prototype Decoupling & File Deletions (#21, #22)', () => {
+    const htmlPath = path.resolve('src/visualizer/index.html');
+    const protoMachinePath = path.resolve('src/visualizer/council-machine.js');
+    const protoWalkthroughsPath = path.resolve('src/visualizer/council-walkthroughs.js');
+
+    it('ensures index.html does not load council-machine.js or council-walkthroughs.js', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.doesNotMatch(html, /council-machine\.js/);
+      assert.doesNotMatch(html, /council-walkthroughs\.js/);
+    });
+
+    it('ensures index.html contains no references to CouncilMachine', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.doesNotMatch(html, /CouncilMachine/);
+    });
+
+    it('ensures index.html contains no prototype tabs or free-play controls', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.doesNotMatch(html, /wt-better-os/);
+      assert.doesNotMatch(html, /wt-10-seats-quota/);
+      assert.doesNotMatch(html, /wt-opus-guardrails/);
+      assert.doesNotMatch(html, /Free-Play/);
+      assert.doesNotMatch(html, /form-free-play/);
+    });
+
+    it('verifies src/visualizer/council-machine.js and council-walkthroughs.js are deleted', () => {
+      assert.equal(fs.existsSync(protoMachinePath), false, 'council-machine.js must be deleted');
+      assert.equal(fs.existsSync(protoWalkthroughsPath), false, 'council-walkthroughs.js must be deleted');
     });
   });
 });

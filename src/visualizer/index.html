@@ -3,25 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>The Council — Modular State Machine &amp; Dependency Motion Prototype</title>
+  <title>The Council — Live Deliberation Visualizer</title>
   <style>
     :root {
-      --bg: #0b1017;
-      --surface: #121a26;
-      --surface-raised: #172232;
-      --border: #26354a;
-      --text: #e6eef8;
-      --text-secondary: #9cb0c9;
+      --bg: #090e17;
+      --surface: #111827;
+      --surface-raised: #162235;
+      --surface-highlight: #1c2b42;
+      --border: #23334d;
+      --border-subtle: #1a273b;
+      --text: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
       --accent: #38bdf8;
-      --accent-soft: rgba(56, 189, 248, 0.14);
+      --accent-soft: rgba(56, 189, 248, 0.12);
       --green: #34d399;
-      --green-soft: rgba(52, 211, 153, 0.14);
-      --amber: #f59e0b;
-      --amber-soft: rgba(245, 158, 11, 0.14);
+      --green-soft: rgba(52, 211, 153, 0.12);
+      --amber: #fbbf24;
+      --amber-soft: rgba(251, 191, 36, 0.12);
       --red: #f87171;
       --red-soft: rgba(248, 113, 113, 0.14);
       --purple: #c084fc;
-      --purple-soft: rgba(192, 132, 252, 0.14);
+      --purple-soft: rgba(192, 132, 252, 0.12);
       --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
       --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
     }
@@ -34,8 +37,8 @@
     }
 
     ::-webkit-scrollbar {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
     }
     ::-webkit-scrollbar-track {
       background: var(--bg);
@@ -44,15 +47,39 @@
       background: var(--border);
       border-radius: 4px;
     }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334b70;
+    }
 
     body {
       margin: 0;
-      padding: 28px 24px 48px;
+      padding: 16px 20px 48px;
       background: var(--bg);
       color: var(--text);
       font-family: var(--font);
-      line-height: 1.5;
+      line-height: 1.45;
       font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .skip-link {
+      position: absolute;
+      top: -40px;
+      left: 16px;
+      background: var(--accent);
+      color: #040910;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      text-decoration: none;
+      z-index: 9999;
+      transition: top 120ms ease;
+    }
+    .skip-link:focus {
+      top: 16px;
+      outline: 2px solid #ffffff;
+      outline-offset: 2px;
     }
 
     :focus-visible {
@@ -61,662 +88,684 @@
     }
 
     .layout {
-      max-width: 1360px;
+      max-width: 1380px;
       margin: 0 auto;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 16px;
     }
 
     .surface-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 20px 22px;
+      padding: 16px 20px;
     }
 
-    h1 {
-      margin: 0 0 10px 0;
-      font-size: 24px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      text-wrap: balance;
-    }
-
-    h2 {
-      margin: 0 0 12px 0;
-      font-size: 16px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      color: var(--text);
-    }
-
-    h3 {
-      margin: 0 0 8px 0;
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .intro-copy {
-      margin: 0;
-      max-width: 72ch;
-      color: var(--text-secondary);
-      font-size: 14px;
-    }
-
-    .module-links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-
-    .module-chip {
-      background: var(--surface-raised);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 10px;
-    }
-
-    /* Status Alert Banner */
-    .transition-banner {
-      padding: 12px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--surface-raised);
+    /* Top Navigation & Status Bar */
+    .top-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-wrap: wrap;
       gap: 12px;
-      font-size: 14px;
-    }
-    .transition-banner.ok {
-      border-color: rgba(52, 211, 153, 0.5);
-      background: var(--green-soft);
-    }
-    .transition-banner.rejected {
-      border-color: rgba(248, 113, 113, 0.55);
-      background: var(--red-soft);
+      padding: 12px 18px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
     }
 
-    /* Buttons & Controls */
+    .brand-cluster {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+    .brand-sub {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 2px 7px;
+      background: var(--surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 5px;
+    }
+
+    .status-cluster {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    /* Status badges */
+    .badge {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      letter-spacing: 0.02em;
+    }
+    .badge-running {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .badge-completed {
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(52, 211, 153, 0.4);
+    }
+    .badge-failed {
+      background: var(--red-soft);
+      color: var(--red);
+      border: 1px solid rgba(248, 113, 113, 0.4);
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+      animation: pulseAnimation 1.6s infinite ease-in-out;
+    }
+    @keyframes pulseAnimation {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.75); }
+    }
+
+    .timer-pill {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: var(--surface-raised);
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Buttons */
     button {
       font-family: var(--font);
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--text);
       background: var(--surface-raised);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 14px;
+      border-radius: 7px;
+      padding: 6px 12px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      transition: background-color 140ms cubic-bezier(0.16, 1, 0.3, 1),
-                  border-color 140ms cubic-bezier(0.16, 1, 0.3, 1),
-                  transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+      gap: 6px;
+      transition: background-color 140ms ease, border-color 140ms ease;
     }
     button:hover:not(:disabled) {
       border-color: var(--accent);
-      background: rgba(56, 189, 248, 0.1);
+      background: var(--surface-highlight);
     }
-    button:active:not(:disabled) {
-      transform: translateY(1px);
-    }
-    button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-    button.primary {
-      background: var(--accent);
-      color: #081018;
-      border-color: var(--accent);
-    }
-    button.primary:hover:not(:disabled) {
-      background: #7dd3fc;
-    }
-    button.danger {
-      border-color: rgba(248, 113, 113, 0.5);
-      color: var(--red);
-    }
-    button.tab-btn.active {
+    button.active {
       background: var(--accent-soft);
       border-color: var(--accent);
       color: var(--accent);
     }
 
     .icon-svg {
-      width: 14px;
-      height: 14px;
+      width: 13px;
+      height: 13px;
       stroke: currentColor;
-      stroke-width: 1.75;
+      stroke-width: 2;
       fill: none;
       stroke-linecap: round;
       stroke-linejoin: round;
       flex-shrink: 0;
     }
 
-    .tabs-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 12px 0;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .steps-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .step-btn.current-step {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-    }
-    .step-btn.done-step {
-      border-color: rgba(52, 211, 153, 0.45);
-      color: var(--green);
-    }
-
-    /* Animated SVG Graph Surfaces */
-    .graph-stage {
-      background: #0d141f;
+    /* Question / Topic Header */
+    .question-card {
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 12px;
-      overflow-x: auto;
+      padding: 16px 20px;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-wrap: balance;
+      line-height: 1.35;
+    }
+    .question-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
     }
 
-    .sm-edge-next path {
-      animation: flowDash 1.1s linear infinite;
-      @media (prefers-reduced-motion: reduce) {
-        animation: none;
-      }
-    }
-
-    .dep-edge {
-      animation: flowDash 1.6s linear infinite;
-      @media (prefers-reduced-motion: reduce) {
-        animation: none;
-      }
-    }
-
-    @keyframes flowDash {
-      to {
-        stroke-dashoffset: -22;
-      }
-    }
-
-    /* Next Legal Transitions Strip */
-    .next-grid {
+    /* Answer-First Grid (Above the fold on 1440x900) */
+    .answer-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .next-item {
-      background: var(--surface-raised);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 12px 14px;
-      font-size: 13px;
-    }
-    .next-item.unlocked {
-      border-color: rgba(56, 189, 248, 0.55);
-    }
-    .next-item.locked {
-      border-color: rgba(245, 158, 11, 0.45);
-    }
-
-    /* Two-column Observer Details */
-    .observer-columns {
-      display: grid;
-      grid-template-columns: 1.15fr 1fr;
-      gap: 20px;
+      grid-template-columns: 1fr 1.25fr;
+      gap: 16px;
     }
     @media (max-width: 1040px) {
-      .observer-columns { grid-template-columns: 1fr; }
+      .answer-grid { grid-template-columns: 1fr; }
     }
 
-    .seats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    .verdict-panel {
+      display: flex;
+      flex-direction: column;
       gap: 12px;
-      view-transition-scope: all;
     }
-    .seat-card {
+
+    .verdict-banner {
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+    }
+    .verdict-banner.consensus {
+      border-color: rgba(52, 211, 153, 0.45);
+      background: var(--green-soft);
+    }
+    .verdict-banner.dissent {
+      border-color: rgba(251, 191, 36, 0.45);
+      background: var(--amber-soft);
+    }
+    .verdict-banner.fault {
+      border-color: rgba(248, 113, 113, 0.45);
+      background: var(--red-soft);
+    }
+    .verdict-banner.running {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: var(--accent-soft);
+    }
+
+    .verdict-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .verdict-body {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .synthesis-card {
       background: var(--surface-raised);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 10px;
       padding: 14px;
       display: flex;
       flex-direction: column;
       gap: 6px;
-      view-transition-name: match-element;
     }
-    .seat-card.status-thinking { border-color: var(--accent); }
-    .seat-card.status-accepted { border-color: rgba(52, 211, 153, 0.6); }
-    .seat-card.status-objected { border-color: rgba(245, 158, 11, 0.65); }
-    .seat-card.status-fault_quota,
-    .seat-card.status-fault_timeout,
-    .seat-card.status-fault { border-color: var(--red); background: var(--red-soft); }
-    .seat-card.status-excused { opacity: 0.58; border-style: dashed; }
-
-    .badge {
+    .synthesis-title {
+      font-size: 12px;
       font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 6px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .synthesis-content {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+      max-width: 68ch;
+    }
+
+    /* Transition Status Alert (Polite Live Region) */
+    .transition-status {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      background: var(--surface-raised);
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Clauses & Objections Column */
+    .clauses-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      text-transform: uppercase;
+      font-size: 12px;
+      letter-spacing: 0.03em;
+    }
+
+    .clauses-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .clause-card {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 12.5px;
+    }
+    .clause-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .clause-id {
+      font-weight: 700;
+      color: var(--text);
+      font-family: var(--mono);
+    }
+    .clause-body {
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .objections-box {
+      margin-top: 4px;
+    }
+    .objection-card {
+      background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12.5px;
+      margin-top: 6px;
+    }
+    .objection-card.locked {
+      background: rgba(248, 113, 113, 0.08);
+      border-color: rgba(248, 113, 113, 0.4);
+    }
+
+    /* Council Roster Cards */
+    .roster-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .participant-card {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 160ms ease;
+    }
+    .participant-card.status-thinking {
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+    }
+    .participant-card.status-accepted {
+      border-color: rgba(52, 211, 153, 0.5);
+    }
+    .participant-card.status-objected {
+      border-color: rgba(251, 191, 36, 0.5);
+    }
+    .participant-card.status-fault_quota,
+    .participant-card.status-fault_timeout,
+    .participant-card.status-fault {
+      border-color: var(--red);
+      background: var(--red-soft);
+    }
+    .participant-card.status-excused {
+      opacity: 0.55;
+      border-style: dashed;
+    }
+
+    .harness-badge {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 5px;
     }
     .harness-codex { background: var(--green-soft); color: var(--green); }
     .harness-antigravity { background: var(--accent-soft); color: var(--accent); }
     .harness-cursor { background: var(--purple-soft); color: var(--purple); }
 
-    .stack-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .record-item {
-      background: var(--surface-raised);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 12px 14px;
-      font-size: 13px;
-    }
-    .record-item.admitted { border-color: rgba(52, 211, 153, 0.5); }
-    .record-item.rejected { border-color: rgba(248, 113, 113, 0.5); }
-    .record-item.objection-open { border-color: rgba(245, 158, 11, 0.55); }
-    .record-item.objection-excused { border-color: var(--red); }
-
-    .freeplay-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
-      gap: 14px;
-    }
-    .control-group {
-      background: var(--surface-raised);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    input, select {
-      width: 100%;
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 7px 9px;
-      font-size: 12.5px;
-      font-family: var(--font);
-    }
-
-    .audit-log {
-      max-height: 200px;
-      overflow-y: auto;
-      font-family: var(--mono);
+    .soul-block {
       font-size: 12px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
+      color: var(--text-secondary);
+      line-height: 1.35;
     }
-    .log-row { margin-bottom: 4px; color: var(--text-secondary); }
-    .log-row.err { color: var(--red); }
+    .soul-name {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .soul-lens {
+      color: var(--text-muted);
+    }
+
+    /* Deliberation Graphs Section */
+    .graph-stage {
+      background: #080d15;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+      margin-top: 10px;
+    }
+
+    .tabs-header {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 10px;
+    }
+
+    /* Timeline Activity Stream */
+    .timeline-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-top: 10px;
+      padding-right: 4px;
+    }
+    .timeline-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: var(--surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 120ms ease;
+    }
+    .timeline-row:hover {
+      background: var(--surface-highlight);
+      border-color: var(--accent);
+    }
+    .timeline-row.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .timeline-action {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .timeline-time {
+      font-family: var(--mono);
+      color: var(--text-muted);
+      font-size: 11px;
+    }
 
     @media (prefers-reduced-motion: reduce) {
-      ::view-transition-group(*),
-      ::view-transition-old(*),
-      ::view-transition-new(*) {
+      *, ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) {
         animation: none !important;
+        transition: none !important;
       }
     }
   </style>
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to deliberation content</a>
+
   <div class="layout">
-    <!-- 1. Header & Modular Architecture Summary -->
-    <header class="surface-card">
-      <h1>The Council — State Machine &amp; Causal Dependency Motion Explorer</h1>
-      <p class="intro-copy">
-        Interactive representation module for testing how N dynamic <strong>Seats</strong> (mixing <code>codex</code>, <code>antigravity</code>, and <code>cursor</code> harnesses with distinct <strong>Souls</strong>) progress through Proof-backed deliberation, Judge Proof-bound Candidate synthesis, and quota fault recovery (<strong>Retry</strong> or <strong>Excuse Seat</strong>) without allowing token exhaustion to erase an open Objection.
-      </p>
-      <div class="module-links">
-        <span class="module-chip">Engine Module: src/visualizer/council-machine.js</span>
-        <span class="module-chip">Motion &amp; Graph Module: src/visualizer/council-visualizer.js</span>
-        <span class="module-chip">Walkthroughs Module: src/visualizer/council-walkthroughs.js</span>
+    <!-- 1. Top Navigation & Status Bar -->
+    <header class="top-bar" role="banner">
+      <div class="brand-cluster">
+        <span class="brand-title">The Council</span>
+        <span class="brand-sub">Live Research Visualizer</span>
+        <span id="badge-live-tag" class="brand-sub" style="color:var(--accent);">Latest Live Run</span>
+      </div>
+
+      <div class="status-cluster">
+        <div id="status-pill" class="badge badge-running">
+          <span class="pulse-dot"></span>
+          <span id="status-pill-text">RUNNING</span>
+        </div>
+
+        <div class="timer-pill">
+          <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span id="lbl-elapsed">00:00</span>
+        </div>
+
+        <button id="btn-live-follow" onclick="toggleLiveFollow()" aria-pressed="true" class="active">
+          <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+          <span id="btn-live-follow-label">Live Follow: ON (1s)</span>
+        </button>
+
+        <span id="stream-badge" style="font-family:var(--mono); font-size:11px; color:var(--accent);"></span>
       </div>
     </header>
 
-    <!-- Transition Status Bar -->
-    <div id="transition-banner" class="transition-banner ok" role="status" aria-live="polite">
-      <span id="transition-text">Ready. Select a walkthrough step or start the real-time stream.</span>
-      <span id="stream-badge" style="font-family:var(--mono); font-size:12px; color:var(--accent);"></span>
-    </div>
-
-    <!-- 2. Guided Walkthroughs & Stream Controls -->
-    <section class="surface-card" aria-labelledby="heading-walkthroughs">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-        <h2 id="heading-walkthroughs" style="margin:0;">Guided Walkthroughs &amp; Real-Time Observer Stream</h2>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="btn-live-follow" onclick="toggleLiveFollow()">
-            <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
-            <span id="btn-live-follow-label">Live Follow: OFF</span>
-          </button>
-          <button id="btn-autoplay" class="primary" onclick="toggleAutoPlay()">
-            <svg class="icon-svg" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
-            <span id="btn-autoplay-label">Auto-Play Real-Time Stream</span>
-          </button>
-          <button onclick="resetCurrentWalkthrough()">
-            <svg class="icon-svg" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-            <span>Reset Scenario</span>
-          </button>
+    <main id="main-content">
+      <!-- 2. Question / Topic Card -->
+      <section class="question-card" aria-labelledby="heading-topic">
+        <h1 id="heading-topic">Waiting for live deliberation to connect...</h1>
+        <div class="question-meta">
+          <span class="meta-item">
+            <strong>Phase:</strong> <span id="lbl-phase" style="font-family:var(--mono); color:var(--accent);">preflight</span>
+          </span>
+          <span class="meta-item">
+            <strong>Round:</strong> <span id="lbl-round">0</span>/<span id="lbl-max-rounds">3</span>
+          </span>
+          <span class="meta-item">
+            <strong>Quorum:</strong> <span id="lbl-quorum">2</span> min
+          </span>
+          <span class="meta-item">
+            <strong>Harnesses:</strong> <span id="lbl-harness-info">Codex · Antigravity · Cursor</span>
+          </span>
         </div>
-      </div>
+      </section>
 
-      <div id="walkthrough-tabs" class="tabs-row"></div>
-      <p id="walkthrough-desc" class="intro-copy"></p>
-      <div id="walkthrough-steps" class="steps-row"></div>
-    </section>
-
-    <!-- 3. Motion Graph 1: State Machine Topology & "What Comes Next" -->
-    <section class="surface-card" aria-labelledby="heading-topology">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:12px; margin-bottom:10px;">
-        <h2 id="heading-topology" style="margin:0;">State Machine Topology &amp; What Comes Next</h2>
-        <div style="font-size:12px; color:var(--text-secondary); display:flex; gap:16px; flex-wrap:wrap;">
-          <span style="color:var(--green);">Green Arrow: Last Transition Traversed</span>
-          <span style="color:var(--accent);">Animated Cyan Arrow: Unlocked Next Step</span>
-          <span style="color:var(--amber);">Dashed Amber Arrow: Guard Waiting</span>
-        </div>
-      </div>
-
-      <div class="graph-stage">
-        <svg id="state-machine-svg" viewBox="0 0 1120 285" width="100%" height="265" role="img" aria-label="State machine transition graph"></svg>
-      </div>
-
-      <div id="next-transitions-strip" class="next-grid"></div>
-    </section>
-
-    <!-- 4. Motion Graph 2: Live Causal Dependency Graph (Seats -> Proofs -> Clauses -> Objections) -->
-    <section class="surface-card" aria-labelledby="heading-dependencies">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:12px; margin-bottom:10px;">
-        <h2 id="heading-dependencies" style="margin:0;">Causal Dependency Flow (Seats → Proofs → Judge Clauses → Objections)</h2>
-        <div style="font-size:12px; color:var(--text-secondary);">
-          Every Candidate Clause must have incoming green dependency arrows from Judge-admitted Proofs; open Objections block Consensus.
-        </div>
-      </div>
-
-      <div class="graph-stage">
-        <svg id="causal-dependency-svg" viewBox="0 0 1120 260" width="100%" style="min-height:240px;" role="img" aria-label="Artifact dependency graph"></svg>
-      </div>
-    </section>
-
-    <!-- 5. Detailed Real-Time Seat Cards & Deliberation Records -->
-    <section class="surface-card" aria-labelledby="heading-observer">
-      <h2 id="heading-observer">Live Seat Telemetry &amp; Deliberation Artifacts</h2>
-      <div class="observer-columns">
-        <div>
-          <h3>Active Council Roster (Round <span id="lbl-round">0</span>/<span id="lbl-max-rounds">3</span>)</h3>
-          <div id="seats-grid" class="seats-grid"></div>
+      <!-- 3. Answer-First Section (Guaranteed Above Fold on 1440x900) -->
+      <section class="surface-card" aria-labelledby="heading-answer" style="margin-top:16px;">
+        <div class="panel-header" style="margin-bottom:12px;">
+          <h2 id="heading-answer">Deliberation Verdict &amp; Proof-Backed Synthesis</h2>
+          <span id="lbl-verdict-status" class="badge badge-running">EVALUATING</span>
         </div>
 
-        <div class="stack-list" id="artifacts-scope">
-          <div>
-            <h3>Topic Handoff &amp; Shared Clarifications</h3>
-            <div id="topic-box" class="record-item"></div>
+        <div class="answer-grid">
+          <!-- Left Column: Verdict & Synthesis -->
+          <div class="verdict-panel">
+            <div id="verdict-box" class="verdict-banner running">
+              <div id="verdict-title" class="verdict-title">Deliberation in Progress</div>
+              <div id="verdict-body" class="verdict-body">Gathering structured evidence and testing hypotheses across multi-model participant seats.</div>
+            </div>
+
+            <div class="synthesis-card">
+              <div class="synthesis-title">Judge Candidate Synthesis (Proof-Bound)</div>
+              <div id="synthesis-text" class="synthesis-content">Awaiting initial proof collection before candidate synthesis can begin.</div>
+            </div>
+
+            <div id="transition-banner" class="transition-status" role="status" aria-live="polite">
+              <span id="transition-text">Deliberation engine connected. Awaiting state transitions.</span>
+            </div>
           </div>
 
-          <div>
-            <h3>Judge-Synthesized Candidate (Proof-Bound)</h3>
-            <div id="candidate-box" class="record-item"></div>
-          </div>
+          <!-- Right Column: Clauses & Objections -->
+          <div class="clauses-panel">
+            <div class="panel-header">
+              <h2>Candidate Clauses</h2>
+              <span id="lbl-clauses-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 clauses</span>
+            </div>
 
-          <div>
-            <h3>Submitted Proofs (<code>check</code> | <code>citation</code> | <code>benchmark</code> | <code>derivation</code>)</h3>
-            <div id="proofs-list" class="stack-list"></div>
-          </div>
+            <div id="clauses-list" class="clauses-list">
+              <div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>
+            </div>
 
-          <div>
-            <h3>Seat-Owned Objections &amp; Final Verdict</h3>
-            <div id="objections-list" class="stack-list"></div>
-            <div id="verdict-box" style="margin-top:10px;"></div>
+            <div class="objections-box">
+              <div class="panel-header">
+                <h2>Open Objections</h2>
+                <span id="lbl-objs-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 open</span>
+              </div>
+              <div id="objections-list">
+                <div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 6. Free-Play Interactive Controls -->
-    <section class="surface-card" aria-labelledby="heading-freeplay">
-      <h2 id="heading-freeplay">Free-Play Controls (Push Any Transition or Guard)</h2>
-      <div class="freeplay-grid">
-        <div class="control-group">
-          <h3>Phase Transitions</h3>
-          <div style="display:flex; flex-wrap:wrap; gap:6px;">
-            <button onclick="dispatchUI({ type: 'START_CLARIFYING' })">Start Clarifying</button>
-            <button onclick="dispatchUI({ type: 'BEGIN_ROUND' })">Begin Round</button>
-            <button onclick="dispatchUI({ type: 'START_JUDGING' })">Start Judging</button>
-            <button onclick="dispatchUI({ type: 'EVALUATE_ROUND' })">Evaluate Round</button>
-          </div>
-          <label for="fp-clar-answer" style="font-size:12px; color:var(--text-secondary);">Clarification Answer:</label>
-          <input id="fp-clar-answer" value="Compare across Server, Gaming, and Mobile/UNIX Workstation workloads." />
-          <button onclick="dispatchUI({ type: 'PUBLISH_CLARIFICATION', answer: val('fp-clar-answer') })">Publish Shared Answer</button>
+      <!-- 4. Council Roster & Participant Telemetry -->
+      <section class="surface-card" aria-labelledby="heading-roster" style="margin-top:16px;">
+        <div class="panel-header">
+          <h2 id="heading-roster">Active Council Roster &amp; Live Telemetry</h2>
+          <span id="lbl-roster-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 seats</span>
+        </div>
+        <div id="seats-grid" class="roster-grid"></div>
+      </section>
+
+      <!-- 5. Deliberation Graphs (State Machine Flow & Causal DAG) -->
+      <section class="surface-card" aria-labelledby="heading-graphs" style="margin-top:16px;">
+        <div class="tabs-header">
+          <button id="btn-tab-topology" class="active" onclick="switchGraphTab('topology')">State Machine Flow</button>
+          <button id="btn-tab-causal" onclick="switchGraphTab('causal')">Causal Dependency DAG</button>
         </div>
 
-        <div class="control-group">
-          <h3>Add Dynamic Seat (Harness + Soul)</h3>
-          <input id="fp-seat-id" aria-label="Seat ID" value="astra-contrarian" />
-          <div style="display:flex; gap:6px;">
-            <select id="fp-seat-harness" aria-label="Harness">
-              <option value="codex">codex</option>
-              <option value="antigravity">antigravity</option>
-              <option value="cursor">cursor</option>
-            </select>
-            <input id="fp-seat-model" aria-label="Model" value="gpt-6-astra (max)" />
-          </div>
-          <input id="fp-seat-soul" aria-label="Seat Soul" value="Contrarian stress-tester; demands reproducible benchmarks." />
-          <button onclick="dispatchUI({ type: 'ADD_SEAT', seat: { id: val('fp-seat-id'), harness: val('fp-seat-harness'), model: val('fp-seat-model'), soul: val('fp-seat-soul') } })">Add Seat to Roster</button>
+        <div id="stage-topology" class="graph-stage">
+          <svg id="state-machine-svg" viewBox="0 0 1120 285" width="100%" height="265" role="img" aria-label="State machine transition graph"></svg>
         </div>
 
-        <div class="control-group">
-          <h3>Submit Proof or Trigger Quota Fault</h3>
-          <select id="fp-proof-seat" aria-label="Proof Seat"></select>
-          <div style="display:flex; gap:6px;">
-            <select id="fp-proof-kind" aria-label="Proof Kind">
-              <option value="benchmark">benchmark</option>
-              <option value="citation">citation</option>
-              <option value="check">check</option>
-              <option value="derivation">derivation</option>
-            </select>
-            <input id="fp-proof-scope" aria-label="Proof Scope" value="Server workloads" />
-          </div>
-          <input id="fp-proof-source" aria-label="Proof Source" value="https://kernel.org / namespaces + cgroups v2" />
-          <input id="fp-proof-stmt" aria-label="Proof Statement" value="Linux dominates container servers due to native kernel namespaces." />
-          <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button onclick="dispatchUI({ type: 'SUBMIT_PROOF', seatId: val('fp-proof-seat'), scope: val('fp-proof-scope'), kind: val('fp-proof-kind'), source: val('fp-proof-source'), statement: val('fp-proof-stmt') })">Submit Proof</button>
-            <button class="danger" onclick="dispatchUI({ type: 'SEAT_FAULT', seatId: val('fp-proof-seat'), reason: 'Weekly quota reached' })">Trigger Quota Fault</button>
-          </div>
+        <div id="stage-causal" class="graph-stage" style="display:none;">
+          <svg id="causal-dependency-svg" viewBox="0 0 1120 260" width="100%" style="min-height:240px;" role="img" aria-label="Causal artifact dependency graph"></svg>
         </div>
+      </section>
 
-        <div class="control-group">
-          <h3>Confirming Vote &amp; Quota Recovery</h3>
-          <select id="fp-vote-seat" aria-label="Vote Seat"></select>
-          <input id="fp-obj-reason" aria-label="Objection Reason" value="Missing immutable server Linux distinction." />
-          <input id="fp-obj-proof-id" aria-label="Objection Proof ID" value="P1" />
-          <div style="display:flex; flex-wrap:wrap; gap:6px;">
-            <button onclick="dispatchUI({ type: 'CAST_VOTE', seatId: val('fp-vote-seat'), vote: 'accept' })">Vote Accept</button>
-            <button onclick="dispatchUI({ type: 'CAST_VOTE', seatId: val('fp-vote-seat'), vote: 'object', reason: val('fp-obj-reason'), proofId: val('fp-obj-proof-id') })">Raise Objection</button>
-            <button onclick="dispatchUI({ type: 'RETRY_SEAT', seatId: val('fp-vote-seat') })">Retry Faulted Seat</button>
-            <button class="danger" onclick="dispatchUI({ type: 'EXCUSE_SEAT', seatId: val('fp-vote-seat') })">Excuse Seat</button>
-          </div>
+      <!-- 6. Chronological Deliberation Timeline -->
+      <section class="surface-card" aria-labelledby="heading-timeline" style="margin-top:16px;">
+        <div class="panel-header">
+          <h2 id="heading-timeline">Deliberation Activity Timeline</h2>
+          <button onclick="restoreLatestSnapshot()" style="font-size:11px; padding:3px 8px;">Jump to Latest</button>
         </div>
-      </div>
-
-      <div style="margin-top:16px;">
-        <h3>Transition &amp; Guard Audit Trail</h3>
-        <div id="audit-log" class="audit-log"></div>
-      </div>
-    </section>
+        <div id="timeline-list" class="timeline-list"></div>
+      </section>
+    </main>
   </div>
 
   <!-- Load Portable Modules & Latest Live Run -->
   <script src="./live-run-latest.js" onerror="/* optional: created on first live run */"></script>
-  <script src="./council-machine.js"></script>
-  <script src="./council-walkthroughs.js"></script>
   <script src="./council-visualizer.js"></script>
 
   <script>
-    const BASE_WALKTHROUGHS = CouncilWalkthroughs.WALKTHROUGHS;
-    let WALKTHROUGHS = [...BASE_WALKTHROUGHS];
-    let activeWalkthroughIdx = 0;
-    let currentStepIdx = 0;
-    let autoPlayTimer = null;
-    let liveFollowTimer = null;
+    'use strict';
 
-    function syncLiveRunWalkthrough() {
-      const liveRun = (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
-                      (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun);
-      if (liveRun) {
-        const existingIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
-        const liveEntry = {
-          id: 'wt-live-latest',
-          title: '🔴 Latest Live Run' + (liveRun.initialConfig && liveRun.initialConfig.topic ? ': ' + liveRun.initialConfig.topic : ''),
-          description: liveRun.description || ('Real-time observer stream for live deliberation: ' + (liveRun.initialConfig && liveRun.initialConfig.topic ? liveRun.initialConfig.topic : 'Deliberation')),
-          initialConfig: liveRun.initialConfig || {},
-          steps: liveRun.steps || [],
-          currentState: liveRun.currentState,
-          isRunning: liveRun.isRunning,
-          updatedAt: liveRun.updatedAt
-        };
-        if (existingIdx >= 0) {
-          WALKTHROUGHS[existingIdx] = liveEntry;
-        } else {
-          WALKTHROUGHS.unshift(liveEntry);
-        }
+    let liveFollowTimer = null;
+    let elapsedTimer = null;
+    let startTime = Date.now();
+    let currentStepIdx = -1;
+    let activeGraphTab = 'topology';
+
+    // Format structured soul cleanly without [object Object]
+    function formatSoul(soul) {
+      if (!soul) return '';
+      if (typeof soul === 'string') return soul;
+      if (typeof soul === 'object') {
+        const name = soul.name || '';
+        const lens = soul.lens || '';
+        if (name && lens) return name + ' · ' + lens;
+        if (name) return name;
+        if (lens) return lens;
+        if (soul.temperament) return String(soul.temperament);
+        try { return JSON.stringify(soul); } catch { return String(soul); }
       }
+      return String(soul);
     }
 
-    syncLiveRunWalkthrough();
+    function renderSoulCardHtml(soul, esc) {
+      if (!soul) return '';
+      if (typeof soul === 'string') {
+        return '<div class="soul-block">' + esc(soul) + '</div>';
+      }
+      if (typeof soul === 'object') {
+        return (
+          '<div class="soul-block">' +
+            '<span class="soul-name">' + esc(soul.name || 'Participant') + '</span>' +
+            (soul.lens ? '<span class="soul-lens"> · ' + esc(soul.lens) + '</span>' : '') +
+          '</div>'
+        );
+      }
+      return '<div class="soul-block">' + esc(String(soul)) + '</div>';
+    }
+
+    function getLiveRun() {
+      return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
+             (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
+    }
 
     let councilState = (function () {
-      const liveRun = (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
-                      (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun);
-      if (liveRun && liveRun.currentState) {
-        return liveRun.currentState;
-      }
-      return CouncilMachine.createInitialCouncilState(WALKTHROUGHS[0].initialConfig);
+      const liveRun = getLiveRun();
+      return (liveRun && liveRun.currentState) ? liveRun.currentState : null;
     })();
 
-    if (WALKTHROUGHS[0] && WALKTHROUGHS[0].id === 'wt-live-latest' && WALKTHROUGHS[0].steps) {
-      currentStepIdx = WALKTHROUGHS[0].steps.length;
-    }
-
-    function val(id) {
-      const el = document.getElementById(id);
-      return el ? el.value : '';
-    }
-
-    function selectWalkthrough(idx) {
-      stopAutoPlay();
-      activeWalkthroughIdx = idx;
-      const wt = WALKTHROUGHS[idx];
-      if (wt && wt.id === 'wt-live-latest' && wt.currentState) {
-        councilState = wt.currentState;
-        currentStepIdx = (wt.steps || []).length;
-      } else if (wt) {
-        currentStepIdx = 0;
-        councilState = CouncilMachine.createInitialCouncilState(wt.initialConfig);
-      }
-      renderAll();
-    }
-
-    function resetCurrentWalkthrough() {
-      selectWalkthrough(activeWalkthroughIdx);
-    }
-
-    function runWalkthroughStep(stepIdx) {
-      const wt = WALKTHROUGHS[activeWalkthroughIdx];
-      if (!wt || !wt.steps[stepIdx]) return;
-      const step = wt.steps[stepIdx];
-      if (wt.id === 'wt-live-latest' && step.stateSnapshot) {
-        councilState = step.stateSnapshot;
-      } else if (step.multiEvents) {
-        step.multiEvents.forEach(function (ev) {
-          councilState = CouncilMachine.transitionCouncil(councilState, ev);
-        });
-      } else if (step.event) {
-        councilState = CouncilMachine.transitionCouncil(councilState, step.event);
-      }
-      currentStepIdx = stepIdx + 1;
-      renderAll();
-    }
-
-    function toggleAutoPlay() {
-      stopLiveFollow();
-      if (autoPlayTimer) {
-        stopAutoPlay();
-        renderAll();
-        return;
-      }
-      const wt = WALKTHROUGHS[activeWalkthroughIdx];
-      if (currentStepIdx >= wt.steps.length) {
-        currentStepIdx = 0;
-        councilState = CouncilMachine.createInitialCouncilState(wt.initialConfig);
-      }
-      document.getElementById('btn-autoplay-label').textContent = 'Pause Real-Time Stream';
-      document.getElementById('stream-badge').textContent = 'LIVE OBSERVER STREAMING';
-      autoPlayTimer = setInterval(function () {
-        const currentWt = WALKTHROUGHS[activeWalkthroughIdx];
-        if (currentStepIdx < currentWt.steps.length) {
-          runWalkthroughStep(currentStepIdx);
-        } else {
-          stopAutoPlay();
-          renderAll();
-        }
-      }, 1100);
-    }
-
-    function stopAutoPlay() {
-      if (autoPlayTimer) {
-        clearInterval(autoPlayTimer);
-        autoPlayTimer = null;
-      }
-      const lbl = document.getElementById('btn-autoplay-label');
-      if (lbl) lbl.textContent = 'Auto-Play Real-Time Stream';
-      const badge = document.getElementById('stream-badge');
-      if (badge && !liveFollowTimer) badge.textContent = '';
+    function switchGraphTab(tab) {
+      activeGraphTab = tab;
+      document.getElementById('btn-tab-topology').classList.toggle('active', tab === 'topology');
+      document.getElementById('btn-tab-causal').classList.toggle('active', tab === 'causal');
+      document.getElementById('stage-topology').style.display = tab === 'topology' ? 'block' : 'none';
+      document.getElementById('stage-causal').style.display = tab === 'causal' ? 'block' : 'none';
     }
 
     function toggleLiveFollow() {
       if (liveFollowTimer) {
         stopLiveFollow();
-        renderAll();
-        return;
+      } else {
+        startLiveFollow();
       }
-      stopAutoPlay();
-      syncLiveRunWalkthrough();
-      const liveIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
-      if (liveIdx >= 0) {
-        selectWalkthrough(liveIdx);
-      }
+    }
 
-      const btnLabel = document.getElementById('btn-live-follow-label');
-      if (btnLabel) btnLabel.textContent = 'Live Follow: ON (1s)';
+    function startLiveFollow() {
       const btn = document.getElementById('btn-live-follow');
+      const lbl = document.getElementById('btn-live-follow-label');
       if (btn) btn.classList.add('active');
-      const badge = document.getElementById('stream-badge');
-      if (badge) badge.textContent = '⚡ LIVE FOLLOW ACTIVE (file:// auto-sync)';
+      if (lbl) lbl.textContent = 'Live Follow: ON (1s)';
+      document.getElementById('stream-badge').textContent = '⚡ LIVE SYNC';
 
       pollLiveRun();
       liveFollowTimer = setInterval(pollLiveRun, 1000);
@@ -727,12 +776,11 @@
         clearInterval(liveFollowTimer);
         liveFollowTimer = null;
       }
-      const btnLabel = document.getElementById('btn-live-follow-label');
-      if (btnLabel) btnLabel.textContent = 'Live Follow: OFF';
       const btn = document.getElementById('btn-live-follow');
+      const lbl = document.getElementById('btn-live-follow-label');
       if (btn) btn.classList.remove('active');
-      const badge = document.getElementById('stream-badge');
-      if (badge && !autoPlayTimer) badge.textContent = '';
+      if (lbl) lbl.textContent = 'Live Follow: OFF';
+      document.getElementById('stream-badge').textContent = '';
     }
 
     function pollLiveRun() {
@@ -747,13 +795,10 @@
 
       script.onload = function () {
         script.remove();
-        syncLiveRunWalkthrough();
-        const liveIdx = WALKTHROUGHS.findIndex(function (w) { return w.id === 'wt-live-latest'; });
-        if (liveIdx >= 0) {
-          const liveWt = WALKTHROUGHS[liveIdx];
-          if (activeWalkthroughIdx === liveIdx && liveWt.currentState) {
-            councilState = liveWt.currentState;
-            currentStepIdx = (liveWt.steps || []).length;
+        const liveRun = getLiveRun();
+        if (liveRun && liveRun.currentState) {
+          if (currentStepIdx === -1 || currentStepIdx === (liveRun.steps || []).length - 1) {
+            councilState = liveRun.currentState;
           }
         }
         renderAll();
@@ -766,198 +811,240 @@
       document.head.appendChild(script);
     }
 
-    function dispatchUI(event) {
-      stopAutoPlay();
-      stopLiveFollow();
-      councilState = CouncilMachine.transitionCouncil(councilState, event);
+    function inspectStep(idx) {
+      const liveRun = getLiveRun();
+      if (!liveRun || !liveRun.steps || !liveRun.steps[idx]) return;
+      currentStepIdx = idx;
+      if (liveRun.steps[idx].stateSnapshot) {
+        councilState = liveRun.steps[idx].stateSnapshot;
+      }
       renderAll();
     }
 
-    function renderAll() {
-      const graph = CouncilMachine.getDependencyAndStateGraph(councilState);
-      const esc = CouncilVisualizer.escapeHtml;
-
-      // 1. Update Animated State Machine SVG & Causal Dependency SVG
-      CouncilVisualizer.renderStateMachineSVG(
-        document.getElementById('state-machine-svg'),
-        councilState,
-        graph
-      );
-      CouncilVisualizer.renderCausalDependencySVG(
-        document.getElementById('causal-dependency-svg'),
-        councilState,
-        graph
-      );
-
-      // 2. Render "What Comes Next" Outgoing Transitions Strip
-      const nextStrip = document.getElementById('next-transitions-strip');
-      if (graph.outgoingEdges.length === 0) {
-        nextStrip.innerHTML =
-          '<div class="next-item unlocked">' +
-            '<strong>Terminal State Reached (completed)</strong>' +
-            '<div style="color:var(--text-secondary); margin-top:4px;">Verdict emitted. Reset scenario or switch walkthroughs to explore another run.</div>' +
-          '</div>';
-      } else {
-        nextStrip.innerHTML = graph.outgoingEdges.map(function (edge) {
-          return (
-            '<div class="next-item ' + (edge.unlocked ? 'unlocked' : 'locked') + '">' +
-              '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-                '<strong>Next: ' + esc(edge.from) + ' → ' + esc(edge.to) + '</strong>' +
-                '<span class="badge" style="background:' + (edge.unlocked ? 'var(--accent-soft)' : 'var(--amber-soft)') + '; color:' + (edge.unlocked ? 'var(--accent)' : 'var(--amber)') + ';">' +
-                  (edge.unlocked ? 'UNLOCKED' : 'GUARD WAIT') +
-                '</span>' +
-              '</div>' +
-              '<div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">Event: <code>' + esc(edge.event) + '</code></div>' +
-              '<div style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Prerequisite: ' + esc(edge.dynamicReason) + '</div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      // 3. Status Banner
-      const banner = document.getElementById('transition-banner');
-      banner.className = 'transition-banner ' + (councilState.lastTransition.ok ? 'ok' : 'rejected');
-      document.getElementById('transition-text').textContent = councilState.lastTransition.message;
-
-      // 4. Walkthrough Tabs & Step Buttons
-      document.getElementById('walkthrough-tabs').innerHTML = WALKTHROUGHS.map(function (wt, i) {
-        return '<button class="tab-btn ' + (i === activeWalkthroughIdx ? 'active' : '') + '" onclick="selectWalkthrough(' + i + ')">' + esc(wt.title) + '</button>';
-      }).join('');
-
-      const wt = WALKTHROUGHS[activeWalkthroughIdx];
-      document.getElementById('walkthrough-desc').textContent = wt.description;
-      document.getElementById('walkthrough-steps').innerHTML = wt.steps.map(function (st, i) {
-        const cls = i < currentStepIdx ? 'step-btn done-step' : (i === currentStepIdx ? 'step-btn current-step' : 'step-btn');
-        return '<button class="' + cls + '" onclick="runWalkthroughStep(' + i + ')">' + esc(st.label) + '</button>';
-      }).join('');
-
-      // 5. Scoped Component Update for Seats Grid & Artifacts
-      document.getElementById('lbl-round').textContent = councilState.round;
-      document.getElementById('lbl-max-rounds').textContent = councilState.maxRounds;
-
-      const seatsGrid = document.getElementById('seats-grid');
-      CouncilVisualizer.runScopedTransition(seatsGrid, function () {
-        const j = councilState.judge;
-        const judgeCard =
-          '<div class="seat-card status-' + esc(j.status) + '">' +
-            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-              '<strong>Judge: ' + esc(j.id) + '</strong>' +
-              '<span class="badge harness-' + esc(j.harness) + '">' + esc(j.harness) + '</span>' +
-            '</div>' +
-            '<div style="font-size:12px; font-family:var(--mono); color:var(--text-secondary);">' + esc(j.model) + ' · non-voting</div>' +
-            '<div style="font-size:12px; color:var(--text-secondary);">' + esc(j.soul) + '</div>' +
-            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); gap:8px;">' +
-              '<span style="color:var(--accent);">Status: ' + esc(j.status.toUpperCase()) + '</span>' +
-              (j.faultReason ? '<span style="color:var(--red);">' + esc(j.faultReason) + '</span>' : '') +
-            '</div>' +
-          '</div>';
-
-        const seatCards = councilState.seats.map(function (s) {
-          const seatFaultNote = s.excusedReason || s.faultReason;
-          return (
-            '<div class="seat-card status-' + esc(s.status) + '">' +
-              '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-                '<strong>' + esc(s.id) + '</strong>' +
-                '<span class="badge harness-' + esc(s.harness) + '">' + esc(s.harness) + '</span>' +
-              '</div>' +
-              '<div style="font-size:12px; font-family:var(--mono); color:var(--text-secondary);">' + esc(s.model) + ' · retries ' + s.retries + '/' + councilState.maxRetriesPerSeat + '</div>' +
-              '<div style="font-size:12px; color:var(--text-secondary);">' + esc(s.soul) + '</div>' +
-              '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); gap:8px;">' +
-                '<span style="color:var(--accent);">Status: ' + esc(s.status.toUpperCase()) + '</span>' +
-                (seatFaultNote ? '<span style="color:var(--red);">' + esc(seatFaultNote) + '</span>' : '') +
-              '</div>' +
-            '</div>'
-          );
-        }).join('');
-
-        seatsGrid.innerHTML = judgeCard + seatCards;
-      });
-
-      // 6. Topic, Candidate, Proofs, Objections, Verdict
-      const clars = councilState.clarifications.map(function (c) {
-        return '<div style="margin-top:6px; font-size:12px; color:var(--accent);"><strong>Batch ' + c.batch + ' Shared Answer:</strong> ' + esc(c.answer) + '</div>';
-      }).join('');
-      document.getElementById('topic-box').innerHTML = '<strong>Topic:</strong> ' + esc(councilState.topic) + clars;
-
-      const candBox = document.getElementById('candidate-box');
-      if (!councilState.candidate) {
-        candBox.innerHTML = '<span style="color:var(--text-secondary);">No Candidate synthesized yet.</span>';
-      } else {
-        const clausesHtml = councilState.candidate.clauses.map(function (cl) {
-          return (
-            '<div style="margin-top:8px; padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:8px;">' +
-              '<strong>' + esc(cl.id) + ' — WHEN [' + esc(cl.context) + ']:</strong> ' + esc(cl.conclusion) +
-              ' <span class="badge" style="background:var(--green-soft); color:var(--green);">Cites: ' + esc(cl.citedProofIds.join(', ')) + '</span>' +
-            '</div>'
-          );
-        }).join('');
-        candBox.innerHTML = '<div><strong>Round ' + councilState.candidate.round + ' Summary:</strong> ' + esc(councilState.candidate.summary) + '</div>' + clausesHtml;
-      }
-
-      const proofsEl = document.getElementById('proofs-list');
-      if (councilState.proofs.length === 0) {
-        proofsEl.innerHTML = '<div class="record-item" style="color:var(--text-secondary);">No Proofs submitted yet.</div>';
-      } else {
-        proofsEl.innerHTML = councilState.proofs.map(function (p) {
-          return (
-            '<div class="record-item ' + esc(p.status) + '">' +
-              '<div style="display:flex; justify-content:space-between;">' +
-                '<strong>' + esc(p.id) + ' [' + esc(p.kind.toUpperCase()) + '] by ' + esc(p.seatId) + ' (Round ' + p.round + ')</strong>' +
-                '<span class="badge">' + esc(p.status.toUpperCase()) + '</span>' +
-              '</div>' +
-              '<div style="font-size:12px; color:var(--accent); margin-top:2px;">Scope: ' + esc(p.scope) + ' · Source: ' + esc(p.source) + '</div>' +
-              '<div style="margin-top:4px;">' + esc(p.statement) + '</div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      const objsEl = document.getElementById('objections-list');
-      if (councilState.objections.length === 0) {
-        objsEl.innerHTML = '<div class="record-item" style="color:var(--text-secondary);">No Objections raised.</div>';
-      } else {
-        objsEl.innerHTML = councilState.objections.map(function (o) {
-          const cls = o.status === 'preserved_excused' ? 'objection-excused' : (o.status === 'open' ? 'objection-open' : '');
-          return (
-            '<div class="record-item ' + cls + '">' +
-              '<div style="display:flex; justify-content:space-between;">' +
-                '<strong>' + esc(o.id) + ' · Owner: ' + esc(o.seatId) + ' (Backed by ' + esc(o.proofId) + ')</strong>' +
-                '<span class="badge">' + esc(o.status.toUpperCase()) + '</span>' +
-              '</div>' +
-              '<div style="margin-top:4px;">' + esc(o.reason) + '</div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      const vBox = document.getElementById('verdict-box');
-      if (!councilState.verdict) {
-        vBox.innerHTML = '';
-      } else {
-        const v = councilState.verdict;
-        const isConsensus = v.kind === 'Unanimous Consensus';
-        vBox.innerHTML =
-          '<div class="record-item" style="border-color:' + (isConsensus ? 'var(--green)' : 'var(--amber)') + '; background:' + (isConsensus ? 'var(--green-soft)' : 'var(--amber-soft)') + ';">' +
-            '<div style="font-weight:700; font-size:15px;">Verdict: ' + esc(v.kind) + '</div>' +
-            '<div style="margin-top:4px;">' + esc(v.note) + '</div>' +
-          '</div>';
-      }
-
-      // 7. Free-Play Seat Dropdowns
-      const seatOpts = councilState.seats.map(function (s) {
-        return '<option value="' + esc(s.id) + '">' + esc(s.id) + ' (' + esc(s.harness) + ' - ' + esc(s.status) + ')</option>';
-      }).join('');
-      const proofSeatSel = document.getElementById('fp-proof-seat');
-      const voteSeatSel = document.getElementById('fp-vote-seat');
-      if (proofSeatSel) proofSeatSel.innerHTML = seatOpts;
-      if (voteSeatSel) voteSeatSel.innerHTML = seatOpts;
-
-      // 8. Audit Log
-      document.getElementById('audit-log').innerHTML = councilState.history.map(function (h) {
-        return '<div class="log-row ' + (h.indexOf('[REJECTED]') === 0 ? 'err' : '') + '">' + esc(h) + '</div>';
-      }).join('');
+    function restoreLatestSnapshot() {
+      const liveRun = getLiveRun();
+      if (!liveRun || !liveRun.currentState) return;
+      currentStepIdx = -1;
+      councilState = liveRun.currentState;
+      renderAll();
     }
 
+    function updateElapsedTimer() {
+      const liveRun = getLiveRun();
+      let elapsedMs = 0;
+      if (liveRun && liveRun.updatedAt) {
+        elapsedMs = Math.max(0, Date.now() - startTime);
+      }
+      const sec = Math.floor(elapsedMs / 1000) % 60;
+      const min = Math.floor(elapsedMs / 60000);
+      const str = String(min).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+      const el = document.getElementById('lbl-elapsed');
+      if (el) el.textContent = str;
+    }
+
+    function renderAll() {
+      const liveRun = getLiveRun();
+      const esc = (CouncilVisualizer && CouncilVisualizer.escapeHtml) || function (s) { return String(s || ''); };
+
+      if (!councilState) {
+        document.getElementById('heading-topic').textContent = 'Waiting for live deliberation to start...';
+        return;
+      }
+
+      // 1. Topic Header & Metadata
+      document.getElementById('heading-topic').textContent = councilState.topic || 'Deliberation Run';
+      document.getElementById('lbl-phase').textContent = councilState.phase || 'preflight';
+      document.getElementById('lbl-round').textContent = councilState.round ?? 0;
+      document.getElementById('lbl-max-rounds').textContent = councilState.maxRounds ?? 3;
+      document.getElementById('lbl-quorum').textContent = councilState.minQuorum ?? 2;
+
+      // 2. Status Badge & Timer
+      const isRunning = liveRun ? Boolean(liveRun.isRunning) : (councilState.phase !== 'completed');
+      const statusPill = document.getElementById('status-pill');
+      const statusPillText = document.getElementById('status-pill-text');
+      const verdictStatusPill = document.getElementById('lbl-verdict-status');
+
+      if (isRunning) {
+        statusPill.className = 'badge badge-running';
+        statusPillText.textContent = 'RUNNING: ' + String(councilState.phase || '').toUpperCase();
+        verdictStatusPill.className = 'badge badge-running';
+        verdictStatusPill.textContent = 'DELIBERATING';
+      } else {
+        const isConsensus = councilState.verdict && councilState.verdict.kind === 'Unanimous Consensus';
+        const badgeCls = isConsensus ? 'badge badge-completed' : 'badge badge-failed';
+        statusPill.className = badgeCls;
+        statusPillText.textContent = isConsensus ? 'COMPLETED: CONSENSUS' : 'COMPLETED: DISSENT';
+        verdictStatusPill.className = badgeCls;
+        verdictStatusPill.textContent = isConsensus ? 'CONSENSUS REACHED' : 'DISSENT REPORT';
+      }
+
+      // 3. Verdict Banner & Synthesis Card
+      const vBox = document.getElementById('verdict-box');
+      const vTitle = document.getElementById('verdict-title');
+      const vBody = document.getElementById('verdict-body');
+
+      if (councilState.verdict) {
+        const v = councilState.verdict;
+        const isConsensus = v.kind === 'Unanimous Consensus';
+        vBox.className = 'verdict-banner ' + (isConsensus ? 'consensus' : 'dissent');
+        vTitle.textContent = 'Verdict: ' + v.kind;
+        vBody.textContent = v.note || 'Deliberation reached conclusion.';
+      } else {
+        vBox.className = 'verdict-banner running';
+        vTitle.textContent = 'Deliberation in Progress (Round ' + councilState.round + ')';
+        vBody.textContent = 'Seats are submitting proofs and testing claims. Working synthesis will update below.';
+      }
+
+      const synEl = document.getElementById('synthesis-text');
+      if (councilState.candidate && councilState.candidate.summary) {
+        synEl.textContent = councilState.candidate.summary;
+      } else {
+        synEl.textContent = 'No Candidate synthesized yet for Round ' + councilState.round + '.';
+      }
+
+      // Transition Status
+      const transText = document.getElementById('transition-text');
+      if (councilState.lastTransition && councilState.lastTransition.message) {
+        transText.textContent = councilState.lastTransition.message;
+      } else if (councilState.history && councilState.history.length > 0) {
+        transText.textContent = councilState.history[0];
+      }
+
+      // 4. Candidate Clauses
+      const clausesList = document.getElementById('clauses-list');
+      const clauses = (councilState.candidate && councilState.candidate.clauses) ? councilState.candidate.clauses : [];
+      document.getElementById('lbl-clauses-count').textContent = clauses.length + ' clause' + (clauses.length === 1 ? '' : 's');
+
+      if (clauses.length === 0) {
+        clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
+      } else {
+        clausesList.innerHTML = clauses.map(function (cl) {
+          const cites = (cl.citedProofIds && cl.citedProofIds.length > 0)
+            ? '<span class="badge" style="background:var(--green-soft); color:var(--green);">Cites: ' + esc(cl.citedProofIds.join(', ')) + '</span>'
+            : '';
+          return (
+            '<div class="clause-card">' +
+              '<div class="clause-head">' +
+                '<span class="clause-id">' + esc(cl.id) + '</span>' +
+                cites +
+              '</div>' +
+              '<div class="clause-body"><strong>WHEN [' + esc(cl.context) + ']:</strong> ' + esc(cl.conclusion) + '</div>' +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      // Objections
+      const objsList = document.getElementById('objections-list');
+      const openObjs = (councilState.objections || []).filter(function (o) { return o.status !== 'withdrawn'; });
+      document.getElementById('lbl-objs-count').textContent = openObjs.length + ' open';
+
+      if (openObjs.length === 0) {
+        objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
+      } else {
+        objsList.innerHTML = openObjs.map(function (o) {
+          const isLocked = o.status === 'preserved_excused';
+          return (
+            '<div class="objection-card ' + (isLocked ? 'locked' : '') + '">' +
+              '<div style="display:flex; justify-content:space-between; font-weight:700;">' +
+                '<span>' + esc(o.id) + ' · ' + esc(o.seatId) + '</span>' +
+                '<span class="badge" style="color:' + (isLocked ? 'var(--red)' : 'var(--amber)') + ';">' + (isLocked ? 'LOCKED' : 'OPEN') + '</span>' +
+              '</div>' +
+              '<div style="margin-top:4px; color:var(--text);">' + esc(o.reason) + '</div>' +
+              '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Backed by Proof: ' + esc(o.proofId) + '</div>' +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      // 5. Council Roster Cards
+      const seatsGrid = document.getElementById('seats-grid');
+      const seats = councilState.seats || [];
+      const judge = councilState.judge;
+      document.getElementById('lbl-roster-count').textContent = (seats.length + (judge ? 1 : 0)) + ' members';
+
+      let judgeHtml = '';
+      if (judge) {
+        judgeHtml =
+          '<div class="participant-card status-' + esc(judge.status) + '">' +
+            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+              '<strong>Judge: ' + esc(judge.id) + '</strong>' +
+              '<span class="harness-badge harness-' + esc(judge.harness) + '">' + esc(judge.harness) + '</span>' +
+            '</div>' +
+            '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(judge.model) + ' · non-voting</div>' +
+            renderSoulCardHtml(judge.soul, esc) +
+            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+              '<span style="color:var(--accent);">Status: ' + esc((judge.status || 'idle').toUpperCase()) + '</span>' +
+              (judge.faultReason ? '<span style="color:var(--red);">' + esc(judge.faultReason) + '</span>' : '') +
+            '</div>' +
+          '</div>';
+      }
+
+      const seatsHtml = seats.map(function (s) {
+        const seatFault = s.excusedReason || s.faultReason;
+        return (
+          '<div class="participant-card status-' + esc(s.status) + '">' +
+            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+              '<strong>' + esc(s.id) + '</strong>' +
+              '<span class="harness-badge harness-' + esc(s.harness) + '">' + esc(s.harness) + '</span>' +
+            '</div>' +
+            '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (s.retries || 0) + '/' + (councilState.maxRetriesPerSeat || 1) + '</div>' +
+            renderSoulCardHtml(s.soul, esc) +
+            '<div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+              '<span style="color:var(--accent);">Status: ' + esc((s.status || 'idle').toUpperCase()) + '</span>' +
+              (seatFault ? '<span style="color:var(--red);">' + esc(seatFault) + '</span>' : '') +
+            '</div>' +
+          '</div>'
+        );
+      }).join('');
+
+      seatsGrid.innerHTML = judgeHtml + seatsHtml;
+
+      // 6. Deliberation Graphs
+      const graph = councilState.graph || (liveRun && liveRun.currentGraph) || {
+        nodes: [],
+        edges: [],
+        activeNodeId: councilState.phase,
+        outgoingEdges: [],
+        causalLinks: []
+      };
+
+      if (CouncilVisualizer) {
+        CouncilVisualizer.renderStateMachineSVG(
+          document.getElementById('state-machine-svg'),
+          councilState,
+          graph
+        );
+        CouncilVisualizer.renderCausalDependencySVG(
+          document.getElementById('causal-dependency-svg'),
+          councilState,
+          graph
+        );
+      }
+
+      // 7. Chronological Timeline
+      const timelineEl = document.getElementById('timeline-list');
+      const steps = (liveRun && liveRun.steps) ? liveRun.steps : [];
+      if (steps.length === 0 && councilState.history) {
+        timelineEl.innerHTML = councilState.history.map(function (h, i) {
+          return '<div class="timeline-row"><span class="timeline-action">' + esc(h) + '</span></div>';
+        }).join('');
+      } else {
+        timelineEl.innerHTML = steps.map(function (st, i) {
+          const isActive = (i === currentStepIdx);
+          return (
+            '<div class="timeline-row ' + (isActive ? 'active' : '') + '" onclick="inspectStep(' + i + ')">' +
+              '<span class="timeline-action">' + esc(st.label) + '</span>' +
+              '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
+            '</div>'
+          );
+        }).join('');
+      }
+    }
+
+    // Auto-start Live Follow & Timer on load
+    startLiveFollow();
+    elapsedTimer = setInterval(updateElapsedTimer, 1000);
     renderAll();
   </script>
 </body>

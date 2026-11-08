@@ -80,17 +80,18 @@ export function createInitialCouncilState(config = {}) {
     if (typeof item === 'string') {
       return { batch: idx + 1, answer: item.trim() };
     }
+    const labelStr = typeof item?.label === 'string' ? item.label.trim() : '';
+    const sourceStr = typeof item?.source === 'string' ? item.source.trim() : '';
+    const textStr = typeof item?.text === 'string' ? item.text.trim() : '';
     const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
-    const answer = hasAnswer
-      ? item.answer.trim()
-      : `[${String(item?.label || '').trim()}] (Source: ${String(item?.source || '').trim()}): ${String(item?.text || '').trim()}`;
+    const answer = hasAnswer ? item.answer.trim() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
     return {
       batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
       answer,
       ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
-      ...(typeof item?.label === 'string' && item.label.trim()
-        ? { label: item.label.trim(), source: String(item.source || '').trim(), text: String(item.text || '').trim() }
-        : {})
+      ...(labelStr ? { label: labelStr } : {}),
+      ...(sourceStr ? { source: sourceStr } : {}),
+      ...(textStr ? { text: textStr } : {})
     };
   });
 

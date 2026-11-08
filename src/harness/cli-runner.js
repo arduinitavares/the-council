@@ -106,6 +106,29 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
 }
 
 /**
+ * Extracts the canonical lowercase base model name after validating effort via parseModelAndEffort.
+ * Enforces the no-double-effort (!hasParens) and single-suffix (break) rules.
+ *
+ * @param {string} modelString
+ * @param {'high'|'medium'|'low'|'max'|'xhigh'|string} [defaultEffort='high']
+ * @returns {string}
+ */
+export function extractCanonicalBaseModel(modelString, defaultEffort = 'high') {
+  const parsed = parseModelAndEffort(modelString, defaultEffort);
+  const hasParens = /\([^)]*\)\s*$/.test(String(modelString || '').trim());
+  let baseModel = parsed.model.trim().toLowerCase();
+  if (!hasParens) {
+    for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
+      if (baseModel.endsWith(suffix)) {
+        baseModel = baseModel.slice(0, -suffix.length);
+        break;
+      }
+    }
+  }
+  return baseModel;
+}
+
+/**
  * Executes a CLI process directly via execFile with timeout and abort support.
  * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error.
  *

@@ -70,7 +70,16 @@ export class CouncilEngine {
       this.harnessResolver = this._defaultHarnessResolver.bind(this);
     }
     this.signal = options.signal || null;
-    this.state = createInitialCouncilState({ ...this.config, seats: [] });
+    this.state = createInitialCouncilState({
+      ...this.config,
+      seats: [],
+      clarifications: [],
+      maxClarificationBatches: Math.max(
+        this.config.maxClarificationBatches,
+        Array.isArray(this.config.clarifications) ? this.config.clarifications.length : 0
+      )
+    });
+    this._configClarificationsPublished = false;
     this.aborted = Boolean(this.signal?.aborted);
     this._defaultMockAdapter = null;
 
@@ -163,21 +172,18 @@ export class CouncilEngine {
     if (!clarifications || clarifications.length === 0 || this.aborted || this.isCompleted()) return;
 
     let itemsToPublish = clarifications;
-    if (this.state.clarificationBatch === 0 && Array.isArray(this.state.clarifications) && this.state.clarifications.length > 0) {
-      if (clarifications !== this.config.clarifications && Array.isArray(this.config.clarifications) && this.config.clarifications.length > 0) {
+    if (!this._configClarificationsPublished) {
+      this._configClarificationsPublished = true;
+      if (
+        clarifications !== this.config.clarifications &&
+        Array.isArray(this.config.clarifications) &&
+        this.config.clarifications.length > 0
+      ) {
         itemsToPublish = [...this.config.clarifications, ...clarifications];
       }
-      this.state = {
-        ...this.state,
-        clarifications: [],
-        maxClarificationBatches: Math.max(this.state.maxClarificationBatches, itemsToPublish.length)
-      };
-    } else if (this.state.clarificationBatch + itemsToPublish.length > this.state.maxClarificationBatches) {
-      this.state = {
-        ...this.state,
-        maxClarificationBatches: this.state.clarificationBatch + itemsToPublish.length
-      };
     }
+
+    const requiredMaxBatches = this.state.clarificationBatch + itemsToPublish.length;
 
     for (let i = 0; i < itemsToPublish.length; i++) {
       if (this.aborted || this.isCompleted()) break;
@@ -200,7 +206,12 @@ export class CouncilEngine {
       } else {
         answer = String(item);
       }
-      this._step({ type: 'START_CLARIFYING' });
+      this._step({
+        type: 'START_CLARIFYING',
+        ...(requiredMaxBatches > this.state.maxClarificationBatches
+          ? { maxClarificationBatches: requiredMaxBatches }
+          : {})
+      });
       this._step({
         type: 'PUBLISH_CLARIFICATION',
         answer,
@@ -777,7 +788,7 @@ export class CouncilEngine {
   async run() {
     this.initRoster();
 
-    if (this.config.clarifications && this.config.clarifications.length > 0) {
+    if (!this._configClarificationsPublished && this.config.clarifications && this.config.clarifications.length > 0) {
       await this.runDiscovery(this.config.clarifications);
     }
 

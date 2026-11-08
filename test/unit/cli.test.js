@@ -816,17 +816,35 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       assert.ok(pkg.scripts && pkg.scripts['install-skill'], 'package.json must define "install-skill" script');
 
       const { installSkill } = await import('../../scripts/install-skill.js');
-      const tmpTargetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-skill-target-'));
+      const tmpSkillRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'council-skill-target-'));
+      const tmpUserRoot = path.join(tmpSkillRoot, 'user-skills');
+      const tmpWorkspaceRoot = path.join(tmpSkillRoot, 'workspace-skills');
       try {
-        const result = installSkill({ userSkillsRoot: tmpTargetDir });
+        const result = installSkill({
+          userSkillsRoot: tmpUserRoot,
+          workspaceSkillsRoot: tmpWorkspaceRoot
+        });
         assert.ok(result.installedPaths.length >= 2);
-        const targetSkillFile = path.join(tmpTargetDir, 'ask-council', 'SKILL.md');
+        const targetSkillFile = path.join(tmpUserRoot, 'ask-council', 'SKILL.md');
+        const tempWorkspaceSkillFile = path.join(tmpWorkspaceRoot, 'ask-council', 'SKILL.md');
         assert.ok(fs.existsSync(targetSkillFile), 'Installed SKILL.md must exist');
         assert.equal(fs.lstatSync(targetSkillFile).isSymbolicLink(), false, 'Installed SKILL.md must not be a symlink');
+        assert.ok(fs.existsSync(tempWorkspaceSkillFile), 'Installed workspace SKILL.md must exist');
+        assert.equal(fs.lstatSync(tempWorkspaceSkillFile).isSymbolicLink(), false, 'Installed workspace SKILL.md must not be a symlink');
 
+        const sourceSkillFile = path.join(repoRoot, 'skills', 'ask-council', 'SKILL.md');
         const workspaceSkillFile = path.join(repoRoot, '.agents', 'skills', 'ask-council', 'SKILL.md');
+        assert.ok(fs.existsSync(sourceSkillFile), 'skills/ask-council/SKILL.md must exist');
         assert.ok(fs.existsSync(workspaceSkillFile), '.agents/skills/ask-council/SKILL.md must exist');
+        assert.equal(fs.lstatSync(sourceSkillFile).isSymbolicLink(), false, 'Source SKILL.md must not be a symlink');
+        assert.equal(fs.lstatSync(sourceSkillFile).isFile(), true, 'Source SKILL.md must be a regular file');
         assert.equal(fs.lstatSync(workspaceSkillFile).isSymbolicLink(), false, 'Workspace SKILL.md must not be a symlink');
+        assert.equal(fs.lstatSync(workspaceSkillFile).isFile(), true, 'Workspace SKILL.md must be a regular file');
+        assert.equal(
+          Buffer.compare(fs.readFileSync(sourceSkillFile), fs.readFileSync(workspaceSkillFile)),
+          0,
+          'skills/ask-council/SKILL.md and .agents/skills/ask-council/SKILL.md must be byte-for-byte identical'
+        );
 
         const skillContent = fs.readFileSync(targetSkillFile, 'utf8');
         assert.match(skillContent, /\/Users\/aaat\/projects\/the-council\/bin\/council/);
@@ -834,7 +852,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         assert.doesNotMatch(skillContent, /^\s*\.\/bin\/council/m);
         assert.doesNotMatch(skillContent, /^\s*open src\/visualizer\/index\.html/m);
       } finally {
-        fs.rmSync(tmpTargetDir, { recursive: true, force: true });
+        fs.rmSync(tmpSkillRoot, { recursive: true, force: true });
       }
     });
   });

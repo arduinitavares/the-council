@@ -918,6 +918,30 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(bins, ['cursor-agent', 'agent']);
     });
   });
+
+  describe('extractCanonicalBaseModel', () => {
+    it('extracts canonical base model and enforces no-double-effort and single-suffix rules', async () => {
+      const { extractCanonicalBaseModel } = await import('../../src/harness/cli-runner.js');
+      assert.equal(typeof extractCanonicalBaseModel, 'function');
+
+      assert.equal(extractCanonicalBaseModel('gpt-6-astra (max)'), 'gpt-6-astra');
+      assert.equal(extractCanonicalBaseModel('gpt-6.1-sol (high)'), 'gpt-6.1-sol');
+      assert.equal(extractCanonicalBaseModel('gemini-4-argon-high'), 'gemini-4-argon');
+      assert.equal(extractCanonicalBaseModel('claude-opus-5-5-high'), 'claude-opus-5-5');
+      assert.equal(extractCanonicalBaseModel('grok-4.7-xhigh'), 'grok-4.7');
+      assert.equal(extractCanonicalBaseModel('composer-2.5'), 'composer-2.5');
+
+      // Double-effort with parens + suffix must NOT strip suffix
+      assert.equal(extractCanonicalBaseModel('gpt-6-astra-high (max)'), 'gpt-6-astra-high');
+
+      // Double-suffix without parens must only strip a single trailing effort suffix
+      assert.equal(extractCanonicalBaseModel('gpt-6-astra-high-max'), 'gpt-6-astra-high');
+
+      // Throws on unsupported effort
+      assert.throws(() => extractCanonicalBaseModel('gpt-6-astra (ultra)'), /Unsupported reasoning effort/);
+    });
+  });
 });
+
 
 

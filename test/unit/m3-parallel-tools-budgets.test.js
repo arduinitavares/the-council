@@ -24,6 +24,9 @@ import {
   InvalidResponseError
 } from '../../src/harness/adapter.js';
 import { MockAdapter } from '../../src/harness/mock.js';
+import { AntigravityAdapter } from '../../src/harness/antigravity.js';
+import { Seat } from '../../src/seats/seat.js';
+import { createInitialCouncilState } from '../../src/machine/state.js';
 import { runCursorCli, recordProviderCall } from '../../src/harness/cli-runner.js';
 
 describe('Milestone 3: Parallel Seat Turns & Read-Only Tool Budgets (#24, #25)', () => {
@@ -701,6 +704,393 @@ Final thought: candidate satisfies all constraints.`;
           return true;
         }
       );
+    });
+  });
+
+  // =========================================================================
+  // PILLAR 5: State Machine & CouncilEngine Tool Policy and Timeout Plumbing (#24, #25)
+  // =========================================================================
+  describe('Pillar 5: State Machine & CouncilEngine Tool Policy and Timeout Plumbing (#24, #25)', () => {
+    it('validates tools and timeoutMs in validateSeatConfig and Seat model', () => {
+      const validSeat = new Seat({
+        id: 'seat-test',
+        harness: 'mock',
+        model: 'mock-model',
+        soul: 'Test Soul',
+        tools: 'none',
+        timeoutMs: 15000
+      });
+      assert.equal(validSeat.tools, 'none');
+      assert.equal(validSeat.timeoutMs, 15000);
+      const json = validSeat.toJSON();
+      assert.equal(json.tools, 'none');
+      assert.equal(json.timeoutMs, 15000);
+
+      // Rejections
+      assert.throws(
+        () => new Seat({ id: 's', harness: 'm', model: 'm', soul: 's', tools: 'write' }),
+        /Invalid seat tools policy "write"/
+      );
+      assert.throws(
+        () => new Seat({ id: 's', harness: 'm', model: 'm', soul: 's', timeoutMs: -10 }),
+        /Seat timeoutMs must be a positive number/
+      );
+    });
+
+    it('preserves seat and judge tools and timeoutMs in createInitialCouncilState and CouncilEngine.state', () => {
+      const config = {
+        topic: 'Preserve Tools and Timeouts in State',
+        tools: 'none',
+        timeoutMs: 60000,
+        judge: {
+          id: 'judge-1',
+          harness: 'mock',
+          model: 'mock-judge',
+          soul: 'Judge Soul',
+          tools: 'none',
+          timeoutMs: 25000
+        },
+        seats: [
+          {
+            id: 's1',
+            harness: 'mock',
+            model: 'mock-model-1',
+            soul: 'Soul 1',
+            tools: 'none',
+            timeoutMs: 15000
+          },
+          {
+            id: 's2',
+            harness: 'mock',
+            model: 'mock-model-2',
+            soul: 'Soul 2',
+            tools: 'read-only',
+            timeoutMs: 30000
+          }
+        ]
+      };
+
+      // 1. Direct createInitialCouncilState inspection
+      const rawState = createInitialCouncilState(config);
+      assert.equal(rawState.judge.tools, 'none', 'Raw state judge tools must be "none"');
+      assert.equal(rawState.judge.timeoutMs, 25000, 'Raw state judge timeoutMs must be 25000');
+      assert.equal(rawState.seats[0].tools, 'none', 'Raw state s1 tools must be "none"');
+      assert.equal(rawState.seats[0].timeoutMs, 15000, 'Raw state s1 timeoutMs must be 15000');
+      assert.equal(rawState.seats[1].tools, 'read-only', 'Raw state s2 tools must be "read-only"');
+      assert.equal(rawState.seats[1].timeoutMs, 30000, 'Raw state s2 timeoutMs must be 30000');
+
+      // 2. CouncilEngine with initRoster() inspection
+      const engine = new CouncilEngine(config);
+      engine.initRoster();
+
+      assert.equal(engine.state.judge.tools, 'none', 'Judge tools must be "none"');
+      assert.equal(engine.state.judge.timeoutMs, 25000, 'Judge timeoutMs must be preserved');
+
+      const s1 = engine.state.seats.find((s) => s.id === 's1');
+      const s2 = engine.state.seats.find((s) => s.id === 's2');
+      assert.ok(s1, 'Seat s1 must exist in state');
+      assert.ok(s2, 'Seat s2 must exist in state');
+
+      assert.equal(s1.tools, 'none', 'Seat s1 tools must be "none"');
+      assert.equal(s1.timeoutMs, 15000, 'Seat s1 timeoutMs must be 15000');
+
+      assert.equal(s2.tools, 'read-only', 'Seat s2 tools must be "read-only"');
+      assert.equal(s2.timeoutMs, 30000, 'Seat s2 timeoutMs must be 30000');
+    });
+
+    it('inherits root tools and timeoutMs on seats and judge when unspecified', () => {
+      const config = {
+        topic: 'Inherit Root Policies',
+        tools: 'none',
+        timeoutMs: 45000,
+        seats: [
+          { id: 's1', harness: 'mock', model: 'mock-1', soul: 'Soul 1' },
+          { id: 's2', harness: 'mock', model: 'mock-2', soul: 'Soul 2' }
+        ]
+      };
+
+      // 1. Direct createInitialCouncilState inspection
+      const rawState = createInitialCouncilState(config);
+      assert.equal(rawState.judge.tools, 'none', 'Raw state judge must inherit root tools: "none"');
+      assert.equal(rawState.judge.timeoutMs, 45000, 'Raw state judge must inherit root timeoutMs: 45000');
+      assert.equal(rawState.seats[0].tools, 'none', 'Raw state s1 must inherit root tools: "none"');
+      assert.equal(rawState.seats[0].timeoutMs, 45000, 'Raw state s1 must inherit root timeoutMs: 45000');
+
+      // 2. CouncilEngine with initRoster() inspection
+      const engine = new CouncilEngine(config);
+      engine.initRoster();
+
+      assert.equal(engine.state.judge.tools, 'none', 'Judge must inherit root tools: "none"');
+      assert.equal(engine.state.judge.timeoutMs, 45000, 'Judge must inherit root timeoutMs: 45000');
+      assert.equal(engine.state.seats[0].tools, 'none', 'Seat s1 must inherit root tools: "none"');
+      assert.equal(engine.state.seats[0].timeoutMs, 45000, 'Seat s1 must inherit root timeoutMs: 45000');
+    });
+
+    it('preserves tools and timeoutMs during dynamic ADD_SEAT transitions and initRoster()', () => {
+      const engine = new CouncilEngine({
+        topic: 'Dynamic ADD_SEAT Preservation',
+        seats: [
+          { id: 's1', harness: 'mock', model: 'm1', soul: 'Soul 1' },
+          { id: 's2', harness: 'mock', model: 'm2', soul: 'Soul 2' }
+        ]
+      });
+
+      // Direct ADD_SEAT transition to reducer
+      engine._step({
+        type: 'ADD_SEAT',
+        seat: {
+          id: 's3',
+          harness: 'mock',
+          model: 'm3',
+          soul: 'Soul 3',
+          tools: 'none',
+          timeoutMs: 12000
+        }
+      });
+
+      const s3 = engine.state.seats.find((s) => s.id === 's3');
+      assert.ok(s3, 'Dynamically added seat s3 must exist in state');
+      assert.equal(s3.tools, 'none', 'Dynamic seat s3 must preserve tools: "none"');
+      assert.equal(s3.timeoutMs, 12000, 'Dynamic seat s3 must preserve timeoutMs: 12000');
+
+      // Test initRoster forwarding of tools and timeoutMs
+      const lateEngine = new CouncilEngine({
+        topic: 'Late Roster Init',
+        seats: [
+          { id: 'seatA', harness: 'mock', model: 'mA', soul: 'Soul A' },
+          { id: 'seatB', harness: 'mock', model: 'mB', soul: 'Soul B' }
+        ]
+      });
+      // Simulate adding a configured seat before initRoster
+      lateEngine.config.seats.push({
+        id: 'seatC',
+        harness: 'mock',
+        model: 'mC',
+        soul: 'Soul C',
+        tools: 'none',
+        timeoutMs: 18000
+      });
+      lateEngine.initRoster();
+
+      const seatC = lateEngine.state.seats.find((s) => s.id === 'seatC');
+      assert.ok(seatC, 'Late roster seatC must be added to state');
+      assert.equal(seatC.tools, 'none', 'Late roster seatC must forward tools: "none"');
+      assert.equal(seatC.timeoutMs, 18000, 'Late roster seatC must forward timeoutMs: 18000');
+    });
+
+    it('omits prompt verification directives during deliberation and voting when seat tools is "none"', async () => {
+      const capturedPrompts = [];
+      const mockRunner = async ({ prompt, context }) => {
+        capturedPrompts.push({
+          seatId: context.seatId,
+          tools: context.tools,
+          prompt
+        });
+
+        // If Judge call, return valid candidate synthesis
+        if (context.seatId === 'test-judge') {
+          return JSON.stringify({
+            summary: 'Unified Deliberation Candidate',
+            proofDecisions: {
+              P1: { status: 'admitted', note: 'Valid proof 1' },
+              P2: { status: 'admitted', note: 'Valid proof 2' }
+            },
+            clauses: [
+              {
+                context: 'Architecture Context',
+                conclusion: 'Adopt unified architecture',
+                citedProofIds: ['P1', 'P2']
+              }
+            ]
+          });
+        }
+
+        // If Voting call, return ballot
+        if (prompt.includes('CAST BALLOT') || prompt.includes('Voting on Round')) {
+          return JSON.stringify({ vote: 'accept' });
+        }
+
+        // Deliberation proof return
+        return JSON.stringify({
+          scope: 'Architecture',
+          kind: 'check',
+          source: 'System Spec',
+          statement: `Verified assertion from ${context.seatId}`
+        });
+      };
+
+      const adapter = new AntigravityAdapter({ spawnRunner: mockRunner });
+      const engine = new CouncilEngine(
+        {
+          topic: 'Runtime Prompt Directive Verification',
+          tools: 'read-only', // Global default is read-only
+          judge: {
+            id: 'test-judge',
+            harness: 'antigravity',
+            model: 'gemini-4-argon-high',
+            soul: 'Impartial Judge',
+            tools: 'none' // Judge configured with tools: none
+          },
+          seats: [
+            {
+              id: 'seat-none',
+              harness: 'antigravity',
+              model: 'gemini-4-argon-high',
+              soul: 'No-Tools Lens',
+              tools: 'none', // Explicit none
+              timeoutMs: 15000
+            },
+            {
+              id: 'seat-readonly',
+              harness: 'antigravity',
+              model: 'gemini-4-argon-high',
+              soul: 'Read-Only Lens',
+              tools: 'read-only', // Explicit read-only
+              timeoutMs: 25000
+            }
+          ]
+        },
+        { harnessResolver: () => adapter }
+      );
+
+      engine.initRoster();
+      await engine.runRound();
+
+      // 1. Verify Deliberation prompts
+      const sNoneDelib = capturedPrompts.find(
+        (p) => p.seatId === 'seat-none' && p.prompt.includes('Deliberation Round 1')
+      );
+      const sReadonlyDelib = capturedPrompts.find(
+        (p) => p.seatId === 'seat-readonly' && p.prompt.includes('Deliberation Round 1')
+      );
+
+      assert.ok(sNoneDelib, 'Must capture deliberation prompt for seat-none');
+      assert.ok(sReadonlyDelib, 'Must capture deliberation prompt for seat-readonly');
+
+      assert.equal(sNoneDelib.tools, 'none', 'seat-none context.tools must be "none"');
+      assert.equal(sReadonlyDelib.tools, 'read-only', 'seat-readonly context.tools must be "read-only"');
+
+      assert.ok(
+        !sNoneDelib.prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'),
+        'Deliberation prompt for seat-none must NOT contain tool directive'
+      );
+      assert.ok(
+        sReadonlyDelib.prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'),
+        'Deliberation prompt for seat-readonly MUST contain tool directive'
+      );
+
+      // 2. Verify Judge prompt
+      const judgeCall = capturedPrompts.find((p) => p.seatId === 'test-judge');
+      assert.ok(judgeCall, 'Must capture judge prompt');
+      assert.equal(judgeCall.tools, 'none', 'Judge context.tools must be "none"');
+      assert.ok(
+        !judgeCall.prompt.includes('4. Spot-check proof sources: You have read-only inspection tools enabled.'),
+        'Judge prompt with tools: "none" must NOT contain spot-check directive'
+      );
+
+      // 3. Verify Voting prompts
+      const sNoneVote = capturedPrompts.find(
+        (p) => p.seatId === 'seat-none' && (p.prompt.includes('CAST BALLOT') || p.prompt.includes('Voting on Round'))
+      );
+      const sReadonlyVote = capturedPrompts.find(
+        (p) => p.seatId === 'seat-readonly' && (p.prompt.includes('CAST BALLOT') || p.prompt.includes('Voting on Round'))
+      );
+
+      assert.ok(sNoneVote, 'Must capture voting prompt for seat-none');
+      assert.ok(sReadonlyVote, 'Must capture voting prompt for seat-readonly');
+
+      assert.equal(sNoneVote.tools, 'none', 'Voting context.tools for seat-none must be "none"');
+      assert.equal(sReadonlyVote.tools, 'read-only', 'Voting context.tools for seat-readonly must be "read-only"');
+
+      assert.ok(
+        !sNoneVote.prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'),
+        'Voting prompt for seat-none must NOT contain tool directive'
+      );
+      assert.ok(
+        sReadonlyVote.prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'),
+        'Voting prompt for seat-readonly MUST contain tool directive'
+      );
+    });
+
+    it('propagates seat-specific timeoutMs and judge timeoutMs to harness calls', async () => {
+      const dispatchedTimeouts = [];
+
+      class SpyHarnessAdapter extends HarnessAdapter {
+        constructor() {
+          super({ name: 'spy' });
+        }
+        async executeSeatProof({ seat, timeoutMs }) {
+          dispatchedTimeouts.push({ seatId: seat.id, phase: 'DELIBERATION', timeoutMs });
+          return { scope: 'Test', kind: 'check', source: 'Source', statement: `Statement from ${seat.id}` };
+        }
+        async executeJudgeAuditAndSynthesis({ judge, timeoutMs }) {
+          dispatchedTimeouts.push({ seatId: judge.id, phase: 'JUDGING', timeoutMs });
+          return {
+            summary: 'Spy Synthesis',
+            proofDecisions: { P1: { status: 'admitted' }, P2: { status: 'admitted' } },
+            clauses: [{ context: 'C', conclusion: 'Conc', citedProofIds: ['P1', 'P2'] }]
+          };
+        }
+        async executeSeatVote({ seat, timeoutMs }) {
+          dispatchedTimeouts.push({ seatId: seat.id, phase: 'VOTING', timeoutMs });
+          return { vote: 'accept' };
+        }
+      }
+
+      const spyAdapter = new SpyHarnessAdapter();
+      const engine = new CouncilEngine(
+        {
+          topic: 'Timeout Propagation Verification',
+          timeoutMs: 90000, // Global fallback timeout: 90s
+          judge: {
+            id: 'custom-judge',
+            harness: 'spy',
+            model: 'judge-model',
+            soul: 'Judge',
+            timeoutMs: 22000 // Custom judge timeout: 22s
+          },
+          seats: [
+            {
+              id: 'seat-fast',
+              harness: 'spy',
+              model: 'model-1',
+              soul: 'Soul 1',
+              timeoutMs: 14000 // Custom seat timeout: 14s
+            },
+            {
+              id: 'seat-default',
+              harness: 'spy',
+              model: 'model-2',
+              soul: 'Soul 2' // No override: should fallback to global 90s
+            }
+          ]
+        },
+        { harnessResolver: () => spyAdapter }
+      );
+
+      engine.initRoster();
+      await engine.runRound();
+
+      // Deliberation timeouts
+      const fastDelib = dispatchedTimeouts.find((d) => d.seatId === 'seat-fast' && d.phase === 'DELIBERATION');
+      const defaultDelib = dispatchedTimeouts.find((d) => d.seatId === 'seat-default' && d.phase === 'DELIBERATION');
+      assert.ok(fastDelib, 'fastDelib timeout must be recorded');
+      assert.ok(defaultDelib, 'defaultDelib timeout must be recorded');
+      assert.equal(fastDelib.timeoutMs, 14000, 'seat-fast must receive its configured 14000ms timeout');
+      assert.equal(defaultDelib.timeoutMs, 90000, 'seat-default must fall back to engine-level 90000ms timeout');
+
+      // Judging timeout
+      const judgeCall = dispatchedTimeouts.find((d) => d.seatId === 'custom-judge' && d.phase === 'JUDGING');
+      assert.ok(judgeCall, 'Judge timeout must be recorded');
+      assert.equal(judgeCall.timeoutMs, 22000, 'Judge must receive its configured 22000ms timeout');
+
+      // Voting timeouts
+      const fastVote = dispatchedTimeouts.find((d) => d.seatId === 'seat-fast' && d.phase === 'VOTING');
+      const defaultVote = dispatchedTimeouts.find((d) => d.seatId === 'seat-default' && d.phase === 'VOTING');
+      assert.ok(fastVote, 'fastVote timeout must be recorded');
+      assert.ok(defaultVote, 'defaultVote timeout must be recorded');
+      assert.equal(fastVote.timeoutMs, 14000, 'seat-fast voting must receive 14000ms timeout');
+      assert.equal(defaultVote.timeoutMs, 90000, 'seat-default voting must receive 90000ms timeout');
     });
   });
 });

@@ -122,13 +122,19 @@ export class CouncilEngine {
     if (!this.config.seats || !Array.isArray(this.config.seats)) return;
     for (const seat of this.config.seats) {
       if (!this.state.seats.some((s) => s.id === seat.id)) {
+        const seatTools = seat.tools || this.config.tools || 'read-only';
+        const seatTimeoutMs = typeof seat.timeoutMs === 'number' && seat.timeoutMs > 0
+          ? seat.timeoutMs
+          : (typeof this.config.timeoutMs === 'number' && this.config.timeoutMs > 0 ? this.config.timeoutMs : undefined);
         this._step({
           type: 'ADD_SEAT',
           seat: {
             id: seat.id,
             harness: seat.harness,
             model: seat.model,
-            soul: typeof seat.soul === 'object' && seat.soul !== null && seat.soul.toJSON ? seat.soul.toJSON() : seat.soul
+            soul: typeof seat.soul === 'object' && seat.soul !== null && seat.soul.toJSON ? seat.soul.toJSON() : seat.soul,
+            tools: seatTools,
+            ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {})
           }
         });
       }

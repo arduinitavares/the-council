@@ -246,7 +246,8 @@ describe('Unit: Council Roster Management & Quorum Double-Gating (src/seats/rost
         soul: 'Purist',
         status: 'thinking',
         retries: 0,
-        excusedReason: null
+        excusedReason: null,
+        tools: 'read-only'
       });
     });
 

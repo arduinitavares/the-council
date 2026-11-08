@@ -106,6 +106,7 @@ export const DEFAULT_COUNCIL_CONFIG = Object.freeze({
     harness: 'codex',
     model: 'gpt-6-astra (max)',
     soul: 'Impartial Proof Auditor: admits only scoped, sourced proofs and synthesizes context-partitioned candidates without adding personal claims.',
+    tools: 'read-only',
     status: 'idle',
     retries: 0
   })

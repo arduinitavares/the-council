@@ -43,8 +43,25 @@ Options:
   -V, --version          Show version
 `;
 
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..');
+
+function resolveInputPath(rawPath) {
+  const strPath = String(rawPath);
+  const cwdPath = path.resolve(process.cwd(), strPath);
+  if (fs.existsSync(cwdPath)) {
+    return cwdPath;
+  }
+  if (!path.isAbsolute(strPath)) {
+    const pkgPath = path.resolve(PACKAGE_ROOT, strPath);
+    if (fs.existsSync(pkgPath)) {
+      return pkgPath;
+    }
+  }
+  return cwdPath;
+}
+
 function parseEvidenceFile(rawPath) {
-  const resolvedPath = path.resolve(process.cwd(), rawPath);
+  const resolvedPath = resolveInputPath(rawPath);
   if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
     throw new Error(`Evidence file not found: "${resolvedPath}"`);
   }
@@ -150,7 +167,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       logErr('Error: "council inspect" requires a path to a snapshot JSON file.');
       return await safeExit(1);
     }
-    const resolved = path.resolve(process.cwd(), filePath);
+    const resolved = resolveInputPath(filePath);
     if (!fs.existsSync(resolved)) {
       logErr(`Error: Snapshot file not found: "${resolved}"`);
       return await safeExit(1);

@@ -728,9 +728,25 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(validateConfig({ ...base, clarifications: [{}] }).valid, false);
       assert.equal(validateConfig({ ...base, clarifications: [{ answer: '  ' }] }).valid, false);
       assert.equal(validateConfig({ ...base, clarifications: [{ batch: 0, answer: 'bad batch' }] }).valid, false);
+
+      // Invalid evidence[i].id
+      assert.equal(
+        validateConfig({
+          ...base,
+          evidence: [{ id: 123, label: 'L', source: 'S', text: 'T' }]
+        }).valid,
+        false
+      );
+      assert.equal(
+        validateConfig({
+          ...base,
+          evidence: [{ id: '   ', label: 'L', source: 'S', text: 'T' }]
+        }).valid,
+        false
+      );
     });
 
-    it('preserves frozen evidence and all pre-supplied clarifications (even when > maxClarificationBatches) across createInitialCouncilState, initRoster, and CouncilEngine.run()', async () => {
+    it('preserves frozen evidence and all pre-supplied clarifications (including question/label/source/text metadata and across RESET / dynamic runDiscovery) across createInitialCouncilState, initRoster, and CouncilEngine.run()', async () => {
       const { createInitialCouncilState } = await import('../../src/machine/state.js');
       const { transitionCouncil } = await import('../../src/machine/reducer.js');
 
@@ -743,7 +759,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           { label: 'Schema Snippet', source: 'db/schema.sql:10', text: 'CREATE TABLE orders (id INT PRIMARY KEY);' }
         ],
         clarifications: [
-          { batch: 1, answer: 'Clarification 1: single region' },
+          { batch: 1, question: 'Deployment target?', answer: 'Clarification 1: single region' },
           { batch: 2, answer: 'Clarification 2: zero downtime' },
           { label: 'Clarification 3 Label', source: 'ops-notes.md', text: 'Clarification 3: strict SLO' }
         ],
@@ -762,12 +778,15 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(initial.evidence[1].id, 'E2');
       assert.equal(initial.clarifications.length, 3, 'Pre-supplied clarifications must not be truncated by maxClarificationBatches');
 
-      // Reducer transition preserves frozen evidence
+      // Reducer transition preserves frozen evidence, and RESET preserves both evidence and clarifications
       const afterBegin = transitionCouncil(initial, { type: 'BEGIN_ROUND' });
       assert.equal(afterBegin.evidence.length, 2);
       assert.ok(Object.isFrozen(afterBegin.evidence));
+      const afterReset = transitionCouncil(afterBegin, { type: 'RESET' });
+      assert.equal(afterReset.evidence.length, 2);
+      assert.equal(afterReset.clarifications.length, 3);
 
-      // CouncilEngine initRoster and run() preserve evidence and all 3 clarifications
+      // CouncilEngine initRoster and run() preserve evidence and all 3 clarifications with full metadata
       const engine = new CouncilEngine(configInput);
       engine.initRoster();
       assert.equal(engine.state.evidence.length, 2);
@@ -778,7 +797,20 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(result.ok, true);
       assert.equal(result.state.evidence.length, 2);
       assert.equal(result.state.clarifications.length, 3);
+      assert.equal(result.state.clarifications[0].question, 'Deployment target?');
+      assert.equal(result.state.clarifications[2].label, 'Clarification 3 Label');
+      assert.equal(result.state.clarifications[2].source, 'ops-notes.md');
+      assert.equal(result.state.clarifications[2].text, 'Clarification 3: strict SLO');
       assert.match(result.state.clarifications[2].answer, /Clarification 3/);
+
+      // Calling runDiscovery(extraClarifications) on a fresh engine with pre-supplied config.clarifications
+      // must append extraClarifications rather than wiping the pre-supplied clarifications
+      const engineWithExtra = new CouncilEngine(configInput);
+      engineWithExtra.initRoster();
+      await engineWithExtra.runDiscovery([{ question: 'Dynamic Q?', answer: 'Dynamic A' }]);
+      assert.equal(engineWithExtra.state.clarifications.length, 4);
+      assert.equal(engineWithExtra.state.clarifications[3].question, 'Dynamic Q?');
+      assert.equal(engineWithExtra.state.clarifications[3].answer, 'Dynamic A');
     });
   });
 });

@@ -1799,6 +1799,242 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         fs.rmSync(tmpRunsDir, { recursive: true, force: true });
       }
     });
+
+    it('rehydrates step-accurate step.graph (lastEdgeId, outgoingEdges, causalLinks) and step.stateSnapshot (previousPhase, evidence, clarifications) from disk and does not clobber CouncilLatestLiveRun when loading older <runId>.js', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+
+      const runsDir = path.join(tmpDir, 'rehydrate-runs');
+      const mockAdapter = new MockAdapter();
+
+      const config1 = {
+        topic: 'Run 1 Historical Step Graph Inspection',
+        maxRounds: 2,
+        minQuorum: 2,
+        evidence: [
+          { id: 'E1', label: 'Perf Log', source: 'perf.log', text: 'p99=8ms' }
+        ],
+        clarifications: [
+          { batch: 1, question: 'Region?', answer: 'Single region only' }
+        ],
+        judge: { id: 'judge-1', harness: 'mock', model: 'm-judge', soul: 'Judge' },
+        seats: [
+          { id: 'seat-1', harness: 'mock', model: 'm-1', soul: 'S1' },
+          { id: 'seat-2', harness: 'mock', model: 'm-2', soul: 'S2' }
+        ]
+      };
+
+      const engine1 = new CouncilEngine(config1, { harnessResolver: () => mockAdapter });
+      const watcher1 = new VisualizerLiveWatcher({
+        telemetry: engine1.getTelemetry(),
+        outputDir: runsDir,
+        runId: 'run-historical-1',
+        initialConfig: config1
+      });
+      await engine1.run();
+      watcher1.stop();
+
+      // Run a second deliberation so latest.js points to run-latest-2
+      const config2 = {
+        ...config1,
+        topic: 'Run 2 Newer Latest Run'
+      };
+      const engine2 = new CouncilEngine(config2, { harnessResolver: () => mockAdapter });
+      const watcher2 = new VisualizerLiveWatcher({
+        telemetry: engine2.getTelemetry(),
+        outputDir: runsDir,
+        runId: 'run-latest-2',
+        initialConfig: config2
+      });
+      await engine2.run();
+      watcher2.stop();
+
+      const win = {};
+      const indexCode = fs.readFileSync(path.join(runsDir, 'index.js'), 'utf8');
+      const latestCode = fs.readFileSync(path.join(runsDir, 'latest.js'), 'utf8');
+      const run1Code = fs.readFileSync(path.join(runsDir, 'run-historical-1.js'), 'utf8');
+
+      new Function('window', 'globalThis', indexCode)(win, win);
+      new Function('window', 'globalThis', latestCode)(win, win);
+      assert.equal(win.CouncilLatestLiveRun.runId, 'run-latest-2');
+
+      // Now dynamically load the older run-historical-1.js (as index.html does when selecting an older run)
+      new Function('window', 'globalThis', run1Code)(win, win);
+
+      // Loading an older <runId>.js must populate CouncilRuns['run-historical-1'] WITHOUT clobbering CouncilLatestLiveRun!
+      assert.equal(
+        win.CouncilLatestLiveRun.runId,
+        'run-latest-2',
+        'Loading historical <runId>.js must not overwrite window.CouncilLatestLiveRun'
+      );
+      const run1 = win.CouncilRuns['run-historical-1'];
+      assert.ok(run1, 'CouncilRuns must contain run-historical-1');
+
+      // Find the START_CLARIFYING, PUBLISH_CLARIFICATION, BEGIN_ROUND, SUBMIT_PROOF, and completed steps in run1
+      const stepStartClarifying = run1.steps.find((s) => s.event?.type === 'START_CLARIFYING');
+      const stepPublishClarification = run1.steps.find((s) => s.event?.type === 'PUBLISH_CLARIFICATION');
+      const stepBeginRound = run1.steps.find((s) => s.event?.type === 'BEGIN_ROUND');
+      const stepSubmitProof = run1.steps.find((s) => s.event?.type === 'SUBMIT_PROOF');
+      const stepCompleted = run1.steps[run1.steps.length - 1];
+
+      assert.ok(stepStartClarifying);
+      assert.ok(stepPublishClarification);
+      assert.ok(stepBeginRound);
+      assert.ok(stepSubmitProof);
+      assert.equal(stepCompleted.stateSnapshot.phase, 'completed');
+
+      // At START_CLARIFYING (before PUBLISH_CLARIFICATION), clarifications should be empty in that step's snapshot
+      assert.equal(stepStartClarifying.stateSnapshot.clarifications.length, 0);
+      // At PUBLISH_CLARIFICATION, clarifications should have 1 item
+      assert.equal(stepPublishClarification.stateSnapshot.clarifications.length, 1);
+
+      // Every rehydrated step must preserve evidence and previousPhase
+      assert.equal(stepBeginRound.stateSnapshot.evidence.length, 1);
+      assert.equal(stepBeginRound.stateSnapshot.evidence[0].id, 'E1');
+      assert.equal(stepBeginRound.stateSnapshot.previousPhase, 'clarifying');
+
+      // Step-specific graph: at BEGIN_ROUND, lastEdgeId must be 'e-clar-rev' (not the final 'e-eval-consensus'),
+      // outgoingEdges must be non-empty, and causalLinks must be empty before proofs are submitted!
+      assert.equal(stepBeginRound.graph.activeNodeId, 'reviewing');
+      assert.equal(stepBeginRound.graph.lastEdgeId, 'e-clar-rev');
+      assert.ok(stepBeginRound.graph.outgoingEdges.length > 0, 'Historical reviewing step must have outgoingEdges');
+      assert.equal(stepBeginRound.graph.causalLinks.length, 0, 'BEGIN_ROUND step must have 0 causal links');
+
+      // After first SUBMIT_PROOF, causalLinks must have 1 link (dep-seat-proof-P1), not all final links or 0
+      assert.equal(stepSubmitProof.graph.causalLinks.length, 1);
+      assert.equal(stepSubmitProof.graph.causalLinks[0].toKind, 'proof');
+      assert.equal(stepSubmitProof.graph.activeNodeId, 'reviewing');
+
+      // Execute index.html inline controller script in a mock DOM to verify selectRun, pollLiveRun race safety, and inspectStep
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      const inlineScriptMatch = html.match(/<script>\s*([\s\S]*?)\s*<\/script>\s*<\/body>/);
+      assert.ok(inlineScriptMatch, 'index.html must contain main inline controller script');
+
+      const elements = new Map();
+      const getEl = (id) => {
+        if (!elements.has(id)) {
+          elements.set(id, {
+            id,
+            textContent: '',
+            innerHTML: '',
+            value: id === 'run-selector' ? 'latest' : '',
+            className: '',
+            style: {},
+            classList: {
+              add: () => {},
+              remove: () => {},
+              toggle: () => {}
+            },
+            remove: function () {
+              elements.delete(this.id);
+            }
+          });
+        }
+        return elements.get(id);
+      };
+
+      const appendedScripts = [];
+      const mockDoc = {
+        getElementById: (id) => getEl(id),
+        createElement: (tag) => ({
+          tagName: tag.toUpperCase(),
+          id: '',
+          src: '',
+          onload: null,
+          onerror: null,
+          remove: function () {
+            if (this.id) elements.delete(this.id);
+          }
+        }),
+        head: {
+          appendChild: (el) => {
+            if (el.id) elements.set(el.id, el);
+            appendedScripts.push(el);
+          }
+        }
+      };
+
+      const renderedGraphs = [];
+      const mockVisualizer = {
+        escapeHtml: (s) => String(s ?? ''),
+        formatSoul: (s) => String(s ?? ''),
+        renderSoulCardHtml: (s) => `<div>${String(s ?? '')}</div>`,
+        renderStateMachineSVG: (_svgEl, stateArg, graphArg) => {
+          renderedGraphs.push({ kind: 'state', phase: stateArg.phase, graph: graphArg });
+        },
+        renderCausalDependencySVG: (_svgEl, stateArg, graphArg) => {
+          renderedGraphs.push({ kind: 'causal', phase: stateArg.phase, graph: graphArg });
+        }
+      };
+
+      const domWin = {
+        CouncilRunIndex: win.CouncilRunIndex,
+        CouncilLatestLiveRun: win.CouncilLatestLiveRun,
+        CouncilRuns: { 'run-latest-2': win.CouncilLatestLiveRun }
+      };
+
+      const controllerFn = new Function(
+        'window',
+        'globalThis',
+        'document',
+        'CouncilVisualizer',
+        'setInterval',
+        'clearInterval',
+        inlineScriptMatch[1] + '\nreturn { selectRun, inspectStep, pollLiveRun, updateRunSelector };'
+      );
+      const controller = controllerFn(
+        domWin,
+        domWin,
+        mockDoc,
+        mockVisualizer,
+        () => 123,
+        () => {}
+      );
+
+      // 1. Initial renderAll() populates #run-selector with options for latest, run-latest-2, and run-historical-1
+      assert.match(getEl('run-selector').innerHTML, /run-latest-2/);
+      assert.match(getEl('run-selector').innerHTML, /run-historical-1/);
+      assert.equal(getEl('heading-topic').textContent, 'Run 2 Newer Latest Run');
+
+      // 2. Start a pollLiveRun() so a #script-live-reload script is in-flight, then switch to run-historical-1
+      controller.pollLiveRun();
+      const inFlightLiveScript = appendedScripts.find((s) => s.id === 'script-live-reload');
+      assert.ok(inFlightLiveScript, 'pollLiveRun must append #script-live-reload');
+
+      controller.selectRun('run-historical-1');
+      // Dynamic script for run-historical-1.js was appended; simulate its load
+      const historicalScript = appendedScripts[appendedScripts.length - 1];
+      assert.match(historicalScript.src, /run-historical-1\.js/);
+      new Function('window', 'globalThis', run1Code)(domWin, domWin);
+      historicalScript.onload();
+
+      assert.equal(getEl('heading-topic').textContent, 'Run 1 Historical Step Graph Inspection');
+      assert.equal(getEl('run-selector').value, 'run-historical-1');
+
+      // 3. Even if the stale in-flight pollLiveRun script onload fires late, it must NOT overwrite the selected historical run
+      if (inFlightLiveScript.onload) {
+        inFlightLiveScript.onload();
+      }
+      assert.equal(getEl('heading-topic').textContent, 'Run 1 Historical Step Graph Inspection');
+      assert.equal(getEl('run-selector').value, 'run-historical-1');
+
+      // 4. Inspecting the BEGIN_ROUND step in run-historical-1 renders that step's exact graph
+      const beginRoundIdx = domWin.CouncilRuns['run-historical-1'].steps.findIndex(
+        (s) => s.event?.type === 'BEGIN_ROUND'
+      );
+      renderedGraphs.length = 0;
+      controller.inspectStep(beginRoundIdx);
+      const lastStateGraph = renderedGraphs.find((g) => g.kind === 'state');
+      assert.ok(lastStateGraph);
+      assert.equal(lastStateGraph.phase, 'reviewing');
+      assert.equal(lastStateGraph.graph.activeNodeId, 'reviewing');
+      assert.equal(lastStateGraph.graph.lastEdgeId, 'e-clar-rev');
+
+      // 5. Switching back to 'latest' restores Run 2 Newer Latest Run
+      controller.selectRun('latest');
+      assert.equal(getEl('heading-topic').textContent, 'Run 2 Newer Latest Run');
+    });
   });
 });
 

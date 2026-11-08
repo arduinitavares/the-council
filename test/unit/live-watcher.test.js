@@ -616,6 +616,89 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(html, /Simplicity/);
       assert.doesNotMatch(html, /\[object Object\]/);
     });
+
+    it('handles non-string properties in formatSoul without crashing or emitting [object Object]', () => {
+      // Numbers
+      assert.doesNotThrow(() => formatSoul({ name: 42 }));
+      assert.equal(formatSoul({ name: 42 }), '42');
+      assert.equal(formatSoul({ lens: 100 }), '100');
+      assert.equal(formatSoul({ name: 42, lens: 100 }), '42 — 100');
+
+      // Booleans
+      assert.doesNotThrow(() => formatSoul({ lens: true }));
+      assert.equal(formatSoul({ lens: true }), 'true');
+
+      // Arrays
+      assert.doesNotThrow(() => formatSoul({ name: ['architect'] }));
+      assert.equal(formatSoul({ name: ['architect'] }), 'architect');
+      assert.doesNotThrow(() => formatSoul({ temperament: ['pragmatic', 'adversarial'] }));
+      assert.equal(formatSoul({ temperament: ['pragmatic', 'adversarial'] }), 'pragmatic, adversarial');
+
+      // Nested objects
+      assert.doesNotThrow(() => formatSoul({ name: { nested: 'obj' } }));
+      assert.doesNotMatch(formatSoul({ name: { nested: 'obj' } }), /\[object Object\]/);
+
+      // Verify no [object Object] in any adversarial non-string permutation
+      for (const input of [
+        { name: 42 },
+        { lens: true },
+        { temperament: ['test'] },
+        { name: null, lens: 99 },
+        { temperament: 999 }
+      ]) {
+        const res = formatSoul(input);
+        assert.doesNotMatch(res, /\[object Object\]/);
+      }
+    });
+
+    it('handles non-string properties in renderSoulCardHtml without crashing or emitting [object Object]', () => {
+      const esc = (s) => String(s);
+
+      assert.doesNotThrow(() => renderSoulCardHtml({ name: 42 }, esc));
+      const htmlNum = renderSoulCardHtml({ name: 42, lens: 100, temperament: 999 }, esc);
+      assert.match(htmlNum, /42/);
+      assert.match(htmlNum, /100/);
+      assert.match(htmlNum, /999/);
+      assert.doesNotMatch(htmlNum, /\[object Object\]/);
+
+      assert.doesNotThrow(() => renderSoulCardHtml({ lens: true }, esc));
+      const htmlBool = renderSoulCardHtml({ lens: true }, esc);
+      assert.match(htmlBool, /true/);
+      assert.doesNotMatch(htmlBool, /\[object Object\]/);
+
+      assert.doesNotThrow(() => renderSoulCardHtml({ temperament: ['pragmatic'] }, esc));
+      const htmlArr = renderSoulCardHtml({ temperament: ['pragmatic'] }, esc);
+      assert.match(htmlArr, /pragmatic/);
+      assert.doesNotMatch(htmlArr, /\[object Object\]/);
+    });
+
+    it('handles circular, nested, and null-prototype objects safely in formatSoul and renderSoulCardHtml', () => {
+      const circular = { id: 'special' };
+      circular.self = circular;
+
+      assert.doesNotThrow(() => formatSoul(circular));
+      const resSoul = formatSoul(circular);
+      assert.equal(typeof resSoul, 'string');
+      assert.doesNotMatch(resSoul, /\[object Object\]/);
+
+      const esc = (s) => String(s);
+      assert.doesNotThrow(() => renderSoulCardHtml(circular, esc));
+      const resCard = renderSoulCardHtml(circular, esc);
+      assert.equal(typeof resCard, 'string');
+      assert.doesNotMatch(resCard, /\[object Object\]/);
+
+      // Circular property inside soul.name
+      const circularProp = {};
+      circularProp.name = circularProp;
+      assert.doesNotThrow(() => formatSoul(circularProp));
+      assert.doesNotMatch(formatSoul(circularProp), /\[object Object\]/);
+      assert.doesNotThrow(() => renderSoulCardHtml(circularProp, esc));
+      assert.doesNotMatch(renderSoulCardHtml(circularProp, esc), /\[object Object\]/);
+
+      const nullProto = Object.create(null);
+      nullProto.name = 'Null Prototype Master';
+      assert.equal(formatSoul(nullProto), 'Null Prototype Master');
+    });
   });
 
   describe('Graph Label Truncation Helper (#19)', () => {
@@ -651,6 +734,41 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(truncateAtWord(undefined), '');
       assert.equal(truncateAtWord(''), '');
     });
+
+    it('handles non-positive maxLen and zero without throwing or trailing ellipsis', () => {
+      assert.equal(truncateAtWord('hello world', 0), '');
+      assert.equal(truncateAtWord('hello world', -1), '');
+      assert.equal(truncateAtWord('hello world', -10), '');
+      assert.equal(truncateAtWord('', 0), '');
+      assert.equal(truncateAtWord('', -5), '');
+      assert.equal(truncateAtWord('hello world', NaN), '');
+      assert.equal(truncateAtWord('hello world', 1), '…');
+    });
+
+    it('safely slices multi-byte UTF-16 surrogate pairs (emojis) without producing unpaired surrogates', () => {
+      const emojiStr = '🚀🔥🎉✨🌟';
+      const unpairedSurrogatePattern = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+      for (let len = 1; len <= 10; len++) {
+        const truncated = truncateAtWord(emojiStr, len);
+        assert.equal(
+          unpairedSurrogatePattern.test(truncated),
+          false,
+          `truncateAtWord("${emojiStr}", ${len}) returned unpaired surrogate: ${JSON.stringify(truncated)}`
+        );
+      }
+
+      // Mixed text and multi-byte emojis
+      const mixed = 'Deliberation 🚀 with high-throughput 🔥 clusters';
+      for (let len = 5; len <= 35; len += 3) {
+        const truncated = truncateAtWord(mixed, len);
+        assert.equal(
+          unpairedSurrogatePattern.test(truncated),
+          false,
+          `truncateAtWord("${mixed}", ${len}) returned unpaired surrogate: ${JSON.stringify(truncated)}`
+        );
+      }
+    });
   });
 
   describe('Prototype Decoupling & File Deletions (#21, #22)', () => {
@@ -681,6 +799,51 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
     it('verifies src/visualizer/council-machine.js and council-walkthroughs.js are deleted', () => {
       assert.equal(fs.existsSync(protoMachinePath), false, 'council-machine.js must be deleted');
       assert.equal(fs.existsSync(protoWalkthroughsPath), false, 'council-walkthroughs.js must be deleted');
+    });
+
+    it('verifies src/visualizer/index.html includes accessible heading-graphs landmark', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.match(
+        html,
+        /<h2\s+id=["']heading-graphs["']\s+class=["']sr-only["']>/,
+        'index.html must contain <h2 id="heading-graphs" class="sr-only">'
+      );
+      assert.match(
+        html,
+        /\.sr-only\s*\{/,
+        'index.html must contain .sr-only styling'
+      );
+    });
+
+    it('verifies index.html formatSoul safely handles circular objects without emitting [object Object]', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      const formatSoulMatch = html.match(/function formatSoul\(soul\) \{[\s\S]*?\n    \}/);
+      assert.ok(formatSoulMatch, 'index.html must define formatSoul function');
+      const fn = new Function('soul', formatSoulMatch[0] + '\nreturn formatSoul(soul);');
+      const circular = { a: 1 };
+      circular.self = circular;
+      const res = fn(circular);
+      assert.doesNotMatch(res, /\[object Object\]/);
+      assert.equal(res, '');
+    });
+
+    it('verifies index.html loads council-visualizer.js and delegates to CouncilVisualizer API', () => {
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.match(
+        html,
+        /<script\s+src=["']\.\/council-visualizer\.js["']>/,
+        'index.html must load ./council-visualizer.js'
+      );
+      assert.match(
+        html,
+        /CouncilVisualizer\.formatSoul/,
+        'index.html formatSoul must delegate to CouncilVisualizer.formatSoul'
+      );
+      assert.match(
+        html,
+        /CouncilVisualizer\.renderSoulCardHtml/,
+        'index.html renderSoulCardHtml must delegate to CouncilVisualizer.renderSoulCardHtml'
+      );
     });
   });
 });

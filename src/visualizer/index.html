@@ -87,6 +87,18 @@
       outline-offset: 2px;
     }
 
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     .layout {
       max-width: 1380px;
       margin: 0 auto;
@@ -474,7 +486,8 @@
     .harness-antigravity { background: var(--accent-soft); color: var(--accent); }
     .harness-cursor { background: var(--purple-soft); color: var(--purple); }
 
-    .soul-block {
+    .soul-block,
+    .soul-text {
       font-size: 12px;
       color: var(--text-secondary);
       line-height: 1.35;
@@ -485,6 +498,11 @@
     }
     .soul-lens {
       color: var(--text-muted);
+    }
+    .soul-temperament {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
     }
 
     /* Deliberation Graphs Section */
@@ -664,6 +682,7 @@
 
       <!-- 5. Deliberation Graphs (State Machine Flow & Causal DAG) -->
       <section class="surface-card" aria-labelledby="heading-graphs" style="margin-top:16px;">
+        <h2 id="heading-graphs" class="sr-only">Deliberation Graphs</h2>
         <div class="tabs-header">
           <button id="btn-tab-topology" class="active" onclick="switchGraphTab('topology')">State Machine Flow</button>
           <button id="btn-tab-causal" onclick="switchGraphTab('causal')">Causal Dependency DAG</button>
@@ -702,36 +721,64 @@
     let currentStepIdx = -1;
     let activeGraphTab = 'topology';
 
-    // Format structured soul cleanly without [object Object]
+    // Format structured soul cleanly delegating to CouncilVisualizer without [object Object]
     function formatSoul(soul) {
-      if (!soul) return '';
-      if (typeof soul === 'string') return soul;
-      if (typeof soul === 'object') {
-        const name = soul.name || '';
-        const lens = soul.lens || '';
-        if (name && lens) return name + ' · ' + lens;
-        if (name) return name;
-        if (lens) return lens;
-        if (soul.temperament) return String(soul.temperament);
-        try { return JSON.stringify(soul); } catch { return String(soul); }
+      if (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && typeof CouncilVisualizer.formatSoul === 'function') {
+        return CouncilVisualizer.formatSoul(soul);
       }
-      return String(soul);
+      try {
+        if (!soul) return '';
+        if (typeof soul === 'string') {
+          const trimmed = soul.trim();
+          return trimmed === '[object Object]' ? '' : trimmed;
+        }
+        if (typeof soul === 'number' || typeof soul === 'boolean' || typeof soul === 'bigint') {
+          return String(soul).trim();
+        }
+        if (typeof soul === 'object') {
+          const toSafe = function (v) {
+            if (v == null) return '';
+            if (typeof v === 'string') {
+              const t = v.trim();
+              return t === '[object Object]' ? '' : t;
+            }
+            if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v).trim();
+            if (Array.isArray(v)) {
+              return v.map(function (x) {
+                return typeof x === 'string' ? x.trim() : (x != null && typeof x !== 'object' ? String(x).trim() : '');
+              }).filter(Boolean).join(', ');
+            }
+            return '';
+          };
+          const name = toSafe(soul.name);
+          const lens = toSafe(soul.lens);
+          const temperament = toSafe(soul.temperament);
+          if (name && lens) return name + ' — ' + lens;
+          if (name) return name;
+          if (lens) return lens;
+          if (temperament) return temperament;
+          try {
+            const json = JSON.stringify(soul);
+            if (json && json !== '{}' && !json.includes('[object Object]')) {
+              return json;
+            }
+          } catch {}
+          return '';
+        }
+        return '';
+      } catch {
+        return '';
+      }
     }
 
     function renderSoulCardHtml(soul, esc) {
+      if (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && typeof CouncilVisualizer.renderSoulCardHtml === 'function') {
+        return CouncilVisualizer.renderSoulCardHtml(soul, esc);
+      }
       if (!soul) return '';
-      if (typeof soul === 'string') {
-        return '<div class="soul-block">' + esc(soul) + '</div>';
-      }
-      if (typeof soul === 'object') {
-        return (
-          '<div class="soul-block">' +
-            '<span class="soul-name">' + esc(soul.name || 'Participant') + '</span>' +
-            (soul.lens ? '<span class="soul-lens"> · ' + esc(soul.lens) + '</span>' : '') +
-          '</div>'
-        );
-      }
-      return '<div class="soul-block">' + esc(String(soul)) + '</div>';
+      const escape = typeof esc === 'function' ? esc : function (s) { return String(s); };
+      const text = formatSoul(soul);
+      return text ? '<div class="soul-block">' + escape(text) + '</div>' : '';
     }
 
     function getLiveRun() {
@@ -1033,7 +1080,7 @@
         timelineEl.innerHTML = steps.map(function (st, i) {
           const isActive = (i === currentStepIdx);
           return (
-            '<div class="timeline-row ' + (isActive ? 'active' : '') + '" onclick="inspectStep(' + i + ')">' +
+            '<div class="timeline-row ' + (isActive ? 'active' : '') + '" role="button" tabindex="0" onclick="inspectStep(' + i + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();inspectStep(' + i + ');}">' +
               '<span class="timeline-action">' + esc(st.label) + '</span>' +
               '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
             '</div>'

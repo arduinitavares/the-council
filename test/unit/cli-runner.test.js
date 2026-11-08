@@ -8,14 +8,17 @@ import {
   execCli,
   runAntigravityCli,
   runCodexCli,
-  runCursorCli
+  runCursorCli,
+  redactArgv,
+  CODEX_EFFORT_MAP,
+  ALLOWED_EFFORTS
 } from '../../src/harness/cli-runner.js';
 
 describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
   describe('parseModelAndEffort', () => {
     it('parses model and effort from parenthesized model string', () => {
       const res1 = parseModelAndEffort('gpt-6-astra (max)');
-      assert.deepEqual(res1, { model: 'gpt-6-astra', effort: 'max', codexEffort: 'xhigh' });
+      assert.deepEqual(res1, { model: 'gpt-6-astra', effort: 'max', codexEffort: 'max' });
 
       const res2 = parseModelAndEffort('gpt-6.1-sol (high)');
       assert.deepEqual(res2, { model: 'gpt-6.1-sol', effort: 'high', codexEffort: 'high' });
@@ -232,13 +235,14 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(captured.bin, 'codex');
       assert.deepEqual(captured.args, [
         'exec',
+        '--ephemeral',
         '--skip-git-repo-check',
         '--sandbox',
         'read-only',
         '-m',
         'gpt-6-astra',
         '-c',
-        'model_reasoning_effort="xhigh"',
+        'model_reasoning_effort="max"',
         'Audit and synthesize candidate'
       ]);
       assert.equal(out, '{"vote":"accept"}');
@@ -345,6 +349,273 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         async () => runCursorCli({ model: 'grok-4.7-high', prompt: 'P', exec: mockExec }),
         /Permission denied/
       );
+    });
+  });
+
+  describe('parseModelAndEffort: Codex Effort Preservation (Issue #15)', () => {
+    it('preserves "max" effort for parenthesized model strings', () => {
+      const res = parseModelAndEffort('gpt-6-astra (max)');
+      assert.deepEqual(res, {
+        model: 'gpt-6-astra',
+        effort: 'max',
+        codexEffort: 'max'
+      });
+    });
+
+    it('preserves "max" effort regardless of case or whitespace', () => {
+      const variations = [
+        'gpt-6-astra (MAX)',
+        'gpt-6-astra (Max)',
+        '  gpt-6-astra   (  max  )  '
+      ];
+      for (const v of variations) {
+        const res = parseModelAndEffort(v);
+        assert.equal(res.codexEffort, 'max', `Failed for variation: ${v}`);
+        assert.equal(res.effort, 'max', `Failed for variation: ${v}`);
+      }
+    });
+
+    it('preserves "max" effort for hyphenated suffix syntax', () => {
+      const res = parseModelAndEffort('model-max');
+      assert.deepEqual(res, {
+        model: 'model-max',
+        effort: 'max',
+        codexEffort: 'max'
+      });
+    });
+
+    it('preserves "max" effort when specified as defaultEffort fallback', () => {
+      const res = parseModelAndEffort('plain-model', 'max');
+      assert.deepEqual(res, {
+        model: 'plain-model',
+        effort: 'max',
+        codexEffort: 'max'
+      });
+    });
+
+    it('distinguishes "max" and "xhigh" as separate, non-aliased tiers', () => {
+      const maxRes = parseModelAndEffort('gpt-6-astra (max)');
+      const xhighRes = parseModelAndEffort('gpt-6-astra (xhigh)');
+      assert.equal(maxRes.codexEffort, 'max');
+      assert.equal(xhighRes.codexEffort, 'xhigh');
+      assert.notEqual(maxRes.codexEffort, xhighRes.codexEffort);
+    });
+  });
+
+  describe('parseModelAndEffort: Unsupported Effort Rejection (Issue #15)', () => {
+    it('throws descriptive configuration error for unrecognized parenthesized effort', () => {
+      const invalidEfforts = ['ultra', 'extreme', 'ultra-mega', 'turbo', 'none', 'super-high'];
+      for (const invalid of invalidEfforts) {
+        assert.throws(
+          () => parseModelAndEffort(`gpt-6-astra (${invalid})`),
+          (err) => {
+            assert.match(err.message, new RegExp(`Unsupported reasoning effort "${invalid}"`, 'i'));
+            assert.match(err.message, /Allowed:.*(max|xhigh|high|medium|low)/i);
+            return true;
+          },
+          `Expected error for invalid effort: ${invalid}`
+        );
+      }
+    });
+
+    it('throws descriptive error if defaultEffort parameter is invalid', () => {
+      assert.throws(
+        () => parseModelAndEffort('plain-model', 'ultra'),
+        (err) => {
+          assert.match(err.message, /Unsupported reasoning effort "ultra"/i);
+          assert.match(err.message, /Allowed:/i);
+          return true;
+        }
+      );
+    });
+
+    it('rejects unsupported effort before calling child_process in runCodexCli', async () => {
+      let childSpawned = false;
+      const mockExec = async () => {
+        childSpawned = true;
+        return { stdout: 'ok', exitCode: 0 };
+      };
+
+      await assert.rejects(
+        async () => runCodexCli({
+          model: 'gpt-6-astra (unsupported_effort)',
+          prompt: 'test prompt',
+          exec: mockExec
+        }),
+        /Unsupported reasoning effort "unsupported_effort"/i
+      );
+
+      assert.equal(childSpawned, false, 'Process must not be spawned if model effort is invalid');
+    });
+  });
+
+  describe('runCodexCli: Ephemeral Isolation & Argument Invariants (Issue #18)', () => {
+    it('unconditionally includes "--ephemeral" in Codex exec arguments', async () => {
+      let capturedArgs = null;
+      const mockExec = async (bin, args) => {
+        capturedArgs = args;
+        return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+      };
+
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'Synthesize research',
+        exec: mockExec
+      });
+
+      assert.ok(capturedArgs.includes('--ephemeral'), 'Arguments must include --ephemeral');
+      const ephemeralIdx = capturedArgs.indexOf('--ephemeral');
+      const promptIdx = capturedArgs.indexOf('Synthesize research');
+      const execIdx = capturedArgs.indexOf('exec');
+      assert.equal(execIdx, 0, 'exec must be the first argument');
+      assert.ok(ephemeralIdx > execIdx, '--ephemeral must come after exec');
+      assert.ok(ephemeralIdx < promptIdx, '--ephemeral must come before prompt');
+    });
+
+    it('passes model_reasoning_effort="max" when model has max effort', async () => {
+      let capturedArgs = null;
+      const mockExec = async (bin, args) => {
+        capturedArgs = args;
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      };
+
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'Audit topic',
+        exec: mockExec
+      });
+
+      const cIndex = capturedArgs.indexOf('-c');
+      assert.ok(cIndex !== -1, 'Arguments must contain -c flag');
+      assert.equal(
+        capturedArgs[cIndex + 1],
+        'model_reasoning_effort="max"',
+        'Reasoning effort must be "max" without downgrade'
+      );
+    });
+
+    it('matches the exact argument specification in PROJECT.md', async () => {
+      let captured = null;
+      const mockExec = async (bin, args, opts) => {
+        captured = { bin, args, opts };
+        return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+      };
+
+      await runCodexCli({
+        model: 'gpt-6.1-sol (max)',
+        prompt: 'Execute round',
+        exec: mockExec
+      });
+
+      assert.equal(captured.bin, 'codex');
+      assert.deepEqual(captured.args, [
+        'exec',
+        '--ephemeral',
+        '--skip-git-repo-check',
+        '--sandbox',
+        'read-only',
+        '-m',
+        'gpt-6.1-sol',
+        '-c',
+        'model_reasoning_effort="max"',
+        'Execute round'
+      ]);
+    });
+
+    it('supports opt-in strict isolation (--ignore-user-config)', async () => {
+      let capturedArgs = null;
+      const mockExec = async (bin, args) => {
+        capturedArgs = args;
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      };
+
+      // Default: does not include --ignore-user-config (preserves auth)
+      await runCodexCli({
+        model: 'gpt-6-astra (high)',
+        prompt: 'prompt',
+        exec: mockExec
+      });
+      assert.equal(capturedArgs.includes('--ignore-user-config'), false);
+
+      // Opt-in: ignoreUserConfig: true
+      await runCodexCli({
+        model: 'gpt-6-astra (high)',
+        prompt: 'prompt',
+        ignoreUserConfig: true,
+        exec: mockExec
+      });
+      assert.ok(capturedArgs.includes('--ignore-user-config'));
+      assert.equal(capturedArgs.indexOf('--ignore-user-config'), capturedArgs.indexOf('--ephemeral') + 1);
+    });
+  });
+
+  describe('runCodexCli: Telemetry & Prompt Redaction (PROJECT.md:45)', () => {
+    it('redacts prompt content in recorded argv while preserving flags', async () => {
+      let recordedCall = null;
+      const secretPrompt = 'Confidential deliberative deliberation prompt with sensitive data';
+
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: secretPrompt,
+        context: { seatId: 'astra-1' },
+        onCallRecord: (record) => { recordedCall = record; },
+        exec: async () => ({ stdout: 'ok', exitCode: 0 })
+      });
+
+      assert.ok(recordedCall, 'onCallRecord must be invoked');
+      assert.equal(recordedCall.participantId, 'astra-1');
+      assert.equal(recordedCall.provider, 'codex');
+      assert.equal(recordedCall.exitCode, 0);
+      assert.ok(typeof recordedCall.durationMs === 'number');
+
+      // Verify prompt is redacted in argv
+      assert.ok(!recordedCall.argv.includes(secretPrompt), 'Prompt must not appear in recorded argv');
+      const redactedArg = recordedCall.argv.find((a) => a.startsWith('[REDACTED prompt:'));
+      assert.ok(redactedArg, 'Argv must contain redacted prompt summary');
+      assert.ok(redactedArg.includes(`length=${secretPrompt.length}`));
+    });
+
+    it('records non-zero exitCode and call duration upon CLI failure', async () => {
+      let recordedCall = null;
+      const failingExec = async () => {
+        const err = new Error('Execution failed');
+        err.exitCode = 127;
+        throw err;
+      };
+
+      await assert.rejects(
+        async () => runCodexCli({
+          model: 'gpt-6-astra (max)',
+          prompt: 'test',
+          onCallRecord: (record) => { recordedCall = record; },
+          exec: failingExec
+        })
+      );
+
+      assert.ok(recordedCall);
+      assert.equal(recordedCall.exitCode, 127);
+      assert.ok(recordedCall.durationMs >= 0);
+    });
+  });
+
+  describe('redactArgv helper', () => {
+    it('returns empty array if args is not an array', () => {
+      assert.deepEqual(redactArgv(null), []);
+      assert.deepEqual(redactArgv(undefined), []);
+      assert.deepEqual(redactArgv('string'), []);
+    });
+
+    it('redacts prompt positional arg and --print=<prompt> arg', () => {
+      const prompt = 'my secret prompt';
+      const args1 = ['exec', prompt];
+      const redacted1 = redactArgv(args1, prompt);
+      assert.equal(redacted1[0], 'exec');
+      assert.match(redacted1[1], /^\[REDACTED prompt: length=16, sha256=[a-f0-9]{12}\]$/);
+
+      const args2 = ['--print=' + prompt, '--other'];
+      const redacted2 = redactArgv(args2, prompt);
+      assert.match(redacted2[0], /^--print=\[REDACTED prompt: length=16, sha256=[a-f0-9]{12}\]$/);
+      assert.equal(redacted2[1], '--other');
     });
   });
 });

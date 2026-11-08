@@ -77,7 +77,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
       assert.deepEqual(res, {
         model: 'gpt-6-astra',
         effort: 'max',
-        codexEffort: 'xhigh'
+        codexEffort: 'max'
       });
 
       const res2 = parseModelAndEffort('\tgpt-6.1-sol\t(\tHIGH\t)\n');
@@ -92,7 +92,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
       const res1 = parseModelAndEffort('GPT-6-ASTRA (MAX)');
       assert.equal(res1.model, 'GPT-6-ASTRA');
       assert.equal(res1.effort, 'max');
-      assert.equal(res1.codexEffort, 'xhigh');
+      assert.equal(res1.codexEffort, 'max');
 
       const res2 = parseModelAndEffort('gemini-4-argon-HIGH');
       assert.equal(res2.model, 'gemini-4-argon-HIGH');
@@ -139,13 +139,11 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
       assert.equal(resSpace.codexEffort, 'high');
     });
 
-    it('handles unrecognized or custom effort strings without crashing', () => {
-      const res = parseModelAndEffort('custom-model (ultra)');
-      assert.deepEqual(res, {
-        model: 'custom-model',
-        effort: 'ultra',
-        codexEffort: 'high' // Fallback to 'high'
-      });
+    it('rejects unrecognized or custom effort strings with descriptive configuration error', () => {
+      assert.throws(
+        () => parseModelAndEffort('custom-model (ultra)'),
+        /Unsupported reasoning effort "ultra"\. Allowed: /i
+      );
     });
 
     it('respects defaultEffort parameter variations', () => {
@@ -160,16 +158,14 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
       assert.deepEqual(res2, {
         model: 'plain-model',
         effort: 'max',
-        codexEffort: 'xhigh'
+        codexEffort: 'max'
       });
 
-      // When unrecognized effort is in paren and defaultEffort is 'medium'
-      const res3 = parseModelAndEffort('plain-model (unknown)', 'medium');
-      assert.deepEqual(res3, {
-        model: 'plain-model',
-        effort: 'unknown',
-        codexEffort: 'medium'
-      });
+      // When unrecognized effort is in paren, rejects with error even if defaultEffort is provided
+      assert.throws(
+        () => parseModelAndEffort('plain-model (unknown)', 'medium'),
+        /Unsupported reasoning effort "unknown"\. Allowed: /i
+      );
     });
 
     it('does not false-positive match hyphenated suffixes without hyphens', () => {
@@ -431,7 +427,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
     });
 
     describe('runCodexCli', () => {
-      it('correctly maps model and codexEffort xhigh for max effort', async () => {
+      it('correctly maps model, codexEffort max, and includes --ephemeral for max effort', async () => {
         let capturedArgs = null;
         const mockExec = async (bin, args) => {
           capturedArgs = args;
@@ -447,10 +443,11 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
         assert.equal(res, '{"vote":"accept"}');
         assert.deepEqual(capturedArgs, [
           'exec',
+          '--ephemeral',
           '--skip-git-repo-check',
           '--sandbox', 'read-only',
           '-m', 'gpt-6-astra',
-          '-c', 'model_reasoning_effort="xhigh"',
+          '-c', 'model_reasoning_effort="max"',
           'Audit topic'
         ]);
       });

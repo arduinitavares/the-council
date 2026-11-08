@@ -257,7 +257,12 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         return await safeExit(1);
       }
       engineOptions.harnessRegistry = harnessRegistry;
-      liveWatcher = io.liveWatcher || new VisualizerLiveWatcher({ initialConfig: resolved });
+      liveWatcher =
+        io.liveWatcher ||
+        new VisualizerLiveWatcher({
+          initialConfig: resolved,
+          ...(io.liveWatcherOptions || {})
+        });
     }
 
     const engine = new CouncilEngine(resolved, engineOptions);

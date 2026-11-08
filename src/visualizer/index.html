@@ -583,6 +583,10 @@
       </div>
 
       <div class="status-cluster">
+        <select id="run-selector" aria-label="Select deliberation run" onchange="selectRun(this.value)" style="background:var(--surface-raised); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-family:var(--mono); font-size:11.5px;">
+          <option value="latest">Latest Run (Live Follow)</option>
+        </select>
+
         <div id="status-pill" class="badge badge-running">
           <span class="pulse-dot"></span>
           <span id="status-pill-text">RUNNING</span>
@@ -709,7 +713,9 @@
   </div>
 
   <!-- Load Portable Modules & Latest Live Run -->
-  <script src="./live-run-latest.js" onerror="/* optional: created on first live run */"></script>
+  <script src="./live-run-latest.js" onerror="/* optional legacy fallback */"></script>
+  <script src="../../.council/runs/index.js" onerror="/* optional: created on first live run */"></script>
+  <script src="../../.council/runs/latest.js" onerror="/* optional: created on first live run */"></script>
   <script src="./council-visualizer.js"></script>
 
   <script>
@@ -720,6 +726,7 @@
     let startTime = Date.now();
     let currentStepIdx = -1;
     let activeGraphTab = 'topology';
+    let selectedRunId = 'latest';
 
     // Format structured soul cleanly delegating to CouncilVisualizer without [object Object]
     function formatSoul(soul) {
@@ -782,8 +789,67 @@
     }
 
     function getLiveRun() {
+      const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
+                   (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
+      if (selectedRunId !== 'latest' && runs && runs[selectedRunId]) {
+        return runs[selectedRunId];
+      }
       return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
              (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
+    }
+
+    function updateRunSelector() {
+      const sel = document.getElementById('run-selector');
+      if (!sel) return;
+      const runIndex = (typeof window !== 'undefined' && window.CouncilRunIndex) ||
+                       (typeof globalThis !== 'undefined' && globalThis.CouncilRunIndex) || [];
+      if (!Array.isArray(runIndex)) return;
+      const prevValue = sel.value || selectedRunId || 'latest';
+      let html = '<option value="latest">Latest Run (Live Follow)</option>';
+      for (let i = 0; i < runIndex.length; i++) {
+        const entry = runIndex[i];
+        if (!entry || !entry.runId) continue;
+        const label = (entry.topic || entry.title || entry.runId).slice(0, 48);
+        const statusTag = entry.isRunning ? 'RUNNING' : (entry.verdictKind || 'DONE');
+        html += '<option value="' + String(entry.runId).replace(/"/g, '&quot;') + '">' +
+          String(entry.runId) + ' — ' + String(label).replace(/</g, '&lt;') + ' [' + String(statusTag).replace(/</g, '&lt;') + ']' +
+          '</option>';
+      }
+      sel.innerHTML = html;
+      sel.value = prevValue;
+    }
+
+    function selectRun(runId) {
+      selectedRunId = runId || 'latest';
+      currentStepIdx = -1;
+      const badgeTag = document.getElementById('badge-live-tag');
+      if (selectedRunId === 'latest') {
+        if (badgeTag) badgeTag.textContent = 'Latest Live Run';
+        startLiveFollow();
+        return;
+      }
+      stopLiveFollow();
+      if (badgeTag) badgeTag.textContent = 'Run: ' + selectedRunId;
+      const runs = (typeof window !== 'undefined' && window.CouncilRuns) || {};
+      if (runs[selectedRunId] && runs[selectedRunId].currentState) {
+        councilState = runs[selectedRunId].currentState;
+        renderAll();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = '../../.council/runs/' + encodeURIComponent(selectedRunId) + '.js?t=' + Date.now();
+      script.onload = function () {
+        script.remove();
+        const loadedRun = getLiveRun();
+        if (loadedRun && loadedRun.currentState) {
+          councilState = loadedRun.currentState;
+        }
+        renderAll();
+      };
+      script.onerror = function () {
+        script.remove();
+      };
+      document.head.appendChild(script);
     }
 
     let councilState = (function () {
@@ -803,6 +869,9 @@
       if (liveFollowTimer) {
         stopLiveFollow();
       } else {
+        selectedRunId = 'latest';
+        const sel = document.getElementById('run-selector');
+        if (sel) sel.value = 'latest';
         startLiveFollow();
       }
     }
@@ -815,6 +884,7 @@
       document.getElementById('stream-badge').textContent = '⚡ LIVE SYNC';
 
       pollLiveRun();
+      if (liveFollowTimer) clearInterval(liveFollowTimer);
       liveFollowTimer = setInterval(pollLiveRun, 1000);
     }
 
@@ -835,13 +905,29 @@
       if (oldScript) {
         oldScript.remove();
       }
+      const oldIndex = document.getElementById('script-index-reload');
+      if (oldIndex) {
+        oldIndex.remove();
+      }
+
+      const idxScript = document.createElement('script');
+      idxScript.id = 'script-index-reload';
+      idxScript.src = '../../.council/runs/index.js?t=' + Date.now();
+      idxScript.onload = function () {
+        idxScript.remove();
+        updateRunSelector();
+      };
+      idxScript.onerror = function () {
+        idxScript.remove();
+      };
+      document.head.appendChild(idxScript);
 
       const script = document.createElement('script');
       script.id = 'script-live-reload';
-      script.src = './live-run-latest.js?t=' + Date.now();
+      script.src = '../../.council/runs/latest.js?t=' + Date.now();
 
-      script.onload = function () {
-        script.remove();
+      const onRunLoaded = function () {
+        updateRunSelector();
         const liveRun = getLiveRun();
         if (liveRun && liveRun.currentState) {
           if (currentStepIdx === -1 || currentStepIdx === (liveRun.steps || []).length - 1) {
@@ -851,8 +937,23 @@
         renderAll();
       };
 
+      script.onload = function () {
+        script.remove();
+        onRunLoaded();
+      };
+
       script.onerror = function () {
         script.remove();
+        const fallback = document.createElement('script');
+        fallback.src = './live-run-latest.js?t=' + Date.now();
+        fallback.onload = function () {
+          fallback.remove();
+          onRunLoaded();
+        };
+        fallback.onerror = function () {
+          fallback.remove();
+        };
+        document.head.appendChild(fallback);
       };
 
       document.head.appendChild(script);

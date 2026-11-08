@@ -1584,6 +1584,195 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       }
     });
   });
+
+  describe('Run-Scoped Artifacts, Manifest Index, Sub-Quadratic Deltas & .gitignore (#20)', () => {
+    it('defines root .gitignore covering .council/, src/visualizer/live-run-latest.js, .codegraph/, .DS_Store, node_modules/, and *.local.json', () => {
+      const gitignorePath = path.resolve(import.meta.dirname, '../../.gitignore');
+      assert.ok(fs.existsSync(gitignorePath), '.gitignore must exist at repo root');
+      const content = fs.readFileSync(gitignorePath, 'utf8');
+      assert.match(content, /^\.council\/?$/m);
+      assert.match(content, /^src\/visualizer\/live-run-latest\.js$/m);
+      assert.match(content, /^\.codegraph\/?$/m);
+      assert.match(content, /^\.DS_Store$/m);
+      assert.match(content, /^node_modules\/?$/m);
+      assert.match(content, /^\*\.local\.json$/m);
+    });
+
+    it('defaults outputDir to <PACKAGE_ROOT>/.council/runs outside src/ and persists run-scoped <runId>.js, latest.js, and index.js across consecutive runs', () => {
+      const runsDir = path.join(tmpDir, 'runs');
+      const emitter1 = createTelemetryEmitter();
+      const watcher1 = new VisualizerLiveWatcher({
+        telemetry: emitter1,
+        outputDir: runsDir,
+        runId: 'run-first-001',
+        initialConfig: { topic: 'First Run Topic' }
+      });
+
+      emitter1.emitStateTransition(
+        { type: 'EVALUATE_ROUND' },
+        {
+          phase: 'completed',
+          round: 1,
+          topic: 'First Run Topic',
+          verdict: { kind: 'Unanimous Consensus', note: 'First run done' },
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: ['Verdict: Unanimous Consensus']
+        }
+      );
+      watcher1.stop();
+
+      const emitter2 = createTelemetryEmitter();
+      const watcher2 = new VisualizerLiveWatcher({
+        telemetry: emitter2,
+        outputDir: runsDir,
+        runId: 'run-second-002',
+        initialConfig: { topic: 'Second Run Topic' }
+      });
+
+      emitter2.emitStateTransition(
+        { type: 'EVALUATE_ROUND' },
+        {
+          phase: 'completed',
+          round: 2,
+          topic: 'Second Run Topic',
+          verdict: { kind: 'Dissent Report (Round Limit Reached)', note: 'Second run dissent' },
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: ['Verdict: Dissent Report']
+        }
+      );
+      watcher2.stop();
+
+      // Both run artifacts + latest.js + index.js must exist
+      const run1File = path.join(runsDir, 'run-first-001.js');
+      const run2File = path.join(runsDir, 'run-second-002.js');
+      const latestFile = path.join(runsDir, 'latest.js');
+      const indexFile = path.join(runsDir, 'index.js');
+
+      assert.ok(fs.existsSync(run1File), 'First run artifact must exist');
+      assert.ok(fs.existsSync(run2File), 'Second run artifact must exist');
+      assert.ok(fs.existsSync(latestFile), 'latest.js pointer must exist');
+      assert.ok(fs.existsSync(indexFile), 'index.js manifest must exist');
+
+      // Evaluate index.js, latest.js, and run-first-001.js in browser sandbox
+      const win = {};
+      new Function('window', 'globalThis', fs.readFileSync(indexFile, 'utf8'))(win, win);
+      assert.ok(Array.isArray(win.CouncilRunIndex), 'window.CouncilRunIndex must be an array');
+      assert.equal(win.CouncilRunIndex.length, 2, 'CouncilRunIndex must list both consecutive runs');
+      assert.equal(win.CouncilRunIndex[0].runId, 'run-second-002', 'Newest run must be first');
+      assert.equal(win.CouncilRunIndex[1].runId, 'run-first-001', 'Earlier run must be preserved');
+
+      new Function('window', 'globalThis', fs.readFileSync(latestFile, 'utf8'))(win, win);
+      assert.equal(win.CouncilLatestLiveRun.runId, 'run-second-002');
+      assert.equal(win.CouncilLatestLiveRun.currentState.topic, 'Second Run Topic');
+
+      // Switch to earlier run by loading run-first-001.js
+      new Function('window', 'globalThis', fs.readFileSync(run1File, 'utf8'))(win, win);
+      assert.ok(win.CouncilRuns && win.CouncilRuns['run-first-001']);
+      assert.equal(win.CouncilRuns['run-first-001'].currentState.topic, 'First Run Topic');
+      assert.equal(win.CouncilRuns['run-first-001'].currentState.verdict.kind, 'Unanimous Consensus');
+    });
+
+    it('stores compact stateDelta on disk so 17-step deliberation grows sub-quadratically without repeating clarifications or prior history N times, while rehydrating step.stateSnapshot at runtime', () => {
+      const runsDir = path.join(tmpDir, 'subquadratic');
+      const largeClarification = 'CLARIFICATION_PAYLOAD_' + 'X'.repeat(4000);
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputDir: runsDir,
+        runId: 'run-subquad',
+        initialConfig: {
+          topic: 'Sub-Quadratic Snapshot Scaling Test',
+          seats: [
+            { id: 'seat-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Soul 1 ' + 'S'.repeat(500) },
+            { id: 'seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Soul 2 ' + 'S'.repeat(500) }
+          ],
+          judge: { id: 'judge-1', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge Soul' }
+        }
+      });
+
+      const proofs = [];
+      const history = [];
+      for (let i = 1; i <= 17; i++) {
+        proofs.push({
+          id: `P${i}`,
+          seatId: i % 2 === 0 ? 'seat-2' : 'seat-1',
+          round: 1,
+          kind: 'check',
+          scope: `Scope ${i}`,
+          source: `src/file-${i}.js`,
+          statement: `Statement_${i}_` + 'P'.repeat(1000),
+          status: i < 10 ? 'admitted' : 'pending'
+        });
+        history.unshift(`Step_${i}_history_entry_` + 'H'.repeat(300));
+
+        const state = {
+          phase: i === 17 ? 'completed' : 'reviewing',
+          canonicalPhase: i === 17 ? 'CONSENSUS' : 'DELIBERATION',
+          round: 1,
+          maxRounds: 3,
+          minQuorum: 2,
+          topic: 'Sub-Quadratic Snapshot Scaling Test',
+          clarifications: [{ batch: 1, answer: largeClarification }],
+          seats: [
+            { id: 'seat-1', harness: 'codex', model: 'gpt-6-astra (max)', status: i % 2 === 0 ? 'proof_submitted' : 'thinking', retries: 0, soul: 'Soul 1 ' + 'S'.repeat(500) },
+            { id: 'seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', status: 'thinking', retries: 0, soul: 'Soul 2 ' + 'S'.repeat(500) }
+          ],
+          judge: { id: 'judge-1', harness: 'antigravity', model: 'claude-opus-5-5-high', status: 'idle', soul: 'Judge Soul' },
+          proofs: structuredClone(proofs),
+          objections: [],
+          candidate: i >= 10 ? { round: 1, summary: 'Candidate summary', clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }] } : null,
+          verdict: i === 17 ? { kind: 'Unanimous Consensus', note: 'Agreed' } : null,
+          history: [...history]
+        };
+
+        emitter.emitStateTransition({ type: 'SUBMIT_PROOF', seatId: 'seat-1', id: `P${i}`, kind: 'check' }, state);
+      }
+
+      watcher.stop();
+
+      const latestFile = path.join(runsDir, 'latest.js');
+      const rawDisk = fs.readFileSync(latestFile, 'utf8');
+
+      // largeClarification must appear at most twice in the serialized file (never 17+ times across every step)
+      const clarificationOccurrences = rawDisk.split('CLARIFICATION_PAYLOAD_').length - 1;
+      assert.ok(
+        clarificationOccurrences <= 2,
+        `Expected largeClarification to not be duplicated across 17 steps, found ${clarificationOccurrences} occurrences`
+      );
+
+      // Statement_1_ must appear at most twice (in currentState.proofs and the single SUBMIT_PROOF event if present, not 17 times)
+      const proof1Occurrences = rawDisk.split('Statement_1_').length - 1;
+      assert.ok(
+        proof1Occurrences <= 2,
+        `Expected Statement_1_ to not be duplicated across 17 steps, found ${proof1Occurrences} occurrences`
+      );
+
+      // Evaluate in sandbox and verify every step has rehydrated stateSnapshot & graph
+      const win = {};
+      new Function('window', 'globalThis', rawDisk)(win, win);
+      const loaded = win.CouncilLatestLiveRun;
+      assert.equal(loaded.steps.length, 17);
+      assert.ok(loaded.steps[0].stateDelta, 'Step 0 must have compact stateDelta');
+      assert.ok(loaded.steps[0].stateSnapshot, 'Step 0 must rehydrate stateSnapshot at runtime');
+      assert.equal(loaded.steps[0].stateSnapshot.phase, 'reviewing');
+      assert.equal(loaded.steps[0].stateSnapshot.seats[0].status, 'thinking');
+      assert.equal(loaded.steps[1].stateSnapshot.seats[0].status, 'proof_submitted');
+      assert.equal(loaded.steps[16].stateSnapshot.phase, 'completed');
+      assert.equal(loaded.steps[16].stateSnapshot.verdict.kind, 'Unanimous Consensus');
+    });
+
+    it('includes run-selector dropdown and .council/runs loader scripts in src/visualizer/index.html', () => {
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.match(html, /id=["']run-selector["']/, 'index.html must include #run-selector dropdown');
+      assert.match(html, /\.\.\/\.\.\/\.council\/runs\/index\.js/, 'index.html must load ../../.council/runs/index.js');
+      assert.match(html, /\.\.\/\.\.\/\.council\/runs\/latest\.js/, 'index.html must load ../../.council/runs/latest.js');
+      assert.match(html, /selectRun\s*\(/, 'index.html must define selectRun handler');
+    });
+  });
 });
 
 

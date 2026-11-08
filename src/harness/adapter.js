@@ -3,6 +3,18 @@
  * ESM Module (Node >= 22). Zero external dependencies.
  */
 
+import { parseModelAndEffort } from './cli-runner.js';
+
+export const EFFORT_TIMEOUT_MAP = Object.freeze({
+  max: 240000,
+  xhigh: 240000,
+  high: 120000,
+  medium: 60000,
+  low: 60000
+});
+
+export const DEFAULT_TIMEOUT_MS = 60000;
+
 // ============================================================================
 // ERROR TAXONOMY
 // ============================================================================
@@ -150,9 +162,44 @@ export class HarnessAdapter {
    */
   constructor(config = {}) {
     this.name = config.name || 'base';
-    this.defaultTimeoutMs = config.timeoutMs || 60000;
+    this.defaultTimeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.logger = config.logger || (() => {});
     this.initialized = false;
+  }
+
+  /**
+   * Resolves execution timeout in milliseconds, dynamically scaling by model reasoning effort when unset.
+   *
+   * @param {string} [model] - Model string with optional effort (e.g. 'gpt-6-astra (max)')
+   * @param {number} [explicitTimeoutMs] - Explicit timeout override
+   * @returns {number} Timeout in milliseconds
+   */
+  resolveTimeoutMs(model, explicitTimeoutMs) {
+    if (typeof explicitTimeoutMs === 'number' && explicitTimeoutMs > 0 && Number.isFinite(explicitTimeoutMs)) {
+      return explicitTimeoutMs;
+    }
+    if (this.defaultTimeoutMs !== DEFAULT_TIMEOUT_MS) {
+      return this.defaultTimeoutMs;
+    }
+    if (typeof model === 'string' && model.trim()) {
+      const trimmed = model.trim().toLowerCase();
+      const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
+      if (parenMatch) {
+        const effort = parenMatch[2].trim();
+        if (EFFORT_TIMEOUT_MAP[effort]) {
+          return EFFORT_TIMEOUT_MAP[effort];
+        }
+      }
+      for (const suffix of ['-xhigh', '-max', '-high', '-medium', '-low']) {
+        if (trimmed.endsWith(suffix)) {
+          const effort = suffix.slice(1);
+          if (EFFORT_TIMEOUT_MAP[effort]) {
+            return EFFORT_TIMEOUT_MAP[effort];
+          }
+        }
+      }
+    }
+    return this.defaultTimeoutMs;
   }
 
   /**
@@ -249,7 +296,8 @@ export class HarnessAdapter {
    * @param {Object} [context]
    * @returns {Promise<T>}
    */
-  async executeWithTimeout(fn, timeoutMs = this.defaultTimeoutMs, context = {}) {
+  async executeWithTimeout(fn, timeoutMs, context = {}) {
+    const effectiveTimeoutMs = this.resolveTimeoutMs(context.model, timeoutMs);
     const controller = new AbortController();
     let timer;
 
@@ -257,17 +305,17 @@ export class HarnessAdapter {
       timer = setTimeout(() => {
         reject(
           new TimeoutError(
-            `Harness "${this.name}" execution timed out after ${timeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
+            `Harness "${this.name}" execution timed out after ${effectiveTimeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
             {
               harness: this.name,
               seatId: context.seatId,
               model: context.model,
-              timeoutMs
+              timeoutMs: effectiveTimeoutMs
             }
           )
         );
         controller.abort();
-      }, timeoutMs);
+      }, effectiveTimeoutMs);
     });
 
     try {
@@ -365,46 +413,136 @@ export class HarnessAdapter {
       });
     }
 
-    let cleaned = rawText.trim();
+    const trimmed = rawText.trim();
 
-    // 1. Strip markdown code block fences if present
-    const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (codeBlockMatch) {
-      cleaned = codeBlockMatch[1].trim();
-    } else {
-      // 2. Extract outermost JSON object or array if surrounded by chatter
-      const firstBrace = cleaned.indexOf('{');
-      const lastBrace = cleaned.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    // 1. Search for all markdown code blocks (```(?:json)? ... ```)
+    const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
+    const codeBlocks = [];
+    let match;
+    while ((match = codeBlockRegex.exec(trimmed)) !== null) {
+      codeBlocks.push(match[1].trim());
+    }
+
+    // Evaluate code blocks in reverse (last block first, since final answer is placed at end)
+    for (let i = codeBlocks.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(codeBlocks[i]);
+        const errors = this._validatePayloadSchema(parsed, schemaType);
+        if (errors.length === 0) {
+          return parsed;
+        }
+      } catch {
+        // Not valid JSON in this block, continue
       }
     }
 
-    let parsed;
+    // 2. Extract balanced JSON objects from raw text (handles tool chatter preceding output)
+    const candidates = [];
+    let braceDepth = 0;
+    let startIndex = -1;
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i];
+
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (char === '\\') {
+          escape = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+      } else {
+        if (char === '"') {
+          inString = true;
+        } else if (char === '{') {
+          if (braceDepth === 0) {
+            startIndex = i;
+          }
+          braceDepth++;
+        } else if (char === '}') {
+          braceDepth--;
+          if (braceDepth === 0 && startIndex !== -1) {
+            candidates.push(trimmed.substring(startIndex, i + 1));
+            startIndex = -1;
+          } else if (braceDepth < 0) {
+            braceDepth = 0;
+            startIndex = -1;
+          }
+        }
+      }
+    }
+
+    // Test extracted candidates in reverse order
+    let lastParsedObj = null;
+    let lastValidationError = null;
+
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(candidates[i]);
+        const errors = this._validatePayloadSchema(parsed, schemaType);
+        if (errors.length === 0) {
+          return parsed;
+        }
+        if (!lastParsedObj) {
+          lastParsedObj = parsed;
+          lastValidationError = errors;
+        }
+      } catch {
+        // Candidate was not valid JSON
+      }
+    }
+
+    // 3. Fallback: If we parsed a valid JSON object that failed schema validation, report schema errors
+    if (lastParsedObj && lastValidationError) {
+      throw new InvalidResponseError(
+        `Model response violates ${schemaType} schema: ${lastValidationError.join('; ')}`,
+        {
+          harness: this.name,
+          rawResponse: rawText,
+          validationErrors: lastValidationError
+        }
+      );
+    }
+
+    // 4. Fallback: If single code block was present but had invalid JSON
+    if (codeBlocks.length > 0) {
+      try {
+        JSON.parse(codeBlocks[codeBlocks.length - 1]);
+      } catch (err) {
+        throw new InvalidResponseError(`Failed to parse model JSON: ${err.message}`, {
+          harness: this.name,
+          rawResponse: rawText,
+          cause: err
+        });
+      }
+    }
+
+    // 5. Direct parse fallback
     try {
-      parsed = JSON.parse(cleaned);
+      const direct = JSON.parse(trimmed);
+      const errors = this._validatePayloadSchema(direct, schemaType);
+      if (errors.length > 0) {
+        throw new InvalidResponseError(
+          `Model response violates ${schemaType} schema: ${errors.join('; ')}`,
+          {
+            harness: this.name,
+            rawResponse: rawText,
+            validationErrors: errors
+          }
+        );
+      }
+      return direct;
     } catch (err) {
+      if (err instanceof InvalidResponseError) throw err;
       throw new InvalidResponseError(`Failed to parse model JSON: ${err.message}`, {
         harness: this.name,
         rawResponse: rawText,
         cause: err
       });
     }
-
-    // 3. Structural schema validation
-    const errors = this._validatePayloadSchema(parsed, schemaType);
-    if (errors.length > 0) {
-      throw new InvalidResponseError(
-        `Model response violates ${schemaType} schema: ${errors.join('; ')}`,
-        {
-          harness: this.name,
-          rawResponse: rawText,
-          validationErrors: errors
-        }
-      );
-    }
-
-    return parsed;
   }
 
   /**

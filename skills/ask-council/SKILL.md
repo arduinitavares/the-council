@@ -191,3 +191,63 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
    If user hooks must not run during deliberation, `--ignore-user-config` can be enabled, provided authentication is exported via environment variables (such as `CODEX_API_KEY` or `OPENAI_API_KEY`).
 4. **Telemetry & Sanitization**:
    Live runs record provider call telemetry including `durationMs`, `exitCode`, and sanitized `argv` where sensitive deliberation prompts are redacted and represented by length and SHA-256 hash.
+
+---
+
+## 7. Tool Policies, Concurrency & Time Budgets
+
+### Tool Access Policies (`tools: 'none' | 'read-only'`)
+The Council enforces strict tool boundary policies across all seats and the Judge:
+- `'read-only'` (Default): Seats are provided with read-only inspection capabilities and prompt verification directives. Participants are instructed to inspect relevant codebases, standards, benchmarks, or documents before asserting facts or casting votes. The Judge is directed to spot-check submitted proof citations before admitting them.
+- `'none'`: Pure reasoning mode with zero tool invocations. Verification prompt directives are omitted.
+- **Write Capabilities Strictly Forbidden**: Specifying `write`, `read-write`, or unapproved tools immediately fails configuration validation naming the allowed values (`none`, `read-only`). For `cursor-agent`, CLI executions automatically enforce `--mode plan` and `--sandbox enabled`.
+
+### Parallel Deliberation & Voting Concurrency (`maxConcurrentSeats`)
+- Seat turns within Deliberation (Proof Collection) and Confirmation (Voting) execute concurrently up to `maxConcurrentSeats` (defaulting to the roster length, or 10).
+- Results are reduced onto the Council state machine in strict roster order, guaranteeing reproducible proof IDs (`P1, P2...`) and objection IDs (`O1, O2...`) regardless of completion timing.
+
+### Dynamic Effort-Scaled Time Budgets (`timeoutMs`)
+Per-turn time budgets can be configured at the top level or overridden on individual seats or the judge. If omitted, timeouts dynamically scale based on the model's reasoning effort:
+
+| Effort Tier | Models / Suffixes | Default Timeout |
+|---|---|---|
+| `max` / `xhigh` | `gpt-6-astra (max)`, `gpt-6.1-sol (xhigh)` | 240,000 ms (4.0 min) |
+| `high` | `gemini-4-argon-high`, `claude-opus-5-5-high`, `*-high` | 120,000 ms (2.0 min) |
+| `medium` / `low` | `claude-sonnet-4-5-medium`, `*-medium`, `*-low` | 60,000 ms (1.0 min) |
+| Fallback | Models without explicit effort tier | 60,000 ms (1.0 min) |
+
+*Resilient Output Parsing*: Model outputs preceded by tool execution logs or multiple markdown code blocks are parsed using reverse evaluation and balanced-brace JSON tracking, ensuring robust extraction even during extensive investigation chatter.
+
+### Recommended Configuration for Deep Research Questions
+For empirical or codebase-heavy questions, configure `tools: 'read-only'` with generous timeouts:
+```json
+{
+  "topic": "Audit src/engine/council-engine.js for race conditions under concurrent seat execution",
+  "maxConcurrentSeats": 4,
+  "timeoutMs": 120000,
+  "judge": {
+    "id": "judge-opus",
+    "harness": "antigravity",
+    "model": "claude-opus-5-5-high",
+    "soul": "Impartial Concurrency Auditor",
+    "tools": "read-only",
+    "timeoutMs": 180000
+  },
+  "seats": [
+    {
+      "id": "astra-concurrency",
+      "harness": "codex",
+      "model": "gpt-6-astra (max)",
+      "soul": "Distributed Systems & Concurrency Purist",
+      "tools": "read-only"
+    },
+    {
+      "id": "sol-race-tester",
+      "harness": "codex",
+      "model": "gpt-5-sol (high)",
+      "soul": "Race Condition & State Invariant Specialist",
+      "tools": "read-only"
+    }
+  ]
+}
+```

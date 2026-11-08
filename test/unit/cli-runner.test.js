@@ -305,6 +305,10 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         '--print',
         '--output-format',
         'text',
+        '--mode',
+        'plan',
+        '--sandbox',
+        'enabled',
         '--model',
         'grok-4.7-high',
         'Deliberate'

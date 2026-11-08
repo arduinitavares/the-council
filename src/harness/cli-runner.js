@@ -162,17 +162,20 @@ export async function execCli(executable, args = [], options = {}) {
 
 /**
  * Helper to safely record provider call telemetry.
- * @private
  */
-function recordProviderCall({ context, onCallRecord, record }) {
+export function recordProviderCall({ context, onCallRecord, record }) {
+  const enrichedRecord = {
+    ...record,
+    tools: record.tools || context?.tools || 'read-only'
+  };
   if (typeof onCallRecord === 'function') {
-    onCallRecord(record);
+    onCallRecord(enrichedRecord);
   }
   if (typeof context?.onCallRecord === 'function') {
-    context.onCallRecord(record);
+    context.onCallRecord(enrichedRecord);
   }
   if (context?.telemetry && typeof context.telemetry.emitProviderCall === 'function') {
-    context.telemetry.emitProviderCall(record);
+    context.telemetry.emitProviderCall(enrichedRecord);
   }
 }
 
@@ -394,6 +397,8 @@ export async function runCursorCli({
   const args = [
     '--print',
     '--output-format', 'text',
+    '--mode', 'plan',
+    '--sandbox', 'enabled',
     '--model', parsed.model,
     prompt
   ];

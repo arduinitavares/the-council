@@ -11,6 +11,12 @@
 export const VALID_PROOF_KINDS = Object.freeze(['check', 'citation', 'benchmark', 'derivation']);
 
 /**
+ * Valid participant tool execution policies. Write tools are strictly forbidden.
+ * @type {readonly ['none', 'read-only']}
+ */
+export const VALID_TOOL_POLICIES = Object.freeze(['none', 'read-only']);
+
+/**
  * Valid proof status values.
  * @type {readonly ['pending', 'admitted', 'rejected']}
  */
@@ -174,6 +180,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {HarnessType} harness - Execution harness adapter.
  * @property {string} model - Underlying model identifier (e.g. 'gpt-6-astra (max)').
  * @property {string} soul - Pre-configured persona, temperament, or domain lens.
+ * @property {'none' | 'read-only'} [tools] - Participant tool execution policy (default: 'read-only').
+ * @property {number} [timeoutMs] - Explicit execution timeout in ms.
  * @property {SeatStatus} status - Live seat status.
  * @property {number} retries - Number of times this seat has been retried after faulting.
  * @property {string | null} excusedReason - Reason why this seat was excused, or null if active.
@@ -185,6 +193,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {HarnessType} harness - Execution harness adapter.
  * @property {string} model - Underlying model identifier.
  * @property {string} soul - Judge persona (impartial proof auditor).
+ * @property {'none' | 'read-only'} [tools] - Participant tool execution policy (default: 'read-only').
+ * @property {number} [timeoutMs] - Explicit execution timeout in ms.
  * @property {JudgeStatus} status - Live judge status.
  * @property {number} retries - Number of times judge has been retried after faulting.
  */
@@ -267,6 +277,9 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {number} [maxClarificationBatches] - Max clarification cycles (default: 2).
  * @property {number} [minQuorum] - Minimum active seats for consensus (default: 2).
  * @property {number} [maxRetriesPerSeat] - Max retries before seat excusal (default: 1).
+ * @property {number} [timeoutMs] - Optional global execution timeout in ms.
+ * @property {number} [maxConcurrentSeats] - Max concurrent seats during deliberation/voting.
+ * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
  * @property {Partial<Judge>} [judge] - Optional judge configuration.
  * @property {Array<Partial<Seat>>} [seats] - Initial seat roster.
  */

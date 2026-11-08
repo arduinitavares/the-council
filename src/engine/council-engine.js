@@ -24,6 +24,32 @@ import { resolveConfig } from './config.js';
 import { HarnessError, InvalidResponseError } from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
 
+/**
+ * Concurrently maps an array of items with a worker pool limit.
+ *
+ * @template T, R
+ * @param {T[]} items
+ * @param {number} limit
+ * @param {(item: T, index: number) => Promise<R>} fn
+ * @returns {Promise<R[]>}
+ */
+export async function mapConcurrent(items, limit, fn) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const poolLimit = Math.max(1, Math.min(limit || items.length, items.length));
+  const workers = new Array(poolLimit).fill(0).map(async () => {
+    while (nextIndex < items.length) {
+      const i = nextIndex++;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export class CouncilEngine {
   /**
    * @param {Object} [config={}] - Council configuration object.
@@ -296,75 +322,127 @@ export class CouncilEngine {
     const currentRound = this.state.round;
     this.telemetry.emitRoundStart(currentRound, activeSeats(this.state).map((s) => s.id));
 
-    // 2. PROOF COLLECTION (Active seats submit proofs)
+    // 2. PROOF COLLECTION (Active seats submit proofs concurrently)
     const active = activeSeats(this.state);
-    for (const seat of active) {
+    const concurrencyLimit = this.config.maxConcurrentSeats || active.length;
+
+    const turnResults = await mapConcurrent(active, concurrencyLimit, async (seat) => {
+      if (this.aborted || this.isCompleted() || seat.status === 'excused') {
+        return { seat, proofInput: null, error: null, skipped: true };
+      }
+
+      this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+      const harness = this.harnessResolver(seat.harness);
+      const turnTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+
+      try {
+        let proofInput;
+        if (typeof harness.executeSeatProof === 'function') {
+          proofInput = await harness.executeSeatProof({
+            seat,
+            soul: seat.soul,
+            round: currentRound,
+            phase: 'DELIBERATION',
+            state: this.state,
+            topic: this.state.topic,
+            timeoutMs: turnTimeoutMs
+          });
+        } else if (typeof harness.executeSeat === 'function') {
+          proofInput = await harness.executeSeat({
+            seat,
+            soul: seat.soul,
+            round: currentRound,
+            phase: 'DELIBERATION',
+            state: this.state,
+            topic: this.state.topic,
+            timeoutMs: turnTimeoutMs
+          });
+        } else {
+          throw new Error(`Harness for "${seat.harness}" does not implement executeSeatProof or executeSeat`);
+        }
+        return { seat, proofInput, error: null };
+      } catch (err) {
+        return { seat, proofInput: null, error: err };
+      }
+    });
+
+    // Apply proof collection results in strict roster order
+    for (let i = 0; i < active.length; i++) {
       if (this.aborted || this.isCompleted()) break;
-      if (seat.status === 'excused') continue;
+      const seat = active[i];
+      let res = turnResults[i];
+      if (res?.skipped || seat.status === 'excused') continue;
 
       const harness = this.harnessResolver(seat.harness);
-      let executed = false;
+      const turnTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
 
-      while (!executed && !this.isCompleted() && !this.aborted) {
-        this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
-
-        try {
-          let proofInput;
-          if (typeof harness.executeSeatProof === 'function') {
-            proofInput = await harness.executeSeatProof({
-              seat,
-              soul: seat.soul,
-              round: currentRound,
-              phase: 'DELIBERATION',
-              state: this.state,
-              topic: this.state.topic
-            });
-          } else if (typeof harness.executeSeat === 'function') {
-            proofInput = await harness.executeSeat({
-              seat,
-              soul: seat.soul,
-              round: currentRound,
-              phase: 'DELIBERATION',
-              state: this.state,
-              topic: this.state.topic
-            });
-          } else {
-            throw new Error(`Harness for "${seat.harness}" does not implement executeSeatProof or executeSeat`);
-          }
-
-          const validation = validateProof(proofInput);
-          if (!validation.valid) {
-            throw new InvalidResponseError(
-              `Invalid proof from seat ${seat.id}: ${validation.errors.join('; ')}`,
-              {
-                harness: seat.harness,
-                seatId: seat.id,
-                model: seat.model,
-                validationErrors: validation.errors
-              }
-            );
-          }
-
-          this._step({
-            type: 'SUBMIT_PROOF',
-            id: proofInput.id,
-            seatId: seat.id,
-            scope: proofInput.scope,
-            kind: proofInput.kind,
-            source: proofInput.source,
-            statement: proofInput.statement
-          });
-
-          this.telemetry.emitSeatTelemetry(seat.id, 'proof_submitted');
-          const latestProof = this.state.proofs[this.state.proofs.length - 1];
-          this.telemetry.emitProofSubmitted(latestProof);
-          executed = true;
-        } catch (err) {
-          const faultRes = this.handleSeatFault(seat.id, err);
+      while (!this.isCompleted() && !this.aborted) {
+        if (res.error) {
+          const faultRes = this.handleSeatFault(seat.id, res.error);
           if (faultRes.action === 'excused' || this.isCompleted()) {
             break;
           }
+          // Retry the faulted seat
+          this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+          try {
+            let proofInput;
+            if (typeof harness.executeSeatProof === 'function') {
+              proofInput = await harness.executeSeatProof({
+                seat,
+                soul: seat.soul,
+                round: currentRound,
+                phase: 'DELIBERATION',
+                state: this.state,
+                topic: this.state.topic,
+                timeoutMs: turnTimeoutMs
+              });
+            } else if (typeof harness.executeSeat === 'function') {
+              proofInput = await harness.executeSeat({
+                seat,
+                soul: seat.soul,
+                round: currentRound,
+                phase: 'DELIBERATION',
+                state: this.state,
+                topic: this.state.topic,
+                timeoutMs: turnTimeoutMs
+              });
+            }
+            res = { seat, proofInput, error: null };
+          } catch (retryErr) {
+            res = { seat, proofInput: null, error: retryErr };
+            continue;
+          }
         }
+
+        const validation = validateProof(res.proofInput);
+        if (!validation.valid) {
+          const valErr = new InvalidResponseError(
+            `Invalid proof from seat ${seat.id}: ${validation.errors.join('; ')}`,
+            {
+              harness: seat.harness,
+              seatId: seat.id,
+              model: seat.model,
+              validationErrors: validation.errors
+            }
+          );
+          res = { seat, proofInput: null, error: valErr };
+          continue;
+        }
+
+        this._step({
+          type: 'SUBMIT_PROOF',
+          id: res.proofInput.id,
+          seatId: seat.id,
+          scope: res.proofInput.scope,
+          kind: res.proofInput.kind,
+          source: res.proofInput.source,
+          statement: res.proofInput.statement
+        });
+
+        this.telemetry.emitSeatTelemetry(seat.id, 'proof_submitted');
+        const latestProof = this.state.proofs[this.state.proofs.length - 1];
+        this.telemetry.emitProofSubmitted(latestProof);
+        break;
       }
     }
 
@@ -377,6 +455,7 @@ export class CouncilEngine {
     const judge = this.state.judge;
     this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
     const judgeHarness = this.harnessResolver(judge.harness);
+    const judgeTimeoutMs = judge.timeoutMs || this.config.timeoutMs;
 
     const roundProofs = this.state.proofs.filter((p) => p.round === currentRound || p.status === 'pending');
     const maxJudgeRetries = this.config.maxRetriesPerJudge ?? this.config.maxRetriesPerSeat ?? 1;
@@ -392,7 +471,8 @@ export class CouncilEngine {
             phase: 'JUDGE_AUDIT_SYNTHESIS',
             proofs: roundProofs,
             state: this.state,
-            topic: this.state.topic
+            topic: this.state.topic,
+            timeoutMs: judgeTimeoutMs
           });
         } else if (typeof judgeHarness.executeJudge === 'function') {
           synthesisResult = await judgeHarness.executeJudge({
@@ -401,7 +481,8 @@ export class CouncilEngine {
             phase: 'JUDGE_AUDIT_SYNTHESIS',
             proofs: roundProofs,
             state: this.state,
-            topic: this.state.topic
+            topic: this.state.topic,
+            timeoutMs: judgeTimeoutMs
           });
         } else {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
@@ -455,86 +536,142 @@ export class CouncilEngine {
 
     this.telemetry.emitCandidateSynthesized(this.state.candidate);
 
-    // 4. VOTING (Active seats accept or object)
+    // 4. VOTING (Active seats accept or object concurrently)
     const voters = activeSeats(this.state);
-    for (const seat of voters) {
+    const voteConcurrencyLimit = this.config.maxConcurrentSeats || voters.length;
+
+    const voteResults = await mapConcurrent(voters, voteConcurrencyLimit, async (seat) => {
+      if (this.aborted || this.isCompleted() || seat.status === 'excused') {
+        return { seat, voteResult: null, error: null, skipped: true };
+      }
+
+      this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+      const seatHarness = this.harnessResolver(seat.harness);
+      const voteTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+
+      try {
+        let voteResult;
+        if (typeof seatHarness.executeSeatVote === 'function') {
+          voteResult = await seatHarness.executeSeatVote({
+            seat,
+            soul: seat.soul,
+            candidate: this.state.candidate,
+            round: currentRound,
+            phase: 'VOTING',
+            state: this.state,
+            timeoutMs: voteTimeoutMs
+          });
+        } else if (typeof seatHarness.executeSeat === 'function') {
+          voteResult = await seatHarness.executeSeat({
+            seat,
+            soul: seat.soul,
+            candidate: this.state.candidate,
+            round: currentRound,
+            phase: 'VOTING',
+            state: this.state,
+            timeoutMs: voteTimeoutMs
+          });
+        } else {
+          throw new Error(`Harness for "${seat.harness}" does not implement executeSeatVote or executeSeat`);
+        }
+        return { seat, voteResult, error: null };
+      } catch (err) {
+        return { seat, voteResult: null, error: err };
+      }
+    });
+
+    // Apply voting results in strict roster order
+    for (let i = 0; i < voters.length; i++) {
       if (this.aborted || this.isCompleted()) break;
-      if (seat.status === 'excused') continue;
+      const seat = voters[i];
+      let res = voteResults[i];
+      if (res?.skipped || seat.status === 'excused') continue;
 
       const seatHarness = this.harnessResolver(seat.harness);
-      let executed = false;
+      const voteTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
 
-      while (!executed && !this.isCompleted() && !this.aborted) {
-        this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
-
-        try {
-          let voteResult;
-          if (typeof seatHarness.executeSeatVote === 'function') {
-            voteResult = await seatHarness.executeSeatVote({
-              seat,
-              soul: seat.soul,
-              candidate: this.state.candidate,
-              round: currentRound,
-              phase: 'VOTING',
-              state: this.state
-            });
-          } else if (typeof seatHarness.executeSeat === 'function') {
-            voteResult = await seatHarness.executeSeat({
-              seat,
-              soul: seat.soul,
-              candidate: this.state.candidate,
-              round: currentRound,
-              phase: 'VOTING',
-              state: this.state
-            });
-          } else {
-            throw new Error(`Harness for "${seat.harness}" does not implement executeSeatVote or executeSeat`);
+      while (!this.isCompleted() && !this.aborted) {
+        if (res.error) {
+          const faultRes = this.handleSeatFault(seat.id, res.error);
+          if (faultRes.action === 'excused' || this.isCompleted()) {
+            break;
           }
+          // Retry the faulted seat
+          this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+          try {
+            let voteResult;
+            if (typeof seatHarness.executeSeatVote === 'function') {
+              voteResult = await seatHarness.executeSeatVote({
+                seat,
+                soul: seat.soul,
+                candidate: this.state.candidate,
+                round: currentRound,
+                phase: 'VOTING',
+                state: this.state,
+                timeoutMs: voteTimeoutMs
+              });
+            } else if (typeof seatHarness.executeSeat === 'function') {
+              voteResult = await seatHarness.executeSeat({
+                seat,
+                soul: seat.soul,
+                candidate: this.state.candidate,
+                round: currentRound,
+                phase: 'VOTING',
+                state: this.state,
+                timeoutMs: voteTimeoutMs
+              });
+            }
+            res = { seat, voteResult, error: null };
+          } catch (retryErr) {
+            res = { seat, voteResult: null, error: retryErr };
+            continue;
+          }
+        }
 
-          if (voteResult.vote === 'accept') {
-            this._step({ type: 'CAST_VOTE', seatId: seat.id, vote: 'accept' });
-            if (!this.state.lastTransition.ok) {
-              throw new InvalidResponseError(this.state.lastTransition.message, {
-                harness: seat.harness,
-                seatId: seat.id,
-                model: seat.model
-              });
-            }
-            this.telemetry.emitSeatTelemetry(seat.id, 'accepted');
-            this.telemetry.emitVoteCast(seat.id, 'accept');
-          } else if (voteResult.vote === 'object') {
-            this._step({
-              type: 'CAST_VOTE',
-              seatId: seat.id,
-              vote: 'object',
-              reason: voteResult.reason,
-              proofId: voteResult.proofId
-            });
-            if (!this.state.lastTransition.ok) {
-              throw new InvalidResponseError(this.state.lastTransition.message, {
-                harness: seat.harness,
-                seatId: seat.id,
-                model: seat.model
-              });
-            }
-            this.telemetry.emitSeatTelemetry(seat.id, 'objected');
-            this.telemetry.emitVoteCast(seat.id, 'object', voteResult.reason, voteResult.proofId);
-            const latestObj = this.state.objections[this.state.objections.length - 1];
-            this.telemetry.emitObjectionRaised(latestObj);
-          } else {
-            throw new InvalidResponseError(`Unknown vote outcome "${voteResult.vote}" from seat ${seat.id}`, {
+        if (res.voteResult.vote === 'accept') {
+          this._step({ type: 'CAST_VOTE', seatId: seat.id, vote: 'accept' });
+          if (!this.state.lastTransition.ok) {
+            const transErr = new InvalidResponseError(this.state.lastTransition.message, {
               harness: seat.harness,
               seatId: seat.id,
               model: seat.model
             });
+            res = { seat, voteResult: null, error: transErr };
+            continue;
           }
-          executed = true;
-        } catch (err) {
-          const faultRes = this.handleSeatFault(seat.id, err);
-          if (faultRes.action === 'excused' || this.isCompleted()) {
-            break;
+          this.telemetry.emitSeatTelemetry(seat.id, 'accepted');
+          this.telemetry.emitVoteCast(seat.id, 'accept');
+        } else if (res.voteResult.vote === 'object') {
+          this._step({
+            type: 'CAST_VOTE',
+            seatId: seat.id,
+            vote: 'object',
+            reason: res.voteResult.reason,
+            proofId: res.voteResult.proofId
+          });
+          if (!this.state.lastTransition.ok) {
+            const transErr = new InvalidResponseError(this.state.lastTransition.message, {
+              harness: seat.harness,
+              seatId: seat.id,
+              model: seat.model
+            });
+            res = { seat, voteResult: null, error: transErr };
+            continue;
           }
+          this.telemetry.emitSeatTelemetry(seat.id, 'objected');
+          this.telemetry.emitVoteCast(seat.id, 'object', res.voteResult.reason, res.voteResult.proofId);
+          const latestObj = this.state.objections[this.state.objections.length - 1];
+          this.telemetry.emitObjectionRaised(latestObj);
+        } else {
+          const invErr = new InvalidResponseError(`Unknown vote outcome "${res.voteResult?.vote}" from seat ${seat.id}`, {
+            harness: seat.harness,
+            seatId: seat.id,
+            model: seat.model
+          });
+          res = { seat, voteResult: null, error: invErr };
+          continue;
         }
+        break;
       }
     }
 

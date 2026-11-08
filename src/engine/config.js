@@ -5,7 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_CONFIG } from '../types.js';
+import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
 
 /**
  * Validates a Council configuration object.
@@ -38,12 +38,52 @@ export function validateConfig(config) {
     errors.push('maxRetriesPerSeat must be an integer >= 0.');
   }
 
+  if (config.timeoutMs !== undefined) {
+    if (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs)) {
+      errors.push('timeoutMs must be a positive number.');
+    }
+  }
+
+  if (config.maxConcurrentSeats !== undefined) {
+    if (
+      typeof config.maxConcurrentSeats !== 'number' ||
+      config.maxConcurrentSeats < 1 ||
+      !Number.isInteger(config.maxConcurrentSeats)
+    ) {
+      errors.push('maxConcurrentSeats must be an integer >= 1.');
+    }
+  }
+
+  if (config.tools !== undefined) {
+    if (typeof config.tools !== 'string' || !VALID_TOOL_POLICIES.includes(config.tools)) {
+      errors.push(
+        `"tools" policy must be 'none' or 'read-only' (got "${config.tools}"). Write tools are strictly forbidden.`
+      );
+    }
+  }
+
   if (config.judge) {
     if (!config.judge.id || typeof config.judge.id !== 'string') {
       errors.push('Judge requires a valid "id" string.');
     }
     if (!config.judge.harness || typeof config.judge.harness !== 'string') {
       errors.push('Judge requires a valid "harness" string.');
+    }
+    if (config.judge.timeoutMs !== undefined) {
+      if (
+        typeof config.judge.timeoutMs !== 'number' ||
+        config.judge.timeoutMs <= 0 ||
+        !Number.isFinite(config.judge.timeoutMs)
+      ) {
+        errors.push('Judge requires "timeoutMs" to be a positive number.');
+      }
+    }
+    if (config.judge.tools !== undefined) {
+      if (typeof config.judge.tools !== 'string' || !VALID_TOOL_POLICIES.includes(config.judge.tools)) {
+        errors.push(
+          `Judge "tools" policy must be 'none' or 'read-only' (got "${config.judge.tools}"). Write tools are strictly forbidden.`
+        );
+      }
     }
   }
 
@@ -75,6 +115,18 @@ export function validateConfig(config) {
         }
         if (!s.soul || (typeof s.soul !== 'string' && typeof s.soul !== 'object')) {
           errors.push(`Seat "${s.id || idx}" missing valid "soul".`);
+        }
+        if (s.timeoutMs !== undefined) {
+          if (typeof s.timeoutMs !== 'number' || s.timeoutMs <= 0 || !Number.isFinite(s.timeoutMs)) {
+            errors.push(`Seat "${s.id || idx}" requires "timeoutMs" to be a positive number.`);
+          }
+        }
+        if (s.tools !== undefined) {
+          if (typeof s.tools !== 'string' || !VALID_TOOL_POLICIES.includes(s.tools)) {
+            errors.push(
+              `Seat "${s.id || idx}" "tools" policy must be 'none' or 'read-only' (got "${s.tools}"). Write tools are strictly forbidden.`
+            );
+          }
         }
       });
     }
@@ -228,31 +280,45 @@ export function resolveConfig(userConfig = {}) {
     presetDefinition = COUNCIL_PRESETS[userConfig.preset];
   }
 
+  const defaultTools = userConfig.tools !== undefined ? userConfig.tools : 'read-only';
   const defaultJudge = presetDefinition
-    ? { ...presetDefinition.judge }
+    ? { ...presetDefinition.judge, tools: presetDefinition.judge.tools || defaultTools }
     : {
         id: 'judge-astra',
         harness: 'codex',
         model: 'gpt-6-astra (max)',
-        soul: 'Impartial Proof Auditor: admits only scoped, sourced proofs and synthesizes context-partitioned candidates without adding personal claims.'
+        soul: 'Impartial Proof Auditor: admits only scoped, sourced proofs and synthesizes context-partitioned candidates without adding personal claims.',
+        tools: defaultTools
       };
 
   const defaultSeats = presetDefinition
-    ? presetDefinition.seats.map((s) => ({ ...s }))
+    ? presetDefinition.seats.map((s) => ({ ...s, tools: s.tools || defaultTools }))
     : [
-        { id: 'astra-kernel', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems & Kernel Purist: focuses on container density, cgroups v2, and headless uptime.' },
-        { id: 'astra-gamer', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Desktop Gaming Enthusiast: focuses on DirectX 12, kernel anti-cheat, and frame pacing.' },
-        { id: 'argon-unix', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Staff Mobile & Full-Stack Dev: focuses on POSIX shell, Xcode/iOS SDKs, and ARM efficiency.' }
+        { id: 'astra-kernel', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems & Kernel Purist: focuses on container density, cgroups v2, and headless uptime.', tools: defaultTools },
+        { id: 'astra-gamer', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Desktop Gaming Enthusiast: focuses on DirectX 12, kernel anti-cheat, and frame pacing.', tools: defaultTools },
+        { id: 'argon-unix', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Staff Mobile & Full-Stack Dev: focuses on POSIX shell, Xcode/iOS SDKs, and ARM efficiency.', tools: defaultTools }
       ];
+
+  const rawSeats = userConfig.seats ? [...userConfig.seats] : defaultSeats;
+  const resolvedMaxConcurrentSeats = userConfig.maxConcurrentSeats !== undefined
+    ? userConfig.maxConcurrentSeats
+    : (userConfig.seats ? userConfig.seats.length : (presetDefinition ? presetDefinition.seats.length : 10));
 
   const merged = {
     ...DEFAULT_CONFIG,
     ...userConfig,
+    maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
       ...defaultJudge,
-      ...(userConfig.judge || {})
+      ...(userConfig.judge || {}),
+      tools: userConfig.judge?.tools !== undefined
+        ? userConfig.judge.tools
+        : (defaultJudge.tools || defaultTools)
     },
-    seats: userConfig.seats ? [...userConfig.seats] : defaultSeats
+    seats: rawSeats.map((s) => ({
+      ...s,
+      tools: s.tools !== undefined ? s.tools : defaultTools
+    }))
   };
 
   const validation = validateConfig(merged);

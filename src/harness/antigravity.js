@@ -66,7 +66,7 @@ export class AntigravityAdapter extends HarnessAdapter {
 
   async executeSeat({ seat, soul, round, phase, state, timeoutMs }) {
     this.validateModel(seat.model);
-    const context = { seatId: seat.id, model: seat.model };
+    const context = { seatId: seat.id, model: seat.model, tools: seat.tools || 'read-only' };
 
     return this.executeWithTimeout(
       async (signal) => {
@@ -85,14 +85,14 @@ export class AntigravityAdapter extends HarnessAdapter {
           throw this.classifyError(err, context);
         }
       },
-      timeoutMs || this.defaultTimeoutMs,
+      timeoutMs,
       context
     );
   }
 
   async executeJudge({ judge, round, phase, proofs, state, timeoutMs }) {
     this.validateModel(judge.model);
-    const context = { seatId: judge.id, model: judge.model };
+    const context = { seatId: judge.id, model: judge.model, tools: judge.tools || 'read-only' };
 
     return this.executeWithTimeout(
       async (signal) => {
@@ -110,7 +110,7 @@ export class AntigravityAdapter extends HarnessAdapter {
           throw this.classifyError(err, context);
         }
       },
-      timeoutMs || this.defaultTimeoutMs,
+      timeoutMs,
       context
     );
   }

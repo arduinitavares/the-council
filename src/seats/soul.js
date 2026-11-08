@@ -275,9 +275,11 @@ export function formatDeliberationPrompt({
   clarifications = [],
   previousCandidate = null,
   openObjections = [],
-  state = null
+  state = null,
+  tools
 }) {
   const s = createSoul(soul);
+  const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
 
   const resolvedTopic = topic || state?.topic || '';
   const resolvedRound = round || state?.round || 1;
@@ -308,10 +310,15 @@ export function formatDeliberationPrompt({
       resolvedObjections.map((o) => `- Objection ${o.id} (by ${o.seatId}, backed by ${o.proofId}): ${o.reason}`).join('\n') + '\n';
   }
 
+  const verificationBlock = resolvedTools === 'read-only'
+    ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
+You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".\n`
+    : '';
+
   return `### Deliberation Round ${resolvedRound}/${resolvedMaxRounds} — Proof Submission
 ${contextBlock}
-As Seat "${seat.id}" embodying "${s.name}" (${s.lens}), submit a structured Proof substantiating your position.
-
+As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), submit a structured Proof substantiating your position.
+${verificationBlock}
 OUTPUT CONTRACT (strict JSON):
 {
   "scope": "<context boundary, e.g. Production Cloud & Container Servers>",
@@ -330,6 +337,7 @@ OUTPUT CONTRACT (strict JSON):
  * @param {Array<Object>} [params.admittedProofs]
  * @param {Array<Object>} [params.myOpenObjections=[]]
  * @param {Object|null} [params.state=null]
+ * @param {'none' | 'read-only'} [params.tools]
  * @returns {string}
  */
 export function formatVotingPrompt({
@@ -338,9 +346,11 @@ export function formatVotingPrompt({
   candidate,
   admittedProofs,
   myOpenObjections = [],
-  state = null
+  state = null,
+  tools
 }) {
   const s = createSoul(soul);
+  const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
   const cand = candidate || state?.candidate;
   const proofs = admittedProofs || (state?.proofs || []).filter((p) => p.status === 'admitted');
 
@@ -356,6 +366,11 @@ export function formatVotingPrompt({
       ).join('\n')
     : 'No candidate clauses provided.';
 
+  const votingVerificationBlock = resolvedTools === 'read-only'
+    ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
+You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.\n`
+    : '';
+
   return `### Voting on Round ${cand?.round || 1} Candidate
 Candidate Summary: "${cand?.summary || ''}"
 
@@ -365,10 +380,10 @@ ${clauseList}
 Admitted Proofs this Round:
 ${proofList}
 
-As Seat "${seat.id}" embodying "${s.name}" (${s.lens}), evaluate if this Candidate satisfies your criteria.
+As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), evaluate if this Candidate satisfies your criteria.
 - If you accept: voting "accept" will automatically withdraw any open objections you previously raised.
 - If you object: you MUST provide a concrete "reason" and cite an admitted "proofId" substantiating your dissent.
-
+${votingVerificationBlock}
 OUTPUT CONTRACT (strict JSON):
 If accepting:
 { "vote": "accept" }
@@ -387,6 +402,7 @@ If objecting:
  * @param {number} [params.maxRounds]
  * @param {Array<Object>} [params.proofs=[]]
  * @param {Object|null} [params.state=null]
+ * @param {'none' | 'read-only'} [params.tools]
  * @returns {string}
  */
 export function formatJudgePrompt({
@@ -395,11 +411,13 @@ export function formatJudgePrompt({
   round = 1,
   maxRounds,
   proofs = [],
-  state = null
+  state = null,
+  tools
 }) {
   const judgeSoul = typeof judge?.soul === 'object' && judge?.soul
     ? judge.soul
     : createSoul(judge?.soul || 'Impartial Proof Auditor');
+  const resolvedTools = tools !== undefined ? tools : (judge?.tools || 'read-only');
   const resolvedTopic = topic || state?.topic || '';
   const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
 
@@ -414,6 +432,18 @@ export function formatJudgePrompt({
       }).join('\n')
     : 'No proofs submitted for auditing.';
 
+  const judgeDirectives = [
+    '1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" with a concrete "note".',
+    '2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]).',
+    '3. Bare opinions or conclusions ungrounded in admitted proofs are strictly forbidden.'
+  ];
+
+  if (resolvedTools === 'read-only') {
+    judgeDirectives.push(
+      '4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.'
+    );
+  }
+
   return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}
 Topic: "${resolvedTopic}"
 Judge: ${judge?.id || 'judge'} (${judge?.model || 'model'})
@@ -423,9 +453,7 @@ Submitted Proofs for Auditing:
 ${proofList}
 
 Judge Directives & Invariants:
-1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" with a concrete "note".
-2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]).
-3. Bare opinions or conclusions ungrounded in admitted proofs are strictly forbidden.
+${judgeDirectives.join('\n')}
 
 OUTPUT CONTRACT (strict JSON):
 {

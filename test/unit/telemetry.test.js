@@ -400,6 +400,33 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
         [3, 5]
       );
     });
+
+    it('retains 0 history items when maxHistory: 0 while still emitting live events, and falls back to 500 for negative or non-integer values', () => {
+      const zeroEmitter = createTelemetryEmitter({ clock: fixedClock, maxHistory: 0 });
+      assert.equal(zeroEmitter.maxHistory, 0);
+
+      const liveTelemetry = [];
+      const liveProviderCalls = [];
+      zeroEmitter.on('seat_telemetry', (t) => liveTelemetry.push(t));
+      zeroEmitter.on('provider_call', (c) => liveProviderCalls.push(c));
+
+      zeroEmitter.emitSeatTelemetry('seat-1', 'thinking');
+      zeroEmitter.emitProviderCall({ participantId: 'seat-1', provider: 'codex', exitCode: 0, durationMs: 12 });
+
+      assert.equal(liveTelemetry.length, 1);
+      assert.equal(liveProviderCalls.length, 1);
+      assert.equal(zeroEmitter.getTelemetryHistory().length, 0);
+      assert.equal(zeroEmitter.getProviderCalls().length, 0);
+
+      const negEmitter = createTelemetryEmitter({ maxHistory: -10 });
+      assert.equal(negEmitter.maxHistory, 500);
+
+      const strEmitter = createTelemetryEmitter({ maxHistory: 'not-a-number' });
+      assert.equal(strEmitter.maxHistory, 500);
+
+      const floatEmitter = createTelemetryEmitter({ maxHistory: 3.5 });
+      assert.equal(floatEmitter.maxHistory, 500);
+    });
   });
 });
 

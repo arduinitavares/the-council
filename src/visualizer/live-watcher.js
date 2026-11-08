@@ -64,7 +64,10 @@ export function getTransitionSummary(event, state) {
   }
 
   if (state?.lastTransition?.ok === false) {
-    return `Rejected ${event.type}: ${state.lastTransition.message || 'Guard rejected transition'}`;
+    const rawMsg = state.lastTransition.message || 'Guard rejected transition';
+    const escapedType = String(event.type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const cleanMsg = String(rawMsg).replace(new RegExp(`^Guard\\s+rejected\\s+${escapedType}:\\s*`, 'i'), '');
+    return `Rejected ${event.type}: ${cleanMsg || 'Guard rejected transition'}`;
   }
 
   switch (event.type) {

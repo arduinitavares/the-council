@@ -636,6 +636,21 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
 
       assert.equal(
         getTransitionSummary(
+          { type: 'BEGIN_ROUND' },
+          {
+            phase: 'clarifying',
+            round: 0,
+            lastTransition: {
+              ok: false,
+              message: 'Guard rejected BEGIN_ROUND: Minimum 2 active seats required for deliberation.'
+            }
+          }
+        ),
+        'Rejected BEGIN_ROUND: Minimum 2 active seats required for deliberation.'
+      );
+
+      assert.equal(
+        getTransitionSummary(
           { type: 'JUDGE_AUDIT_AND_SYNTHESIZE', clauses: [] },
           {
             phase: 'judging',
@@ -648,6 +663,10 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         ),
         'Rejected JUDGE_AUDIT_AND_SYNTHESIZE: Judge Candidate Guard: Candidate requires at least one clause.'
       );
+
+      const indexHtml = fs.readFileSync(path.resolve(process.cwd(), 'src/visualizer/index.html'), 'utf8');
+      assert.match(indexHtml, /flex-wrap:wrap;\s*gap:4px 8px;/);
+      assert.match(indexHtml, /min-width:0;\s*overflow-wrap:anywhere;/);
 
       // 2. Non-duplicate [ErrorClass] in SEAT_FAULT and JUDGE_FAULT when reason already starts with [<errorClass>]
       assert.equal(

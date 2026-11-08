@@ -236,6 +236,11 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           ...(Array.isArray(resolved.seats) ? resolved.seats.map((s) => ({ role: 'seat', participant: s })) : [])
         ];
         for (const { role, participant } of participants) {
+          if (String(participant.harness || '').toLowerCase() === 'mock') {
+            throw new Error(
+              `Cannot use "mock" harness for ${role} "${participant.id}" in --live mode. Use --mock for simulated runs or configure a live harness (codex, antigravity, cursor).`
+            );
+          }
           const adapter = harnessRegistry.get(participant.harness);
           if (adapter && typeof adapter.validateModel === 'function') {
             try {

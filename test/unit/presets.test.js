@@ -184,6 +184,14 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.doesNotThrow(() => registry.get(seat.harness).validateModel(seat.model));
       }
 
+      // Verify validateModel also rejects invalid effort tiers and substring-spoofed model names
+      assert.throws(() => registry.get('codex').validateModel('gpt-6-astra (ultra)'), /Unsupported reasoning effort/);
+      assert.throws(() => registry.get('codex').validateModel('not-gpt-6-astra-high'), /not permitted under Codex route/);
+      assert.throws(() => registry.get('antigravity').validateModel('gemini-4-argon (bogus)'), /Unsupported reasoning effort/);
+      assert.throws(() => registry.get('antigravity').validateModel('not-gemini-4-argon-high'), /not permitted under Antigravity route/);
+      assert.throws(() => registry.get('cursor').validateModel('grok-4.7 (ultra)'), /Unsupported reasoning effort/);
+      assert.throws(() => registry.get('cursor').validateModel('composer-2.5 (high)'), /not permitted under Cursor route/);
+
       // Also verify skills/ask-council/SKILL.md matches COUNCIL_PRESETS models and contains no rejected models
       const skillPath = path.resolve(process.cwd(), 'skills/ask-council/SKILL.md');
       const skillContent = fs.readFileSync(skillPath, 'utf8');

@@ -5,12 +5,14 @@
  */
 
 import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
-import { runCodexCli } from './cli-runner.js';
+import { runCodexCli, parseModelAndEffort } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
   formatVotingPrompt,
   formatJudgePrompt as formatJudgeSoulPrompt
 } from '../seats/soul.js';
+
+const EFFORT_SUFFIXES = ['-max', '-xhigh', '-high', '-medium', '-low'];
 
 export class CodexAdapter extends HarnessAdapter {
   /**
@@ -32,9 +34,26 @@ export class CodexAdapter extends HarnessAdapter {
    * @param {string} model
    */
   validateModel(model) {
-    const normalized = (model || '').toLowerCase();
-    const isSol = normalized.includes('gpt-6.1-sol');
-    const isAstra = normalized.includes('gpt-6-astra');
+    let parsed;
+    try {
+      parsed = parseModelAndEffort(model, 'high');
+    } catch (err) {
+      throw new HarnessExecutionError(err.message, { harness: this.name, model, cause: err });
+    }
+
+    const hasParens = /\([^)]*\)\s*$/.test(String(model || '').trim());
+    let baseModel = parsed.model.trim().toLowerCase();
+    if (!hasParens) {
+      for (const suffix of EFFORT_SUFFIXES) {
+        if (baseModel.endsWith(suffix)) {
+          baseModel = baseModel.slice(0, -suffix.length);
+          break;
+        }
+      }
+    }
+
+    const isSol = baseModel === 'gpt-6.1-sol';
+    const isAstra = baseModel === 'gpt-6-astra';
     if (!isSol && !isAstra) {
       throw new HarnessExecutionError(
         `Model "${model}" is not permitted under Codex route. Allowed: gpt-6.1-sol, gpt-6-astra.`,

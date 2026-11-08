@@ -193,7 +193,7 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
       assert.throws(() => registry.get('cursor').validateModel('composer-2.5 (high)'), /not permitted under Cursor route/);
 
       // Also verify skills/ask-council/SKILL.md matches COUNCIL_PRESETS models and contains no rejected models
-      const skillPath = path.resolve(process.cwd(), 'skills/ask-council/SKILL.md');
+      const skillPath = path.resolve(import.meta.dirname, '../../skills/ask-council/SKILL.md');
       const skillContent = fs.readFileSync(skillPath, 'utf8');
       assert.doesNotMatch(skillContent, /gpt-5-sol/);
       assert.doesNotMatch(skillContent, /grok-4-skeptic/);
@@ -341,6 +341,51 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.equal(resolved.seats[0].id, 'argon-systems');
       } finally {
         fs.unlinkSync(tmpFile);
+      }
+    });
+
+    it('resolves configs/best-of-families.json, best-of-families.json, and -p best-of-families when process.cwd() is an external directory (#27)', () => {
+      const prevCwd = process.cwd();
+      const tmpExtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-ext-cwd-'));
+      try {
+        process.chdir(tmpExtDir);
+
+        const fromRelConfig = loadConfigFile('configs/best-of-families.json', {
+          topic: 'External CWD relative configs path'
+        });
+        assert.equal(fromRelConfig.topic, 'External CWD relative configs path');
+        assert.equal(fromRelConfig.judge.id, 'judge-astra');
+        assert.deepEqual(
+          fromRelConfig.seats.map((s) => s.id),
+          ['sol-voter', 'argon-voter', 'opus-voter']
+        );
+
+        const fromShortName = loadConfigFile('best-of-families.json', {
+          topic: 'External CWD short filename'
+        });
+        assert.equal(fromShortName.judge.id, 'judge-astra');
+        assert.equal(fromShortName.seats.length, 3);
+
+        const fromBareName = loadConfigFile('best-of-families', {
+          topic: 'External CWD bare config name'
+        });
+        assert.equal(fromBareName.judge.id, 'judge-astra');
+        assert.equal(fromBareName.seats.length, 3);
+
+        const fromPreset = resolveConfig({
+          preset: 'best-of-families',
+          topic: 'External CWD preset best-of-families'
+        });
+        assert.equal(fromPreset.preset, 'best-of-families');
+        assert.equal(fromPreset.topic, 'External CWD preset best-of-families');
+        assert.equal(fromPreset.judge.id, 'judge-astra');
+        assert.deepEqual(
+          fromPreset.seats.map((s) => s.id),
+          ['sol-voter', 'argon-voter', 'opus-voter']
+        );
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(tmpExtDir, { recursive: true, force: true });
       }
     });
   });

@@ -299,7 +299,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
   });
 
   describe('Visualizer HTML Integration & Live Follow Mode (src/visualizer/index.html)', () => {
-    const htmlPath = path.resolve('src/visualizer/index.html');
+    const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
 
     it('loads live-run-latest.js via optional/safe script tag', () => {
       const html = fs.readFileSync(htmlPath, 'utf8');
@@ -664,7 +664,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         'Rejected JUDGE_AUDIT_AND_SYNTHESIZE: Judge Candidate Guard: Candidate requires at least one clause.'
       );
 
-      const indexHtml = fs.readFileSync(path.resolve(process.cwd(), 'src/visualizer/index.html'), 'utf8');
+      const indexHtml = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/visualizer/index.html'), 'utf8');
       assert.match(indexHtml, /flex-wrap:wrap;\s*gap:4px 8px;/);
       assert.match(indexHtml, /min-width:0;\s*overflow-wrap:anywhere;/);
 
@@ -1125,9 +1125,9 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
   });
 
   describe('Prototype Decoupling & File Deletions (#21, #22)', () => {
-    const htmlPath = path.resolve('src/visualizer/index.html');
-    const protoMachinePath = path.resolve('src/visualizer/council-machine.js');
-    const protoWalkthroughsPath = path.resolve('src/visualizer/council-walkthroughs.js');
+    const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+    const protoMachinePath = path.resolve(import.meta.dirname, '../../src/visualizer/council-machine.js');
+    const protoWalkthroughsPath = path.resolve(import.meta.dirname, '../../src/visualizer/council-walkthroughs.js');
 
     it('ensures index.html does not load council-machine.js or council-walkthroughs.js', () => {
       const html = fs.readFileSync(htmlPath, 'utf8');
@@ -1771,6 +1771,33 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(html, /\.\.\/\.\.\/\.council\/runs\/index\.js/, 'index.html must load ../../.council/runs/index.js');
       assert.match(html, /\.\.\/\.\.\/\.council\/runs\/latest\.js/, 'index.html must load ../../.council/runs/latest.js');
       assert.match(html, /selectRun\s*\(/, 'index.html must define selectRun handler');
+    });
+
+    it('never pollutes caller process.cwd() when instantiated from an external directory (#27)', async () => {
+      const { DEFAULT_OUTPUT_DIR } = await import('../../src/visualizer/live-watcher.js');
+      const prevCwd = process.cwd();
+      const tmpExtCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-watcher-ext-cwd-'));
+      const tmpRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-watcher-runs-'));
+      try {
+        process.chdir(tmpExtCwd);
+        assert.ok(!DEFAULT_OUTPUT_DIR.startsWith(tmpExtCwd), 'DEFAULT_OUTPUT_DIR must not depend on process.cwd()');
+
+        const watcher = new VisualizerLiveWatcher({
+          telemetry: emitter,
+          outputDir: tmpRunsDir,
+          initialConfig: { topic: 'External CWD Isolation' }
+        });
+        emitter.emitStateTransition({ type: 'BEGIN_ROUND' }, { phase: 'reviewing', round: 1 });
+        watcher.stop();
+
+        assert.equal(fs.existsSync(path.join(tmpExtCwd, 'src')), false, 'Must not create src/ in caller cwd');
+        assert.equal(fs.existsSync(path.join(tmpExtCwd, '.council')), false, 'Must not create .council/ in caller cwd');
+        assert.deepEqual(fs.readdirSync(tmpExtCwd), [], 'Caller cwd must remain completely empty');
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(tmpExtCwd, { recursive: true, force: true });
+        fs.rmSync(tmpRunsDir, { recursive: true, force: true });
+      }
     });
   });
 });

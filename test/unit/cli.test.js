@@ -163,7 +163,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       assert.match(HELP_TEXT, /-m, --mock.*required unless --live/i);
       assert.doesNotMatch(HELP_TEXT, /--mock.*\(default\)/i);
 
-      const skillPath = path.resolve(process.cwd(), 'skills/ask-council/SKILL.md');
+      const skillPath = path.resolve(import.meta.dirname, '../../skills/ask-council/SKILL.md');
       const skillContent = fs.readFileSync(skillPath, 'utf8');
       assert.match(skillContent, /--live/);
       assert.match(skillContent, /--mock/);
@@ -746,6 +746,96 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
       assert.equal(code, 1);
       assert.match(mockIO.getStderr(), /Unknown command "invalidcommand"/);
+    });
+  });
+
+  describe('Issue #27: CWD-Independent CLI, Config/Preset Resolution & Skill Installation', () => {
+    it('runCli --live from an external cwd never creates src/ or .council/ in caller cwd', async () => {
+      const { MockAdapter } = await import('../../src/harness/mock.js');
+      const prevCwd = process.cwd();
+      const tmpExtCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-ext-cwd-'));
+      const tmpRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-runs-'));
+
+      try {
+        process.chdir(tmpExtCwd);
+        const mockIO = createMockIO();
+        const mockAdapter = new MockAdapter();
+        mockIO.io.harnessRegistry = { get: () => mockAdapter };
+        mockIO.io.liveWatcherOptions = { outputDir: tmpRunsDir };
+
+        const code = await runCli(['run', '--live', '-p', 'argon-only', '-t', 'External CWD live test'], mockIO.io);
+        assert.equal(code, 0);
+        assert.equal(fs.existsSync(path.join(tmpExtCwd, 'src')), false, 'Must not create src/ in caller cwd');
+        assert.equal(fs.existsSync(path.join(tmpExtCwd, '.council')), false, 'Must not create .council/ in caller cwd');
+        assert.deepEqual(fs.readdirSync(tmpExtCwd), [], 'Caller cwd must remain completely empty');
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(tmpExtCwd, { recursive: true, force: true });
+        fs.rmSync(tmpRunsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('runCli --mock with -c configs/best-of-families.json and -p best-of-families succeeds from an external cwd', async () => {
+      const prevCwd = process.cwd();
+      const tmpExtCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-ext-cfg-'));
+
+      try {
+        process.chdir(tmpExtCwd);
+
+        const mockIO1 = createMockIO();
+        const code1 = await runCli(
+          ['run', '--mock', '-c', 'configs/best-of-families.json', '-t', 'From external cwd -c', '--json'],
+          mockIO1.io
+        );
+        assert.equal(code1, 0, `Expected exit 0 for -c configs/best-of-families.json, stderr: ${mockIO1.getStderr()}`);
+        const parsed1 = JSON.parse(mockIO1.getStdout());
+        assert.equal(parsed1.ok, true);
+        assert.equal(parsed1.state.judge.id, 'judge-astra');
+        assert.deepEqual(parsed1.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter']);
+
+        const mockIO2 = createMockIO();
+        const code2 = await runCli(
+          ['run', '--mock', '-p', 'best-of-families', '-t', 'From external cwd -p', '--json'],
+          mockIO2.io
+        );
+        assert.equal(code2, 0, `Expected exit 0 for -p best-of-families, stderr: ${mockIO2.getStderr()}`);
+        const parsed2 = JSON.parse(mockIO2.getStdout());
+        assert.equal(parsed2.ok, true);
+        assert.equal(parsed2.state.judge.id, 'judge-astra');
+        assert.deepEqual(parsed2.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter']);
+        assert.deepEqual(fs.readdirSync(tmpExtCwd), [], 'Caller cwd must remain completely empty');
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(tmpExtCwd, { recursive: true, force: true });
+      }
+    });
+
+    it('install-skill script copies a real file (not a symlink) and SKILL.md uses CWD-independent paths', async () => {
+      const repoRoot = path.resolve(import.meta.dirname, '../..');
+      const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+      assert.ok(pkg.scripts && pkg.scripts['install-skill'], 'package.json must define "install-skill" script');
+
+      const { installSkill } = await import('../../scripts/install-skill.js');
+      const tmpTargetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-skill-target-'));
+      try {
+        const result = installSkill({ userSkillsRoot: tmpTargetDir });
+        assert.ok(result.installedPaths.length >= 2);
+        const targetSkillFile = path.join(tmpTargetDir, 'ask-council', 'SKILL.md');
+        assert.ok(fs.existsSync(targetSkillFile), 'Installed SKILL.md must exist');
+        assert.equal(fs.lstatSync(targetSkillFile).isSymbolicLink(), false, 'Installed SKILL.md must not be a symlink');
+
+        const workspaceSkillFile = path.join(repoRoot, '.agents', 'skills', 'ask-council', 'SKILL.md');
+        assert.ok(fs.existsSync(workspaceSkillFile), '.agents/skills/ask-council/SKILL.md must exist');
+        assert.equal(fs.lstatSync(workspaceSkillFile).isSymbolicLink(), false, 'Workspace SKILL.md must not be a symlink');
+
+        const skillContent = fs.readFileSync(targetSkillFile, 'utf8');
+        assert.match(skillContent, /\/Users\/aaat\/projects\/the-council\/bin\/council/);
+        assert.match(skillContent, /open \/Users\/aaat\/projects\/the-council\/src\/visualizer\/index\.html/);
+        assert.doesNotMatch(skillContent, /^\s*\.\/bin\/council/m);
+        assert.doesNotMatch(skillContent, /^\s*open src\/visualizer\/index\.html/m);
+      } finally {
+        fs.rmSync(tmpTargetDir, { recursive: true, force: true });
+      }
     });
   });
 });

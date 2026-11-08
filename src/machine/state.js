@@ -65,6 +65,37 @@ export function createInitialCouncilState(config = {}) {
 
   const initialPhase = cfg.phase ? normalizePhase(cfg.phase) : 'preflight';
 
+  const evidence = Object.freeze(
+    (Array.isArray(cfg.evidence) ? cfg.evidence : []).map((item, idx) =>
+      Object.freeze({
+        id: typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : `E${idx + 1}`,
+        label: String(item?.label || '').trim(),
+        source: String(item?.source || '').trim(),
+        text: String(item?.text || '').trim()
+      })
+    )
+  );
+
+  const clarifications = (Array.isArray(cfg.clarifications) ? cfg.clarifications : []).map((item, idx) => {
+    if (typeof item === 'string') {
+      return { batch: idx + 1, answer: item.trim() };
+    }
+    const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
+    const answer = hasAnswer
+      ? item.answer.trim()
+      : `[${String(item?.label || '').trim()}] (Source: ${String(item?.source || '').trim()}): ${String(item?.text || '').trim()}`;
+    return {
+      batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
+      answer,
+      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(typeof item?.label === 'string' && item.label.trim()
+        ? { label: item.label.trim(), source: String(item.source || '').trim(), text: String(item.text || '').trim() }
+        : {})
+    };
+  });
+
+  const baseMaxClarificationBatches = cfg.maxClarificationBatches ?? DEFAULT_COUNCIL_CONFIG.maxClarificationBatches;
+
   return {
     topic: cfg.topic || DEFAULT_COUNCIL_CONFIG.topic,
     phase: initialPhase,
@@ -77,10 +108,11 @@ export function createInitialCouncilState(config = {}) {
     round: 0,
     maxRounds: cfg.maxRounds ?? DEFAULT_COUNCIL_CONFIG.maxRounds,
     clarificationBatch: 0,
-    maxClarificationBatches: cfg.maxClarificationBatches ?? DEFAULT_COUNCIL_CONFIG.maxClarificationBatches,
+    maxClarificationBatches: Math.max(baseMaxClarificationBatches, clarifications.length),
     minQuorum: cfg.minQuorum ?? DEFAULT_COUNCIL_CONFIG.minQuorum,
     maxRetriesPerSeat: cfg.maxRetriesPerSeat ?? DEFAULT_COUNCIL_CONFIG.maxRetriesPerSeat,
-    clarifications: [],
+    evidence,
+    clarifications,
     judge,
     seats,
     proofs: [],
@@ -99,10 +131,14 @@ export function createInitialCouncilState(config = {}) {
  * @returns {Object} cloned state
  */
 export function cloneState(state) {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(state);
+  const cloned =
+    typeof structuredClone === 'function'
+      ? structuredClone(state)
+      : JSON.parse(JSON.stringify(state));
+  if (cloned && Array.isArray(cloned.evidence)) {
+    cloned.evidence = Object.freeze(cloned.evidence.map((item) => Object.freeze(item)));
   }
-  return JSON.parse(JSON.stringify(state));
+  return cloned;
 }
 
 /**

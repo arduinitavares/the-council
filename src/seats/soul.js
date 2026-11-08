@@ -272,6 +272,7 @@ export function formatDeliberationPrompt({
   topic,
   round,
   maxRounds,
+  evidence = [],
   clarifications = [],
   previousCandidate = null,
   openObjections = [],
@@ -284,6 +285,9 @@ export function formatDeliberationPrompt({
   const resolvedTopic = topic || state?.topic || '';
   const resolvedRound = round || state?.round || 1;
   const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
+  const resolvedEvidence = (evidence && evidence.length > 0)
+    ? evidence
+    : (state?.evidence || []);
   const resolvedClarifications = (clarifications && clarifications.length > 0)
     ? clarifications
     : (state?.clarifications || []);
@@ -293,6 +297,11 @@ export function formatDeliberationPrompt({
     : (state?.objections || []).filter((o) => o.status === 'open');
 
   let contextBlock = `Topic: "${resolvedTopic}"\n`;
+
+  if (resolvedEvidence.length > 0) {
+    contextBlock += `\nPre-Gathered Grounding Evidence:\n` +
+      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
+  }
 
   if (resolvedClarifications.length > 0) {
     contextBlock += `\nBroadcast Clarifications:\n` +
@@ -335,6 +344,8 @@ OUTPUT CONTRACT (strict JSON):
  * @param {Object} params.seat
  * @param {Object} [params.candidate]
  * @param {Array<Object>} [params.admittedProofs]
+ * @param {Array<Object>} [params.evidence=[]]
+ * @param {Array<Object>} [params.clarifications=[]]
  * @param {Array<Object>} [params.myOpenObjections=[]]
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
@@ -345,6 +356,8 @@ export function formatVotingPrompt({
   seat,
   candidate,
   admittedProofs,
+  evidence = [],
+  clarifications = [],
   myOpenObjections = [],
   state = null,
   tools
@@ -353,6 +366,12 @@ export function formatVotingPrompt({
   const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
   const cand = candidate || state?.candidate;
   const proofs = admittedProofs || (state?.proofs || []).filter((p) => p.status === 'admitted');
+  const resolvedEvidence = (evidence && evidence.length > 0)
+    ? evidence
+    : (state?.evidence || []);
+  const resolvedClarifications = (clarifications && clarifications.length > 0)
+    ? clarifications
+    : (state?.clarifications || []);
 
   const proofList = (proofs && proofs.length > 0)
     ? proofs.map((p, idx) =>
@@ -366,6 +385,16 @@ export function formatVotingPrompt({
       ).join('\n')
     : 'No candidate clauses provided.';
 
+  let groundingSection = '';
+  if (resolvedEvidence.length > 0) {
+    groundingSection += `\nPre-Gathered Grounding Evidence:\n` +
+      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
+  }
+  if (resolvedClarifications.length > 0) {
+    groundingSection += `\nBroadcast Clarifications:\n` +
+      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
+  }
+
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
 You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.\n`
@@ -373,7 +402,7 @@ You have read-only inspection tools enabled. Verify disputed candidate clauses o
 
   return `### Voting on Round ${cand?.round || 1} Candidate
 Candidate Summary: "${cand?.summary || ''}"
-
+${groundingSection}
 Candidate Clauses:
 ${clauseList}
 
@@ -401,6 +430,8 @@ If objecting:
  * @param {number} params.round
  * @param {number} [params.maxRounds]
  * @param {Array<Object>} [params.proofs=[]]
+ * @param {Array<Object>} [params.evidence=[]]
+ * @param {Array<Object>} [params.clarifications=[]]
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
  * @returns {string}
@@ -411,6 +442,8 @@ export function formatJudgePrompt({
   round = 1,
   maxRounds,
   proofs = [],
+  evidence = [],
+  clarifications = [],
   state = null,
   tools
 }) {
@@ -420,6 +453,22 @@ export function formatJudgePrompt({
   const resolvedTools = tools !== undefined ? tools : (judge?.tools || 'read-only');
   const resolvedTopic = topic || state?.topic || '';
   const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
+  const resolvedEvidence = (evidence && evidence.length > 0)
+    ? evidence
+    : (state?.evidence || []);
+  const resolvedClarifications = (clarifications && clarifications.length > 0)
+    ? clarifications
+    : (state?.clarifications || []);
+
+  let groundingSection = '';
+  if (resolvedEvidence.length > 0) {
+    groundingSection += `\nPre-Gathered Grounding Evidence:\n` +
+      resolvedEvidence.map((e, i) => `[${e.id || `E${i + 1}`}] ${e.label} (Source: ${e.source}): ${e.text}`).join('\n') + '\n';
+  }
+  if (resolvedClarifications.length > 0) {
+    groundingSection += `\nBroadcast Clarifications:\n` +
+      resolvedClarifications.map((c, i) => `Batch ${c.batch || i + 1}: ${c.answer}`).join('\n') + '\n';
+  }
 
   const proofList = (proofs && proofs.length > 0)
     ? proofs.map((p, idx) => {
@@ -448,7 +497,7 @@ export function formatJudgePrompt({
 Topic: "${resolvedTopic}"
 Judge: ${judge?.id || 'judge'} (${judge?.model || 'model'})
 Soul: ${judgeSoul.name || 'Impartial Proof Auditor'}: ${judgeSoul.lens || ''}
-
+${groundingSection}
 Submitted Proofs for Auditing:
 ${proofList}
 

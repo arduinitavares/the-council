@@ -227,6 +227,56 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
       assert.match(prompt, /Clause C1 \[C\]: V/);
       assert.match(prompt, /P1/);
     });
+
+    it('renders state.evidence ([E1] <label> (Source: <source>): <text>) and state.clarifications in formatDeliberationPrompt, formatVotingPrompt, and formatJudgePrompt (Issue #23)', () => {
+      const stateWithEvidence = {
+        topic: 'Local Service Architecture',
+        round: 1,
+        maxRounds: 3,
+        evidence: [
+          {
+            id: 'E1',
+            label: 'Local Endpoint Snapshot',
+            source: 'http://127.0.0.1:8790/status',
+            text: 'healthy=true active_workers=8'
+          }
+        ],
+        clarifications: [
+          { batch: 1, answer: 'Must run offline without external cloud dependencies.' }
+        ],
+        candidate: {
+          round: 1,
+          summary: 'Candidate summary',
+          clauses: [{ id: 'C1', context: 'Local', conclusion: 'Use worker pool', citedProofIds: ['P1'] }]
+        },
+        proofs: [
+          { id: 'P1', round: 1, seatId: 'astra-kernel', kind: 'check', scope: 'Local', source: 'http://127.0.0.1:8790/status', statement: '8 workers active', status: 'admitted' }
+        ],
+        objections: []
+      };
+
+      const delibPrompt = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        state: stateWithEvidence
+      });
+      const votePrompt = formatVotingPrompt({
+        soul,
+        seat: seatContext,
+        state: stateWithEvidence
+      });
+      const judgePrompt = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Auditor' },
+        round: 1,
+        proofs: stateWithEvidence.proofs,
+        state: stateWithEvidence
+      });
+
+      for (const p of [delibPrompt, votePrompt, judgePrompt]) {
+        assert.match(p, /\[E1\] Local Endpoint Snapshot \(Source: http:\/\/127\.0\.0\.1:8790\/status\): healthy=true active_workers=8/);
+        assert.match(p, /Must run offline without external cloud dependencies\./);
+      }
+    });
   });
 });
 

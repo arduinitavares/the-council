@@ -30,8 +30,9 @@ Usage:
 
 Options:
   -c, --config <path>    Path to JSON configuration file
-  -p, --preset <name>    Built-in preset (architecture, product-comparison, security-audit, argon-only)
+  -p, --preset <name>    Built-in preset (architecture, product-comparison, security-audit, argon-only, best-of-families)
   -t, --topic <string>   Debate topic problem statement
+  -e, --evidence <path>  Path to JSON or Markdown/text evidence file (repeatable)
   -r, --rounds <number>  Maximum deliberation rounds (default: 3)
   -q, --quorum <number>  Minimum quorum of active seats (default: 2)
   -l, --live             Run with live CLI harnesses and visualizer stream (required unless --mock)
@@ -41,6 +42,39 @@ Options:
   -h, --help             Show this help message
   -V, --version          Show version
 `;
+
+function parseEvidenceFile(rawPath) {
+  const resolvedPath = path.resolve(process.cwd(), rawPath);
+  if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+    throw new Error(`Evidence file not found: "${resolvedPath}"`);
+  }
+  const content = fs.readFileSync(resolvedPath, 'utf8');
+  if (resolvedPath.toLowerCase().endsWith('.json')) {
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`Malformed JSON in evidence file "${resolvedPath}": ${err.message}`);
+    }
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.evidence)) {
+      return parsed.evidence;
+    }
+    if (parsed && typeof parsed === 'object') {
+      return [parsed];
+    }
+    throw new Error(`Invalid evidence JSON in "${resolvedPath}": expected an array or object.`);
+  }
+  return [
+    {
+      label: path.basename(resolvedPath),
+      source: rawPath,
+      text: content
+    }
+  ];
+}
 
 /**
  * Runs the CLI command with the given argument list.
@@ -80,6 +114,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         config: { type: 'string', short: 'c' },
         preset: { type: 'string', short: 'p' },
         topic: { type: 'string', short: 't' },
+        evidence: { type: 'string', short: 'e', multiple: true },
         rounds: { type: 'string', short: 'r' },
         quorum: { type: 'string', short: 'q' },
         live: { type: 'boolean', short: 'l', default: false },
@@ -205,6 +240,13 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     let resolved;
     try {
+      if (Array.isArray(values.evidence) && values.evidence.length > 0) {
+        const cliEvidence = [];
+        for (const evPath of values.evidence) {
+          cliEvidence.push(...parseEvidenceFile(evPath));
+        }
+        overrides.evidence = cliEvidence;
+      }
       if (values.config) {
         resolved = loadConfigFile(values.config, overrides);
       } else {
@@ -226,6 +268,9 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     const mode = values.live ? 'live' : 'mock';
     const engineOptions = {};
+    if (typeof io.harnessResolver === 'function') {
+      engineOptions.harnessResolver = io.harnessResolver;
+    }
     let liveWatcher = null;
 
     if (values.live) {

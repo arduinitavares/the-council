@@ -47,7 +47,7 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
 
       const solPrag = p.seats.find((s) => s.id === 'sol-pragmatic');
       assert.equal(solPrag.harness, 'codex');
-      assert.equal(solPrag.model, 'gpt-5-sol (high)');
+      assert.equal(solPrag.model, 'gpt-6.1-sol (high)');
       assert.match(solPrag.soul, /Pragmatic Systems Engineer/);
 
       const argonStaff = p.seats.find((s) => s.id === 'argon-staff');
@@ -89,7 +89,7 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
 
       const grok = p.seats.find((s) => s.id === 'grok-skeptic');
       assert.equal(grok.harness, 'cursor');
-      assert.equal(grok.model, 'grok-4-skeptic');
+      assert.equal(grok.model, 'grok-4.7-high');
       assert.match(grok.soul, /Independent Skeptic & Edge-Case Prober/);
     });
 
@@ -154,6 +154,46 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         };
         const validation = validateConfig(fullConfig);
         assert.equal(validation.valid, true, `Preset ${name} failed validateConfig: ${validation.errors.join(', ')}`);
+      }
+    });
+
+    it('ensures every judge and seat in every built-in preset and default config passes its live adapter validateModel (Issue #16)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const registry = new HarnessRegistry();
+
+      for (const [presetName, preset] of Object.entries(COUNCIL_PRESETS)) {
+        const judgeAdapter = registry.get(preset.judge.harness);
+        assert.doesNotThrow(
+          () => judgeAdapter.validateModel(preset.judge.model),
+          `Preset "${presetName}" judge "${preset.judge.id}" (${preset.judge.harness} / ${preset.judge.model}) must pass validateModel`
+        );
+
+        for (const seat of preset.seats) {
+          const seatAdapter = registry.get(seat.harness);
+          assert.doesNotThrow(
+            () => seatAdapter.validateModel(seat.model),
+            `Preset "${presetName}" seat "${seat.id}" (${seat.harness} / ${seat.model}) must pass validateModel`
+          );
+        }
+      }
+
+      // Also verify default config when no preset is specified
+      const defaultResolved = resolveConfig({});
+      assert.doesNotThrow(() => registry.get(defaultResolved.judge.harness).validateModel(defaultResolved.judge.model));
+      for (const seat of defaultResolved.seats) {
+        assert.doesNotThrow(() => registry.get(seat.harness).validateModel(seat.model));
+      }
+
+      // Also verify skills/ask-council/SKILL.md matches COUNCIL_PRESETS models and contains no rejected models
+      const skillPath = path.resolve(process.cwd(), 'skills/ask-council/SKILL.md');
+      const skillContent = fs.readFileSync(skillPath, 'utf8');
+      assert.doesNotMatch(skillContent, /gpt-5-sol/);
+      assert.doesNotMatch(skillContent, /grok-4-skeptic/);
+      for (const preset of Object.values(COUNCIL_PRESETS)) {
+        assert.ok(skillContent.includes(preset.judge.model), `SKILL.md must include judge model ${preset.judge.model}`);
+        for (const seat of preset.seats) {
+          assert.ok(skillContent.includes(seat.model), `SKILL.md must include seat model ${seat.model}`);
+        }
       }
     });
   });

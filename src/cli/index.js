@@ -230,6 +230,27 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     if (values.live) {
       const harnessRegistry = io.harnessRegistry || new HarnessRegistry();
+      try {
+        const participants = [
+          ...(resolved.judge ? [{ role: 'judge', participant: resolved.judge }] : []),
+          ...(Array.isArray(resolved.seats) ? resolved.seats.map((s) => ({ role: 'seat', participant: s })) : [])
+        ];
+        for (const { role, participant } of participants) {
+          const adapter = harnessRegistry.get(participant.harness);
+          if (adapter && typeof adapter.validateModel === 'function') {
+            try {
+              adapter.validateModel(participant.model);
+            } catch (modelErr) {
+              throw new Error(
+                `Invalid model for ${role} "${participant.id}" (harness "${participant.harness}", model "${participant.model}"): ${modelErr.message}`
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logErr(`Configuration error: ${err.message}`);
+        return await safeExit(1);
+      }
       engineOptions.harnessRegistry = harnessRegistry;
       liveWatcher = io.liveWatcher || new VisualizerLiveWatcher({ initialConfig: resolved });
     }

@@ -63,6 +63,41 @@ describe('Unit: Seat Lifecycle, Validation & Turn Retention (src/seats/seat.js)'
       assert.equal(validateSeatConfig({ id: 's1', harness: 'h', model: 'm', soul: 's', retries: 1.5 }).valid, false);
       assert.equal(validateSeatConfig({ id: 's1', harness: 'h', model: 'm', soul: 's', retries: 'one' }).valid, false);
     });
+
+    it('validates disableHooks and ignoreUserConfig strictly as booleans (#37)', () => {
+      assert.equal(
+        validateSeatConfig({
+          id: 's1',
+          harness: 'codex',
+          model: 'gpt-6-astra (max)',
+          soul: 's',
+          disableHooks: false,
+          ignoreUserConfig: true
+        }).valid,
+        true
+      );
+      for (const badVal of ['false', 'true', 1, 0, null, {}, []]) {
+        const resHooks = validateSeatConfig({
+          id: 's1',
+          harness: 'codex',
+          model: 'gpt-6-astra (max)',
+          soul: 's',
+          disableHooks: badVal
+        });
+        assert.equal(resHooks.valid, false);
+        assert.ok(resHooks.errors.some((e) => e.includes('disableHooks')));
+
+        const resIgnore = validateSeatConfig({
+          id: 's1',
+          harness: 'codex',
+          model: 'gpt-6-astra (max)',
+          soul: 's',
+          ignoreUserConfig: badVal
+        });
+        assert.equal(resIgnore.valid, false);
+        assert.ok(resIgnore.errors.some((e) => e.includes('ignoreUserConfig')));
+      }
+    });
   });
 
   describe('isSeatActive & isSeatExcused helpers', () => {
@@ -256,6 +291,58 @@ describe('Unit: Seat Lifecycle, Validation & Turn Retention (src/seats/seat.js)'
         retries: 0,
         excusedReason: null,
         tools: 'read-only'
+      });
+      assert.equal(seat.disableHooks, undefined);
+      assert.equal(seat.ignoreUserConfig, undefined);
+    });
+
+    it('preserves explicit disableHooks and ignoreUserConfig (including false) in constructor, getters, and toJSON() (#37)', () => {
+      const seatFalse = createSeat({
+        id: 'astra-1',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'SRE Specialist',
+        disableHooks: false,
+        ignoreUserConfig: false
+      });
+
+      assert.equal(seatFalse.disableHooks, false);
+      assert.equal(seatFalse.ignoreUserConfig, false);
+      assert.deepEqual(seatFalse.toJSON(), {
+        id: 'astra-1',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'SRE Specialist',
+        status: 'idle',
+        retries: 0,
+        excusedReason: null,
+        tools: 'read-only',
+        disableHooks: false,
+        ignoreUserConfig: false
+      });
+
+      const seatTrue = createSeat({
+        id: 'astra-2',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'SRE Specialist',
+        disableHooks: true,
+        ignoreUserConfig: true
+      });
+
+      assert.equal(seatTrue.disableHooks, true);
+      assert.equal(seatTrue.ignoreUserConfig, true);
+      assert.deepEqual(seatTrue.toJSON(), {
+        id: 'astra-2',
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        soul: 'SRE Specialist',
+        status: 'idle',
+        retries: 0,
+        excusedReason: null,
+        tools: 'read-only',
+        disableHooks: true,
+        ignoreUserConfig: true
       });
     });
 

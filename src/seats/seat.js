@@ -93,6 +93,16 @@ export function validateSeatConfig(config) {
     errors.push('Seat timeoutMs must be a positive number.');
   }
 
+  // 9. disableHooks validation (if provided)
+  if (config.disableHooks !== undefined && typeof config.disableHooks !== 'boolean') {
+    errors.push('Seat disableHooks must be a boolean.');
+  }
+
+  // 10. ignoreUserConfig validation (if provided)
+  if (config.ignoreUserConfig !== undefined && typeof config.ignoreUserConfig !== 'boolean') {
+    errors.push('Seat ignoreUserConfig must be a boolean.');
+  }
+
   return {
     valid: errors.length === 0,
     errors
@@ -131,6 +141,8 @@ export class Seat {
    * @param {import('../types.js').SeatStatus} [config.status='idle'] - Live status.
    * @param {number} [config.retries=0] - Number of times retried after fault.
    * @param {string | null} [config.excusedReason=null] - Reason if excused.
+   * @param {boolean} [config.disableHooks] - Whether to disable Codex CLI hooks.
+   * @param {boolean} [config.ignoreUserConfig] - Whether to pass --ignore-user-config to Codex CLI.
    * @param {Array<Object>} [config.turns=[]] - Retained completed turn records.
    * @param {string} [config.createdAt] - Creation ISO timestamp.
    */
@@ -149,6 +161,8 @@ export class Seat {
     this._excusedReason = config.excusedReason ?? null;
     this._tools = config.tools || 'read-only';
     this._timeoutMs = typeof config.timeoutMs === 'number' && config.timeoutMs > 0 ? config.timeoutMs : undefined;
+    this._disableHooks = typeof config.disableHooks === 'boolean' ? config.disableHooks : undefined;
+    this._ignoreUserConfig = typeof config.ignoreUserConfig === 'boolean' ? config.ignoreUserConfig : undefined;
     this._turns = Array.isArray(config.turns) ? [...config.turns] : [];
     this._createdAt = config.createdAt || new Date().toISOString();
     this._updatedAt = this._createdAt;
@@ -163,6 +177,8 @@ export class Seat {
   get excusedReason() { return this._excusedReason; }
   get tools() { return this._tools; }
   get timeoutMs() { return this._timeoutMs; }
+  get disableHooks() { return this._disableHooks; }
+  get ignoreUserConfig() { return this._ignoreUserConfig; }
   get turns() { return [...this._turns]; }
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
@@ -288,7 +304,9 @@ export class Seat {
       retries: this._retries,
       excusedReason: this._excusedReason,
       tools: this._tools,
-      ...(this._timeoutMs !== undefined ? { timeoutMs: this._timeoutMs } : {})
+      ...(this._timeoutMs !== undefined ? { timeoutMs: this._timeoutMs } : {}),
+      ...(this._disableHooks !== undefined ? { disableHooks: this._disableHooks } : {}),
+      ...(this._ignoreUserConfig !== undefined ? { ignoreUserConfig: this._ignoreUserConfig } : {})
     };
   }
 

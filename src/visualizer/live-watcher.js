@@ -27,13 +27,29 @@ export function getTransitionActor(event, state) {
     event.type === 'START_JUDGING' ||
     event.type === 'JUDGE_AUDIT_AND_SYNTHESIZE' ||
     event.type === 'JUDGE_FAULT' ||
-    event.type === 'RETRY_JUDGE' ||
-    event.type === 'START_CLARIFYING' ||
-    event.type === 'PUBLISH_CLARIFICATION'
+    event.type === 'RETRY_JUDGE'
   ) {
     return state?.judge?.id || 'judge';
   }
   return 'engine';
+}
+
+/**
+ * Formats fault detail without duplicating `[<errorClass>]` when reason already begins with it.
+ * @param {string} [errorClass]
+ * @param {string} [reason]
+ * @returns {string}
+ */
+function formatFaultDetail(errorClass, reason) {
+  const rawReason = reason || 'unspecified';
+  const cls = errorClass || 'Error';
+  if (
+    typeof rawReason === 'string' &&
+    (rawReason.startsWith(`[${cls}]`) || rawReason.startsWith(`${cls}:`))
+  ) {
+    return rawReason;
+  }
+  return `${cls}: ${rawReason}`;
 }
 
 /**
@@ -45,6 +61,10 @@ export function getTransitionActor(event, state) {
 export function getTransitionSummary(event, state) {
   if (!event || !event.type) {
     return `Transition to ${state?.phase || 'unknown phase'}`;
+  }
+
+  if (state?.lastTransition?.ok === false) {
+    return `Rejected ${event.type}: ${state.lastTransition.message || 'Guard rejected transition'}`;
   }
 
   switch (event.type) {
@@ -104,13 +124,18 @@ export function getTransitionSummary(event, state) {
     case 'WITHDRAW_OBJECTION':
       return `Seat "${event.seatId}" withdrew Objection ${event.objectionId || ''}`;
     case 'SEAT_FAULT':
-      return `Seat "${event.seatId}" faulted (${event.errorClass || 'Error'}: ${event.reason || 'unspecified'})`;
+      return `Seat "${event.seatId}" faulted (${formatFaultDetail(event.errorClass, event.reason)})`;
     case 'RETRY_SEAT':
       return `Retrying faulted Seat "${event.seatId}"`;
     case 'EXCUSE_SEAT':
       return `Excused Seat "${event.seatId}" (${event.reason || 'retries exhausted'})`;
-    case 'JUDGE_FAULT':
-      return `Judge faulted (${event.errorClass || 'Error'}: ${event.reason || event.error || 'unspecified'})`;
+    case 'JUDGE_FAULT': {
+      const detail = formatFaultDetail(event.errorClass, event.reason || event.error);
+      if (event.terminal === true) {
+        return `Terminal Judge fault (${detail}) -> Dissent Report (Judge Fault)`;
+      }
+      return `Judge faulted (${detail})`;
+    }
     case 'RETRY_JUDGE':
       return 'Retrying faulted Judge';
     case 'EVALUATE_ROUND': {

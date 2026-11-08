@@ -10,7 +10,7 @@
  * - Telemetry payload formatting
  */
 
-import { SEAT_STATUSES } from '../types.js';
+import { SEAT_STATUSES, VALID_TOOL_POLICIES } from '../types.js';
 
 /**
  * Valid seat status values re-exported from types.js.
@@ -83,6 +83,16 @@ export function validateSeatConfig(config) {
     errors.push('Seat retries must be a non-negative integer.');
   }
 
+  // 7. tools validation (if provided)
+  if (config.tools !== undefined && !VALID_TOOL_POLICIES.includes(config.tools)) {
+    errors.push(`Invalid seat tools policy "${config.tools}". Must be 'none' or 'read-only'.`);
+  }
+
+  // 8. timeoutMs validation (if provided)
+  if (config.timeoutMs !== undefined && (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs))) {
+    errors.push('Seat timeoutMs must be a positive number.');
+  }
+
   return {
     valid: errors.length === 0,
     errors
@@ -137,6 +147,8 @@ export class Seat {
     this._status = config.status || 'idle';
     this._retries = config.retries ?? 0;
     this._excusedReason = config.excusedReason ?? null;
+    this._tools = config.tools || 'read-only';
+    this._timeoutMs = typeof config.timeoutMs === 'number' && config.timeoutMs > 0 ? config.timeoutMs : undefined;
     this._turns = Array.isArray(config.turns) ? [...config.turns] : [];
     this._createdAt = config.createdAt || new Date().toISOString();
     this._updatedAt = this._createdAt;
@@ -149,6 +161,8 @@ export class Seat {
   get status() { return this._status; }
   get retries() { return this._retries; }
   get excusedReason() { return this._excusedReason; }
+  get tools() { return this._tools; }
+  get timeoutMs() { return this._timeoutMs; }
   get turns() { return [...this._turns]; }
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
@@ -272,7 +286,9 @@ export class Seat {
       soul: typeof this._soul === 'object' && this._soul.toJSON ? this._soul.toJSON() : this._soul,
       status: this._status,
       retries: this._retries,
-      excusedReason: this._excusedReason
+      excusedReason: this._excusedReason,
+      tools: this._tools,
+      ...(this._timeoutMs !== undefined ? { timeoutMs: this._timeoutMs } : {})
     };
   }
 

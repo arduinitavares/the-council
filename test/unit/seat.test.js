@@ -254,7 +254,8 @@ describe('Unit: Seat Lifecycle, Validation & Turn Retention (src/seats/seat.js)'
         soul: 'SRE Specialist',
         status: 'proof_submitted',
         retries: 0,
-        excusedReason: null
+        excusedReason: null,
+        tools: 'read-only'
       });
     });
 

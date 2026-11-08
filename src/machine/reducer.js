@@ -106,7 +106,9 @@ export function transitionCouncil(state, event) {
         soul: s.soul,
         status: 'idle',
         retries: 0,
-        excusedReason: null
+        excusedReason: null,
+        tools: s.tools || 'read-only',
+        ...(typeof s.timeoutMs === 'number' && s.timeoutMs > 0 ? { timeoutMs: s.timeoutMs } : {})
       });
       return succeed(state, next, event.type, 'Added Seat "' + s.id + '" (' + s.harness + ' / ' + s.model + ').');
     }

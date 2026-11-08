@@ -22,24 +22,38 @@ export function createInitialCouncilState(config = {}) {
   const defaultJudge = DEFAULT_COUNCIL_CONFIG.defaultJudge;
 
   const rawJudge = cfg.judge || {};
+  const judgeTools = rawJudge.tools || cfg.tools || defaultJudge.tools || 'read-only';
+  const judgeTimeoutMs = typeof rawJudge.timeoutMs === 'number' && rawJudge.timeoutMs > 0
+    ? rawJudge.timeoutMs
+    : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
   const judge = {
     id: rawJudge.id || defaultJudge.id,
     harness: rawJudge.harness || defaultJudge.harness,
     model: rawJudge.model || defaultJudge.model,
     soul: rawJudge.soul || defaultJudge.soul,
     status: 'idle',
-    retries: 0
+    retries: 0,
+    tools: judgeTools,
+    ...(judgeTimeoutMs !== undefined ? { timeoutMs: judgeTimeoutMs } : {})
   };
 
-  const seats = (cfg.seats || []).map((s) => ({
-    id: s.id,
-    harness: s.harness,
-    model: s.model,
-    soul: s.soul,
-    status: 'idle',
-    retries: 0,
-    excusedReason: null
-  }));
+  const seats = (cfg.seats || []).map((s) => {
+    const seatTools = s.tools || cfg.tools || 'read-only';
+    const seatTimeoutMs = typeof s.timeoutMs === 'number' && s.timeoutMs > 0
+      ? s.timeoutMs
+      : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
+    return {
+      id: s.id,
+      harness: s.harness,
+      model: s.model,
+      soul: s.soul,
+      status: 'idle',
+      retries: 0,
+      excusedReason: null,
+      tools: seatTools,
+      ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {})
+    };
+  });
 
   const initialPhase = cfg.phase ? normalizePhase(cfg.phase) : 'preflight';
 

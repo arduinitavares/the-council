@@ -308,6 +308,59 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       }
     });
 
+    it('rejects unknown or rejected models up front in --live mode before spawning any provider, naming participant and model (Issue #16)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const tmpSeatBad = path.join(os.tmpdir(), `live-bad-seat-model-${Date.now()}.json`);
+      const tmpJudgeBad = path.join(os.tmpdir(), `live-bad-judge-model-${Date.now()}.json`);
+
+      fs.writeFileSync(tmpSeatBad, JSON.stringify({
+        topic: 'Preflight Bad Seat Model',
+        seats: [
+          { id: 'astra-valid', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Valid Seat' },
+          { id: 'sol-invalid-seat', harness: 'codex', model: 'gpt-5-sol (high)', soul: 'Invalid Seat' }
+        ],
+        judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Valid Judge' }
+      }));
+
+      fs.writeFileSync(tmpJudgeBad, JSON.stringify({
+        topic: 'Preflight Bad Judge Model',
+        seats: [
+          { id: 'astra-valid-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Valid Seat 1' },
+          { id: 'astra-valid-2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'Valid Seat 2' }
+        ],
+        judge: { id: 'judge-bad-cursor', harness: 'cursor', model: 'grok-4-skeptic', soul: 'Invalid Judge' }
+      }));
+
+      try {
+        let spawnCalls = 0;
+        const trackingRegistry = new HarnessRegistry({
+          spawnRunner: async () => {
+            spawnCalls += 1;
+            return '{}';
+          }
+        });
+
+        const seatIO = createMockIO();
+        seatIO.io.harnessRegistry = trackingRegistry;
+        const seatCode = await runCli(['run', '--live', '-c', tmpSeatBad], seatIO.io);
+        assert.equal(seatCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when seat model is invalid');
+        assert.match(seatIO.getStderr(), /sol-invalid-seat/);
+        assert.match(seatIO.getStderr(), /gpt-5-sol \(high\)/);
+
+        const judgeIO = createMockIO();
+        judgeIO.io.harnessRegistry = trackingRegistry;
+        const judgeCode = await runCli(['run', '--live', '-c', tmpJudgeBad], judgeIO.io);
+        assert.equal(judgeCode, 1);
+        assert.equal(spawnCalls, 0, 'Must not spawn any provider when judge model is invalid');
+        assert.match(judgeIO.getStderr(), /judge-bad-cursor/);
+        assert.match(judgeIO.getStderr(), /grok-4-skeptic/);
+      } finally {
+        if (fs.existsSync(tmpSeatBad)) fs.unlinkSync(tmpSeatBad);
+        if (fs.existsSync(tmpJudgeBad)) fs.unlinkSync(tmpJudgeBad);
+      }
+    });
+
     it('waits for stdout drain before exiting when piped stdout buffer is full', async () => {
       const { EventEmitter } = await import('node:events');
       let exitCalled = false;

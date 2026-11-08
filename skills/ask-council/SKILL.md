@@ -30,10 +30,10 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 
 | Preset Name | Seat Roster | Judge | Best Used For |
 |---|---|---|---|
-| `architecture` | 4 seats: `astra-systems` (Codex Astra Max), `sol-pragmatic` (Codex Sol High), `argon-staff` (Antigravity Argon High), `opus-domain` (Antigravity Opus High) | `judge-opus` (Antigravity Claude Opus High) | Systems architecture, boundary isolation, deep modules, microservices vs. monoliths, distributed systems trade-offs. |
-| `product-comparison` | 4 seats: `astra-specs` (Codex Astra Max), `astra-ux` (Codex Astra Max), `argon-value` (Antigravity Argon High), `grok-skeptic` (Cursor Grok Skeptic) | `judge-opus` (Antigravity Claude Opus High) | Product, hardware, benchmark, or tooling comparisons (e.g. OS comparison, phone comparisons). |
-| `security-audit` | 3 seats: `astra-secops` (Codex Astra Max), `opus-threat` (Antigravity Opus High), `argon-supplychain` (Antigravity Argon High) | `judge-astra` (Codex Astra Max) | Vulnerability analysis, threat modeling (STRIDE), injection vectors, supply chain and SBOM audits. |
-| `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all Antigravity Gemini 4 Argon High with distinct Souls) | `judge-argon` (Antigravity Gemini 4 Argon High) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
+| `architecture` | 4 seats: `astra-systems` (`codex` / `gpt-6-astra (max)`), `sol-pragmatic` (`codex` / `gpt-6.1-sol (high)`), `argon-staff` (`antigravity` / `gemini-4-argon-high`), `opus-domain` (`antigravity` / `claude-opus-5-5-high`) | `judge-opus` (`antigravity` / `claude-opus-5-5-high`) | Systems architecture, boundary isolation, deep modules, microservices vs. monoliths, distributed systems trade-offs. |
+| `product-comparison` | 4 seats: `astra-specs` (`codex` / `gpt-6-astra (max)`), `astra-ux` (`codex` / `gpt-6-astra (max)`), `argon-value` (`antigravity` / `gemini-4-argon-high`), `grok-skeptic` (`cursor` / `grok-4.7-high`) | `judge-opus` (`antigravity` / `claude-opus-5-5-high`) | Product, hardware, benchmark, or tooling comparisons (e.g. OS comparison, phone comparisons). |
+| `security-audit` | 3 seats: `astra-secops` (`codex` / `gpt-6-astra (max)`), `opus-threat` (`antigravity` / `claude-opus-5-5-high`), `argon-supplychain` (`antigravity` / `gemini-4-argon-high`) | `judge-astra` (`codex` / `gpt-6-astra (max)`) | Vulnerability analysis, threat modeling (STRIDE), injection vectors, supply chain and SBOM audits. |
+| `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
 - [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`). Run with:
@@ -78,7 +78,7 @@ If the question demands domain-specific temperaments (Souls) that aren't covered
     {
       "id": "skeptic-durability",
       "harness": "cursor",
-      "model": "grok-4-skeptic",
+      "model": "grok-4.7-high",
       "soul": "Independent Skeptic: challenges vendor bloatware, OS update longevity, drop-test results, and repairability indices."
     }
   ]
@@ -245,7 +245,7 @@ For empirical or codebase-heavy questions, configure `tools: 'read-only'` with g
     {
       "id": "sol-race-tester",
       "harness": "codex",
-      "model": "gpt-5-sol (high)",
+      "model": "gpt-6.1-sol (high)",
       "soul": "Race Condition & State Invariant Specialist",
       "tools": "read-only"
     }

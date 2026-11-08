@@ -176,7 +176,7 @@ export const COUNCIL_PRESETS = Object.freeze({
       Object.freeze({
         id: 'sol-pragmatic',
         harness: 'codex',
-        model: 'gpt-5-sol (high)',
+        model: 'gpt-6.1-sol (high)',
         soul: 'Pragmatic Systems Engineer: prioritizes operability, standard tooling, and minimal moving parts.'
       }),
       Object.freeze({
@@ -222,7 +222,7 @@ export const COUNCIL_PRESETS = Object.freeze({
       Object.freeze({
         id: 'grok-skeptic',
         harness: 'cursor',
-        model: 'grok-4-skeptic',
+        model: 'grok-4.7-high',
         soul: 'Independent Skeptic & Edge-Case Prober: challenges marketing claims, vendor lock-in, and real-world failure modes.'
       })
     ])

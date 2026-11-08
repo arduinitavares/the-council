@@ -581,6 +581,121 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.ok(capturedArgs.includes('--ignore-user-config'));
       assert.equal(capturedArgs.indexOf('--ignore-user-config'), capturedArgs.indexOf('--ephemeral') + 1);
     });
+
+    it('matches disableHooks precedence for ignoreUserConfig (explicit option overrides context) (#37)', async () => {
+      let capturedArgs = null;
+      const mockExec = async (_bin, args) => {
+        capturedArgs = args;
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      };
+
+      // Explicit ignoreUserConfig: false overrides context.ignoreUserConfig: true
+      await runCodexCli({
+        model: 'gpt-6-astra (high)',
+        prompt: 'prompt',
+        ignoreUserConfig: false,
+        context: { ignoreUserConfig: true },
+        exec: mockExec
+      });
+      assert.equal(
+        capturedArgs.includes('--ignore-user-config'),
+        false,
+        'Explicit ignoreUserConfig: false must override context.ignoreUserConfig: true'
+      );
+
+      // Explicit ignoreUserConfig: true overrides context.ignoreUserConfig: false
+      await runCodexCli({
+        model: 'gpt-6-astra (high)',
+        prompt: 'prompt',
+        ignoreUserConfig: true,
+        context: { ignoreUserConfig: false },
+        exec: mockExec
+      });
+      assert.equal(
+        capturedArgs.includes('--ignore-user-config'),
+        true,
+        'Explicit ignoreUserConfig: true must override context.ignoreUserConfig: false'
+      );
+
+      // Omitted ignoreUserConfig uses context.ignoreUserConfig: true
+      await runCodexCli({
+        model: 'gpt-6-astra (high)',
+        prompt: 'prompt',
+        context: { ignoreUserConfig: true },
+        exec: mockExec
+      });
+      assert.equal(
+        capturedArgs.includes('--ignore-user-config'),
+        true,
+        'Omitted ignoreUserConfig must honor context.ignoreUserConfig: true'
+      );
+    });
+
+    it('rejects non-boolean disableHooks and ignoreUserConfig at top-level, judge, and seats without coercing "false" to true (#37)', async () => {
+      const { resolveConfig, validateConfig } = await import('../../src/engine/config.js');
+
+      for (const badVal of ['false', 'true', 0, 1, null, {}]) {
+        assert.throws(
+          () => resolveConfig({ topic: 'T', disableHooks: badVal }),
+          /disableHooks/
+        );
+        assert.throws(
+          () => resolveConfig({ topic: 'T', ignoreUserConfig: badVal }),
+          /ignoreUserConfig/
+        );
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'T',
+              judge: { id: 'j1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'J', disableHooks: badVal }
+            }),
+          /disableHooks/
+        );
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'T',
+              judge: { id: 'j1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'J', ignoreUserConfig: badVal }
+            }),
+          /ignoreUserConfig/
+        );
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'T',
+              seats: [
+                { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1', disableHooks: badVal },
+                { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'S2' }
+              ]
+            }),
+          /disableHooks/
+        );
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'T',
+              seats: [
+                { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1', ignoreUserConfig: badVal },
+                { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'S2' }
+              ]
+            }),
+          /ignoreUserConfig/
+        );
+
+        const directVal = validateConfig({
+          topic: 'T',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxClarificationBatches: 0,
+          maxRetriesPerSeat: 0,
+          disableHooks: badVal,
+          ignoreUserConfig: badVal
+        });
+        assert.equal(directVal.valid, false);
+        assert.ok(directVal.errors.some((e) => e.includes('disableHooks')));
+        assert.ok(directVal.errors.some((e) => e.includes('ignoreUserConfig')));
+      }
+    });
   });
 
   describe('runCodexCli: Telemetry & Prompt Redaction (PROJECT.md:45)', () => {

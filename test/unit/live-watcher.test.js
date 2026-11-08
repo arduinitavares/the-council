@@ -511,7 +511,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         judge: { id: 'judge-1' }
       };
       emitter.emitStateTransition({ type: 'START_CLARIFYING' }, state1);
-      assert.equal(watcher.liveRun.steps[0].actor, 'judge-1');
+      assert.equal(watcher.liveRun.steps[0].actor, 'engine');
       assert.equal(watcher.liveRun.steps[0].summary, 'Started discovery & clarification phase');
 
       const state2 = {
@@ -555,6 +555,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         },
         { phase: 'clarifying', clarificationBatch: 2, seats: [], judge: { id: 'judge-1' } }
       );
+      assert.equal(watcher.liveRun.steps[3].actor, 'engine');
       assert.equal(watcher.liveRun.steps[3].summary, 'Published clarification answer for Batch 2');
 
       emitter.emitStateTransition(
@@ -612,6 +613,275 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(watcher.liveRun.steps[6].summary, 'Seat "sol-voter" voted OBJECT (Round 1, cites Proof P2)');
 
       watcher.stop();
+    });
+
+    it('renders Rejected <event.type>: <message> on guard-rejected transitions, avoids duplicate [ErrorClass], and distinguishes terminal JUDGE_FAULT (#40)', async () => {
+      const { getTransitionActor, getTransitionSummary } = await import('../../src/visualizer/live-watcher.js');
+
+      // 1. Rejected transitions
+      assert.equal(
+        getTransitionSummary(
+          { type: 'CAST_VOTE', seatId: 's1', vote: 'object', reason: 'Bad proofId', proofId: 'P999' },
+          {
+            phase: 'confirming',
+            round: 1,
+            lastTransition: {
+              ok: false,
+              message: 'Objection Proof Guard: Objection cites non-existent Proof "P999".'
+            }
+          }
+        ),
+        'Rejected CAST_VOTE: Objection Proof Guard: Objection cites non-existent Proof "P999".'
+      );
+
+      assert.equal(
+        getTransitionSummary(
+          { type: 'JUDGE_AUDIT_AND_SYNTHESIZE', clauses: [] },
+          {
+            phase: 'judging',
+            round: 1,
+            lastTransition: {
+              ok: false,
+              message: 'Judge Candidate Guard: Candidate requires at least one clause.'
+            }
+          }
+        ),
+        'Rejected JUDGE_AUDIT_AND_SYNTHESIZE: Judge Candidate Guard: Candidate requires at least one clause.'
+      );
+
+      // 2. Non-duplicate [ErrorClass] in SEAT_FAULT and JUDGE_FAULT when reason already starts with [<errorClass>]
+      assert.equal(
+        getTransitionSummary(
+          {
+            type: 'SEAT_FAULT',
+            seatId: 's1',
+            errorClass: 'TimeoutError',
+            reason: '[TimeoutError] Seat "s1" timed out after 5000ms'
+          },
+          { phase: 'seat_fault', round: 1 }
+        ),
+        'Seat "s1" faulted ([TimeoutError] Seat "s1" timed out after 5000ms)'
+      );
+      assert.equal(
+        getTransitionSummary(
+          {
+            type: 'SEAT_FAULT',
+            seatId: 's1',
+            errorClass: 'TimeoutError',
+            reason: 'Seat "s1" timed out after 5000ms'
+          },
+          { phase: 'seat_fault', round: 1 }
+        ),
+        'Seat "s1" faulted (TimeoutError: Seat "s1" timed out after 5000ms)'
+      );
+
+      // 3. Non-terminal vs terminal JUDGE_FAULT
+      const nonTerminalJudgeSummary = getTransitionSummary(
+        {
+          type: 'JUDGE_FAULT',
+          errorClass: 'TimeoutError',
+          reason: '[TimeoutError] Judge timed out after 10000ms'
+        },
+        { phase: 'judge_fault', round: 1 }
+      );
+      assert.equal(nonTerminalJudgeSummary, 'Judge faulted ([TimeoutError] Judge timed out after 10000ms)');
+
+      const terminalJudgeSummary = getTransitionSummary(
+        {
+          type: 'JUDGE_FAULT',
+          errorClass: 'TimeoutError',
+          reason: '[TimeoutError] Judge timed out after 10000ms',
+          terminal: true
+        },
+        { phase: 'completed', round: 1 }
+      );
+      assert.notEqual(terminalJudgeSummary, nonTerminalJudgeSummary);
+      assert.equal(
+        terminalJudgeSummary,
+        'Terminal Judge fault ([TimeoutError] Judge timed out after 10000ms) -> Dissent Report (Judge Fault)'
+      );
+
+      // 4. Clarification actor attribution
+      assert.equal(getTransitionActor({ type: 'START_CLARIFYING' }, { judge: { id: 'judge-1' } }), 'engine');
+      assert.equal(
+        getTransitionActor({ type: 'PUBLISH_CLARIFICATION', answer: 'Yes' }, { judge: { id: 'judge-1' } }),
+        'engine'
+      );
+    });
+
+    it('verifies end-to-end CouncilEngine -> VisualizerLiveWatcher event contract for getTransitionActor and getTransitionSummary (#40)', async () => {
+      const { CouncilEngine } = await import('../../src/engine/council-engine.js');
+      const { InvalidResponseError, TimeoutError } = await import('../../src/harness/adapter.js');
+
+      let s1ProofAttempts = 0;
+      let judgeAttempts = 0;
+      let s1VoteAttempts = 0;
+
+      const customHarness = {
+        executeSeatProof: async ({ seat }) => {
+          if (seat.id === 'seat-alpha' && s1ProofAttempts === 0) {
+            s1ProofAttempts += 1;
+            throw new TimeoutError('Seat alpha timed out on first attempt', {
+              harness: 'codex',
+              seatId: 'seat-alpha',
+              timeoutMs: 1000
+            });
+          }
+          return {
+            scope: 'Architecture',
+            kind: 'check',
+            source: 'src/engine/council-engine.js',
+            statement: `Verified by ${seat.id}`
+          };
+        },
+        executeJudgeAuditAndSynthesis: async () => {
+          if (judgeAttempts === 0) {
+            judgeAttempts += 1;
+            // First attempt returns unverified proof citation -> rejected JUDGE_AUDIT_AND_SYNTHESIZE transition + JUDGE_FAULT + RETRY_JUDGE
+            return {
+              summary: 'Invalid synthesis citing P999',
+              proofDecisions: { P1: { status: 'admitted', note: 'ok' }, P2: { status: 'admitted', note: 'ok' } },
+              clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P999'] }]
+            };
+          }
+          return {
+            summary: 'Valid synthesis',
+            proofDecisions: { P1: { status: 'admitted', note: 'ok' }, P2: { status: 'admitted', note: 'ok' } },
+            clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1', 'P2'] }]
+          };
+        },
+        executeSeatVote: async ({ seat }) => {
+          if (seat.id === 'seat-alpha' && s1VoteAttempts === 0) {
+            s1VoteAttempts += 1;
+            // First vote objects citing non-existent P999 -> rejected CAST_VOTE transition + SEAT_FAULT (exhausts retries -> EXCUSE_SEAT)
+            return { vote: 'object', reason: 'Bad proof reference', proofId: 'P999' };
+          }
+          return { vote: 'accept' };
+        }
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Engine-to-Watcher Event Contract',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 1,
+          clarifications: [{ answer: 'Target Node >= 22' }],
+          judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge' },
+          seats: [
+            { id: 'seat-alpha', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Alpha' },
+            { id: 'seat-beta', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'Beta' },
+            { id: 'seat-gamma', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Gamma' }
+          ]
+        },
+        {
+          telemetry: emitter,
+          harnessResolver: () => customHarness
+        }
+      );
+
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputPath: tmpOut,
+        initialConfig: engine.config
+      });
+
+      const result = await engine.run();
+      watcher.stop();
+
+      assert.equal(result.ok, true);
+      const steps = watcher.liveRun.steps;
+
+      // Verify actors and summaries across every step emitted by CouncilEngine
+      const byType = (type) => steps.filter((s) => s.event?.type === type);
+
+      const addSeats = byType('ADD_SEAT');
+      assert.equal(addSeats.length, 3);
+      assert.equal(addSeats[0].actor, 'seat-alpha');
+      assert.match(addSeats[0].summary, /^Added Seat "seat-alpha"/);
+
+      const startClarifying = byType('START_CLARIFYING')[0];
+      assert.equal(startClarifying.actor, 'engine');
+      assert.equal(startClarifying.summary, 'Started discovery & clarification phase');
+
+      const publishClarification = byType('PUBLISH_CLARIFICATION')[0];
+      assert.equal(publishClarification.actor, 'engine');
+      assert.equal(publishClarification.summary, 'Published clarification answer for Batch 1');
+
+      const beginRound = byType('BEGIN_ROUND')[0];
+      assert.equal(beginRound.actor, 'engine');
+      assert.equal(beginRound.summary, 'Began Round 1/1 proof collection');
+
+      const seatFaults = byType('SEAT_FAULT');
+      assert.equal(seatFaults.length, 2);
+      assert.equal(seatFaults[0].actor, 'seat-alpha');
+      assert.doesNotMatch(
+        seatFaults[0].summary,
+        /TimeoutError:\s*\[TimeoutError\]/,
+        'Must not duplicate [TimeoutError] in SEAT_FAULT summary'
+      );
+      assert.match(seatFaults[0].summary, /^Seat "seat-alpha" faulted \(\[TimeoutError\]/);
+
+      const retrySeats = byType('RETRY_SEAT');
+      assert.equal(retrySeats.length, 1);
+      assert.equal(retrySeats[0].actor, 'seat-alpha');
+      assert.equal(retrySeats[0].summary, 'Retrying faulted Seat "seat-alpha"');
+
+      const submitProofs = byType('SUBMIT_PROOF');
+      assert.equal(submitProofs.length, 3);
+      assert.equal(submitProofs[0].actor, 'seat-alpha');
+      assert.equal(submitProofs[0].summary, 'Seat "seat-alpha" submitted Proof P1 [check]');
+
+      const startJudging = byType('START_JUDGING')[0];
+      assert.equal(startJudging.actor, 'judge-opus');
+      assert.equal(startJudging.summary, 'Initiated Judge audit & candidate synthesis for Round 1');
+
+      const judgeAudits = byType('JUDGE_AUDIT_AND_SYNTHESIZE');
+      assert.equal(judgeAudits.length, 2);
+      assert.equal(judgeAudits[0].actor, 'judge-opus');
+      assert.match(
+        judgeAudits[0].summary,
+        /^Rejected JUDGE_AUDIT_AND_SYNTHESIZE: .*Judge Candidate Guard:/,
+        'Rejected JUDGE_AUDIT_AND_SYNTHESIZE must render Rejected summary instead of false-positive success'
+      );
+      assert.equal(judgeAudits[1].actor, 'judge-opus');
+      assert.equal(judgeAudits[1].summary, 'Judge audited proofs & synthesized Candidate with 1 clause(s)');
+
+      const judgeFaults = byType('JUDGE_FAULT');
+      assert.equal(judgeFaults.length, 1);
+      assert.equal(judgeFaults[0].actor, 'judge-opus');
+      assert.doesNotMatch(
+        judgeFaults[0].summary,
+        /InvalidResponseError:\s*\[InvalidResponseError\]/,
+        'Must not duplicate [InvalidResponseError] in JUDGE_FAULT summary'
+      );
+      assert.match(judgeFaults[0].summary, /^Judge faulted \(\[InvalidResponseError\]/);
+
+      const retryJudge = byType('RETRY_JUDGE')[0];
+      assert.equal(retryJudge.actor, 'judge-opus');
+      assert.equal(retryJudge.summary, 'Retrying faulted Judge');
+
+      const castVotes = byType('CAST_VOTE');
+      assert.equal(castVotes.length, 3);
+      assert.equal(castVotes[0].actor, 'seat-alpha');
+      assert.match(
+        castVotes[0].summary,
+        /^Rejected CAST_VOTE: .*Objection Guard:/,
+        'Rejected CAST_VOTE must render Rejected summary instead of false-positive success'
+      );
+      assert.equal(castVotes[1].actor, 'seat-beta');
+      assert.equal(castVotes[1].summary, 'Seat "seat-beta" voted ACCEPT (Round 1)');
+      assert.equal(castVotes[2].actor, 'seat-gamma');
+      assert.equal(castVotes[2].summary, 'Seat "seat-gamma" voted ACCEPT (Round 1)');
+
+      const excuseSeats = byType('EXCUSE_SEAT');
+      assert.equal(excuseSeats.length, 1);
+      assert.equal(excuseSeats[0].actor, 'seat-alpha');
+      assert.match(excuseSeats[0].summary, /^Excused Seat "seat-alpha"/);
+
+      const evaluateRound = byType('EVALUATE_ROUND')[0];
+      assert.equal(evaluateRound.actor, 'engine');
+      assert.equal(evaluateRound.summary, 'Evaluated Round 1: Verdict — Unanimous Consensus');
     });
 
     it('handles partial states without throwing in _computeGraph', () => {

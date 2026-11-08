@@ -36,9 +36,9 @@ export function createInitialCouncilState(config = {}) {
     status: 'idle',
     retries: 0,
     tools: judgeTools,
-    ...(judgeTimeoutMs !== undefined ? { timeoutMs: judgeTimeoutMs } : {}),
-    ...(judgeDisableHooks !== undefined ? { disableHooks: Boolean(judgeDisableHooks) } : {}),
-    ...(judgeIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(judgeIgnoreUserConfig) } : {})
+    ...(typeof judgeTimeoutMs === 'number' ? { timeoutMs: judgeTimeoutMs } : {}),
+    ...(typeof judgeDisableHooks === 'boolean' ? { disableHooks: judgeDisableHooks } : {}),
+    ...(typeof judgeIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: judgeIgnoreUserConfig } : {})
   };
 
   const seats = (cfg.seats || []).map((s) => {
@@ -58,8 +58,8 @@ export function createInitialCouncilState(config = {}) {
       excusedReason: null,
       tools: seatTools,
       ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
-      ...(seatDisableHooks !== undefined ? { disableHooks: Boolean(seatDisableHooks) } : {}),
-      ...(seatIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(seatIgnoreUserConfig) } : {})
+      ...(typeof seatDisableHooks === 'boolean' ? { disableHooks: seatDisableHooks } : {}),
+      ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {})
     };
   });
 

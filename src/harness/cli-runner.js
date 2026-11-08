@@ -304,12 +304,14 @@ export async function runCodexCli({
   exec = execCli,
   context,
   onCallRecord,
-  ignoreUserConfig = false,
+  ignoreUserConfig,
   disableHooks
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
   const shouldDisableHooks =
     disableHooks !== undefined ? Boolean(disableHooks) : context?.disableHooks !== false;
+  const shouldIgnoreUserConfig =
+    ignoreUserConfig !== undefined ? Boolean(ignoreUserConfig) : Boolean(context?.ignoreUserConfig);
   const args = [
     'exec',
     '--ephemeral',
@@ -321,7 +323,7 @@ export async function runCodexCli({
     prompt
   ];
 
-  if (ignoreUserConfig || context?.ignoreUserConfig) {
+  if (shouldIgnoreUserConfig) {
     args.splice(args.indexOf('--ephemeral') + 1, 0, '--ignore-user-config');
   }
 

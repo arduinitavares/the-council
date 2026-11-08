@@ -62,6 +62,14 @@ export function validateConfig(config) {
     }
   }
 
+  if (config.disableHooks !== undefined && typeof config.disableHooks !== 'boolean') {
+    errors.push('disableHooks must be a boolean.');
+  }
+
+  if (config.ignoreUserConfig !== undefined && typeof config.ignoreUserConfig !== 'boolean') {
+    errors.push('ignoreUserConfig must be a boolean.');
+  }
+
   if (config.judge) {
     if (!config.judge.id || typeof config.judge.id !== 'string') {
       errors.push('Judge requires a valid "id" string.');
@@ -84,6 +92,12 @@ export function validateConfig(config) {
           `Judge "tools" policy must be 'none' or 'read-only' (got "${config.judge.tools}"). Write tools are strictly forbidden.`
         );
       }
+    }
+    if (config.judge.disableHooks !== undefined && typeof config.judge.disableHooks !== 'boolean') {
+      errors.push('Judge requires "disableHooks" to be a boolean.');
+    }
+    if (config.judge.ignoreUserConfig !== undefined && typeof config.judge.ignoreUserConfig !== 'boolean') {
+      errors.push('Judge requires "ignoreUserConfig" to be a boolean.');
     }
   }
 
@@ -127,6 +141,12 @@ export function validateConfig(config) {
               `Seat "${s.id || idx}" "tools" policy must be 'none' or 'read-only' (got "${s.tools}"). Write tools are strictly forbidden.`
             );
           }
+        }
+        if (s.disableHooks !== undefined && typeof s.disableHooks !== 'boolean') {
+          errors.push(`Seat "${s.id || idx}" requires "disableHooks" to be a boolean.`);
+        }
+        if (s.ignoreUserConfig !== undefined && typeof s.ignoreUserConfig !== 'boolean') {
+          errors.push(`Seat "${s.id || idx}" requires "ignoreUserConfig" to be a boolean.`);
         }
       });
     }
@@ -315,22 +335,26 @@ export function resolveConfig(userConfig = {}) {
         ? userConfig.judge.tools
         : (defaultJudge.tools || defaultTools),
       ...(userConfig.judge?.disableHooks !== undefined
-        ? { disableHooks: Boolean(userConfig.judge.disableHooks) }
-        : (userConfig.disableHooks !== undefined ? { disableHooks: Boolean(userConfig.disableHooks) } : {})),
+        ? { disableHooks: userConfig.judge.disableHooks }
+        : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
       ...(userConfig.judge?.ignoreUserConfig !== undefined
-        ? { ignoreUserConfig: Boolean(userConfig.judge.ignoreUserConfig) }
-        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(userConfig.ignoreUserConfig) } : {}))
+        ? { ignoreUserConfig: userConfig.judge.ignoreUserConfig }
+        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {}))
     },
-    seats: rawSeats.map((s) => ({
-      ...s,
-      tools: s.tools !== undefined ? s.tools : defaultTools,
-      ...(s.disableHooks !== undefined
-        ? { disableHooks: Boolean(s.disableHooks) }
-        : (userConfig.disableHooks !== undefined ? { disableHooks: Boolean(userConfig.disableHooks) } : {})),
-      ...(s.ignoreUserConfig !== undefined
-        ? { ignoreUserConfig: Boolean(s.ignoreUserConfig) }
-        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(userConfig.ignoreUserConfig) } : {}))
-    }))
+    seats: rawSeats.map((s) =>
+      s && typeof s === 'object'
+        ? {
+            ...s,
+            tools: s.tools !== undefined ? s.tools : defaultTools,
+            ...(s.disableHooks !== undefined
+              ? { disableHooks: s.disableHooks }
+              : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
+            ...(s.ignoreUserConfig !== undefined
+              ? { ignoreUserConfig: s.ignoreUserConfig }
+              : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {}))
+          }
+        : s
+    )
   };
 
   const validation = validateConfig(merged);

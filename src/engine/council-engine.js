@@ -137,8 +137,8 @@ export class CouncilEngine {
             soul: typeof seat.soul === 'object' && seat.soul !== null && seat.soul.toJSON ? seat.soul.toJSON() : seat.soul,
             tools: seatTools,
             ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
-            ...(seatDisableHooks !== undefined ? { disableHooks: Boolean(seatDisableHooks) } : {}),
-            ...(seatIgnoreUserConfig !== undefined ? { ignoreUserConfig: Boolean(seatIgnoreUserConfig) } : {})
+            ...(typeof seatDisableHooks === 'boolean' ? { disableHooks: seatDisableHooks } : {}),
+            ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {})
           }
         });
       }
@@ -452,6 +452,18 @@ export class CouncilEngine {
           source: res.proofInput.source,
           statement: res.proofInput.statement
         });
+        if (!this.state.lastTransition?.ok) {
+          const transErr = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${seat.id}`,
+            {
+              harness: seat.harness,
+              seatId: seat.id,
+              model: seat.model
+            }
+          );
+          res = { seat, proofInput: null, error: transErr };
+          continue;
+        }
 
         this.telemetry.emitSeatTelemetry(seat.id, 'proof_submitted');
         const latestProof = this.state.proofs[this.state.proofs.length - 1];

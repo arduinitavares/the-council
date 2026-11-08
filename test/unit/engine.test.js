@@ -575,6 +575,59 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(result.state.judge.errorClass, 'InvalidResponseError');
       assert.match(result.state.judge.faultReason, /^\[InvalidResponseError\]/);
     });
+
+    it('checks state.lastTransition.ok after SUBMIT_PROOF before emitting proof_submitted telemetry (#40)', async () => {
+      const mockHarness = new MockAdapter();
+      const engine = new CouncilEngine(
+        {
+          topic: 'SUBMIT_PROOF Guard Rejection Check',
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          seats: [
+            { id: 's1-rejected-proof', harness: 'mock', model: 'm', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+            { id: 's3', harness: 'mock', model: 'm', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      // Force SUBMIT_PROOF for s1-rejected-proof to be rejected by transitionCouncil
+      // by excusing s1-rejected-proof in state right before its SUBMIT_PROOF step is applied
+      const origStep = engine._step.bind(engine);
+      engine._step = (event, throwOnError) => {
+        if (event.type === 'SUBMIT_PROOF' && event.seatId === 's1-rejected-proof') {
+          const target = engine.state.seats.find((s) => s.id === 's1-rejected-proof');
+          if (target) {
+            // Simulate reducer guard rejection (e.g. invalid kind at reducer boundary)
+            return origStep({ ...event, kind: 'invalid_reducer_kind' }, throwOnError);
+          }
+        }
+        return origStep(event, throwOnError);
+      };
+
+      const seatTelemetryEvents = [];
+      const proofSubmittedEvents = [];
+      engine.getTelemetry().on('seat_telemetry', (evt) => seatTelemetryEvents.push(evt));
+      engine.getTelemetry().on('proof_submitted', (evt) => proofSubmittedEvents.push(evt));
+
+      const result = await engine.run();
+
+      assert.equal(
+        seatTelemetryEvents.some((e) => e.seatId === 's1-rejected-proof' && e.status === 'proof_submitted'),
+        false,
+        'Must not emit proof_submitted seat_telemetry when SUBMIT_PROOF transition is rejected'
+      );
+      assert.equal(
+        proofSubmittedEvents.some((e) => !e.proof || e.proof.seatId === 's1-rejected-proof'),
+        false,
+        'Must not emit proof_submitted event for a rejected SUBMIT_PROOF transition'
+      );
+      const s1 = result.state.seats.find((s) => s.id === 's1-rejected-proof');
+      assert.equal(s1.status, 'excused');
+      assert.equal(s1.errorClass, 'InvalidResponseError');
+      assert.equal(result.ok, true);
+    });
   });
 });
 

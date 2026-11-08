@@ -107,7 +107,17 @@ export class CouncilEngine {
 
     if (!nextState.lastTransition.ok) {
       const errorMsg = `State transition guard rejected event ${event.type}: ${nextState.lastTransition.message}`;
-      this.telemetry.emit('guard_rejected', { event, message: errorMsg, state: nextState });
+      try {
+        if (typeof this.telemetry.emitGuardRejected === 'function') {
+          this.telemetry.emitGuardRejected({ event, message: errorMsg, state: nextState });
+        } else if (typeof this.telemetry._safeEmit === 'function') {
+          this.telemetry._safeEmit('guard_rejected', { event, message: errorMsg, state: nextState });
+        } else {
+          this.telemetry.emit('guard_rejected', { event, message: errorMsg, state: nextState });
+        }
+      } catch {
+        // Isolate observer failures on custom telemetry implementations
+      }
       if (throwOnError) {
         throw new Error(errorMsg);
       }

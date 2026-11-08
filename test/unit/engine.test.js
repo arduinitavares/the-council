@@ -628,6 +628,43 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(s1.errorClass, 'InvalidResponseError');
       assert.equal(result.ok, true);
     });
+
+    it('isolates throwing guard_rejected listeners in CouncilEngine._step without crashing or masking guard errors (Issue #36)', () => {
+      const engine = new CouncilEngine({
+        topic: 'Guard Rejected Isolation',
+        minQuorum: 2,
+        seats: [
+          { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
+          { id: 's2', harness: 'mock', model: 'm', soul: 'S2' }
+        ]
+      });
+
+      const guardPayloads = [];
+      const telemetryErrors = [];
+      engine.getTelemetry().on('error', (err) => telemetryErrors.push(err));
+      engine.getTelemetry().on('guard_rejected', () => {
+        throw new Error('broken guard_rejected observer');
+      });
+      engine.getTelemetry().on('guard_rejected', (payload) => {
+        guardPayloads.push(payload);
+      });
+
+      // throwOnError = false: should not throw despite throwing listener
+      const nextState = engine._step({ type: 'CAST_VOTE', seatId: 's1', vote: 'accept' }, false);
+      assert.equal(nextState.lastTransition.ok, false);
+      assert.equal(guardPayloads.length, 1);
+      assert.equal(telemetryErrors.length, 1);
+      assert.match(telemetryErrors[0].error, /broken guard_rejected observer/);
+
+      // throwOnError = true: should throw the state transition guard error, not the observer error
+      assert.throws(
+        () => engine._step({ type: 'CAST_VOTE', seatId: 's1', vote: 'accept' }, true),
+        /State transition guard rejected event CAST_VOTE/
+      );
+      assert.equal(guardPayloads.length, 2);
+      assert.equal(telemetryErrors.length, 2);
+    });
   });
 });
+
 

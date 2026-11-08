@@ -246,5 +246,160 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       assert.throws(() => emitter.emitStateTransition(null, {}), /event with a valid "type"/);
       assert.throws(() => emitter.emitStateTransition({ type: 'X' }, null), /valid CouncilState/);
     });
+
+    it('isolates sibling listeners when an earlier listener throws and preserves prependListener and once semantics (Issue #36)', () => {
+      const emitter = createTelemetryEmitter({ clock: fixedClock });
+      const callOrder = [];
+      const errors = [];
+
+      emitter.on('error', (err) => {
+        errors.push(err);
+      });
+
+      emitter.on('round_start', () => {
+        callOrder.push('first-on-throws');
+        throw new Error('first listener failed');
+      });
+
+      emitter.once('round_start', () => {
+        callOrder.push('once-throws');
+        // Reentrant emission inside throwing once listener must not re-fire this once listener
+        emitter.emitRoundStart(99, ['s1']);
+        throw new Error('once listener failed');
+      });
+
+      emitter.on('round_start', (payload) => {
+        callOrder.push(`second-on:${payload.round}`);
+      });
+
+      emitter.prependListener('round_start', (payload) => {
+        callOrder.push(`prepended:${payload.round}`);
+      });
+
+      emitter.emitRoundStart(1, ['s1', 's2']);
+      emitter.emitRoundStart(2, ['s1', 's2']);
+
+      // First emission (round 1):
+      // 1. prepended:1
+      // 2. first-on-throws (throws -> error 1)
+      // 3. once-throws -> reentrant emitRoundStart(99):
+      //    - prepended:99
+      //    - first-on-throws (throws -> error 2)
+      //    - second-on:99 (once-throws is already removed!)
+      //    then once-throws throws -> error 3
+      // 4. second-on:1
+      // Second emission (round 2):
+      // 1. prepended:2
+      // 2. first-on-throws (throws -> error 4)
+      // 3. second-on:2 (once-throws does not fire again)
+      assert.deepEqual(callOrder, [
+        'prepended:1',
+        'first-on-throws',
+        'once-throws',
+        'prepended:99',
+        'first-on-throws',
+        'second-on:99',
+        'second-on:1',
+        'prepended:2',
+        'first-on-throws',
+        'second-on:2'
+      ]);
+      assert.equal(errors.length, 4);
+      assert.equal(errors[0].eventName, 'round_start');
+      assert.equal(errors[0].error, 'first listener failed');
+      assert.equal(errors[2].error, 'once listener failed');
+    });
+
+    it('isolates throwing error listeners without recursion or unhandled error crashes when default error listener is removed (Issue #36)', () => {
+      const emitter = createTelemetryEmitter({ clock: fixedClock });
+      emitter.removeAllListeners('error');
+
+      // With zero 'error' listeners, a throwing event listener must still not throw
+      emitter.on('verdict', () => {
+        throw new Error('unhandled observer failure');
+      });
+      assert.doesNotThrow(() => {
+        emitter.emitVerdict({ kind: 'Unanimous Consensus' });
+      });
+
+      // With multiple 'error' listeners where the first throws, subsequent 'error' listeners still run without recursion
+      const receivedErrors = [];
+      emitter.on('error', () => {
+        throw new Error('broken error listener');
+      });
+      emitter.on('error', (errPayload) => {
+        receivedErrors.push(errPayload);
+      });
+
+      assert.doesNotThrow(() => {
+        emitter.emitVerdict({ kind: 'Unanimous Consensus' });
+      });
+      assert.equal(receivedErrors.length, 1);
+      assert.equal(receivedErrors[0].eventName, 'verdict');
+      assert.equal(receivedErrors[0].error, 'unhandled observer failure');
+    });
+
+    it('exposes emitGuardRejected with observer isolation (Issue #36)', () => {
+      const emitter = createTelemetryEmitter({ clock: fixedClock });
+      const received = [];
+      const errors = [];
+
+      emitter.on('error', (e) => errors.push(e));
+      emitter.on('guard_rejected', () => {
+        throw new Error('guard observer crashed');
+      });
+      emitter.on('guard_rejected', (payload) => {
+        received.push(payload);
+      });
+
+      const state = createInitialCouncilState();
+      assert.doesNotThrow(() => {
+        emitter.emitGuardRejected({
+          event: { type: 'CAST_VOTE' },
+          message: 'Guard rejected CAST_VOTE',
+          state
+        });
+      });
+
+      assert.equal(received.length, 1);
+      assert.equal(received[0].event.type, 'CAST_VOTE');
+      assert.equal(received[0].message, 'Guard rejected CAST_VOTE');
+      assert.equal(received[0].state, state);
+      assert.equal(received[0].timestamp, '2026-11-07T00:00:00.000Z');
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0].eventName, 'guard_rejected');
+    });
+
+    it('bounds providerCalls history to maxHistory while emitting every provider_call event (Issue #36)', () => {
+      const emitter = createTelemetryEmitter({ clock: fixedClock, maxHistory: 3 });
+      const emittedIds = [];
+
+      emitter.on('provider_call', (rec) => {
+        emittedIds.push(rec.callIndex);
+      });
+
+      for (let i = 1; i <= 5; i++) {
+        emitter.emitProviderCall({
+          participantId: i % 2 === 0 ? 'seat-even' : 'seat-odd',
+          provider: 'codex',
+          callIndex: i,
+          exitCode: 0,
+          durationMs: 10 * i
+        });
+      }
+
+      assert.deepEqual(emittedIds, [1, 2, 3, 4, 5]);
+      const allCalls = emitter.getProviderCalls();
+      assert.equal(allCalls.length, 3);
+      assert.deepEqual(
+        allCalls.map((c) => c.callIndex),
+        [3, 4, 5]
+      );
+      assert.deepEqual(
+        emitter.getProviderCalls('seat-odd').map((c) => c.callIndex),
+        [3, 5]
+      );
+    });
   });
 });
+

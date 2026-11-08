@@ -93,6 +93,7 @@ export function validateConfig(config) {
         if (item.id !== undefined) {
           if (typeof item.id !== 'string' || !item.id.trim()) {
             errors.push(`evidence[${idx}].id must be a non-empty string when provided.`);
+            resolvedId = null;
           } else {
             resolvedId = item.id.trim();
             if (resolvedId.length > MAX_EVIDENCE_ID_CHARS) {
@@ -102,10 +103,12 @@ export function validateConfig(config) {
             }
           }
         }
-        if (seenEvidenceIds.has(resolvedId)) {
-          errors.push(`Duplicate evidence id "${resolvedId}" at evidence[${idx}].`);
-        } else {
-          seenEvidenceIds.add(resolvedId);
+        if (resolvedId !== null) {
+          if (seenEvidenceIds.has(resolvedId)) {
+            errors.push(`Duplicate evidence id "${resolvedId}" at evidence[${idx}].`);
+          } else {
+            seenEvidenceIds.add(resolvedId);
+          }
         }
         if (typeof item.label !== 'string' || !item.label.trim()) {
           errors.push(`evidence[${idx}] requires a non-empty string "label".`);

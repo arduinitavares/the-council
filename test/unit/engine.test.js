@@ -779,11 +779,11 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(dupExplicitRes.valid, false);
       assert.match(dupExplicitRes.errors.join(' '), /Duplicate evidence id "custom-1" at evidence\[1\]\./);
 
-      // Duplicate explicit-vs-auto evidence ID (index 0 explicitly claims "E2", index 1 auto-assigns "E2")
+      // Duplicate explicit-vs-auto evidence ID (index 0 explicitly claims "E2" or " E2 ", index 1 auto-assigns "E2")
       const dupAutoRes = validateConfig({
         ...base,
         evidence: [
-          { id: 'E2', label: 'A', source: 'S', text: 'T' },
+          { id: ' E2 ', label: 'A', source: 'S', text: 'T' },
           { label: 'B', source: 'S', text: 'T' }
         ]
       });
@@ -793,11 +793,23 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
         resolveConfig({
           ...base,
           evidence: [
-            { id: 'E2', label: 'A', source: 'S', text: 'T' },
+            { id: ' E2 ', label: 'A', source: 'S', text: 'T' },
             { label: 'B', source: 'S', text: 'T' }
           ]
         })
       );
+
+      // Invalid empty id at evidence[0] must not cause a spurious duplicate "E1" error on evidence[1]
+      const emptyIdThenE1 = validateConfig({
+        ...base,
+        evidence: [
+          { id: '', label: 'A', source: 'S', text: 'T' },
+          { id: 'E1', label: 'B', source: 'S', text: 'T' }
+        ]
+      });
+      assert.equal(emptyIdThenE1.valid, false);
+      assert.match(emptyIdThenE1.errors.join(' '), /evidence\[0\]\.id must be a non-empty string/);
+      assert.doesNotMatch(emptyIdThenE1.errors.join(' '), /Duplicate evidence id "E1"/);
     });
 
     it('preserves frozen evidence and all pre-supplied clarifications (including question/label/source/text metadata and across RESET / dynamic runDiscovery) across createInitialCouncilState, initRoster, and CouncilEngine.run() without direct state mutation', async () => {
@@ -867,6 +879,13 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(engineWithExtra.state.maxClarificationBatches, 4);
       assert.equal(engineWithExtra.state.clarifications[3].question, 'Dynamic Q?');
       assert.equal(engineWithExtra.state.clarifications[3].answer, 'Dynamic A');
+
+      // Calling runDiscovery() with no arguments on a fresh engine with pre-supplied config.clarifications
+      // must publish the 3 pre-supplied clarifications via transitions
+      const engineNoArgDiscovery = new CouncilEngine(configInput);
+      engineNoArgDiscovery.initRoster();
+      await engineNoArgDiscovery.runDiscovery();
+      assert.equal(engineNoArgDiscovery.state.clarifications.length, 3);
     });
   });
 });

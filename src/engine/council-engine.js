@@ -169,19 +169,24 @@ export class CouncilEngine {
    * @param {Array<{ answer?: string, label?: string, source?: string, text?: string } | string>} [clarifications=[]]
    */
   async runDiscovery(clarifications = []) {
-    if (!clarifications || clarifications.length === 0 || this.aborted || this.isCompleted()) return;
+    if (this.aborted || this.isCompleted()) return;
 
-    let itemsToPublish = clarifications;
+    const extra = Array.isArray(clarifications) ? clarifications : [];
+    let itemsToPublish = extra;
     if (!this._configClarificationsPublished) {
-      this._configClarificationsPublished = true;
       if (
         clarifications !== this.config.clarifications &&
         Array.isArray(this.config.clarifications) &&
         this.config.clarifications.length > 0
       ) {
-        itemsToPublish = [...this.config.clarifications, ...clarifications];
+        itemsToPublish = [...this.config.clarifications, ...extra];
+      }
+      if (itemsToPublish.length > 0) {
+        this._configClarificationsPublished = true;
       }
     }
+
+    if (!itemsToPublish || itemsToPublish.length === 0) return;
 
     const requiredMaxBatches = this.state.clarificationBatch + itemsToPublish.length;
 

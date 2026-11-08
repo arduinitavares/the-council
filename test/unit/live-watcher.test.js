@@ -2036,29 +2036,41 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(getEl('heading-topic').textContent, 'Run 2 Newer Latest Run');
     });
 
-    it('matches original deep-cloned state at every transition (ADD_SEAT, BEGIN_ROUND, SUBMIT_PROOF, START_JUDGING, JUDGE_AUDIT_AND_SYNTHESIZE, CAST_VOTE, EVALUATE_ROUND) without leaking future seats or future judgeNote', async () => {
+    it('matches original deep-cloned state and graph at every transition (ADD_SEAT, BEGIN_ROUND, SEAT_FAULT, RETRY_SEAT, EXCUSE_SEAT, SUBMIT_PROOF, START_JUDGING, JUDGE_AUDIT_AND_SYNTHESIZE, CAST_VOTE, EVALUATE_ROUND) without leaking future seats, future judgeNote, or dropping duplicate consecutive history entries', async () => {
       const { CouncilEngine } = await import('../../src/engine/council-engine.js');
       const { MockAdapter } = await import('../../src/harness/mock.js');
+      const { QuotaExhaustionError } = await import('../../src/harness/adapter.js');
+      const { getDependencyAndStateGraph, transitionCouncil } = await import('../../src/machine/reducer.js');
+      const { createInitialCouncilState } = await import('../../src/machine/state.js');
 
       const runsDir = path.join(tmpDir, 'rehydrate-fidelity');
       const mockAdapter = new MockAdapter();
-      // Script seat-2 to object in round 1 so objections and multi-round proof judgeNote transitions are also exercised
+      // Script seat-2 to object in round 1 so objections and multi-round proof judgeNote transitions are exercised
       mockAdapter.scriptSeatResponse({
         seatId: 'seat-2',
         round: 1,
         phase: 'VOTING',
         response: { vote: 'object', reason: 'Needs round 2 refinement', proofId: 'P2' }
       });
+      // Inject a fault on seat-3 in round 1 (retried once, then excused on second trigger)
+      mockAdapter.injectSeatFault('seat-3', {
+        round: 1,
+        phase: 'DELIBERATION',
+        maxTriggers: 2,
+        error: new QuotaExhaustionError('Rate limit 429 on seat-3')
+      });
 
       const config = {
         topic: 'Step-by-Step Rehydration Fidelity Test',
         maxRounds: 2,
         minQuorum: 2,
+        maxRetriesPerSeat: 1,
         clarifications: [{ question: 'Env?', answer: 'Linux containers' }],
         judge: { id: 'judge-1', harness: 'mock', model: 'm-judge', soul: 'Judge' },
         seats: [
           { id: 'seat-1', harness: 'mock', model: 'm-1', soul: 'S1' },
-          { id: 'seat-2', harness: 'mock', model: 'm-2', soul: 'S2' }
+          { id: 'seat-2', harness: 'mock', model: 'm-2', soul: 'S2' },
+          { id: 'seat-3', harness: 'mock', model: 'm-3', soul: 'S3' }
         ]
       };
 
@@ -2067,7 +2079,8 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       engine.getTelemetry().on('state_transition', ({ event, state }) => {
         capturedSnapshots.push({
           eventType: event?.type,
-          state: structuredClone(state)
+          state: structuredClone(state),
+          graph: structuredClone(getDependencyAndStateGraph(state))
         });
       });
 
@@ -2089,13 +2102,16 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(rehydratedRun.steps.length, capturedSnapshots.length);
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'ADD_SEAT'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'BEGIN_ROUND'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'SEAT_FAULT'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'RETRY_SEAT'));
+      assert.ok(capturedSnapshots.some((s) => s.eventType === 'EXCUSE_SEAT'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'SUBMIT_PROOF'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'START_JUDGING'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'JUDGE_AUDIT_AND_SYNTHESIZE'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'CAST_VOTE'));
       assert.ok(capturedSnapshots.some((s) => s.eventType === 'EVALUATE_ROUND'));
 
-      // Specifically check Step 0 (ADD_SEAT for seat-1): seat-2 must NOT leak into Step 0
+      // Specifically check Step 0 (ADD_SEAT for seat-1): seat-2 and seat-3 must NOT leak into Step 0
       assert.equal(capturedSnapshots[0].eventType, 'ADD_SEAT');
       assert.equal(rehydratedRun.steps[0].stateSnapshot.seats.length, 1);
       assert.equal(rehydratedRun.steps[0].stateSnapshot.seats[0].id, 'seat-1');
@@ -2110,20 +2126,48 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
 
       for (let i = 0; i < capturedSnapshots.length; i++) {
         const expected = capturedSnapshots[i].state;
+        const expectedGraph = capturedSnapshots[i].graph;
         const actualDisk = rehydratedRun.steps[i].stateSnapshot;
         const actualMem = watcher.liveRun.steps[i].stateSnapshot;
 
         for (const actual of [actualDisk, actualMem]) {
           assert.equal(actual.phase, expected.phase, `Step ${i} (${capturedSnapshots[i].eventType}) phase mismatch`);
           assert.equal(actual.previousPhase, expected.previousPhase, `Step ${i} previousPhase mismatch`);
+          assert.equal(actual.returnPhase, expected.returnPhase, `Step ${i} returnPhase mismatch`);
+          assert.equal(actual.faultSeatId, expected.faultSeatId, `Step ${i} faultSeatId mismatch`);
+          assert.equal(actual.maxRetriesPerSeat, expected.maxRetriesPerSeat, `Step ${i} maxRetriesPerSeat mismatch`);
           assert.equal(actual.round, expected.round, `Step ${i} round mismatch`);
           assert.deepEqual(actual.seats, expected.seats, `Step ${i} (${capturedSnapshots[i].eventType}) seats mismatch`);
           assert.deepEqual(actual.proofs, expected.proofs, `Step ${i} (${capturedSnapshots[i].eventType}) proofs mismatch`);
           assert.deepEqual(actual.objections, expected.objections, `Step ${i} (${capturedSnapshots[i].eventType}) objections mismatch`);
           assert.deepEqual(actual.candidate, expected.candidate, `Step ${i} (${capturedSnapshots[i].eventType}) candidate mismatch`);
           assert.deepEqual(actual.verdict, expected.verdict, `Step ${i} (${capturedSnapshots[i].eventType}) verdict mismatch`);
+          assert.deepEqual(actual.history, expected.history, `Step ${i} (${capturedSnapshots[i].eventType}) history mismatch`);
         }
+        assert.deepEqual(rehydratedRun.steps[i].graph, expectedGraph, `Step ${i} disk graph mismatch`);
+        assert.deepEqual(watcher.liveRun.steps[i].graph, expectedGraph, `Step ${i} mem graph mismatch`);
       }
+
+      // Also verify two consecutive identical guard-rejected transitions preserve both identical history[0] entries
+      const dupHistEmitter = createTelemetryEmitter();
+      const dupWatcher = new VisualizerLiveWatcher({
+        telemetry: dupHistEmitter,
+        outputDir: runsDir,
+        runId: 'run-dup-history'
+      });
+      let s = createInitialCouncilState({ topic: 'Dup History Test', minQuorum: 2 });
+      s = transitionCouncil(s, { type: 'BEGIN_ROUND' }); // Rejected #1 (0 active seats < 2)
+      dupHistEmitter.emitStateTransition({ type: 'BEGIN_ROUND' }, s);
+      s = transitionCouncil(s, { type: 'BEGIN_ROUND' }); // Rejected #2 (identical history[0] string!)
+      dupHistEmitter.emitStateTransition({ type: 'BEGIN_ROUND' }, s);
+      dupWatcher.stop();
+
+      assert.equal(dupWatcher.liveRun.steps[0].stateSnapshot.history.length, 2);
+      assert.equal(dupWatcher.liveRun.steps[1].stateSnapshot.history.length, 3);
+      assert.equal(
+        dupWatcher.liveRun.steps[1].stateSnapshot.history[0],
+        dupWatcher.liveRun.steps[1].stateSnapshot.history[1]
+      );
     });
 
     it('records O(1) incremental step deltas (seatChanges, proofChanges, objectionChanges) without retaining eager clonedState/clonedGraph values in memory, and preserves concurrent runs via <runId>.meta.json', () => {

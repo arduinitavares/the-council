@@ -448,7 +448,7 @@ describe('Adversarial Stress: Milestone 4 Presets & Config Resolution (Challenge
   describe('6. CLI Flag Resolution and Crash Vectors', () => {
     it('executes CLI run with --preset architecture cleanly with code 0', async () => {
       let stdoutOutput = '';
-      const exitCode = await runCli(['run', '--preset', 'architecture', '-t', 'CLI Architecture Test'], {
+      const exitCode = await runCli(['run', '--mock', '--preset', 'architecture', '-t', 'CLI Architecture Test'], {
         stdout: { write: (m) => { stdoutOutput += m; return true; } },
         stderr: { write: () => true },
         exit: (c) => c
@@ -482,7 +482,7 @@ describe('Adversarial Stress: Milestone 4 Presets & Config Resolution (Challenge
       fs.writeFileSync(cfgPath, JSON.stringify({ preset: 'argon-only', topic: 'File Topic' }));
 
       let stdoutOutput = '';
-      const exitCode = await runCli(['run', '-c', cfgPath, '-t', 'Overridden Topic', '--json'], {
+      const exitCode = await runCli(['run', '--mock', '-c', cfgPath, '-t', 'Overridden Topic', '--json'], {
         stdout: { write: (m) => { stdoutOutput += m; return true; } },
         stderr: { write: () => true },
         exit: (c) => c
@@ -500,7 +500,7 @@ describe('Adversarial Stress: Milestone 4 Presets & Config Resolution (Challenge
       fs.writeFileSync(cfgPath, JSON.stringify({ topic: 'Topic Without Preset' }));
 
       let stdoutOutput = '';
-      const exitCode = await runCli(['run', '-c', cfgPath, '-p', 'architecture', '--json'], {
+      const exitCode = await runCli(['run', '--mock', '-c', cfgPath, '-p', 'architecture', '--json'], {
         stdout: { write: (m) => { stdoutOutput += m; return true; } },
         stderr: { write: () => true },
         exit: (c) => c
@@ -518,7 +518,7 @@ describe('Adversarial Stress: Milestone 4 Presets & Config Resolution (Challenge
       fs.writeFileSync(cfgPath, JSON.stringify({ preset: 'argon-only', topic: 'File Topic' }));
 
       let out1 = '';
-      const exit1 = await runCli(['run', '-c', cfgPath, '-r', '5', '--json'], {
+      const exit1 = await runCli(['run', '--mock', '-c', cfgPath, '-r', '5', '--json'], {
         stdout: { write: (m) => { out1 += m; return true; } },
         stderr: { write: () => true },
         exit: (c) => c
@@ -527,7 +527,7 @@ describe('Adversarial Stress: Milestone 4 Presets & Config Resolution (Challenge
       assert.equal(JSON.parse(out1).state.maxRounds, 5);
 
       let out2 = '';
-      const exit2 = await runCli(['run', '-c', cfgPath, '-q', '3', '--json'], {
+      const exit2 = await runCli(['run', '--mock', '-c', cfgPath, '-q', '3', '--json'], {
         stdout: { write: (m) => { out2 += m; return true; } },
         stderr: { write: () => true },
         exit: (c) => c

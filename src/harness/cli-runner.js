@@ -6,6 +6,9 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 
@@ -1139,13 +1142,140 @@ function findMatchingPendingUnkeyedIndex(
   return -1;
 }
 
+const FORBIDDEN_COUNCIL_PATH_REGEX =
+  /(?:^|[\s"'`=,:;()[\]{}\\/])\.council(?:[\\/]|$|[\s"'`,:;()[\]{}])/;
+
+const FORBIDDEN_ACCESS_SKIP_KEYS = new Set([
+  ...EXCLUDED_TRACE_OUTPUT_KEYS,
+  ...IGNORED_META_KEYS,
+  'error',
+  'failure',
+  'name',
+  'tool',
+  'tool_name',
+  'toolName',
+  'function_name',
+  'functionName'
+]);
+
+/**
+ * Checks whether a path, command string, or tool-call object targets `.council/`.
+ *
+ * @param {string|Object} value
+ * @returns {boolean}
+ */
+export function isForbiddenCouncilPathOrCommand(value) {
+  if (typeof value === 'string') {
+    return FORBIDDEN_COUNCIL_PATH_REGEX.test(value);
+  }
+  if (value && typeof value === 'object') {
+    return detectForbiddenCouncilAccess(value).forbiddenStateAccess;
+  }
+  return false;
+}
+
+/**
+ * Inspects observed tool calls (and optional raw input map) for forbidden `.council/` state access.
+ * Excludes tool output/result keys so benign command output (e.g., `ls` or `git status` output)
+ * never triggers a false positive unless the tool input/command/path itself targeted `.council/`.
+ *
+ * @param {Array<Object>|Object|string} toolCalls
+ * @param {WeakMap<Object, Object>} [rawInputsByToolEntry]
+ * @returns {{ forbiddenStateAccess: boolean, forbiddenAccessDetails: string[] }}
+ */
+export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = null) {
+  if (typeof toolCalls === 'string') {
+    const matched = isForbiddenCouncilPathOrCommand(toolCalls);
+    return {
+      forbiddenStateAccess: matched,
+      forbiddenAccessDetails: matched ? [toolCalls.trim()] : []
+    };
+  }
+  const list = Array.isArray(toolCalls)
+    ? toolCalls
+    : toolCalls && typeof toolCalls === 'object'
+      ? [toolCalls]
+      : [];
+
+  const details = new Set();
+
+  const inspectValue = (val, visited, depth) => {
+    if (depth > 6 || val === null || val === undefined) {
+      return;
+    }
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (
+        (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))
+      ) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object') {
+            inspectValue(parsed, visited, depth + 1);
+            return;
+          }
+        } catch {
+          // Fall through to raw string check
+        }
+      }
+      if (FORBIDDEN_COUNCIL_PATH_REGEX.test(trimmed)) {
+        details.add(trimmed);
+      }
+      return;
+    }
+    if (typeof val !== 'object') {
+      return;
+    }
+    if (visited.has(val)) {
+      return;
+    }
+    visited.add(val);
+
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        inspectValue(item, visited, depth + 1);
+      }
+      return;
+    }
+
+    for (const [k, v] of Object.entries(val)) {
+      if (FORBIDDEN_ACCESS_SKIP_KEYS.has(k)) {
+        continue;
+      }
+      inspectValue(v, visited, depth + 1);
+    }
+  };
+
+  for (const tc of list) {
+    if (!tc || typeof tc !== 'object') {
+      continue;
+    }
+    const visited = new Set();
+    inspectValue(tc, visited, 0);
+    const rawInput = rawInputsByToolEntry?.get?.(tc);
+    if (rawInput && typeof rawInput === 'object') {
+      inspectValue(rawInput, visited, 0);
+    }
+  }
+
+  const forbiddenAccessDetails = [...details];
+  return {
+    forbiddenStateAccess: forbiddenAccessDetails.length > 0,
+    forbiddenAccessDetails
+  };
+}
+
 /**
  * Parses `codex exec --json` JSONL event stream.
  * Extracts final assistant text, observed tool calls, and verified skill reads.
  * Maintains backwards compatibility when plain text or single non-event JSON is returned.
  *
  * @param {string} stdout
- * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, eventsParsed: boolean }}
+ * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], eventsParsed: boolean }}
  */
 export function parseCodexEventStream(stdout) {
   const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
@@ -1156,6 +1286,8 @@ export function parseCodexEventStream(stdout) {
       traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
+      forbiddenStateAccess: false,
+      forbiddenAccessDetails: [],
       eventsParsed: false
     };
   }
@@ -1188,6 +1320,8 @@ export function parseCodexEventStream(stdout) {
       traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
+      forbiddenStateAccess: false,
+      forbiddenAccessDetails: [],
       eventsParsed: false
     };
   }
@@ -1441,6 +1575,8 @@ export function parseCodexEventStream(stdout) {
     }
   }
 
+  const forbiddenCheck = detectForbiddenCouncilAccess(finalToolCalls, rawInputsByToolEntry);
+
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
     nonEmptyMessages.length > 0
@@ -1454,6 +1590,8 @@ export function parseCodexEventStream(stdout) {
     traceCoverage: malformedJsonLines > 0 ? 'partial' : 'full',
     toolCalls: finalToolCalls,
     skillsRead: [...skillsByName.values()],
+    forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
+    forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
     eventsParsed: true
   };
 }
@@ -1505,7 +1643,7 @@ function isCursorStreamEvent(obj) {
  * Maintains backwards compatibility when plain text or single non-event JSON is returned.
  *
  * @param {string} stdout
- * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, eventsParsed: boolean }}
+ * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], eventsParsed: boolean }}
  */
 export function parseCursorEventStream(stdout) {
   const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
@@ -1516,6 +1654,8 @@ export function parseCursorEventStream(stdout) {
       traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
+      forbiddenStateAccess: false,
+      forbiddenAccessDetails: [],
       eventsParsed: false
     };
   }
@@ -1548,6 +1688,8 @@ export function parseCursorEventStream(stdout) {
       traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
+      forbiddenStateAccess: false,
+      forbiddenAccessDetails: [],
       eventsParsed: false
     };
   }
@@ -1894,6 +2036,8 @@ export function parseCursorEventStream(stdout) {
     }
   }
 
+  const forbiddenCheck = detectForbiddenCouncilAccess(finalToolCalls, rawInputsByToolEntry);
+
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
     nonEmptyMessages.length > 0
@@ -1907,6 +2051,8 @@ export function parseCursorEventStream(stdout) {
     traceCoverage: malformedJsonLines > 0 ? 'partial' : 'full',
     toolCalls: finalToolCalls,
     skillsRead: [...skillsByName.values()],
+    forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
+    forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
     eventsParsed: true
   };
 }
@@ -1916,7 +2062,7 @@ export function parseCursorEventStream(stdout) {
  *
  * @param {Object} [trace]
  * @param {Object} [defaults]
- * @returns {{ traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, durationMs: number, outcome: 'success'|'error' }}
+ * @returns {{ traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], durationMs: number, outcome: 'success'|'error' }}
  */
 export function normalizeProviderTrace(trace, defaults = {}) {
   const validCoverages = new Set(['full', 'partial', 'unavailable']);
@@ -1926,19 +2072,32 @@ export function normalizeProviderTrace(trace, defaults = {}) {
     : defaultCoverage;
   const toolCalls = Array.isArray(trace?.toolCalls) ? trace.toolCalls : [];
   const skillsRead = Array.isArray(trace?.skillsRead) ? trace.skillsRead : [];
+  const forbiddenCheck =
+    trace?.forbiddenStateAccess !== undefined || Array.isArray(trace?.forbiddenAccessDetails)
+      ? {
+          forbiddenStateAccess: Boolean(trace?.forbiddenStateAccess),
+          forbiddenAccessDetails: Array.isArray(trace?.forbiddenAccessDetails)
+            ? trace.forbiddenAccessDetails
+            : []
+        }
+      : detectForbiddenCouncilAccess(toolCalls);
   const durationMs =
     typeof trace?.durationMs === 'number'
       ? trace.durationMs
       : (typeof defaults.durationMs === 'number' ? defaults.durationMs : 0);
   const outcome =
-    trace?.outcome === 'error' || trace?.outcome === 'success'
-      ? trace.outcome
-      : (defaults.exitCode === 0 || defaults.exitCode === undefined ? 'success' : 'error');
+    forbiddenCheck.forbiddenStateAccess
+      ? 'error'
+      : trace?.outcome === 'error' || trace?.outcome === 'success'
+        ? trace.outcome
+        : (defaults.exitCode === 0 || defaults.exitCode === undefined ? 'success' : 'error');
 
   return {
     traceCoverage,
     toolCalls,
     skillsRead,
+    forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
+    forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
     durationMs,
     outcome
   };
@@ -2050,6 +2209,16 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
   }
 }
 
+function createForbiddenStateAccessError(details, trace, exitCode = 0) {
+  const err = new Error(
+    `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${details.join(', ')}`
+  );
+  err.code = 'FORBIDDEN_STATE_ACCESS';
+  err.exitCode = exitCode;
+  err.trace = trace;
+  return err;
+}
+
 /**
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
@@ -2082,6 +2251,16 @@ export async function runAntigravityCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const explicitCwd =
+    typeof cwd === 'string' && cwd.trim()
+      ? cwd.trim()
+      : typeof context?.cwd === 'string' && context.cwd.trim()
+        ? context.cwd.trim()
+        : null;
+  const tempCwdDir = explicitCwd
+    ? null
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+  const effectiveCwd = explicitCwd || tempCwdDir;
   const args = [
     '--output-format', 'json',
     '--mode', 'plan',
@@ -2096,7 +2275,7 @@ export async function runAntigravityCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
+    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
 
@@ -2114,6 +2293,8 @@ export async function runAntigravityCli({
           traceCoverage: 'unavailable',
           toolCalls: [],
           skillsRead: [],
+          forbiddenStateAccess: false,
+          forbiddenAccessDetails: [],
           durationMs,
           outcome: 'success'
         }
@@ -2140,6 +2321,24 @@ export async function runAntigravityCli({
 
     sanitizeCliError(err, executable, args, prompt);
 
+    const errorTrace = err?.trace
+      ? {
+          ...err.trace,
+          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
+          outcome: 'error'
+        }
+      : {
+          traceCoverage: 'unavailable',
+          toolCalls: [],
+          skillsRead: [],
+          forbiddenStateAccess: false,
+          forbiddenAccessDetails: [],
+          durationMs,
+          outcome: 'error'
+        };
+    err.trace = errorTrace;
+    err._providerCallRecorded = true;
+
     recordProviderCall({
       context,
       onCallRecord,
@@ -2149,18 +2348,20 @@ export async function runAntigravityCli({
         model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs,
-        trace: {
-          traceCoverage: 'unavailable',
-          toolCalls: [],
-          skillsRead: [],
-          durationMs,
-          outcome: 'error'
-        }
+        durationMs: errorTrace.durationMs,
+        trace: errorTrace
       }
     });
 
     throw err;
+  } finally {
+    if (tempCwdDir) {
+      try {
+        fs.rmSync(tempCwdDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 }
 
@@ -2198,6 +2399,16 @@ export async function runCodexCli({
   disableHooks
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const explicitCwd =
+    typeof cwd === 'string' && cwd.trim()
+      ? cwd.trim()
+      : typeof context?.cwd === 'string' && context.cwd.trim()
+        ? context.cwd.trim()
+        : null;
+  const tempCwdDir = explicitCwd
+    ? null
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+  const effectiveCwd = explicitCwd || tempCwdDir;
   const shouldDisableHooks =
     disableHooks !== undefined ? Boolean(disableHooks) : context?.disableHooks !== false;
   const shouldIgnoreUserConfig =
@@ -2222,10 +2433,24 @@ export async function runCodexCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
+    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const parsedStream = parseCodexEventStream(result?.stdout || '');
+
+    const trace = {
+      traceCoverage: parsedStream.traceCoverage,
+      toolCalls: parsedStream.toolCalls,
+      skillsRead: parsedStream.skillsRead,
+      forbiddenStateAccess: parsedStream.forbiddenStateAccess,
+      forbiddenAccessDetails: parsedStream.forbiddenAccessDetails,
+      durationMs,
+      outcome: parsedStream.forbiddenStateAccess ? 'error' : 'success'
+    };
+
+    if (parsedStream.forbiddenStateAccess) {
+      throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
+    }
 
     recordProviderCall({
       context,
@@ -2237,13 +2462,7 @@ export async function runCodexCli({
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
-        trace: {
-          traceCoverage: parsedStream.traceCoverage,
-          toolCalls: parsedStream.toolCalls,
-          skillsRead: parsedStream.skillsRead,
-          durationMs,
-          outcome: 'success'
-        }
+        trace
       }
     });
 
@@ -2255,7 +2474,28 @@ export async function runCodexCli({
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = parseCodexEventStream(err?.stdout || '');
+    const parsedErrStream = err?.trace ? null : parseCodexEventStream(err?.stdout || '');
+    const errorTrace = err?.trace
+      ? {
+          ...err.trace,
+          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
+          outcome: 'error'
+        }
+      : {
+          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
+          toolCalls: parsedErrStream.toolCalls,
+          skillsRead: parsedErrStream.skillsRead,
+          forbiddenStateAccess: parsedErrStream.forbiddenStateAccess,
+          forbiddenAccessDetails: parsedErrStream.forbiddenAccessDetails,
+          durationMs,
+          outcome: 'error'
+        };
+    if (!err.trace && parsedErrStream?.forbiddenStateAccess) {
+      err.code = 'FORBIDDEN_STATE_ACCESS';
+      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErrStream.forbiddenAccessDetails.join(', ')}`;
+    }
+    err.trace = errorTrace;
+    err._providerCallRecorded = true;
 
     recordProviderCall({
       context,
@@ -2266,18 +2506,20 @@ export async function runCodexCli({
         model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs,
-        trace: {
-          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
-          toolCalls: parsedErrStream.toolCalls,
-          skillsRead: parsedErrStream.skillsRead,
-          durationMs,
-          outcome: 'error'
-        }
+        durationMs: errorTrace.durationMs,
+        trace: errorTrace
       }
     });
 
     throw err;
+  } finally {
+    if (tempCwdDir) {
+      try {
+        fs.rmSync(tempCwdDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 }
 
@@ -2312,6 +2554,16 @@ export async function runCursorCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const explicitCwd =
+    typeof cwd === 'string' && cwd.trim()
+      ? cwd.trim()
+      : typeof context?.cwd === 'string' && context.cwd.trim()
+        ? context.cwd.trim()
+        : null;
+  const tempCwdDir = explicitCwd
+    ? null
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+  const effectiveCwd = explicitCwd || tempCwdDir;
   const args = [
     '--print',
     '--output-format', 'stream-json',
@@ -2326,10 +2578,24 @@ export async function runCursorCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
+    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const parsedStream = parseCursorEventStream(result?.stdout || '');
+
+    const trace = {
+      traceCoverage: parsedStream.traceCoverage,
+      toolCalls: parsedStream.toolCalls,
+      skillsRead: parsedStream.skillsRead,
+      forbiddenStateAccess: parsedStream.forbiddenStateAccess,
+      forbiddenAccessDetails: parsedStream.forbiddenAccessDetails,
+      durationMs,
+      outcome: parsedStream.forbiddenStateAccess ? 'error' : 'success'
+    };
+
+    if (parsedStream.forbiddenStateAccess) {
+      throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
+    }
 
     recordProviderCall({
       context,
@@ -2341,13 +2607,7 @@ export async function runCursorCli({
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
-        trace: {
-          traceCoverage: parsedStream.traceCoverage,
-          toolCalls: parsedStream.toolCalls,
-          skillsRead: parsedStream.skillsRead,
-          durationMs,
-          outcome: 'success'
-        }
+        trace
       }
     });
 
@@ -2355,10 +2615,28 @@ export async function runCursorCli({
   } catch (err) {
     if (err && err.code === 'ENOENT' && executable === 'cursor-agent') {
       try {
-        const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd, env });
+        const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd: effectiveCwd, env });
         exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
         const durationMs = Date.now() - startTime;
         const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '');
+
+        const fallbackTrace = {
+          traceCoverage: parsedFallback.traceCoverage,
+          toolCalls: parsedFallback.toolCalls,
+          skillsRead: parsedFallback.skillsRead,
+          forbiddenStateAccess: parsedFallback.forbiddenStateAccess,
+          forbiddenAccessDetails: parsedFallback.forbiddenAccessDetails,
+          durationMs,
+          outcome: parsedFallback.forbiddenStateAccess ? 'error' : 'success'
+        };
+
+        if (parsedFallback.forbiddenStateAccess) {
+          throw createForbiddenStateAccessError(
+            parsedFallback.forbiddenAccessDetails,
+            fallbackTrace,
+            exitCode
+          );
+        }
 
         recordProviderCall({
           context,
@@ -2370,13 +2648,7 @@ export async function runCursorCli({
             argv: redactArgv(args, prompt),
             exitCode,
             durationMs,
-            trace: {
-              traceCoverage: parsedFallback.traceCoverage,
-              toolCalls: parsedFallback.toolCalls,
-              skillsRead: parsedFallback.skillsRead,
-              durationMs,
-              outcome: 'success'
-            }
+            trace: fallbackTrace
           }
         });
 
@@ -2388,7 +2660,35 @@ export async function runCursorCli({
           : (typeof fallbackErr.code === 'number' ? fallbackErr.code : 1);
 
         sanitizeCliError(fallbackErr, 'agent', args, prompt);
-        const parsedFallbackErr = parseCursorEventStream(fallbackErr?.stdout || '');
+        const parsedFallbackErr = fallbackErr?.trace
+          ? null
+          : parseCursorEventStream(fallbackErr?.stdout || '');
+        const fallbackErrorTrace = fallbackErr?.trace
+          ? {
+              ...fallbackErr.trace,
+              durationMs:
+                typeof fallbackErr.trace.durationMs === 'number'
+                  ? fallbackErr.trace.durationMs
+                  : durationMs,
+              outcome: 'error'
+            }
+          : {
+              traceCoverage: parsedFallbackErr.eventsParsed
+                ? parsedFallbackErr.traceCoverage
+                : 'unavailable',
+              toolCalls: parsedFallbackErr.toolCalls,
+              skillsRead: parsedFallbackErr.skillsRead,
+              forbiddenStateAccess: parsedFallbackErr.forbiddenStateAccess,
+              forbiddenAccessDetails: parsedFallbackErr.forbiddenAccessDetails,
+              durationMs,
+              outcome: 'error'
+            };
+        if (!fallbackErr.trace && parsedFallbackErr?.forbiddenStateAccess) {
+          fallbackErr.code = 'FORBIDDEN_STATE_ACCESS';
+          fallbackErr.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedFallbackErr.forbiddenAccessDetails.join(', ')}`;
+        }
+        fallbackErr.trace = fallbackErrorTrace;
+        fallbackErr._providerCallRecorded = true;
 
         recordProviderCall({
           context,
@@ -2399,14 +2699,8 @@ export async function runCursorCli({
             model,
             argv: redactArgv(args, prompt),
             exitCode,
-            durationMs,
-            trace: {
-              traceCoverage: parsedFallbackErr.eventsParsed ? parsedFallbackErr.traceCoverage : 'unavailable',
-              toolCalls: parsedFallbackErr.toolCalls,
-              skillsRead: parsedFallbackErr.skillsRead,
-              durationMs,
-              outcome: 'error'
-            }
+            durationMs: fallbackErrorTrace.durationMs,
+            trace: fallbackErrorTrace
           }
         });
 
@@ -2420,7 +2714,28 @@ export async function runCursorCli({
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = parseCursorEventStream(err?.stdout || '');
+    const parsedErrStream = err?.trace ? null : parseCursorEventStream(err?.stdout || '');
+    const errorTrace = err?.trace
+      ? {
+          ...err.trace,
+          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
+          outcome: 'error'
+        }
+      : {
+          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
+          toolCalls: parsedErrStream.toolCalls,
+          skillsRead: parsedErrStream.skillsRead,
+          forbiddenStateAccess: parsedErrStream.forbiddenStateAccess,
+          forbiddenAccessDetails: parsedErrStream.forbiddenAccessDetails,
+          durationMs,
+          outcome: 'error'
+        };
+    if (!err.trace && parsedErrStream?.forbiddenStateAccess) {
+      err.code = 'FORBIDDEN_STATE_ACCESS';
+      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErrStream.forbiddenAccessDetails.join(', ')}`;
+    }
+    err.trace = errorTrace;
+    err._providerCallRecorded = true;
 
     recordProviderCall({
       context,
@@ -2431,17 +2746,19 @@ export async function runCursorCli({
         model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs,
-        trace: {
-          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
-          toolCalls: parsedErrStream.toolCalls,
-          skillsRead: parsedErrStream.skillsRead,
-          durationMs,
-          outcome: 'error'
-        }
+        durationMs: errorTrace.durationMs,
+        trace: errorTrace
       }
     });
 
     throw err;
+  } finally {
+    if (tempCwdDir) {
+      try {
+        fs.rmSync(tempCwdDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 }

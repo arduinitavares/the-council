@@ -103,6 +103,11 @@ export function validateSeatConfig(config) {
     errors.push('Seat ignoreUserConfig must be a boolean.');
   }
 
+  // 11. cwd validation (if provided)
+  if (config.cwd !== undefined && (typeof config.cwd !== 'string' || !config.cwd.trim())) {
+    errors.push('Seat cwd must be a non-empty string.');
+  }
+
   return {
     valid: errors.length === 0,
     errors
@@ -143,6 +148,7 @@ export class Seat {
    * @param {string | null} [config.excusedReason=null] - Reason if excused.
    * @param {boolean} [config.disableHooks] - Whether to disable Codex CLI hooks.
    * @param {boolean} [config.ignoreUserConfig] - Whether to pass --ignore-user-config to Codex CLI.
+   * @param {string} [config.cwd] - Optional working directory override.
    * @param {Array<Object>} [config.turns=[]] - Retained completed turn records.
    * @param {string} [config.createdAt] - Creation ISO timestamp.
    */
@@ -163,6 +169,7 @@ export class Seat {
     this._timeoutMs = typeof config.timeoutMs === 'number' && config.timeoutMs > 0 ? config.timeoutMs : undefined;
     this._disableHooks = typeof config.disableHooks === 'boolean' ? config.disableHooks : undefined;
     this._ignoreUserConfig = typeof config.ignoreUserConfig === 'boolean' ? config.ignoreUserConfig : undefined;
+    this._cwd = typeof config.cwd === 'string' && config.cwd.trim() ? config.cwd.trim() : undefined;
     this._turns = Array.isArray(config.turns) ? [...config.turns] : [];
     this._createdAt = config.createdAt || new Date().toISOString();
     this._updatedAt = this._createdAt;
@@ -179,6 +186,7 @@ export class Seat {
   get timeoutMs() { return this._timeoutMs; }
   get disableHooks() { return this._disableHooks; }
   get ignoreUserConfig() { return this._ignoreUserConfig; }
+  get cwd() { return this._cwd; }
   get turns() { return [...this._turns]; }
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
@@ -306,7 +314,8 @@ export class Seat {
       tools: this._tools,
       ...(this._timeoutMs !== undefined ? { timeoutMs: this._timeoutMs } : {}),
       ...(this._disableHooks !== undefined ? { disableHooks: this._disableHooks } : {}),
-      ...(this._ignoreUserConfig !== undefined ? { ignoreUserConfig: this._ignoreUserConfig } : {})
+      ...(this._ignoreUserConfig !== undefined ? { ignoreUserConfig: this._ignoreUserConfig } : {}),
+      ...(this._cwd !== undefined ? { cwd: this._cwd } : {})
     };
   }
 

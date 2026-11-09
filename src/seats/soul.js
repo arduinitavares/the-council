@@ -201,6 +201,9 @@ export function createSoul(input) {
   return new Soul(input);
 }
 
+export const ANTI_CHEATING_RULE =
+  'STRICT ANTI-CHEATING RULE: Never read, grep, or inspect ".council/" (including ".council/runs/latest.js", run snapshots, or telemetry files). Accessing ".council/" violates blind deliberation independence and immediately invalidates your turn.';
+
 /**
  * Formats the system prompt preamble establishing the Seat's identity and Soul temperament.
  * @param {Soul | string} soulInput
@@ -225,7 +228,8 @@ export function formatSoulSystemPrompt(soulInput, seatContext) {
 ## Deliberation Invariants:
 1. Intellectual Rigor: Argue strictly through your domain lens while adhering to empirical truth.
 2. Structured Proofs: Bare opinions or intuition are strictly forbidden. All claims must cite verifiable sources. Supported kinds: ${VALID_PROOF_KINDS.join(', ')}.
-3. Voting Principle: You may vote to ACCEPT the Candidate only when it satisfies your domain standards. If it fails, you MUST vote to OBJECT, stating a clear reason and citing a valid, non-rejected Proof ID.`;
+3. Voting Principle: You may vote to ACCEPT the Candidate only when it satisfies your domain standards. If it fails, you MUST vote to OBJECT, stating a clear reason and citing a valid, non-rejected Proof ID.
+4. ${ANTI_CHEATING_RULE}`;
 }
 
 /**
@@ -335,10 +339,16 @@ export function formatDeliberationPrompt({
       resolvedObjections.map((o) => `- Objection ${o.id} (by ${o.seatId}, backed by ${o.proofId}): ${o.reason}`).join('\n') + '\n';
   }
 
+  const evidenceGuidance = resolvedEvidence.length > 0
+    ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+    : '';
+
   const verificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
-You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".\n`
-    : '';
+You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".${evidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.
+${ANTI_CHEATING_RULE}\n`
+    : `\n${ANTI_CHEATING_RULE}\n`;
 
   return `### Deliberation Round ${resolvedRound}/${resolvedMaxRounds} — Proof Submission
 ${contextBlock}
@@ -403,10 +413,16 @@ export function formatVotingPrompt({
 
   const groundingSection = formatGroundingSection(resolvedEvidence, resolvedClarifications);
 
+  const votingEvidenceGuidance = resolvedEvidence.length > 0
+    ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+    : '';
+
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
-You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.\n`
-    : '';
+You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.
+${ANTI_CHEATING_RULE}\n`
+    : `\n${ANTI_CHEATING_RULE}\n`;
 
   return `### Voting on Round ${cand?.round || 1} Candidate
 Candidate Summary: "${cand?.summary || ''}"
@@ -488,10 +504,14 @@ export function formatJudgePrompt({
   ];
 
   if (resolvedTools === 'read-only') {
+    const judgeEvidenceGuidance = resolvedEvidence.length > 0
+      ? ' Pre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+      : '';
     judgeDirectives.push(
-      '4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.'
+      `4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
     );
   }
+  judgeDirectives.push(`${judgeDirectives.length + 1}. ${ANTI_CHEATING_RULE}`);
 
   return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}
 Topic: "${resolvedTopic}"

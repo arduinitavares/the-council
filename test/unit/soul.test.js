@@ -277,6 +277,91 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
         assert.match(p, /Must run offline without external cloud dependencies\./);
       }
     });
+
+    it('enforces STRICT ANTI-CHEATING RULE and scopes TOOL USAGE & VERIFICATION DIRECTIVE with and without evidence (Issue #63)', async () => {
+      const { ANTI_CHEATING_RULE } = await import('../../src/seats/soul.js');
+      assert.match(ANTI_CHEATING_RULE, /STRICT ANTI-CHEATING RULE: Never read, grep, or inspect "\.council\/"/);
+
+      const sysPrompt = formatSoulSystemPrompt(soul, seatContext);
+      const delibNoEv = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'What is the best smartphone under R$ 1000 in Brazil?'
+      });
+      const voteNoEv = formatVotingPrompt({
+        soul,
+        seat: seatContext,
+        candidate: { round: 1, summary: 'Candidate', clauses: [] },
+        admittedProofs: []
+      });
+      const judgeNoEv = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Auditor' },
+        topic: 'What is the best smartphone under R$ 1000 in Brazil?',
+        round: 1,
+        proofs: []
+      });
+
+      for (const p of [sysPrompt, delibNoEv, voteNoEv, judgeNoEv]) {
+        assert.ok(p.includes(ANTI_CHEATING_RULE), 'Every prompt must include ANTI_CHEATING_RULE');
+      }
+
+      for (const p of [delibNoEv, voteNoEv]) {
+        assert.match(p, /TOOL USAGE & VERIFICATION DIRECTIVE:/);
+      }
+      assert.match(judgeNoEv, /4\. Spot-check proof sources:/);
+
+      for (const p of [delibNoEv, voteNoEv, judgeNoEv]) {
+        assert.match(
+          p,
+          /only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code/
+        );
+      }
+
+      const evidenceList = [
+        {
+          id: 'E1',
+          label: 'Retail Prices',
+          source: 'Anatel 2026',
+          text: 'Moto G34 5G is R$ 899'
+        }
+      ];
+
+      const delibWithEv = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'What is the best smartphone under R$ 1000 in Brazil?',
+        evidence: evidenceList
+      });
+      const voteWithEv = formatVotingPrompt({
+        soul,
+        seat: seatContext,
+        candidate: { round: 1, summary: 'Candidate', clauses: [] },
+        admittedProofs: [],
+        evidence: evidenceList
+      });
+      const judgeWithEv = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Auditor' },
+        topic: 'What is the best smartphone under R$ 1000 in Brazil?',
+        round: 1,
+        proofs: [],
+        evidence: evidenceList
+      });
+
+      for (const p of [delibWithEv, voteWithEv, judgeWithEv]) {
+        assert.ok(p.includes(ANTI_CHEATING_RULE));
+        assert.match(p, /Pre-Gathered Grounding Evidence is provided above/);
+        assert.match(p, /avoid speculative local filesystem grepping unless the topic explicitly names local repository files/);
+      }
+
+      // Even when tools='none', ANTI_CHEATING_RULE remains present while TOOL USAGE directive is omitted
+      const delibToolsNone = formatDeliberationPrompt({
+        soul,
+        seat: { ...seatContext, tools: 'none' },
+        topic: 'General topic'
+      });
+      assert.ok(delibToolsNone.includes(ANTI_CHEATING_RULE));
+      assert.ok(!delibToolsNone.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+    });
   });
 });
 

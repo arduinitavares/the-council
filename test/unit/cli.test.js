@@ -1180,6 +1180,44 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    it('supports --cwd and --workspace CLI flags and rejects empty cwd in config validation (#63)', async () => {
+      assert.match(HELP_TEXT, /--cwd <dir>/);
+      assert.match(HELP_TEXT, /--workspace <dir>/);
+
+      const tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-workspace-'));
+      try {
+        const cwdIO = createMockIO();
+        const cwdCode = await runCli(
+          ['run', '--mock', '-t', 'Workspace Flag Test', '--cwd', tmpWorkspace, '--json'],
+          cwdIO.io
+        );
+        assert.equal(cwdCode, 0);
+        const cwdParsed = JSON.parse(cwdIO.getStdout());
+        assert.equal(cwdParsed.state.cwd, tmpWorkspace);
+        assert.equal(cwdParsed.state.judge.cwd, tmpWorkspace);
+        assert.ok(cwdParsed.state.seats.every((s) => s.cwd === tmpWorkspace));
+
+        const wsIO = createMockIO();
+        const wsCode = await runCli(
+          ['run', '--mock', '-t', 'Workspace Alias Test', '--workspace', tmpWorkspace, '--json'],
+          wsIO.io
+        );
+        assert.equal(wsCode, 0);
+        const wsParsed = JSON.parse(wsIO.getStdout());
+        assert.equal(wsParsed.state.cwd, tmpWorkspace);
+
+        const emptyCwdIO = createMockIO();
+        const emptyCwdCode = await runCli(
+          ['run', '--mock', '-t', 'Empty CWD Test', '--cwd', '   '],
+          emptyCwdIO.io
+        );
+        assert.equal(emptyCwdCode, 1);
+        assert.match(emptyCwdIO.getStderr(), /cwd must be a non-empty string/);
+      } finally {
+        fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+      }
+    });
   });
 });
 

@@ -20,6 +20,7 @@ export class AntigravityAdapter extends HarnessAdapter {
     super({ name: 'antigravity', ...config });
     this.executable = config.executable || process.env.AGY_CLI_COMMAND || 'agy';
     this.spawnRunner = config.spawnRunner || runAntigravityCli;
+    this.cwd = config.cwd;
   }
 
   validateModel(model) {
@@ -74,14 +75,16 @@ export class AntigravityAdapter extends HarnessAdapter {
     return super.classifyError(error, context);
   }
 
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd }) {
     this.validateModel(seat.model);
+    const effectiveCwd = cwd || seat?.cwd || state?.cwd || this.cwd;
     const context = {
       seatId: seat.id,
       model: seat.model,
       tools: seat.tools || 'read-only',
       ...(telemetry ? { telemetry } : {}),
-      ...(onCallRecord ? { onCallRecord } : {})
+      ...(onCallRecord ? { onCallRecord } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
     };
 
     return this.executeWithTimeout(
@@ -92,12 +95,28 @@ export class AntigravityAdapter extends HarnessAdapter {
             model: seat.model,
             prompt,
             signal,
-            context
+            context,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
           const schemaType = phase === 'VOTING' || phase === 'confirming' ? 'vote' : 'proof';
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
+          if (err?.trace && !err._providerCallRecorded) {
+            this.recordProviderCall({
+              context,
+              onCallRecord,
+              record: {
+                participantId: context.seatId,
+                provider: 'antigravity',
+                model: context.model,
+                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
+                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
+                trace: { ...err.trace, outcome: 'error' }
+              }
+            });
+            err._providerCallRecorded = true;
+          }
           throw this.classifyError(err, context);
         }
       },
@@ -106,14 +125,16 @@ export class AntigravityAdapter extends HarnessAdapter {
     );
   }
 
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd }) {
     this.validateModel(judge.model);
+    const effectiveCwd = cwd || judge?.cwd || state?.cwd || this.cwd;
     const context = {
       seatId: judge.id,
       model: judge.model,
       tools: judge.tools || 'read-only',
       ...(telemetry ? { telemetry } : {}),
-      ...(onCallRecord ? { onCallRecord } : {})
+      ...(onCallRecord ? { onCallRecord } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
     };
 
     return this.executeWithTimeout(
@@ -124,11 +145,27 @@ export class AntigravityAdapter extends HarnessAdapter {
             model: judge.model,
             prompt,
             signal,
-            context
+            context,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
           return this.parseStructuredOutput(rawOutput, 'judge_synthesis');
         } catch (err) {
+          if (err?.trace && !err._providerCallRecorded) {
+            this.recordProviderCall({
+              context,
+              onCallRecord,
+              record: {
+                participantId: context.seatId,
+                provider: 'antigravity',
+                model: context.model,
+                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
+                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
+                trace: { ...err.trace, outcome: 'error' }
+              }
+            });
+            err._providerCallRecorded = true;
+          }
           throw this.classifyError(err, context);
         }
       },
@@ -178,9 +215,17 @@ export class AntigravityAdapter extends HarnessAdapter {
     });
   }
 
-  async _dispatchCli({ model, prompt, signal, context }) {
+  async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      return this.spawnRunner({ executable: this.executable, model, prompt, signal, context });
+      const effectiveCwd = cwd || context?.cwd;
+      return this.spawnRunner({
+        executable: this.executable,
+        model,
+        prompt,
+        signal,
+        context,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      });
     }
     throw new HarnessExecutionError('Antigravity CLI dispatcher runner not configured', {
       harness: this.name,

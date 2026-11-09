@@ -75,6 +75,10 @@ export function validateConfig(config) {
     errors.push('ignoreUserConfig must be a boolean.');
   }
 
+  if (config.cwd !== undefined && (typeof config.cwd !== 'string' || !config.cwd.trim())) {
+    errors.push('cwd must be a non-empty string.');
+  }
+
   if (config.evidence !== undefined) {
     if (!Array.isArray(config.evidence)) {
       errors.push('evidence must be an array of { label, source, text } objects.');
@@ -244,6 +248,9 @@ export function validateConfig(config) {
     if (config.judge.ignoreUserConfig !== undefined && typeof config.judge.ignoreUserConfig !== 'boolean') {
       errors.push('Judge requires "ignoreUserConfig" to be a boolean.');
     }
+    if (config.judge.cwd !== undefined && (typeof config.judge.cwd !== 'string' || !config.judge.cwd.trim())) {
+      errors.push('Judge requires "cwd" to be a non-empty string.');
+    }
   }
 
   if (config.seats) {
@@ -292,6 +299,9 @@ export function validateConfig(config) {
         }
         if (s.ignoreUserConfig !== undefined && typeof s.ignoreUserConfig !== 'boolean') {
           errors.push(`Seat "${s.id || idx}" requires "ignoreUserConfig" to be a boolean.`);
+        }
+        if (s.cwd !== undefined && (typeof s.cwd !== 'string' || !s.cwd.trim())) {
+          errors.push(`Seat "${s.id || idx}" requires "cwd" to be a non-empty string.`);
         }
       });
     }
@@ -550,7 +560,10 @@ export function resolveConfig(userConfig = {}) {
         : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
       ...(userConfig.judge?.ignoreUserConfig !== undefined
         ? { ignoreUserConfig: userConfig.judge.ignoreUserConfig }
-        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {}))
+        : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {})),
+      ...(userConfig.judge?.cwd !== undefined
+        ? { cwd: userConfig.judge.cwd }
+        : (userConfig.cwd !== undefined ? { cwd: userConfig.cwd } : {}))
     },
     seats: rawSeats.map((s) =>
       s && typeof s === 'object'
@@ -562,7 +575,10 @@ export function resolveConfig(userConfig = {}) {
               : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
             ...(s.ignoreUserConfig !== undefined
               ? { ignoreUserConfig: s.ignoreUserConfig }
-              : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {}))
+              : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {})),
+            ...(s.cwd !== undefined
+              ? { cwd: s.cwd }
+              : (userConfig.cwd !== undefined ? { cwd: userConfig.cwd } : {}))
           }
         : s
     )
@@ -581,6 +597,7 @@ export function resolveConfig(userConfig = {}) {
 
   return Object.freeze({
     ...merged,
+    ...(typeof merged.cwd === 'string' ? { cwd: merged.cwd.trim() } : {}),
     maxClarificationBatches: resolvedMaxClarificationBatches,
     evidence: normalizedEvidence,
     ...(normalizedClarifications !== undefined ? { clarifications: normalizedClarifications } : {})

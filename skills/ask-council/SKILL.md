@@ -159,6 +159,7 @@ Using a custom configuration file:
 - `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.
 - `-c, --config <path>`: Path to custom JSON configuration file (resolved against current working directory first, then `<packageRoot>/` and `<packageRoot>/configs/`).
+- `--cwd <dir>` / `--workspace <dir>`: Explicit working directory for seat and judge CLI execution when deliberating on a local repository. When omitted, each CLI invocation runs inside a fresh, empty temporary sandbox directory (`council-seat-cwd-*`) so seats do not accidentally inspect The Council's own repository or `.council/` run state.
 - `-r, --rounds <number>`: Maximum deliberation rounds (default: 3).
 - `-q, --quorum <number>`: Minimum quorum of active seats (default: 2).
 - `-v, --verbose`: Stream real-time transition and seat telemetry to stderr.
@@ -239,9 +240,11 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
    `runCodexCli` also passes `--disable hooks` (equivalent to `-c features.hooks=false`) by default. This suppresses user hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) from firing on internal Council prompts and tool calls while preserving `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json` authentication. Hooks can be re-enabled if desired via `disableHooks: false`.
 3. **Full Config Isolation (`--ignore-user-config`)**:
    For environments that also want to skip `$CODEX_HOME/config.toml` entirely, `ignoreUserConfig: true` passes `--ignore-user-config` (skipping `config.toml` while authentication still uses `CODEX_HOME`).
-4. **Telemetry, Structured Event Traces & Sanitization**:
-   Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, normalized `trace` (`traceCoverage: 'full' | 'partial' | 'unavailable'`, `toolCalls`, `skillsRead`), and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash (including on non-zero CLI exits).
-5. **Cross-Run Voter & Tool Telemetry Leaderboard (`council telemetry`)**:
+4. **Default Working Directory Isolation & `.council/` Anti-Cheating Guard**:
+   Unless an explicit `--cwd <dir>` / `--workspace <dir>` (or `cwd` in config) is provided, `runCodexCli`, `runCursorCli`, and `runAntigravityCli` execute in an isolated temporary directory (`council-seat-cwd-*`) and clean it up after each turn. Additionally, all prompts forbid inspecting `.council/`, and structured event traces (`parseCodexEventStream`, `parseCursorEventStream`) reject any turn whose observed tool calls target `.council/` (`FORBIDDEN_STATE_ACCESS`), recording `forbiddenStateAccess: true` in telemetry and faulting/retrying the seat.
+5. **Telemetry, Structured Event Traces & Sanitization**:
+   Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, normalized `trace` (`traceCoverage: 'full' | 'partial' | 'unavailable'`, `toolCalls`, `skillsRead`, `forbiddenStateAccess`, `forbiddenAccessDetails`), and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash (including on non-zero CLI exits).
+6. **Cross-Run Voter & Tool Telemetry Leaderboard (`council telemetry`)**:
    At run completion, The Council persists an immutable per-run telemetry record to `.council/telemetry/runs/<runId>.json` and projects `.council/runs/telemetry-summary.{json,js}` for the browser visualizer and CLI leaderboard:
    ```bash
    /Users/aaat/projects/the-council/bin/council telemetry
@@ -255,7 +258,7 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
 
 ### Tool Access Policies (`tools: 'none' | 'read-only'`)
 The Council enforces strict tool boundary policies across all seats and the Judge:
-- `'read-only'` (Default): Seats are provided with read-only inspection capabilities and prompt verification directives. Participants are instructed to inspect relevant codebases, standards, benchmarks, or documents before asserting facts or casting votes. The Judge is directed to spot-check submitted proof citations before admitting them.
+- `'read-only'` (Default): Seats are provided with read-only inspection capabilities and prompt verification directives. When `Pre-Gathered Grounding Evidence` (`--evidence`) is supplied, seats and the Judge are instructed to audit and cite the provided evidence packet first and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.
 - `'none'`: Pure reasoning mode with zero tool invocations. Verification prompt directives are omitted.
 - **Write Capabilities Strictly Forbidden**: Specifying `write`, `read-write`, or unapproved tools immediately fails configuration validation naming the allowed values (`none`, `read-only`). For `cursor-agent`, CLI executions automatically enforce `--trust`, `--output-format stream-json`, `--mode plan`, and `--sandbox enabled`.
 

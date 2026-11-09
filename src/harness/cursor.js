@@ -79,7 +79,9 @@ export class CursorAdapter extends HarnessAdapter {
 
   async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(seat.model);
-    const effectiveCwd = cwd || callerContext?.cwd || seat?.cwd || state?.cwd || this.cwd || this.config?.cwd;
+    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -92,7 +94,7 @@ export class CursorAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state });
+          const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state, cwd: effectiveCwd });
           const rawOutput = await this._dispatchCli({
             model: seat.model,
             prompt,
@@ -129,7 +131,9 @@ export class CursorAdapter extends HarnessAdapter {
 
   async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(judge.model);
-    const effectiveCwd = cwd || callerContext?.cwd || judge?.cwd || state?.cwd || this.cwd || this.config?.cwd;
+    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -142,7 +146,7 @@ export class CursorAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state });
+          const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state, cwd: effectiveCwd });
           const rawOutput = await this._dispatchCli({
             model: judge.model,
             prompt,
@@ -176,7 +180,10 @@ export class CursorAdapter extends HarnessAdapter {
     );
   }
 
-  formatSeatPrompt({ seat, soul, round, phase, state }) {
+  formatSeatPrompt({ seat, soul, round, phase, state, cwd }) {
+    const effectiveCwd = [cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     if (phase === 'VOTING' || phase === 'confirming') {
       const admittedProofs = (state?.proofs || []).filter((p) => p.status === 'admitted');
       const myOpenObjections = (state?.objections || []).filter(
@@ -188,7 +195,8 @@ export class CursorAdapter extends HarnessAdapter {
         candidate: state?.candidate,
         admittedProofs,
         myOpenObjections,
-        state
+        state,
+        cwd: effectiveCwd
       });
     }
 
@@ -202,24 +210,31 @@ export class CursorAdapter extends HarnessAdapter {
       clarifications: state?.clarifications,
       previousCandidate: state?.candidate,
       openObjections,
-      state
+      state,
+      cwd: effectiveCwd
     });
   }
 
-  formatJudgePrompt({ judge, round, phase, proofs, state }) {
+  formatJudgePrompt({ judge, round, phase, proofs, state, cwd }) {
+    const effectiveCwd = [cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     return formatJudgeSoulPrompt({
       judge,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
       proofs,
-      state
+      state,
+      cwd: effectiveCwd
     });
   }
 
   async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      const effectiveCwd = cwd || context?.cwd || this.cwd || this.config?.cwd;
+      const effectiveCwd = [cwd, context?.cwd, this.cwd, this.config?.cwd]
+        .find((c) => typeof c === 'string' && c.trim())
+        ?.trim();
       return this.spawnRunner({
         executable: this.executable,
         model,

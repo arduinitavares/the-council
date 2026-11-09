@@ -150,14 +150,17 @@ export class MockAdapter extends HarnessAdapter {
   /**
    * Execute seat turn deterministically.
    */
-  async executeSeat({ seat, soul, round, phase, state }) {
+  async executeSeat({ seat, soul, round, phase, state, cwd, context: callerContext }) {
     this.callCount.seats += 1;
 
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const resolvedSoul = soul || seat?.soul || 'General Seat: Evaluates claims empirically';
+    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const renderedPrompt = isVoting
-      ? formatVotingPrompt({ soul: resolvedSoul, seat, candidate: state?.candidate, state })
-      : formatDeliberationPrompt({ soul: resolvedSoul, seat, topic: state?.topic, round, maxRounds: state?.maxRounds, state });
+      ? formatVotingPrompt({ soul: resolvedSoul, seat, candidate: state?.candidate, state, cwd: effectiveCwd })
+      : formatDeliberationPrompt({ soul: resolvedSoul, seat, topic: state?.topic, round, maxRounds: state?.maxRounds, state, cwd: effectiveCwd });
 
     // Record prompt for soul adherence and evidence/clarifications verification
     const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]\n${renderedPrompt}`;
@@ -218,16 +221,20 @@ export class MockAdapter extends HarnessAdapter {
   /**
    * Execute judge turn deterministically.
    */
-  async executeJudge({ judge, round, phase, proofs, state }) {
+  async executeJudge({ judge, round, phase, proofs, state, cwd, context: callerContext }) {
     this.callCount.judge += 1;
 
+    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const judgePrompt = formatJudgePrompt({
       judge,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
       proofs,
-      state
+      state,
+      cwd: effectiveCwd
     });
     this.recordedPrompts.push({
       seatId: judge?.id || 'judge',

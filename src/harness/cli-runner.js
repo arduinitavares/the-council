@@ -1151,10 +1151,10 @@ const FORBIDDEN_COUNCIL_PATH_REGEX =
   /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/i;
 
 const FORBIDDEN_COUNCIL_GLOB_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_,-]*[?*\[\]{}][?*\[\]{}a-z0-9_,-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:live-run-)?latest[.*a-z0-9_-]*|telemetry-summary[.*a-z0-9_-]*|[*?]+[\\/](?:(?:live-run-)?latest|run-|telemetry-summary))|\.(?:cou[?*\[\]{}a-z0-9_,-]*|c[?*\[\]{}a-z0-9_,-]*[?*\[\]{}][?*\[\]{}a-z0-9_,-]*(?:ouncil|uncil|ncil|cil|l)|(?:\[[a-z0-9_.-]+\]|\{[a-z0-9_.,-]+\}|[?*])+(?:council|ouncil|uncil|ncil)|\{[^}\s/]*council[^}\s/]*\})(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|\?council(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]))/i;
+  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_!^,-]*[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:live-run-)?latest[.*a-z0-9_-]*|telemetry-summary[.*a-z0-9_-]*|[*?]+[\\/](?:(?:live-run-)?latest|run-|telemetry-summary))|\.(?:c[?*\[\]{}a-z0-9_!^,-]*[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|\[[!^]?[a-z0-9_.-]+\](?:[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|[?*\[\]{}a-z0-9_!^,-]*(?:council|ouncil|uncil|ncil|cil))|(?:\[[!^]?[a-z0-9_.-]+\]|\{[a-z0-9_.,-]+\}|[?*])+(?:council|ouncil|uncil|ncil|cil)|\{[^}\s/]*council[^}\s/]*\})(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:\?council|\*[^/\s]*council|\.\*\\?\.?council)(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]|[a-z0-9_.*?-]*))/i;
 
 const FORBIDDEN_COUNCIL_ARTIFACT_REGEX =
-  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.(?:js|json|[*?a-z0-9_-]+)|live-run-[a-z0-9_*?[\]{}.-]+|run-[a-z0-9_*?[\]{}-]+\.(?:meta\.json|events\.jsonl|json|js)|[a-z0-9_*?[\]{}-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary(?:\.(?:json|js|[*?a-z0-9_-]+)|[*?][*?a-z0-9_.-]*))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
+  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.(?:js|json|[a-z0-9_-]*[*?][*?a-z0-9_-]*)|live-run-[a-z0-9_*?[\]{}.-]+|(?:runs[\\/]run-[a-z0-9_*?[\]{}!^,-]+|run-\d+-[a-f0-9]+(?:-[a-z0-9]+)*|run-[a-z0-9_!^,-]*[*?[\]{}][a-z0-9_*?[\]{}!^,-]*)\.(?:js|json|[a-z0-9_.-]*[*?][*?a-z0-9_.-]*)|[a-z0-9_*?[\]{}!^,-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary(?:\.(?:json|js|[*?a-z0-9_-]+)|[*?][*?a-z0-9_.-]*))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
 
 const SAFE_EXCLUSION_ARG_PATTERN =
   '(?:\'[^\'\\r\\n;|&<>()`$]*\'|"[^"\\r\\n;|&<>()`$]*"|[^\\s;|&<>()`$]+)';
@@ -1162,18 +1162,24 @@ const SAFE_EXCLUSION_ARG_PATTERN =
 const SAFE_NEGATED_GLOB_ARG_PATTERN =
   '(?:\'![^\'\\r\\n;|&<>()`$]*\'|"![^"\\r\\n;|&<>()`$]*"|![^\\s;|&<>()`$]+)';
 
+const SAFE_FIND_NEGATED_GLOB_ARG_PATTERN =
+  '(?:\'[^\'\\r\\n;|&<>()`$]*\\/\\*\\*?\'|"[^"\\r\\n;|&<>()`$]*\\/\\*\\*?"|[^\\s\'"\\r\\n;|&<>()`$]*\\/\\*\\*?)';
+
 const SEARCH_EXCLUSION_FLAG_REGEX = new RegExp(
-  `(?:^|\\s)--(?:exclude-dir|exclude|ignore-dir|ignore)(?:=|\\s+)${SAFE_EXCLUSION_ARG_PATTERN}`,
+  `(?:^|\\s)(?:--(?:exclude-dir|exclude|ignore-dir)(?:=|\\s+)|--ignore=)${SAFE_EXCLUSION_ARG_PATTERN}`,
   'gi'
 );
 
 const NEGATED_GLOB_FLAG_REGEX = new RegExp(
-  `(?:^|\\s)(?:-g|--i?glob|--filter)(?:=|\\s+)${SAFE_NEGATED_GLOB_ARG_PATTERN}`,
+  `(?:^|\\s)(?:-g|--i?glob|--filter)(?:=|\\s+)?${SAFE_NEGATED_GLOB_ARG_PATTERN}`,
   'gi'
 );
 
+const GIT_EXCLUDE_PATHSPEC_REGEX =
+  /(?:^|\s)(?:':\((?:exclude(?:,glob)?|glob,exclude)\)[^'\r\n;|&<>()`$]*'|":\((?:exclude(?:,glob)?|glob,exclude)\)[^"\r\n;|&<>()`$]*"|:\((?:exclude(?:,glob)?|glob,exclude)\)[^\s;|&<>()`$]+)/gi;
+
 const FIND_PAREN_PRUNE_REGEX = new RegExp(
-  `(?:\\\\\\(|[(])\\s*(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}\\s*(?:(?:-o|-or|-a|-and)\\s+)?)+(?:\\\\\\)|[)])\\s*-prune\\s+(?:-o|-or)\\b`,
+  `(?:\\\\\\(|[(])\\s*(?:(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}\\s*(?:(?:-o|-or|-a|-and)\\s+)?)+(?:\\\\\\)|[)])\\s*-prune|(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}\\s+-prune\\s*(?:(?:-o|-or|-a|-and)\\s+)?)+(?:\\\\\\)|[)])(?:\\s*-prune)?)\\s+(?:-o|-or)\\b`,
   'gi'
 );
 
@@ -1183,7 +1189,7 @@ const FIND_SIMPLE_PRUNE_REGEX = new RegExp(
 );
 
 const FIND_NEGATED_PATH_REGEX = new RegExp(
-  `(?:^|[\\s(])(?<!(?:^|[\\s(])(?:\\\\!|!|-not)\\s+)(?:\\\\!|!|-not)\\s+-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}`,
+  `(?<=^|[\\s(])(?<!(?:^|[\\s(])(?:\\\\!|!|-not)(?:\\s+|\\\\?\\(\\s*)+)(?:\\\\!|!|-not)\\s+-i?(?:path|wholename)\\s+${SAFE_FIND_NEGATED_GLOB_ARG_PATTERN}(?!\\s*(?:\\\\?\\)\\s*)*(?:-o|-or)\\b)`,
   'gi'
 );
 
@@ -1191,6 +1197,11 @@ function isSafeExclusionToken(token) {
   if (typeof token !== 'string') return false;
   const trimmed = token.trim();
   return trimmed.length > 0 && !/[\s;|&<>()`$\r\n]/.test(trimmed);
+}
+
+function isSafeFindNegatedGlobToken(token) {
+  if (!isSafeExclusionToken(token)) return false;
+  return /\/\*\*?['"]?$/.test(token.trim());
 }
 
 function isSafeExclusionValue(val) {
@@ -1207,27 +1218,36 @@ function stripBenignCouncilExclusions(str) {
   if (typeof str !== 'string' || !str) return '';
   let next = str;
 
-  // 1. Standalone negated glob string (e.g., "!.council/**", "'!.council/**'", "!*/.council/*")
-  if (/^(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|![^\s;|&<>()`$]+)$/.test(next.trim())) {
+  // 1. Standalone negated glob or git exclude pathspec string (e.g., "!.council/**", ":(exclude).council/**")
+  if (
+    /^(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|![^\s;|&<>()`$]+|':\((?:exclude(?:,glob)?|glob,exclude)\)[^'\r\n\s;|&<>()`$]+'|":\((?:exclude(?:,glob)?|glob,exclude)\)[^"\r\n\s;|&<>()`$]+"|:\((?:exclude(?:,glob)?|glob,exclude)\)[^\s;|&<>()`$]+)$/i.test(
+      next.trim()
+    )
+  ) {
     return '';
   }
 
-  // 2. Search/grep exclusion flags: --exclude-dir, --exclude, --ignore-dir, --ignore
+  // 2. Search/grep exclusion flags: --exclude-dir, --exclude, --ignore-dir, --ignore=<val>
   next = next.replace(SEARCH_EXCLUSION_FLAG_REGEX, ' ');
 
-  // 3. Negated glob flags (-g '!.council*', --glob '!.council*', --iglob=!.council*)
+  // 3. Negated glob flags (-g '!.council*', -g!.council**, --glob '!.council*', --iglob=!.council*) and git :(exclude) pathspecs
   next = next.replace(NEGATED_GLOB_FLAG_REGEX, ' ');
+  next = next.replace(GIT_EXCLUDE_PATHSPEC_REGEX, ' ');
 
   // 4. find exclusion clauses:
   //    a) parenthesized or simple -path / -ipath / -wholename / -name / -iname / -regex followed by -prune -o
-  next = next.replace(FIND_PAREN_PRUNE_REGEX, ' ');
-  next = next.replace(FIND_SIMPLE_PRUNE_REGEX, ' ');
-  //    b) single ! or -not preceding -path / -ipath / -wholename / -name / -iname / -regex
+  //       (only when -depth / -d / -delete is absent, since -prune is a no-op under depth-first traversal)
+  const hasFindDepthOrDelete = /(?:^|\s)-(?:depth|d|delete)\b/i.test(next);
+  if (!hasFindDepthOrDelete) {
+    next = next.replace(FIND_PAREN_PRUNE_REGEX, ' ');
+    next = next.replace(FIND_SIMPLE_PRUNE_REGEX, ' ');
+  }
+  //    b) single ! or -not preceding -path / -ipath / -wholename / -iwholename ending in /* or /** (not preceded by outer negation or followed by -o)
   next = next.replace(FIND_NEGATED_PATH_REGEX, ' ');
 
   // 5. Standalone negated glob tokens inside a command or list (e.g., rg "pattern" -g '!.council/**')
   next = next.replace(
-    /(?:^|[\s,\[])(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|!(?=[.*\\/a-zA-Z0-9_?\[\]{}-]*\.(?:council|meta\.json|events\.jsonl)|[.*\\/a-zA-Z0-9_?\[\]{}-]*(?:latest\.js|telemetry-summary))[.*\\/a-zA-Z0-9_?\[\]{}-]+)(?=$|[\s,\]])/gi,
+    /(?:^|[\s,])(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|!(?=[.*\\/a-zA-Z0-9_?\[\]{}-]*\.(?:council|meta\.json|events\.jsonl)|[.*\\/a-zA-Z0-9_?\[\]{}-]*(?:latest\.js|telemetry-summary))[.*\\/a-zA-Z0-9_?\[\]{}-]+)(?=$|[\s,])/gi,
     ' '
   );
 
@@ -1253,10 +1273,16 @@ export function hasForbiddenCouncilToken(str) {
     sanitized.includes("'") ||
     sanitized.includes('\\') ||
     sanitized.includes('[') ||
-    sanitized.includes('{')
+    sanitized.includes('{') ||
+    sanitized.includes('(')
   ) {
     const dequoted = sanitized
-      .replace(/\\(?=[.a-zA-Z0-9_/*?[\]{}-])/g, '')
+      .replace(/\$['"]{2}/g, '')
+      .replace(/\$(?=['"])/g, '')
+      .replace(/[@+*?!]\(([^()]+)\)/g, (_, inner) =>
+        inner.includes('|') ? `{${inner.replace(/\|/g, ',')}}` : inner
+      )
+      .replace(/\\(?=[.a-zA-Z0-9_/*?[\]{}!^()-])/g, '')
       .replace(/["']/g, '')
       .replace(/\[([a-zA-Z0-9_.-])\]/g, '$1')
       .replace(/\{([a-zA-Z0-9_.-]+)\}/g, '$1');
@@ -1313,20 +1339,30 @@ const FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS = new Set([
 ]);
 
 function filterBenignStringArrayExclusions(arr) {
+  const hasFindDepthOrDelete = arr.some(
+    (item) => typeof item === 'string' && /^-(?:depth|d|delete)$/i.test(item.trim())
+  );
   const result = [];
   for (let i = 0; i < arr.length; i += 1) {
-    const prevToken = i > 0 && typeof arr[i - 1] === 'string' ? arr[i - 1].trim() : '';
     const token = arr[i].trim();
     const nextToken = typeof arr[i + 1] === 'string' ? arr[i + 1].trim() : '';
     const thirdToken = typeof arr[i + 2] === 'string' ? arr[i + 2].trim() : '';
     const fourthToken = typeof arr[i + 3] === 'string' ? arr[i + 3].trim() : '';
 
     if (
-      /^--(?:exclude-dir|exclude|ignore-dir|ignore)$/i.test(token) &&
+      /^--(?:exclude-dir|exclude|ignore-dir)$/i.test(token) &&
       i + 1 < arr.length &&
       isSafeExclusionToken(nextToken)
     ) {
       i += 1;
+      continue;
+    }
+    if (
+      /^(?:--(?:exclude-dir|exclude|ignore-dir|ignore)=|(?:-g|--i?glob|--filter)=?['"]?!|['"]?:\((?:exclude(?:,glob)?|glob,exclude)\))/i.test(
+        token
+      ) &&
+      isSafeExclusionToken(token)
+    ) {
       continue;
     }
     if (
@@ -1339,22 +1375,89 @@ function filterBenignStringArrayExclusions(arr) {
     }
     if (
       /^(?:\\!|!|-not)$/i.test(token) &&
-      !/^(?:\\!|!|-not)$/i.test(prevToken) &&
-      /^-i?(?:path|wholename|name|regex)$/i.test(nextToken) &&
+      /^-i?(?:path|wholename)$/i.test(nextToken) &&
       i + 2 < arr.length &&
-      isSafeExclusionToken(thirdToken)
+      isSafeFindNegatedGlobToken(thirdToken)
     ) {
-      i += 2;
-      continue;
+      let prevIdx = i - 1;
+      while (prevIdx >= 0 && /^(?:\\\(|\()$/.test(String(arr[prevIdx] || '').trim())) {
+        prevIdx -= 1;
+      }
+      const effectivePrev = prevIdx >= 0 ? String(arr[prevIdx] || '').trim() : '';
+      let nextIdx = i + 3;
+      while (nextIdx < arr.length && /^(?:\\\)|\))$/.test(String(arr[nextIdx] || '').trim())) {
+        nextIdx += 1;
+      }
+      const effectiveAfter = nextIdx < arr.length ? String(arr[nextIdx] || '').trim() : '';
+      if (
+        !/^(?:\\!|!|-not)$/i.test(effectivePrev) &&
+        !/^(?:-o|-or)$/i.test(effectiveAfter)
+      ) {
+        i += 2;
+        continue;
+      }
     }
-    if (
-      /^-i?(?:path|wholename|name|regex)$/i.test(token) &&
-      isSafeExclusionToken(nextToken) &&
-      thirdToken === '-prune' &&
-      /^(?:-o|-or)$/i.test(fourthToken)
-    ) {
-      i += 3;
-      continue;
+    if (!hasFindDepthOrDelete) {
+      if (
+        /^-i?(?:path|wholename|name|regex)$/i.test(token) &&
+        isSafeExclusionToken(nextToken) &&
+        thirdToken === '-prune' &&
+        /^(?:-o|-or)$/i.test(fourthToken)
+      ) {
+        i += 3;
+        continue;
+      }
+      if (/^(?:\\\(|\()$/.test(token)) {
+        let k = i + 1;
+        let validGroup = false;
+        let allClausesPruned = true;
+        let clauseCount = 0;
+        while (k < arr.length) {
+          const tk = String(arr[k] || '').trim();
+          if (/^(?:\\\)|\))$/.test(tk)) {
+            validGroup = clauseCount > 0;
+            break;
+          }
+          if (
+            /^-i?(?:path|wholename|name|regex)$/i.test(tk) &&
+            k + 1 < arr.length &&
+            isSafeExclusionToken(String(arr[k + 1] || '').trim())
+          ) {
+            clauseCount += 1;
+            k += 2;
+            const maybePrune = k < arr.length ? String(arr[k] || '').trim() : '';
+            if (maybePrune === '-prune') {
+              k += 1;
+            } else {
+              allClausesPruned = false;
+            }
+            const maybeOp = k < arr.length ? String(arr[k] || '').trim() : '';
+            if (/^(?:-o|-or|-a|-and)$/i.test(maybeOp)) {
+              k += 1;
+            }
+            continue;
+          }
+          validGroup = false;
+          break;
+        }
+        if (validGroup && k < arr.length) {
+          let afterClose = k + 1;
+          let hasOuterPrune = false;
+          if (
+            afterClose < arr.length &&
+            String(arr[afterClose] || '').trim() === '-prune'
+          ) {
+            hasOuterPrune = true;
+            afterClose += 1;
+          }
+          const orToken =
+            afterClose < arr.length ? String(arr[afterClose] || '').trim() : '';
+          if ((hasOuterPrune || allClausesPruned) && /^(?:-o|-or)$/i.test(orToken)) {
+            i = afterClose;
+            continue;
+          }
+        }
+      }
     }
     result.push(arr[i]);
   }
@@ -2560,8 +2663,10 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
 }
 
 function createForbiddenStateAccessError(details, trace, exitCode = 0) {
+  const detailText =
+    Array.isArray(details) && details.length > 0 ? details.join(', ') : '.council/';
   const err = new Error(
-    `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${details.join(', ')}`
+    `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`
   );
   err.code = 'FORBIDDEN_STATE_ACCESS';
   err.exitCode = exitCode;
@@ -2574,6 +2679,9 @@ function parseAntigravityOutput(raw) {
   let unwrappedResponse = null;
   let toolCalls = [];
   let traceCoverage = 'unavailable';
+  let traceForbidden = false;
+  let traceForbiddenDetails = [];
+  let traceSkillsRead = [];
   let streamForbidden = false;
   let streamForbiddenDetails = [];
   let streamSkillsRead = [];
@@ -2614,22 +2722,26 @@ function parseAntigravityOutput(raw) {
           traceCoverage = json.trace.traceCoverage;
         }
         if (json.trace.forbiddenStateAccess === true) {
-          streamForbidden = true;
+          traceForbidden = true;
         }
         if (Array.isArray(json.trace.forbiddenAccessDetails)) {
-          streamForbiddenDetails = json.trace.forbiddenAccessDetails;
+          traceForbiddenDetails = json.trace.forbiddenAccessDetails;
         }
         if (Array.isArray(json.trace.skillsRead)) {
-          streamSkillsRead = json.trace.skillsRead;
+          traceSkillsRead = json.trace.skillsRead;
         }
       }
-      if (!rawTools && !json.trace) {
+      if (!rawTools || rawTools.length === 0) {
         const maybeStream = parseCursorEventStream(str);
         if (maybeStream.eventsParsed) {
           eventsParsed = true;
-          toolCalls = maybeStream.toolCalls;
-          traceCoverage = maybeStream.traceCoverage;
-          streamForbidden = maybeStream.forbiddenStateAccess;
+          if (toolCalls.length === 0) {
+            toolCalls = maybeStream.toolCalls;
+          }
+          if (!json.trace?.traceCoverage || json.trace.traceCoverage === 'unavailable') {
+            traceCoverage = maybeStream.traceCoverage;
+          }
+          streamForbidden = Boolean(maybeStream.forbiddenStateAccess);
           streamForbiddenDetails = maybeStream.forbiddenAccessDetails || [];
           streamSkillsRead = maybeStream.skillsRead || [];
           if (unwrappedResponse === null && maybeStream.text) {
@@ -2644,7 +2756,7 @@ function parseAntigravityOutput(raw) {
       eventsParsed = true;
       toolCalls = maybeStream.toolCalls;
       traceCoverage = maybeStream.traceCoverage;
-      streamForbidden = maybeStream.forbiddenStateAccess;
+      streamForbidden = Boolean(maybeStream.forbiddenStateAccess);
       streamForbiddenDetails = maybeStream.forbiddenAccessDetails || [];
       streamSkillsRead = maybeStream.skillsRead || [];
       if (maybeStream.text) {
@@ -2658,16 +2770,21 @@ function parseAntigravityOutput(raw) {
       ? detectForbiddenCouncilAccess(toolCalls)
       : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
   const forbiddenAccessDetails = [
-    ...new Set([...streamForbiddenDetails, ...envelopeCheck.forbiddenAccessDetails])
+    ...new Set([
+      ...traceForbiddenDetails,
+      ...streamForbiddenDetails,
+      ...envelopeCheck.forbiddenAccessDetails
+    ])
   ];
   const forbiddenStateAccess =
+    Boolean(traceForbidden) ||
     Boolean(streamForbidden) ||
     envelopeCheck.forbiddenStateAccess ||
     forbiddenAccessDetails.length > 0;
 
   const envelopeSkills = toolCalls.length > 0 ? extractSkillsRead(toolCalls) : [];
   const skillsByName = new Map();
-  for (const s of [...streamSkillsRead, ...envelopeSkills]) {
+  for (const s of [...traceSkillsRead, ...streamSkillsRead, ...envelopeSkills]) {
     const skillName = typeof s === 'string' ? s : s?.skill;
     if (skillName && !skillsByName.has(skillName)) {
       skillsByName.set(skillName, { skill: skillName, evidence: 'skill_instructions_read' });
@@ -2814,8 +2931,12 @@ export async function runAntigravityCli({
           outcome: 'error'
         };
     if (!err.trace && parsedErr?.forbiddenStateAccess) {
+      const detailText =
+        parsedErr.forbiddenAccessDetails.length > 0
+          ? parsedErr.forbiddenAccessDetails.join(', ')
+          : '.council/';
       err.code = 'FORBIDDEN_STATE_ACCESS';
-      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErr.forbiddenAccessDetails.join(', ')}`;
+      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`;
     }
     err.trace = errorTrace;
     err._providerCallRecorded = true;

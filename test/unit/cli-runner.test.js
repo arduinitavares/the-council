@@ -2422,14 +2422,18 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       // Finding 2: Benign exclusion flags (!.council, --exclude-dir, --exclude, find -prune -o / -not) must NOT false-positive
       const benignExclusionCommands = [
         'rg -g \'!.council/**\' "pattern" .',
+        'rg -g!.council/** "pattern" .',
         'rg --glob "!.council" "pattern" .',
         'rg --iglob \'!.Council/**\' "pattern" src/',
+        'git grep "pattern" -- \':(exclude).council/**\'',
+        'git grep "pattern" -- \':(exclude,glob).council/**\'',
         'grep --exclude-dir=.council -rn "pattern" .',
         'grep --exclude-dir=\'.council*\' --exclude=\'*.log\' -rn "pattern" .',
         'find . -path \'*/.council/*\' -prune -o -type f -print',
+        'find . \\( -path \'*/.council/*\' -prune \\) -o -type f -print',
         'find . \\( -path \'*/.git/*\' -o -path \'*/.council/*\' \\) -prune -o -type f -print',
         'find . -not -path \'*/.council/*\' -type f',
-        'find . ! -name \'.council\' -type f'
+        'find . ! -path \'*/.council/**\' -type f'
       ];
       for (const cmd of benignExclusionCommands) {
         assert.equal(
@@ -2439,6 +2443,29 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         );
         const res = detectForbiddenCouncilAccess([{ kind: 'command_execution', name: 'shell', command: cmd }]);
         assert.equal(res.forbiddenStateAccess, false, `Expected forbiddenStateAccess: false for: ${cmd}`);
+      }
+
+      // Ordinary repository files and dot-directories (.cougar, .counter, scripts/run-tests.js, docs/latest.md) must NOT false-positive
+      const benignRepoCommands = [
+        'node scripts/run-tests.js',
+        'cat test/run-all.js',
+        'cat fixtures/run-config.json',
+        'cat docs/latest.md',
+        'cat public/latest.html',
+        'cat src/latest.ts',
+        'cat src/latest.jsx',
+        'cat data/latest.csv',
+        'cat .cougar/config.json',
+        'ls .counter',
+        'cat .config/settings.json',
+        'jq \'.[0].name\' package.json'
+      ];
+      for (const cmd of benignRepoCommands) {
+        assert.equal(
+          hasForbiddenCouncilToken(cmd),
+          false,
+          `Expected benign repo command NOT to false-positive: ${cmd}`
+        );
       }
 
       // Structured tool args with exclusion arrays or separate ['-g', '!.council/**'] tokens
@@ -2451,8 +2478,11 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
             SearchPath: '/repo/src',
             Includes: ['!**/node_modules/**', '!.council/**'],
             exclude: ['.council', '.council/**'],
-            argv: ['rg', '-g', '!.council/**', 'transitionCouncil', 'src'],
-            findArgv: ['find', '.', '-path', '*/.council/*', '-prune', '-o', '-type', 'f', '-print']
+            argv: ['rg', '-g', '!.council/**', '-g!.council/**', 'transitionCouncil', 'src'],
+            gitArgv: ['git', 'grep', 'transitionCouncil', '--', ':(exclude).council/**', ':(exclude,glob).council/**'],
+            findArgv: ['find', '.', '-path', '*/.council/*', '-prune', '-o', '-type', 'f', '-print'],
+            findParenInnerPruneArgv: ['find', '.', '(', '-path', '*/.council/*', '-prune', ')', '-o', '-print'],
+            findParenOuterPruneArgv: ['find', '.', '(', '-path', '*/.git/*', '-o', '-path', '*/.council/*', ')', '-prune', '-o', '-print']
           }
         }
       ]);
@@ -2461,6 +2491,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       // Mixed exclusion + actual target of .council/runs/latest.js OR malicious exclusion bypasses MUST STILL BE CAUGHT!
       const mixedOrMaliciousCommands = [
         'rg -g \'!.council/telemetry/**\' foo .council/runs/latest.js',
+        'rg --ignore .council/runs/latest.js -e SECRET',
         'grep --exclude-dir=.council/telemetry -rn "verdict" .council/runs/latest.js',
         'find . -path \'*/.council/telemetry/*\' -prune -o -name \'latest.js\' -print',
         'grep --exclude-from=.council/runs/latest.js foo src/',
@@ -2471,7 +2502,27 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'find . -path "*/.council/runs/latest.js" -prune -a -exec cat {} +',
         'find . -path "*/.council/*" -o -name "node_modules" -prune',
         'find . -not -not -path "*/.council/*" -exec cat {} +',
-        'find . ! ! -name "latest.js" -exec cat {} +'
+        'find . ! ! -name "latest.js" -exec cat {} +',
+        'find . ! \\( ! -path \'*/.council/*\' \\) -print',
+        'find . -not \\( -not -path \'*/.council/*\' \\) -exec cat {} +',
+        'find . ! -path \'*/.council/*\' -o -exec cat {} +',
+        'find . ! -name .council -type f -exec cat {} +',
+        'find . ! -path \'*/.council\' -type f -exec cat {} +',
+        'find . -depth -path \'*/.council\' -prune -o -type f -exec cat {} +',
+        'find . -d -path \'*/.council/*\' -prune -o -print',
+        'find . -delete -path \'*/.council/*\' -prune -o -print',
+        'cat .[!x]ouncil/runs/latest.js',
+        'cat .[^x]ouncil/runs/latest.js',
+        'find .c* -type f -exec cat {} +',
+        'find .[cC]* -type f',
+        'find .c?????? -type f',
+        'find . -path \'*council*\' -exec cat {} +',
+        'rg --hidden -g \'*council*\' .',
+        'find . -regex \'.*\\.council.*\'',
+        'ls .@(council)/runs',
+        'cat .cou$\'\'ncil/telemetry/secret.txt',
+        'cat run-1762720000000-a1b2c3.js',
+        'cat runs/run-custom.json'
       ];
       for (const mixedCmd of mixedOrMaliciousCommands) {
         assert.equal(
@@ -2497,6 +2548,10 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         },
         {
           name: 'exec',
+          args: { argv: ['rg', '--ignore', '.council/runs/latest.js', '-e', 'SECRET'] }
+        },
+        {
+          name: 'exec',
           args: { argv: ['find', '.', '-name', 'latest.js', '-prune'] }
         },
         {
@@ -2506,6 +2561,26 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         {
           name: 'exec',
           args: { argv: ['find', '.', '!', '!', '-name', 'latest.js'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '!', '(', '!', '-path', '*/.council/*', ')', '-print'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '!', '-path', '*/.council/*', '-o', '-print'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '!', '-name', '.council', '-type', 'f'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '!', '-path', '*/.council', '-type', 'f'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '-depth', '-path', '*/.council/*', '-prune', '-o', '-print'] }
         },
         {
           name: 'exec',
@@ -2530,7 +2605,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       }
 
       // Finding 3a: runAntigravityCli falling back to parseCursorEventStream preserves maybeStream.forbiddenStateAccess
-      // (both multi-line NDJSON and single-line NDJSON stream event where JSON.parse succeeds)
+      // (both multi-line NDJSON, single-line NDJSON stream event, single-line event with trace object, and envelope with trace.forbiddenStateAccess)
       const singleLineStreamEvent = JSON.stringify({
         type: 'tool_call',
         subtype: 'started',
@@ -2538,6 +2613,25 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           readToolCall: {
             args: { AbsolutePath: '/repo/.council/runs/latest.js' }
           }
+        }
+      });
+      const singleLineStreamEventWithTrace = JSON.stringify({
+        type: 'tool_call',
+        subtype: 'started',
+        tool_call: {
+          readToolCall: {
+            args: { AbsolutePath: '/repo/.council/runs/latest.js' }
+          }
+        },
+        trace: { traceCoverage: 'unavailable' }
+      });
+      const envelopeWithTraceForbiddenOnly = JSON.stringify({
+        response: '{"vote":"accept"}',
+        trace: {
+          traceCoverage: 'partial',
+          forbiddenStateAccess: true,
+          forbiddenAccessDetails: ['/repo/.council/runs/latest.js'],
+          toolCalls: []
         }
       });
       const agyStreamOutput = [
@@ -2548,7 +2642,12 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         })
       ].join('\n');
 
-      for (const streamSample of [agyStreamOutput, singleLineStreamEvent]) {
+      for (const streamSample of [
+        agyStreamOutput,
+        singleLineStreamEvent,
+        singleLineStreamEventWithTrace,
+        envelopeWithTraceForbiddenOnly
+      ]) {
         const agyStreamRecords = [];
         await assert.rejects(
           async () => {
@@ -2576,7 +2675,12 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       }
 
       // Finding 3b: runAntigravityCli catch (err) parses err.stdout when subprocess exits non-zero after forbidden access
-      for (const errStdoutSample of [agyStreamOutput, singleLineStreamEvent]) {
+      for (const errStdoutSample of [
+        agyStreamOutput,
+        singleLineStreamEvent,
+        singleLineStreamEventWithTrace,
+        envelopeWithTraceForbiddenOnly
+      ]) {
         const agyErrorStdoutRecords = [];
         await assert.rejects(
           async () => {

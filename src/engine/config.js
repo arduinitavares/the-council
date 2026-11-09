@@ -595,8 +595,28 @@ export function resolveConfig(userConfig = {}) {
     ? Math.max(merged.maxClarificationBatches, normalizedClarifications.length)
     : merged.maxClarificationBatches;
 
+  const normalizedJudge =
+    merged.judge && typeof merged.judge === 'object'
+      ? {
+          ...merged.judge,
+          ...(typeof merged.judge.cwd === 'string' ? { cwd: merged.judge.cwd.trim() } : {})
+        }
+      : merged.judge;
+  const normalizedSeats = Array.isArray(merged.seats)
+    ? merged.seats.map((s) =>
+        s && typeof s === 'object'
+          ? {
+              ...s,
+              ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {})
+            }
+          : s
+      )
+    : merged.seats;
+
   return Object.freeze({
     ...merged,
+    judge: normalizedJudge,
+    seats: normalizedSeats,
     ...(typeof merged.cwd === 'string' ? { cwd: merged.cwd.trim() } : {}),
     maxClarificationBatches: resolvedMaxClarificationBatches,
     evidence: normalizedEvidence,

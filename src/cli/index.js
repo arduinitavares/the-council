@@ -357,7 +357,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     let liveWatcher = null;
 
     if (values.live) {
-      const harnessRegistry = io.harnessRegistry || new HarnessRegistry();
+      const harnessRegistry = io.harnessRegistry || new HarnessRegistry(resolved.cwd ? { cwd: resolved.cwd } : {});
       try {
         const participants = [
           ...(resolved.judge ? [{ role: 'judge', participant: resolved.judge }] : []),

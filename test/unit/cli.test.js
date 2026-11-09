@@ -1200,12 +1200,14 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
         const wsIO = createMockIO();
         const wsCode = await runCli(
-          ['run', '--mock', '-t', 'Workspace Alias Test', '--workspace', tmpWorkspace, '--json'],
+          ['run', '--mock', '-t', 'Workspace Alias Test', '--workspace', `  ${tmpWorkspace}  `, '--json'],
           wsIO.io
         );
         assert.equal(wsCode, 0);
         const wsParsed = JSON.parse(wsIO.getStdout());
         assert.equal(wsParsed.state.cwd, tmpWorkspace);
+        assert.equal(wsParsed.state.judge.cwd, tmpWorkspace);
+        assert.ok(wsParsed.state.seats.every((s) => s.cwd === tmpWorkspace));
 
         const emptyCwdIO = createMockIO();
         const emptyCwdCode = await runCli(
@@ -1220,4 +1222,5 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
     });
   });
 });
+
 

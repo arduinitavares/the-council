@@ -60,6 +60,14 @@ export class CodexAdapter extends HarnessAdapter {
       return error;
     }
 
+    if (
+      error?.code === 'FORBIDDEN_STATE_ACCESS' ||
+      error?.trace?.forbiddenStateAccess === true ||
+      /\[ForbiddenStateAccessError\]/i.test(error?.message || '')
+    ) {
+      return super.classifyError(error, context);
+    }
+
     const raw = (error?.message || '') + ' ' + (error?.stderr || '');
 
     // OpenAI Quota / Rate limit patterns
@@ -86,11 +94,11 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute seat turn on Codex.
    */
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(seat.model);
     const disableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.disableHooks;
     const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
-    const effectiveCwd = cwd || seat?.cwd || state?.cwd || this.cwd;
+    const effectiveCwd = cwd || callerContext?.cwd || seat?.cwd || state?.cwd || this.cwd || this.config?.cwd;
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -143,11 +151,11 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute judge turn on Codex.
    */
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
-    const effectiveCwd = cwd || judge?.cwd || state?.cwd || this.cwd;
+    const effectiveCwd = cwd || callerContext?.cwd || judge?.cwd || state?.cwd || this.cwd || this.config?.cwd;
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -249,7 +257,7 @@ export class CodexAdapter extends HarnessAdapter {
    */
   async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      const effectiveCwd = cwd || context?.cwd;
+      const effectiveCwd = cwd || context?.cwd || this.cwd || this.config?.cwd;
       return this.spawnRunner({
         executable: this.executable,
         model,

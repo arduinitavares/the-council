@@ -1005,6 +1005,11 @@ const CODEX_EVENT_TYPES = new Set([
   'file_read',
   'tool_call',
   'tool_use',
+  'function_call',
+  'local_shell_call',
+  'custom_tool_call',
+  'file_search_call',
+  'web_search_call',
   'web_search',
   'agent_message',
   'message',
@@ -1143,19 +1148,49 @@ function findMatchingPendingUnkeyedIndex(
 }
 
 const FORBIDDEN_COUNCIL_PATH_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}\\/])\.council(?:[\\/]|$|[\s"'`,:;()[\]{}])/;
+  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/;
 
-const FORBIDDEN_ACCESS_SKIP_KEYS = new Set([
+function hasForbiddenCouncilToken(str) {
+  if (typeof str !== 'string' || !str) return false;
+  if (FORBIDDEN_COUNCIL_PATH_REGEX.test(str)) return true;
+  if ((str.includes('"') || str.includes("'") || str.includes('\\')) && /c/i.test(str)) {
+    const dequoted = str.replace(/\\(?=[.a-zA-Z0-9_/])/g, '').replace(/["']/g, '');
+    if (dequoted !== str && FORBIDDEN_COUNCIL_PATH_REGEX.test(dequoted)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const FORBIDDEN_ACCESS_OUTPUT_KEYS = new Set([
+  'aggregated_output',
+  'output',
+  'result',
+  'stdout',
+  'stderr',
+  'response',
+  'error',
+  'failure'
+]);
+
+const FORBIDDEN_ACCESS_OUTER_SKIP_KEYS = new Set([
+  ...FORBIDDEN_ACCESS_OUTPUT_KEYS,
   ...EXCLUDED_TRACE_OUTPUT_KEYS,
   ...IGNORED_META_KEYS,
-  'error',
-  'failure',
   'name',
   'tool',
   'tool_name',
   'toolName',
   'function_name',
   'functionName'
+]);
+
+const FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS = new Set([
+  'args',
+  'arguments',
+  'input',
+  'parameters',
+  'params'
 ]);
 
 /**
@@ -1166,7 +1201,7 @@ const FORBIDDEN_ACCESS_SKIP_KEYS = new Set([
  */
 export function isForbiddenCouncilPathOrCommand(value) {
   if (typeof value === 'string') {
-    return FORBIDDEN_COUNCIL_PATH_REGEX.test(value);
+    return hasForbiddenCouncilToken(value);
   }
   if (value && typeof value === 'object') {
     return detectForbiddenCouncilAccess(value).forbiddenStateAccess;
@@ -1199,8 +1234,8 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
 
   const details = new Set();
 
-  const inspectValue = (val, visited, depth) => {
-    if (depth > 6 || val === null || val === undefined) {
+  const inspectValue = (val, visited, depth, inInputContainer = false) => {
+    if (depth > 20 || val === null || val === undefined) {
       return;
     }
     if (typeof val === 'string') {
@@ -1215,14 +1250,14 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
         try {
           const parsed = JSON.parse(trimmed);
           if (parsed && typeof parsed === 'object') {
-            inspectValue(parsed, visited, depth + 1);
+            inspectValue(parsed, visited, depth + 1, true);
             return;
           }
         } catch {
           // Fall through to raw string check
         }
       }
-      if (FORBIDDEN_COUNCIL_PATH_REGEX.test(trimmed)) {
+      if (hasForbiddenCouncilToken(trimmed)) {
         details.add(trimmed);
       }
       return;
@@ -1230,23 +1265,42 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
     if (typeof val !== 'object') {
       return;
     }
-    if (visited.has(val)) {
+    const visitKey = `${inInputContainer ? 'in' : 'out'}`;
+    let visitedModes = visited.get(val);
+    if (visitedModes?.has(visitKey)) {
       return;
     }
-    visited.add(val);
+    if (!visitedModes) {
+      visitedModes = new Set();
+      visited.set(val, visitedModes);
+    }
+    visitedModes.add(visitKey);
 
     if (Array.isArray(val)) {
       for (const item of val) {
-        inspectValue(item, visited, depth + 1);
+        inspectValue(item, visited, depth + 1, inInputContainer);
       }
       return;
     }
 
     for (const [k, v] of Object.entries(val)) {
-      if (FORBIDDEN_ACCESS_SKIP_KEYS.has(k)) {
+      if (!inInputContainer) {
+        if ((k === 'action' || k === 'operation') && v && typeof v === 'object') {
+          inspectValue(v, visited, depth + 1, true);
+          continue;
+        }
+        if (FORBIDDEN_ACCESS_OUTER_SKIP_KEYS.has(k)) {
+          continue;
+        }
+      } else if (FORBIDDEN_ACCESS_OUTPUT_KEYS.has(k)) {
         continue;
       }
-      inspectValue(v, visited, depth + 1);
+      inspectValue(
+        v,
+        visited,
+        depth + 1,
+        inInputContainer || FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS.has(k)
+      );
     }
   };
 
@@ -1254,11 +1308,11 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
     if (!tc || typeof tc !== 'object') {
       continue;
     }
-    const visited = new Set();
-    inspectValue(tc, visited, 0);
+    const visited = new Map();
+    inspectValue(tc, visited, 0, false);
     const rawInput = rawInputsByToolEntry?.get?.(tc);
     if (rawInput && typeof rawInput === 'object') {
-      inspectValue(rawInput, visited, 0);
+      inspectValue(rawInput, visited, 0, false);
     }
   }
 
@@ -1353,10 +1407,17 @@ export function parseCodexEventStream(stdout) {
       itemType === 'file_read' ||
       itemType === 'tool_call' ||
       itemType === 'tool_use' ||
+      itemType === 'function_call' ||
+      itemType === 'local_shell_call' ||
+      itemType === 'custom_tool_call' ||
+      itemType === 'file_search_call' ||
+      itemType === 'web_search_call' ||
       itemType === 'web_search'
     ) {
       const normalizedType =
-        itemType === 'exec_command_begin' || itemType === 'exec_command_end'
+        itemType === 'exec_command_begin' ||
+        itemType === 'exec_command_end' ||
+        itemType === 'local_shell_call'
           ? 'command_execution'
           : itemType;
       const toolId = item.id || item.call_id || ev.call_id || ev.id || null;
@@ -1364,9 +1425,16 @@ export function parseCodexEventStream(stdout) {
       const parsedArgsObj =
         parseMaybeJsonObject(item.arguments) ||
         parseMaybeJsonObject(item.input) ||
-        parseMaybeJsonObject(item.args);
+        parseMaybeJsonObject(item.args) ||
+        parseMaybeJsonObject(item.action);
       const incomingRawCommand =
-        item.command || item.cmd || parsedArgsObj?.command || parsedArgsObj?.cmd || null;
+        item.command ||
+        item.cmd ||
+        item.action?.command ||
+        item.action?.cmd ||
+        parsedArgsObj?.command ||
+        parsedArgsObj?.cmd ||
+        null;
       const incomingCommand = Array.isArray(incomingRawCommand)
         ? incomingRawCommand.join(' ')
         : incomingRawCommand;
@@ -1531,6 +1599,61 @@ export function parseCodexEventStream(stdout) {
       itemType === 'agent_message' ||
       (itemType === 'message' && (!msgRole || msgRole === 'assistant'))
     ) {
+      if (Array.isArray(msgObj?.content)) {
+        for (const part of msgObj.content) {
+          if (
+            part &&
+            typeof part === 'object' &&
+            (part.type === 'tool_use' || part.type === 'tool_call' || part.type === 'function_call')
+          ) {
+            const rawArgs = part.input || part.args || part.arguments || null;
+            const parsedPartArgs = parseMaybeJsonObject(rawArgs);
+            const partExplicitName =
+              part.tool ||
+              part.name ||
+              part.tool_name ||
+              part.toolName ||
+              part.function?.name ||
+              null;
+            const partExitCode = extractExitCode(part);
+            const partFailed =
+              isFailedToolObject(part) || (typeof partExitCode === 'number' && partExitCode !== 0);
+            const partCmd = parsedPartArgs?.command || parsedPartArgs?.cmd || null;
+            const partPath =
+              parsedPartArgs?.path ||
+              parsedPartArgs?.file_path ||
+              parsedPartArgs?.target_file ||
+              null;
+            const partEntry = {
+              ...(part.id || part.call_id ? { id: String(part.id || part.call_id) } : {}),
+              type: part.type,
+              kind: part.type,
+              name: String(partExplicitName || part.type),
+              ...(partCmd ? { command: String(partCmd) } : {}),
+              ...(partPath ? { path: String(partPath) } : {}),
+              ...(typeof partExitCode === 'number' ? { exitCode: partExitCode } : {}),
+              status: partFailed ? 'failed' : part.status || 'completed'
+            };
+            rawInputsByToolEntry.set(partEntry, {
+              ...part,
+              type: part.type,
+              kind: part.type,
+              name: String(partExplicitName || part.type),
+              command: partCmd,
+              path: partPath,
+              args: rawArgs
+            });
+            if (partExplicitName) {
+              explicitNameByToolEntry.set(partEntry, String(partExplicitName));
+            }
+            if (part.id || part.call_id) {
+              toolCallsById.set(String(part.id || part.call_id), partEntry);
+            } else {
+              unkeyedToolCalls.push(partEntry);
+            }
+          }
+        }
+      }
       const msgText = extractMessageText(msgObj) || extractMessageText(item);
       const msgId = msgObj?.id || item.id || ev.id || null;
       if (msgId) {
@@ -1602,6 +1725,12 @@ const CURSOR_EVENT_TYPES = new Set([
   'assistant',
   'tool_call',
   'tool_use',
+  'function_call',
+  'local_shell_call',
+  'custom_tool_call',
+  'file_search_call',
+  'web_search_call',
+  'web_search',
   'result',
   'message',
   'agent_message',
@@ -1717,7 +1846,11 @@ export function parseCursorEventStream(stdout) {
     rawSubVal = null
   }) => {
     const normalizedType =
-      type === 'exec_command_begin' || type === 'exec_command_end' ? 'command_execution' : type;
+      type === 'exec_command_begin' ||
+      type === 'exec_command_end' ||
+      type === 'local_shell_call'
+        ? 'command_execution'
+        : type;
     const isStart =
       status === 'started' &&
       rawEvent?.type !== 'item.updated' &&
@@ -1820,6 +1953,12 @@ export function parseCursorEventStream(stdout) {
     if (
       evType === 'tool_call' ||
       evType === 'tool_use' ||
+      evType === 'function_call' ||
+      evType === 'local_shell_call' ||
+      evType === 'custom_tool_call' ||
+      evType === 'file_search_call' ||
+      evType === 'web_search_call' ||
+      evType === 'web_search' ||
       evType === 'command_execution' ||
       evType === 'exec_command_begin' ||
       evType === 'exec_command_end' ||
@@ -1840,9 +1979,9 @@ export function parseCursorEventStream(stdout) {
         ev.name ||
         (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
         null;
-      let command = item.command || item.cmd || null;
+      let command = item.command || item.cmd || item.action?.command || item.action?.cmd || null;
       let pathArg = item.path || item.file_path || null;
-      let rawArgs = item.args || item.arguments || item.input || null;
+      let rawArgs = item.args || item.arguments || item.input || item.action || null;
       let exitCode = extractExitCode(item) ?? extractExitCode(ev);
       let subVal = null;
 
@@ -1964,7 +2103,11 @@ export function parseCursorEventStream(stdout) {
     ) {
       if (Array.isArray(msgObj?.content)) {
         for (const part of msgObj.content) {
-          if (part && typeof part === 'object' && (part.type === 'tool_use' || part.type === 'tool_call')) {
+          if (
+            part &&
+            typeof part === 'object' &&
+            (part.type === 'tool_use' || part.type === 'tool_call' || part.type === 'function_call')
+          ) {
             const rawArgs = part.input || part.args || part.arguments || null;
             const parsedPartArgs = parseMaybeJsonObject(rawArgs);
             const partExplicitName =
@@ -2072,21 +2215,26 @@ export function normalizeProviderTrace(trace, defaults = {}) {
     : defaultCoverage;
   const toolCalls = Array.isArray(trace?.toolCalls) ? trace.toolCalls : [];
   const skillsRead = Array.isArray(trace?.skillsRead) ? trace.skillsRead : [];
-  const forbiddenCheck =
-    trace?.forbiddenStateAccess !== undefined || Array.isArray(trace?.forbiddenAccessDetails)
-      ? {
-          forbiddenStateAccess: Boolean(trace?.forbiddenStateAccess),
-          forbiddenAccessDetails: Array.isArray(trace?.forbiddenAccessDetails)
-            ? trace.forbiddenAccessDetails
-            : []
-        }
-      : detectForbiddenCouncilAccess(toolCalls);
+  const detectedForbidden =
+    toolCalls.length > 0
+      ? detectForbiddenCouncilAccess(toolCalls)
+      : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
+  const mergedDetails = [
+    ...new Set([
+      ...(Array.isArray(trace?.forbiddenAccessDetails) ? trace.forbiddenAccessDetails : []),
+      ...detectedForbidden.forbiddenAccessDetails
+    ])
+  ];
+  const forbiddenStateAccess =
+    Boolean(trace?.forbiddenStateAccess) ||
+    detectedForbidden.forbiddenStateAccess ||
+    mergedDetails.length > 0;
   const durationMs =
     typeof trace?.durationMs === 'number'
       ? trace.durationMs
       : (typeof defaults.durationMs === 'number' ? defaults.durationMs : 0);
   const outcome =
-    forbiddenCheck.forbiddenStateAccess
+    forbiddenStateAccess
       ? 'error'
       : trace?.outcome === 'error' || trace?.outcome === 'success'
         ? trace.outcome
@@ -2096,8 +2244,8 @@ export function normalizeProviderTrace(trace, defaults = {}) {
     traceCoverage,
     toolCalls,
     skillsRead,
-    forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
-    forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
+    forbiddenStateAccess,
+    forbiddenAccessDetails: mergedDetails,
     durationMs,
     outcome
   };
@@ -2278,6 +2426,61 @@ export async function runAntigravityCli({
     const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
+    const raw = result?.stdout || '';
+    let unwrappedResponse = null;
+    let envelopeToolCalls = [];
+    let envelopeCoverage = 'unavailable';
+
+    try {
+      const json = JSON.parse(raw);
+      if (json && typeof json === 'object') {
+        if (typeof json.response === 'string') {
+          unwrappedResponse = json.response;
+        }
+        const rawTools =
+          Array.isArray(json.toolCalls)
+            ? json.toolCalls
+            : Array.isArray(json.tool_calls)
+              ? json.tool_calls
+              : Array.isArray(json.trace?.toolCalls)
+                ? json.trace.toolCalls
+                : null;
+        if (rawTools) {
+          envelopeToolCalls = rawTools;
+          envelopeCoverage = json.trace?.traceCoverage || 'partial';
+        }
+      }
+    } catch {
+      const maybeStream = parseCursorEventStream(raw);
+      if (maybeStream.eventsParsed && maybeStream.toolCalls.length > 0) {
+        envelopeToolCalls = maybeStream.toolCalls;
+        envelopeCoverage = maybeStream.traceCoverage;
+        if (maybeStream.text) {
+          unwrappedResponse = maybeStream.text;
+        }
+      }
+    }
+
+    const forbiddenCheck =
+      envelopeToolCalls.length > 0
+        ? detectForbiddenCouncilAccess(envelopeToolCalls)
+        : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
+    const skillsRead =
+      envelopeToolCalls.length > 0 ? extractSkillsRead(envelopeToolCalls) : [];
+
+    const trace = {
+      traceCoverage: envelopeCoverage,
+      toolCalls: envelopeToolCalls,
+      skillsRead,
+      forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
+      forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
+      durationMs,
+      outcome: forbiddenCheck.forbiddenStateAccess ? 'error' : 'success'
+    };
+
+    if (forbiddenCheck.forbiddenStateAccess) {
+      throw createForbiddenStateAccessError(forbiddenCheck.forbiddenAccessDetails, trace, exitCode);
+    }
 
     recordProviderCall({
       context,
@@ -2289,27 +2492,12 @@ export async function runAntigravityCli({
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
-        trace: {
-          traceCoverage: 'unavailable',
-          toolCalls: [],
-          skillsRead: [],
-          forbiddenStateAccess: false,
-          forbiddenAccessDetails: [],
-          durationMs,
-          outcome: 'success'
-        }
+        trace
       }
     });
 
-    const raw = result?.stdout || '';
-
-    try {
-      const json = JSON.parse(raw);
-      if (json && typeof json.response === 'string') {
-        return json.response;
-      }
-    } catch {
-      // If not JSON envelope, fallback to raw output
+    if (typeof unwrappedResponse === 'string') {
+      return unwrappedResponse;
     }
 
     return raw.trim();

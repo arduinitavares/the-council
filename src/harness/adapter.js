@@ -3,7 +3,7 @@
  * ESM Module (Node >= 22). Zero external dependencies.
  */
 
-import { parseModelAndEffort, recordProviderCall } from './cli-runner.js';
+import { parseModelAndEffort, recordProviderCall, normalizeProviderTrace } from './cli-runner.js';
 
 export const EFFORT_TIMEOUT_MAP = Object.freeze({
   max: 240000,
@@ -167,9 +167,11 @@ export class HarnessAdapter {
    * @param {Function} [config.logger]
    */
   constructor(config = {}) {
+    this.config = config;
     this.name = config.name || 'base';
     this.defaultTimeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.logger = config.logger || (() => {});
+    this.cwd = config.cwd;
     this.initialized = false;
   }
 
@@ -442,6 +444,18 @@ export class HarnessAdapter {
    * @returns {Object}
    */
   parseStructuredOutput(rawText, schemaType) {
+    if (rawText && typeof rawText === 'object' && rawText.trace && typeof rawText.trace === 'object') {
+      const normalizedTrace = normalizeProviderTrace(rawText.trace);
+      if (normalizedTrace.forbiddenStateAccess) {
+        const err = new Error(
+          `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${normalizedTrace.forbiddenAccessDetails.join(', ')}`
+        );
+        err.code = 'FORBIDDEN_STATE_ACCESS';
+        err.trace = normalizedTrace;
+        throw err;
+      }
+    }
+
     const resolvedText =
       rawText && typeof rawText === 'object'
         ? (typeof rawText.text === 'string'

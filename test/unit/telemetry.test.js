@@ -827,7 +827,104 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
 
       assert.equal(win.bySeat.length, 3);
     });
+
+    it('excludes mode: "mock" records by default in aggregateTelemetryWindow (unless includeMock: true), keeps newest model on bySeat, and deduplicates supplemental guardRejectedEvents across seats', () => {
+      const baseState = {
+        phase: 'completed',
+        round: 1,
+        topic: 'Ledger Polish Test',
+        judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'completed' },
+        seats: [
+          { id: 'seat-shared', harness: 'codex', model: 'gpt-6-astra (max)', status: 'accepted', retries: 0 },
+          { id: 'seat-other', harness: 'cursor', model: 'grok-4.7-xhigh', status: 'accepted', retries: 0 }
+        ],
+        proofs: [
+          { id: 'P-1', seatId: 'seat-shared', status: 'admitted', admissionKind: 'explicitly_admitted' }
+        ],
+        verdict: {
+          kind: 'Unanimous Consensus',
+          candidate: {
+            summary: 'Consensus',
+            clauses: [{ id: 'C-1', context: 'All', conclusion: 'Done', citedProofIds: ['P-1'] }]
+          }
+        }
+      };
+
+      // Snapshot already has a rejected SUBMIT_PROOF for seat-shared (P-bad-1),
+      // while guardRejectedEvents has both a duplicate of P-bad-1 and a supplemental rejected proof for seat-other (P-bad-2).
+      const olderLiveRec = buildRunTelemetryRecord({
+        runId: 'run-live-old',
+        mode: 'live',
+        completedAt: '2026-11-08T00:00:00.000Z',
+        state: {
+          ...baseState,
+          seats: [
+            { id: 'seat-shared', harness: 'antigravity', model: 'gemini-4-argon (high)', status: 'accepted', retries: 0 },
+            { id: 'seat-other', harness: 'cursor', model: 'grok-4.7-xhigh', status: 'accepted', retries: 0 }
+          ]
+        },
+        snapshots: [
+          {
+            event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1', statement: 'Bad 1' },
+            lastTransition: { ok: false, event: 'SUBMIT_PROOF' }
+          }
+        ],
+        guardRejectedEvents: [
+          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1', statement: 'Bad 1' } },
+          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', id: 'P-bad-2', statement: 'Bad 2' } }
+        ]
+      });
+
+      assert.equal(
+        olderLiveRec.seats.find((s) => s.seatId === 'seat-shared').guardRejectedProofs,
+        1,
+        'Duplicate rejected proof in snapshots and guardRejectedEvents must not be double-counted'
+      );
+      assert.equal(
+        olderLiveRec.seats.find((s) => s.seatId === 'seat-other').guardRejectedProofs,
+        1,
+        'Supplemental guardRejectedEvents for seat-other must still be counted when snapshots has a rejected proof for seat-shared'
+      );
+
+      const newerLiveRec = buildRunTelemetryRecord({
+        runId: 'run-live-new',
+        mode: 'live',
+        completedAt: '2026-11-09T00:00:00.000Z',
+        state: baseState
+      });
+
+      const mockRec = buildRunTelemetryRecord({
+        runId: 'run-mock-sim',
+        mode: 'mock',
+        completedAt: '2026-11-09T01:00:00.000Z',
+        state: baseState
+      });
+
+      // Default aggregateTelemetryWindow excludes mode: 'mock'
+      const defaultWin = aggregateTelemetryWindow([olderLiveRec, newerLiveRec, mockRec], {
+        days: null,
+        now: '2026-11-09T02:00:00.000Z'
+      });
+      assert.equal(defaultWin.totalRuns, 2, 'Mock run must be excluded by default');
+
+      // Verify bySeat keeps newest run model metadata (codex/gpt-6-astra (max)) while recording both historical models
+      const sharedSeatBucket = defaultWin.bySeat.find((b) => b.key === 'seat-shared');
+      assert.ok(sharedSeatBucket);
+      assert.equal(sharedSeatBucket.provider, 'codex');
+      assert.equal(sharedSeatBucket.model, 'gpt-6-astra');
+      assert.equal(sharedSeatBucket.effort, 'max');
+      assert.deepEqual(sharedSeatBucket.models, [
+        'antigravity/gemini-4-argon (high)',
+        'codex/gpt-6-astra (max)'
+      ]);
+
+      // With includeMock: true, mock run is included
+      const withMockWin = aggregateTelemetryWindow([olderLiveRec, newerLiveRec, mockRec], {
+        days: null,
+        now: '2026-11-09T02:00:00.000Z',
+        includeMock: true
+      });
+      assert.equal(withMockWin.totalRuns, 3, 'Mock run must be included when includeMock: true');
+    });
   });
 });
-
-

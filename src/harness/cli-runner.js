@@ -253,7 +253,116 @@ const EXCLUDED_TRACE_OUTPUT_KEYS = new Set([
 ]);
 
 const SKILL_PATH_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/gi;
+  /(?:^|[\s"'`=,:;()[\]{}\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/g;
+
+const ALLOWED_READ_COMMANDS = new Set([
+  'cat',
+  'head',
+  'tail',
+  'less',
+  'more',
+  'bat',
+  'sed',
+  'awk',
+  'nl',
+  'grep',
+  'rg',
+  'ripgrep',
+  'python',
+  'python3',
+  'node',
+  'jq',
+  'view'
+]);
+
+const FORBIDDEN_COMMAND_NAMES = new Set([
+  'echo',
+  'printf',
+  'rm',
+  'mv',
+  'cp',
+  'touch',
+  'mkdir',
+  'tee',
+  'rmdir',
+  'dd',
+  'truncate',
+  'install',
+  'ln',
+  'chmod',
+  'chown'
+]);
+
+const MUTATING_TOOL_WORDS = new Set([
+  'write',
+  'edit',
+  'patch',
+  'replace',
+  'delete',
+  'remove',
+  'create',
+  'mkdir',
+  'rm',
+  'mv',
+  'cp',
+  'touch',
+  'append',
+  'overwrite',
+  'rename',
+  'unlink'
+]);
+
+function isMutatingToolIdentifier(id) {
+  if (typeof id !== 'string' || !id.trim()) return false;
+  const words = id
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return words.some((w) => MUTATING_TOOL_WORDS.has(w));
+}
+
+const COMMAND_TOOL_REGEX =
+  /^(?:command_execution|exec_command(?:_begin|_end)?|bash|sh|zsh|shell|terminal|run_command|run_terminal_command|shellToolCall|runTerminalCommand)$/i;
+
+const COMMAND_OBJECT_KEYS = new Set([
+  'command',
+  'cmd',
+  'commandLine',
+  'CommandLine',
+  'shell_command',
+  'script'
+]);
+
+const PATH_OBJECT_KEYS = new Set([
+  'path',
+  'file_path',
+  'filepath',
+  'filePath',
+  'target_file',
+  'targetFile',
+  'AbsolutePath',
+  'uri',
+  'file',
+  'files',
+  'paths',
+  'read_path'
+]);
+
+const IGNORED_META_KEYS = new Set([
+  'id',
+  'call_id',
+  'type',
+  'kind',
+  'name',
+  'tool',
+  'server',
+  'status',
+  'subtype',
+  'exit_code',
+  'exitCode'
+]);
 
 function parseMaybeJsonObject(val) {
   if (!val) return null;
@@ -276,6 +385,202 @@ function parseMaybeJsonObject(val) {
   return null;
 }
 
+function splitShellSegments(str) {
+  const segments = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < str.length) {
+        current += ch + str[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ';' || ch === '\n') {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      continue;
+    }
+    if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      i += 1;
+      continue;
+    }
+    if (ch === '|') {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) {
+    segments.push(current.trim());
+  }
+  return segments;
+}
+
+function extractSkillsFromCommand(cmdInput) {
+  if (!cmdInput) return [];
+  if (Array.isArray(cmdInput)) {
+    const strItems = cmdInput.filter((x) => typeof x === 'string');
+    if (strItems.length === 0) return [];
+    const firstBase = strItems[0].split(/[\\/]/).pop().toLowerCase();
+    if ((firstBase === 'sh' || firstBase === 'bash' || firstBase === 'zsh') && strItems.length >= 3) {
+      const cIdx = strItems.findIndex((arg, idx) => idx > 0 && /^-[a-zA-Z]*c$/.test(arg));
+      if (cIdx !== -1 && typeof strItems[cIdx + 1] === 'string') {
+        return extractSkillsFromCommand(strItems[cIdx + 1]);
+      }
+    }
+    return extractSkillsFromCommand(strItems.join(' '));
+  }
+  if (typeof cmdInput !== 'string' || !cmdInput.includes('SKILL.md')) {
+    return [];
+  }
+
+  let cmdStr = cmdInput.trim();
+  const shellWrapperMatch = cmdStr.match(
+    /^(?:\/usr\/bin\/env\s+)?(?:\/[\w.-]+)*\/?(?:zsh|bash|sh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+([\s\S]+)$/
+  );
+  if (shellWrapperMatch) {
+    let inner = shellWrapperMatch[1].trim();
+    if (
+      (inner.startsWith('"') && inner.endsWith('"')) ||
+      (inner.startsWith("'") && inner.endsWith("'"))
+    ) {
+      const q = inner[0];
+      inner = inner.slice(1, -1);
+      if (q === '"') {
+        inner = inner.replace(/\\"/g, '"');
+      }
+    }
+    return extractSkillsFromCommand(inner);
+  }
+
+  const matchedSkills = [];
+  const segments = splitShellSegments(cmdStr);
+
+  for (const seg of segments) {
+    if (!seg.includes('SKILL.md')) continue;
+
+    // Reject output redirection (> or >>) targeting SKILL.md
+    if (/>{1,2}\s*["']?[^\s;|&\n]*SKILL\.md\b/.test(seg)) {
+      continue;
+    }
+
+    let restSeg = seg.replace(/^[(\s]+/, '');
+    while (restSeg) {
+      const envMatch = restSeg.match(/^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+/);
+      if (envMatch) {
+        restSeg = restSeg.slice(envMatch[0].length);
+        continue;
+      }
+      const wrapperMatch = restSeg.match(
+        /^(?:sudo|env|command|builtin|nohup|time)\s+(?:-[a-zA-Z0-9-]+\s+)*/
+      );
+      if (wrapperMatch) {
+        restSeg = restSeg.slice(wrapperMatch[0].length);
+        continue;
+      }
+      break;
+    }
+
+    if (/^(?:\/[\w.-]+)*\/?(?:zsh|bash|sh)\s+/.test(restSeg)) {
+      for (const s of extractSkillsFromCommand(restSeg)) {
+        matchedSkills.push(s);
+      }
+      continue;
+    }
+
+    const firstTokenMatch = restSeg.match(/^["']?([^\s"';|&><()]+)["']?/);
+    if (!firstTokenMatch) continue;
+    const cmdBase = firstTokenMatch[1].split(/[\\/]/).pop().toLowerCase();
+
+    if (FORBIDDEN_COMMAND_NAMES.has(cmdBase) || !ALLOWED_READ_COMMANDS.has(cmdBase)) {
+      continue;
+    }
+
+    // Reject in-place sed mutations (sed -i / sed --in-place)
+    if (cmdBase === 'sed' && /\s-(?:[a-zA-Z]*i\b|-in-place\b)/.test(restSeg)) {
+      continue;
+    }
+
+    // Reject inline script file writes in python/node
+    if (
+      (cmdBase === 'python' || cmdBase === 'python3' || cmdBase === 'node') &&
+      (/\b(?:write_text|writeFileSync|writeFile|appendFileSync|appendFile|unlinkSync|unlink|rmSync|rmdirSync)\b/.test(
+        restSeg
+      ) ||
+        /open\s*\([^)]*,\s*['"][wa+]/.test(restSeg))
+    ) {
+      continue;
+    }
+
+    SKILL_PATH_REGEX.lastIndex = 0;
+    let match;
+    while ((match = SKILL_PATH_REGEX.exec(restSeg)) !== null) {
+      if (match[1]) {
+        matchedSkills.push(match[1]);
+      }
+    }
+  }
+
+  return matchedSkills;
+}
+
+function isFailedToolObject(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  if (typeof obj.exit_code === 'number' && obj.exit_code !== 0) return true;
+  if (typeof obj.exitCode === 'number' && obj.exitCode !== 0) return true;
+  if (typeof obj.status === 'string' && /^(?:failed|error|cancelled|aborted)$/i.test(obj.status.trim())) {
+    return true;
+  }
+  if (typeof obj.subtype === 'string' && /^(?:failed|error|cancelled|aborted)$/i.test(obj.subtype.trim())) {
+    return true;
+  }
+  return false;
+}
+
+function getToolIdentityStrings(obj) {
+  const ids = [];
+  const collectIds = (o) => {
+    if (!o || typeof o !== 'object') return;
+    for (const k of ['name', 'type', 'kind', 'tool']) {
+      if (typeof o[k] === 'string' && o[k].trim()) {
+        ids.push(o[k].trim());
+      }
+    }
+  };
+  collectIds(obj);
+  collectIds(obj?.item);
+  collectIds(obj?.payload);
+  collectIds(obj?.msg);
+  if (obj?.tool_call && typeof obj.tool_call === 'object' && !Array.isArray(obj.tool_call)) {
+    for (const [subKey, subVal] of Object.entries(obj.tool_call)) {
+      ids.push(subKey);
+      collectIds(subVal);
+    }
+  }
+  for (const k of Object.keys(obj || {})) {
+    if (/ToolCall$/.test(k)) {
+      ids.push(k);
+    }
+  }
+  return ids;
+}
+
 /**
  * Extracts verified skill reads ({ skill, evidence: 'skill_instructions_read' })
  * from observed tool command strings, file paths, or argument objects.
@@ -284,50 +589,145 @@ function parseMaybeJsonObject(val) {
  * @returns {Array<{ skill: string, evidence: 'skill_instructions_read' }>}
  */
 export function extractSkillsRead(input) {
-  const strings = [];
-  const collect = (val, depth = 0) => {
+  const seen = new Set();
+  const skillsRead = [];
+
+  const addSkill = (skill) => {
+    if (skill && !seen.has(skill)) {
+      seen.add(skill);
+      skillsRead.push({ skill, evidence: 'skill_instructions_read' });
+    }
+  };
+
+  const matchPathString = (str) => {
+    if (typeof str !== 'string' || !str.includes('SKILL.md')) return;
+    SKILL_PATH_REGEX.lastIndex = 0;
+    let match;
+    while ((match = SKILL_PATH_REGEX.exec(str)) !== null) {
+      addSkill(match[1]);
+    }
+  };
+
+  const inspectValue = (val, depth = 0, isCommandContext = false) => {
     if (depth > 6 || val === null || val === undefined) {
       return;
     }
     if (typeof val === 'string') {
-      strings.push(val);
       const parsedObj = parseMaybeJsonObject(val);
       if (parsedObj) {
-        collect(parsedObj, depth + 1);
+        inspectObject(parsedObj, depth + 1, isCommandContext);
+        return;
+      }
+      if (isCommandContext) {
+        for (const s of extractSkillsFromCommand(val)) {
+          addSkill(s);
+        }
+        return;
+      }
+      const trimmed = val.trim();
+      if (trimmed && !/\s/.test(trimmed) && !/[;|&><`$]/.test(trimmed)) {
+        matchPathString(trimmed);
+      } else {
+        for (const s of extractSkillsFromCommand(val)) {
+          addSkill(s);
+        }
       }
       return;
     }
     if (Array.isArray(val)) {
+      if (
+        val.length > 0 &&
+        val.every((item) => typeof item === 'string') &&
+        (isCommandContext || !val[0].includes('SKILL.md'))
+      ) {
+        for (const s of extractSkillsFromCommand(val)) {
+          addSkill(s);
+        }
+        return;
+      }
       for (const item of val) {
-        collect(item, depth + 1);
+        inspectValue(item, depth + 1, isCommandContext);
       }
       return;
     }
     if (typeof val === 'object') {
-      for (const [k, v] of Object.entries(val)) {
-        if (EXCLUDED_TRACE_OUTPUT_KEYS.has(k)) {
-          continue;
-        }
-        collect(v, depth + 1);
-      }
+      inspectObject(val, depth, isCommandContext);
     }
   };
 
-  collect(input, 0);
-
-  const seen = new Set();
-  const skillsRead = [];
-  for (const str of strings) {
-    SKILL_PATH_REGEX.lastIndex = 0;
-    let match;
-    while ((match = SKILL_PATH_REGEX.exec(str)) !== null) {
-      const skill = match[1];
-      if (skill && !seen.has(skill)) {
-        seen.add(skill);
-        skillsRead.push({ skill, evidence: 'skill_instructions_read' });
+  const inspectObject = (obj, depth = 0, inheritedCommandContext = false) => {
+    if (depth > 6 || !obj || typeof obj !== 'object') {
+      return;
+    }
+    if (
+      isFailedToolObject(obj) ||
+      isFailedToolObject(obj.item) ||
+      isFailedToolObject(obj.payload) ||
+      isFailedToolObject(obj.msg)
+    ) {
+      return;
+    }
+    if (obj.tool_call && typeof obj.tool_call === 'object') {
+      for (const subVal of Object.values(obj.tool_call)) {
+        if (isFailedToolObject(subVal) || isFailedToolObject(subVal?.result)) {
+          return;
+        }
       }
     }
-  }
+
+    const toolIds = getToolIdentityStrings(obj);
+    if (toolIds.some((id) => isMutatingToolIdentifier(id))) {
+      return;
+    }
+
+    const hasNonEmptyCommandProp = [...COMMAND_OBJECT_KEYS].some((k) => {
+      const v = obj[k];
+      return (typeof v === 'string' && v.trim().length > 0) || (Array.isArray(v) && v.length > 0);
+    });
+    const isCommandTool =
+      inheritedCommandContext ||
+      hasNonEmptyCommandProp ||
+      toolIds.some((id) => COMMAND_TOOL_REGEX.test(id));
+
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === null || v === undefined) continue;
+      if (EXCLUDED_TRACE_OUTPUT_KEYS.has(k) || IGNORED_META_KEYS.has(k)) {
+        continue;
+      }
+      if (COMMAND_OBJECT_KEYS.has(k)) {
+        for (const s of extractSkillsFromCommand(v)) {
+          addSkill(s);
+        }
+        continue;
+      }
+      if (PATH_OBJECT_KEYS.has(k)) {
+        if (isCommandTool && hasNonEmptyCommandProp) {
+          continue;
+        }
+        if (typeof v === 'string') {
+          const trimmed = v.trim();
+          const firstWord = trimmed.split(/\s+/)[0]?.toLowerCase() || '';
+          if (/\s/.test(trimmed) && (FORBIDDEN_COMMAND_NAMES.has(firstWord) || ALLOWED_READ_COMMANDS.has(firstWord))) {
+            for (const s of extractSkillsFromCommand(trimmed)) {
+              addSkill(s);
+            }
+          } else {
+            matchPathString(trimmed);
+          }
+        } else if (Array.isArray(v)) {
+          for (const item of v) {
+            if (typeof item === 'string') {
+              matchPathString(item);
+            }
+          }
+        }
+        continue;
+      }
+      inspectValue(v, depth + 1, isCommandTool);
+    }
+  };
+
+  inspectValue(input, 0, false);
   return skillsRead;
 }
 
@@ -405,6 +805,24 @@ function extractMessageText(item) {
   return '';
 }
 
+function isPendingToolStatus(status) {
+  return status === 'started' || status === 'in_progress' || status === 'observed';
+}
+
+function findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry) {
+  for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
+    const existing = unkeyedToolCalls[i];
+    if (!isPendingToolStatus(existing.status)) continue;
+    if (existing.type !== entry.type || existing.name !== entry.name) continue;
+    const sameCmd = (existing.command || null) === (entry.command || null);
+    const samePath = (existing.path || null) === (entry.path || null);
+    if (sameCmd && samePath) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /**
  * Parses `codex exec --json` JSONL event stream.
  * Extracts final assistant text, observed tool calls, and verified skill reads.
@@ -419,7 +837,7 @@ export function parseCodexEventStream(stdout) {
   if (!trimmed) {
     return {
       text: '',
-      traceCoverage: 'partial',
+      traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
       eventsParsed: false
@@ -429,6 +847,7 @@ export function parseCodexEventStream(stdout) {
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsedEvents = [];
   const nonEventLines = [];
+  let malformedJsonLines = 0;
   for (const line of lines) {
     if (!line.startsWith('{')) {
       nonEventLines.push(line);
@@ -442,6 +861,7 @@ export function parseCodexEventStream(stdout) {
         nonEventLines.push(line);
       }
     } catch {
+      malformedJsonLines += 1;
       nonEventLines.push(line);
     }
   }
@@ -449,7 +869,7 @@ export function parseCodexEventStream(stdout) {
   if (parsedEvents.length === 0) {
     return {
       text: trimmed,
-      traceCoverage: 'partial',
+      traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
       eventsParsed: false
@@ -458,18 +878,10 @@ export function parseCodexEventStream(stdout) {
 
   const toolCallsById = new Map();
   const unkeyedToolCalls = [];
-  const skillsByName = new Map();
-  const messagesById = new Map();
-  const unkeyedMessages = [];
+  const rawInputsByToolEntry = new WeakMap();
+  const orderedMessages = [];
+  const messageIndexById = new Map();
   let finalResultText = '';
-
-  const addSkills = (skills) => {
-    for (const entry of skills) {
-      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
-        skillsByName.set(entry.skill, entry);
-      }
-    }
-  };
 
   for (const ev of parsedEvents) {
     const item =
@@ -497,12 +909,19 @@ export function parseCodexEventStream(stdout) {
           ? 'command_execution'
           : itemType;
       const toolId = item.id || item.call_id || ev.call_id || ev.id || null;
-      const parsedArgsObj = parseMaybeJsonObject(item.arguments) || parseMaybeJsonObject(item.input) || parseMaybeJsonObject(item.args);
+      const prevEntry = toolId ? toolCallsById.get(String(toolId)) : null;
+      const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
+
+      const parsedArgsObj =
+        parseMaybeJsonObject(item.arguments) ||
+        parseMaybeJsonObject(item.input) ||
+        parseMaybeJsonObject(item.args);
       const rawCommand =
         item.command ||
         item.cmd ||
         parsedArgsObj?.command ||
         parsedArgsObj?.cmd ||
+        prevEntry?.command ||
         null;
       const command = Array.isArray(rawCommand) ? rawCommand.join(' ') : rawCommand;
       const pathArg =
@@ -511,22 +930,27 @@ export function parseCodexEventStream(stdout) {
         parsedArgsObj?.path ||
         parsedArgsObj?.file_path ||
         parsedArgsObj?.target_file ||
+        prevEntry?.path ||
         null;
       const name =
         item.tool ||
         item.name ||
         (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
+        prevEntry?.name ||
         normalizedType;
-
-      addSkills(
-        extractSkillsRead({
-          command,
-          path: pathArg,
-          arguments: parsedArgsObj || item.arguments,
-          input: item.input,
-          args: item.args
-        })
-      );
+      const exitCode =
+        typeof item.exit_code === 'number'
+          ? item.exit_code
+          : typeof item.exitCode === 'number'
+            ? item.exitCode
+            : prevEntry?.exitCode;
+      const status =
+        item.status ||
+        (ev.type === 'item.completed' || itemType === 'exec_command_end'
+          ? typeof exitCode === 'number' && exitCode !== 0
+            ? 'failed'
+            : 'completed'
+          : prevEntry?.status || 'observed');
 
       const entry = {
         ...(toolId ? { id: String(toolId) } : {}),
@@ -535,33 +959,75 @@ export function parseCodexEventStream(stdout) {
         name: String(name || normalizedType),
         ...(command ? { command: String(command) } : {}),
         ...(pathArg ? { path: String(pathArg) } : {}),
-        ...(typeof item.exit_code === 'number' ? { exitCode: item.exit_code } : {}),
-        status: item.status || (ev.type === 'item.completed' || itemType === 'exec_command_end' ? 'completed' : 'observed')
+        ...(typeof exitCode === 'number' ? { exitCode } : {}),
+        status
+      };
+
+      const mergedRawInput = {
+        ...prevRaw,
+        type: normalizedType,
+        kind: normalizedType,
+        name: String(name || normalizedType),
+        tool: item.tool || prevRaw?.tool,
+        command: rawCommand || command,
+        path: pathArg,
+        arguments: parsedArgsObj || item.arguments || prevRaw?.arguments,
+        input: item.input ?? prevRaw?.input,
+        args: item.args ?? prevRaw?.args,
+        ...(typeof exitCode === 'number' ? { exitCode } : {}),
+        status
       };
 
       if (toolId) {
+        rawInputsByToolEntry.set(entry, mergedRawInput);
         toolCallsById.set(String(toolId), entry);
       } else {
-        unkeyedToolCalls.push(entry);
+        const matchIdx = !isPendingToolStatus(status)
+          ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry)
+          : -1;
+        if (matchIdx !== -1) {
+          const existing = unkeyedToolCalls[matchIdx];
+          const existingRaw = rawInputsByToolEntry.get(existing);
+          const updated = {
+            ...existing,
+            ...entry,
+            ...(entry.command || existing.command ? { command: entry.command || existing.command } : {}),
+            ...(entry.path || existing.path ? { path: entry.path || existing.path } : {})
+          };
+          rawInputsByToolEntry.set(updated, {
+            ...existingRaw,
+            ...mergedRawInput
+          });
+          unkeyedToolCalls[matchIdx] = updated;
+        } else {
+          rawInputsByToolEntry.set(entry, mergedRawInput);
+          unkeyedToolCalls.push(entry);
+        }
       }
       continue;
     }
 
     if (itemType === 'agent_message' || (itemType === 'message' && item.role !== 'user')) {
       const msgText = extractMessageText(item);
-      if (msgText) {
+      if (msgText && msgText.trim()) {
         const msgId = item.id || ev.id || null;
         if (msgId) {
-          messagesById.set(String(msgId), msgText);
+          const key = String(msgId);
+          if (messageIndexById.has(key)) {
+            orderedMessages[messageIndexById.get(key)] = msgText;
+          } else {
+            messageIndexById.set(key, orderedMessages.length);
+            orderedMessages.push(msgText);
+          }
         } else if (ev.type !== 'item.started') {
-          unkeyedMessages.push(msgText);
+          orderedMessages.push(msgText);
         }
       }
       continue;
     }
 
     if (ev.type === 'response.output_text.done' && typeof ev.text === 'string' && ev.text.trim()) {
-      unkeyedMessages.push(ev.text);
+      orderedMessages.push(ev.text);
       continue;
     }
 
@@ -570,18 +1036,29 @@ export function parseCodexEventStream(stdout) {
     }
   }
 
-  const allMessages = [...messagesById.values(), ...unkeyedMessages];
+  const finalToolCalls = [...toolCallsById.values(), ...unkeyedToolCalls];
+  const skillsByName = new Map();
+  for (const tc of finalToolCalls) {
+    const skillInput = rawInputsByToolEntry.get(tc) || tc;
+    for (const entry of extractSkillsRead(skillInput)) {
+      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+        skillsByName.set(entry.skill, entry);
+      }
+    }
+  }
+
+  const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
-    allMessages.length > 0
-      ? allMessages.join('\n').trim()
-      : finalResultText
-        ? finalResultText.trim()
+    finalResultText && finalResultText.trim()
+      ? finalResultText.trim()
+      : nonEmptyMessages.length > 0
+        ? nonEmptyMessages[nonEmptyMessages.length - 1]
         : nonEventLines.join('\n').trim();
 
   return {
     text: extractedText,
-    traceCoverage: 'full',
-    toolCalls: [...toolCallsById.values(), ...unkeyedToolCalls],
+    traceCoverage: malformedJsonLines > 0 ? 'partial' : 'full',
+    toolCalls: finalToolCalls,
     skillsRead: [...skillsByName.values()],
     eventsParsed: true
   };
@@ -633,7 +1110,7 @@ export function parseCursorEventStream(stdout) {
   if (!trimmed) {
     return {
       text: '',
-      traceCoverage: 'partial',
+      traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
       eventsParsed: false
@@ -643,6 +1120,7 @@ export function parseCursorEventStream(stdout) {
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsedEvents = [];
   const nonEventLines = [];
+  let malformedJsonLines = 0;
   for (const line of lines) {
     if (!line.startsWith('{')) {
       nonEventLines.push(line);
@@ -656,6 +1134,7 @@ export function parseCursorEventStream(stdout) {
         nonEventLines.push(line);
       }
     } catch {
+      malformedJsonLines += 1;
       nonEventLines.push(line);
     }
   }
@@ -663,7 +1142,7 @@ export function parseCursorEventStream(stdout) {
   if (parsedEvents.length === 0) {
     return {
       text: trimmed,
-      traceCoverage: 'partial',
+      traceCoverage: 'unavailable',
       toolCalls: [],
       skillsRead: [],
       eventsParsed: false
@@ -672,39 +1151,75 @@ export function parseCursorEventStream(stdout) {
 
   const toolCallsById = new Map();
   const unkeyedToolCalls = [];
-  const skillsByName = new Map();
-  const assistantMessages = [];
+  const rawInputsByToolEntry = new WeakMap();
+  const orderedMessages = [];
+  const messageIndexById = new Map();
   let finalResultText = '';
 
-  const addSkills = (skills) => {
-    for (const entry of skills) {
-      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
-        skillsByName.set(entry.skill, entry);
-      }
-    }
-  };
+  const recordTool = ({
+    id,
+    type = 'tool_call',
+    name,
+    command,
+    pathArg,
+    rawArgs,
+    exitCode,
+    status = 'completed'
+  }) => {
+    const prevEntry = id ? toolCallsById.get(String(id)) : null;
+    const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
+    const effectiveCommand = command || prevEntry?.command || null;
+    const effectivePath = pathArg || prevEntry?.path || null;
+    const effectiveExitCode = typeof exitCode === 'number' ? exitCode : prevEntry?.exitCode;
 
-  const recordTool = ({ id, type = 'tool_call', name, command, pathArg, rawArgs, status = 'completed' }) => {
-    addSkills(
-      extractSkillsRead({
-        command,
-        path: pathArg,
-        args: rawArgs
-      })
-    );
     const entry = {
       ...(id ? { id: String(id) } : {}),
       type,
       kind: type,
-      name: String(name || type),
-      ...(command ? { command: String(command) } : {}),
-      ...(pathArg ? { path: String(pathArg) } : {}),
+      name: String(name || prevEntry?.name || type),
+      ...(effectiveCommand ? { command: String(effectiveCommand) } : {}),
+      ...(effectivePath ? { path: String(effectivePath) } : {}),
+      ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
       status
     };
+
+    const rawInput = {
+      ...prevRaw,
+      type,
+      kind: type,
+      name: String(name || prevEntry?.name || type),
+      command: effectiveCommand,
+      path: effectivePath,
+      args: rawArgs ?? prevRaw?.args,
+      ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
+      status
+    };
+
     if (id) {
+      rawInputsByToolEntry.set(entry, rawInput);
       toolCallsById.set(String(id), entry);
     } else {
-      unkeyedToolCalls.push(entry);
+      const matchIdx = !isPendingToolStatus(status)
+        ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry)
+        : -1;
+      if (matchIdx !== -1) {
+        const existing = unkeyedToolCalls[matchIdx];
+        const existingRaw = rawInputsByToolEntry.get(existing);
+        const updated = {
+          ...existing,
+          ...entry,
+          ...(entry.command || existing.command ? { command: entry.command || existing.command } : {}),
+          ...(entry.path || existing.path ? { path: entry.path || existing.path } : {})
+        };
+        rawInputsByToolEntry.set(updated, {
+          ...existingRaw,
+          ...rawInput
+        });
+        unkeyedToolCalls[matchIdx] = updated;
+      } else {
+        rawInputsByToolEntry.set(entry, rawInput);
+        unkeyedToolCalls.push(entry);
+      }
     }
   };
 
@@ -724,6 +1239,13 @@ export function parseCursorEventStream(stdout) {
       let command = item.command || item.cmd || null;
       let pathArg = item.path || item.file_path || null;
       let rawArgs = item.args || item.arguments || item.input || null;
+      let exitCode =
+        typeof item.exit_code === 'number'
+          ? item.exit_code
+          : typeof item.exitCode === 'number'
+            ? item.exitCode
+            : undefined;
+      let status = ev.subtype || item.status || 'completed';
 
       if (ev.tool_call && typeof ev.tool_call === 'object') {
         const subKeys = Object.keys(ev.tool_call);
@@ -735,6 +1257,11 @@ export function parseCursorEventStream(stdout) {
           const parsedSubArgs = parseMaybeJsonObject(rawArgs);
           command = command || parsedSubArgs?.command || parsedSubArgs?.cmd || null;
           pathArg = pathArg || parsedSubArgs?.path || parsedSubArgs?.file_path || parsedSubArgs?.target_file || null;
+          if (typeof subVal?.exit_code === 'number') exitCode = subVal.exit_code;
+          else if (typeof subVal?.exitCode === 'number') exitCode = subVal.exitCode;
+          else if (typeof subVal?.result?.exit_code === 'number') exitCode = subVal.result.exit_code;
+          else if (typeof subVal?.result?.exitCode === 'number') exitCode = subVal.result.exitCode;
+          if (typeof subVal?.status === 'string') status = subVal.status;
         }
       } else {
         const parsedRawArgs = parseMaybeJsonObject(rawArgs);
@@ -744,6 +1271,10 @@ export function parseCursorEventStream(stdout) {
         }
       }
 
+      if (typeof command === 'object' && Array.isArray(command)) {
+        command = command.join(' ');
+      }
+
       recordTool({
         id: callId,
         type: evType,
@@ -751,7 +1282,8 @@ export function parseCursorEventStream(stdout) {
         command,
         pathArg,
         rawArgs,
-        status: ev.subtype || item.status || 'completed'
+        exitCode,
+        status
       });
       continue;
     }
@@ -770,14 +1302,25 @@ export function parseCursorEventStream(stdout) {
               command: parsedPartArgs?.command || parsedPartArgs?.cmd || null,
               pathArg: parsedPartArgs?.path || parsedPartArgs?.file_path || parsedPartArgs?.target_file || null,
               rawArgs,
-              status: 'completed'
+              status: part.status || 'completed'
             });
           }
         }
       }
       const msgText = extractMessageText(msgObj);
-      if (msgText) {
-        assistantMessages.push(msgText);
+      if (msgText && msgText.trim()) {
+        const msgId = msgObj.id || item.id || ev.id || null;
+        if (msgId) {
+          const key = String(msgId);
+          if (messageIndexById.has(key)) {
+            orderedMessages[messageIndexById.get(key)] = msgText;
+          } else {
+            messageIndexById.set(key, orderedMessages.length);
+            orderedMessages.push(msgText);
+          }
+        } else {
+          orderedMessages.push(msgText);
+        }
       }
       continue;
     }
@@ -787,16 +1330,29 @@ export function parseCursorEventStream(stdout) {
     }
   }
 
-  const extractedText = finalResultText
-    ? finalResultText.trim()
-    : assistantMessages.length > 0
-      ? assistantMessages.join('\n').trim()
-      : nonEventLines.join('\n').trim();
+  const finalToolCalls = [...toolCallsById.values(), ...unkeyedToolCalls];
+  const skillsByName = new Map();
+  for (const tc of finalToolCalls) {
+    const skillInput = rawInputsByToolEntry.get(tc) || tc;
+    for (const entry of extractSkillsRead(skillInput)) {
+      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+        skillsByName.set(entry.skill, entry);
+      }
+    }
+  }
+
+  const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
+  const extractedText =
+    finalResultText && finalResultText.trim()
+      ? finalResultText.trim()
+      : nonEmptyMessages.length > 0
+        ? nonEmptyMessages[nonEmptyMessages.length - 1]
+        : nonEventLines.join('\n').trim();
 
   return {
     text: extractedText,
-    traceCoverage: 'full',
-    toolCalls: [...toolCallsById.values(), ...unkeyedToolCalls],
+    traceCoverage: malformedJsonLines > 0 ? 'partial' : 'full',
+    toolCalls: finalToolCalls,
     skillsRead: [...skillsByName.values()],
     eventsParsed: true
   };

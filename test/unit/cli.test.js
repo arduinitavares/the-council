@@ -1142,6 +1142,23 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const badDaysCode = await runCli(['telemetry', '--days', '0'], badDaysIO.io);
         assert.equal(badDaysCode, 1);
         assert.match(badDaysIO.getStderr(), /--days must be a positive number/);
+
+        // Verify `council run --mock` does NOT persist to telemetryDir by default (unless io.persistMockTelemetry: true)
+        const mockRunsDir = path.join(tmpDir, 'mock-runs');
+        const mockTelDir = path.join(tmpDir, 'mock-telemetry');
+        const mockRunIO = createMockIO();
+        mockRunIO.io.outputDir = mockRunsDir;
+        mockRunIO.io.telemetryDir = mockTelDir;
+        const mockRunCode = await runCli(
+          ['run', '--mock', '-t', 'Simulated Run Should Not Pollute Telemetry', '--json'],
+          mockRunIO.io
+        );
+        assert.equal(mockRunCode, 0);
+        assert.equal(
+          fs.existsSync(path.join(mockTelDir, 'runs')),
+          false,
+          'council run --mock must not persist telemetry records by default'
+        );
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

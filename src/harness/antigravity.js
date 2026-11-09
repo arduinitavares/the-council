@@ -186,8 +186,8 @@ export class AntigravityAdapter extends HarnessAdapter {
     );
   }
 
-  formatSeatPrompt({ seat, soul, round, phase, state, cwd }) {
-    const effectiveCwd = [cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+  formatSeatPrompt({ seat, soul, round, phase, state, cwd, context: callerContext }) {
+    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
       .find((c) => typeof c === 'string' && c.trim())
       ?.trim();
     if (phase === 'VOTING' || phase === 'confirming') {
@@ -221,8 +221,8 @@ export class AntigravityAdapter extends HarnessAdapter {
     });
   }
 
-  formatJudgePrompt({ judge, round, phase, proofs, state, cwd }) {
-    const effectiveCwd = [cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+  formatJudgePrompt({ judge, round, phase, proofs, state, cwd, context: callerContext }) {
+    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
       .find((c) => typeof c === 'string' && c.trim())
       ?.trim();
     return formatJudgeSoulPrompt({

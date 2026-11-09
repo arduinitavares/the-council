@@ -211,8 +211,8 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Formats seat prompt with soul temperament injection.
    */
-  formatSeatPrompt({ seat, soul, round, phase, state, cwd }) {
-    const effectiveCwd = [cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+  formatSeatPrompt({ seat, soul, round, phase, state, cwd, context: callerContext }) {
+    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
       .find((c) => typeof c === 'string' && c.trim())
       ?.trim();
     if (phase === 'VOTING' || phase === 'confirming') {
@@ -249,8 +249,8 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Formats judge prompt for auditing and candidate synthesis.
    */
-  formatJudgePrompt({ judge, round, phase, proofs, state, cwd }) {
-    const effectiveCwd = [cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+  formatJudgePrompt({ judge, round, phase, proofs, state, cwd, context: callerContext }) {
+    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
       .find((c) => typeof c === 'string' && c.trim())
       ?.trim();
     return formatJudgeSoulPrompt({

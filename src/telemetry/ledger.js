@@ -169,6 +169,7 @@ export function buildRunTelemetryRecord({
 
   const seenRejectedProofEventObjects = new Set();
   const seenRejectedProofEventKeys = new Set();
+  const seenRejectedProofIdKeys = new Set();
 
   const getRejectedProofFallbackKey = (seatId, ev) =>
     `${seatId}:${ev.id || ev.proof?.id || ''}:${ev.statement || ev.proof?.statement || ''}`;
@@ -187,8 +188,12 @@ export function buildRunTelemetryRecord({
     if (ev.type === 'SUBMIT_PROOF' && !isOk) {
       const seatId = ev.seatId || ev.proof?.seatId;
       if (seatId) {
+        const proofId = ev.id || ev.proof?.id || '';
         seenRejectedProofEventObjects.add(ev);
         seenRejectedProofEventKeys.add(getRejectedProofFallbackKey(seatId, ev));
+        if (proofId) {
+          seenRejectedProofIdKeys.add(`${seatId}:${proofId}`);
+        }
         guardRejectedBySeat.set(seatId, (guardRejectedBySeat.get(seatId) || 0) + 1);
       }
     } else if (ev.type === 'RETRY_SEAT' && isOk) {
@@ -215,10 +220,21 @@ export function buildRunTelemetryRecord({
       if (ev?.type === 'SUBMIT_PROOF' && !seenRejectedProofEventObjects.has(ev)) {
         const seatId = ev.seatId || ev.proof?.seatId;
         if (seatId) {
+          const proofId = ev.id || ev.proof?.id || '';
+          const statement = ev.statement || ev.proof?.statement || '';
           const fallbackKey = getRejectedProofFallbackKey(seatId, ev);
-          if (!seenRejectedProofEventKeys.has(fallbackKey)) {
+          const idKey = proofId ? `${seatId}:${proofId}` : '';
+          if (
+            !seenRejectedProofEventKeys.has(fallbackKey) &&
+            (!idKey || !seenRejectedProofIdKeys.has(idKey))
+          ) {
             seenRejectedProofEventObjects.add(ev);
-            seenRejectedProofEventKeys.add(fallbackKey);
+            if (proofId || statement) {
+              seenRejectedProofEventKeys.add(fallbackKey);
+            }
+            if (idKey) {
+              seenRejectedProofIdKeys.add(idKey);
+            }
             guardRejectedBySeat.set(seatId, (guardRejectedBySeat.get(seatId) || 0) + 1);
           }
         }

@@ -1159,6 +1159,23 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
           false,
           'council run --mock must not persist telemetry records by default'
         );
+
+        // Opt-in io.persistMockTelemetry: true persists mock telemetry and includes it in summary
+        const optInMockIO = createMockIO();
+        optInMockIO.io.outputDir = mockRunsDir;
+        optInMockIO.io.telemetryDir = mockTelDir;
+        optInMockIO.io.persistMockTelemetry = true;
+        optInMockIO.io.runId = 'run-mock-opt-in';
+        const optInCode = await runCli(
+          ['run', '--mock', '-t', 'Opt-in Simulated Telemetry', '--json'],
+          optInMockIO.io
+        );
+        assert.equal(optInCode, 0);
+        assert.equal(
+          fs.existsSync(path.join(mockTelDir, 'runs', 'run-mock-opt-in.json')),
+          true,
+          'council run --mock must persist telemetry when io.persistMockTelemetry: true'
+        );
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

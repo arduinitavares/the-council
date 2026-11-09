@@ -850,8 +850,8 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
         }
       };
 
-      // Snapshot already has a rejected SUBMIT_PROOF for seat-shared (P-bad-1),
-      // while guardRejectedEvents has both a duplicate of P-bad-1 and a supplemental rejected proof for seat-other (P-bad-2).
+      // Snapshot already has a rejected SUBMIT_PROOF for seat-shared (P-bad-1, compacted without statement),
+      // while guardRejectedEvents has a full duplicate of P-bad-1 (with statement) and two distinct keyless/statementless rejected proofs for seat-other.
       const olderLiveRec = buildRunTelemetryRecord({
         runId: 'run-live-old',
         mode: 'live',
@@ -865,25 +865,26 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
         },
         snapshots: [
           {
-            event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1', statement: 'Bad 1' },
+            event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1' },
             lastTransition: { ok: false, event: 'SUBMIT_PROOF' }
           }
         ],
         guardRejectedEvents: [
           { event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1', statement: 'Bad 1' } },
-          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', id: 'P-bad-2', statement: 'Bad 2' } }
+          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', statement: '' } },
+          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', statement: '' } }
         ]
       });
 
       assert.equal(
         olderLiveRec.seats.find((s) => s.seatId === 'seat-shared').guardRejectedProofs,
         1,
-        'Duplicate rejected proof in snapshots and guardRejectedEvents must not be double-counted'
+        'Duplicate rejected proof in compacted snapshots and guardRejectedEvents must not be double-counted'
       );
       assert.equal(
         olderLiveRec.seats.find((s) => s.seatId === 'seat-other').guardRejectedProofs,
-        1,
-        'Supplemental guardRejectedEvents for seat-other must still be counted when snapshots has a rejected proof for seat-shared'
+        2,
+        'Supplemental guardRejectedEvents for seat-other (including distinct keyless/statementless events) must be counted when snapshots has a rejected proof for seat-shared'
       );
 
       const newerLiveRec = buildRunTelemetryRecord({

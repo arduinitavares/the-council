@@ -110,7 +110,8 @@ export function transitionCouncil(state, event) {
         tools: s.tools || 'read-only',
         ...(typeof s.timeoutMs === 'number' && s.timeoutMs > 0 ? { timeoutMs: s.timeoutMs } : {}),
         ...(typeof s.disableHooks === 'boolean' ? { disableHooks: s.disableHooks } : {}),
-        ...(typeof s.ignoreUserConfig === 'boolean' ? { ignoreUserConfig: s.ignoreUserConfig } : {})
+        ...(typeof s.ignoreUserConfig === 'boolean' ? { ignoreUserConfig: s.ignoreUserConfig } : {}),
+        ...(typeof s.cwd === 'string' && s.cwd.trim() ? { cwd: s.cwd.trim() } : {})
       });
       return succeed(state, next, event.type, 'Added Seat "' + s.id + '" (' + s.harness + ' / ' + s.model + ').');
     }

@@ -25,6 +25,7 @@ export class CodexAdapter extends HarnessAdapter {
     this.spawnRunner = config.spawnRunner || runCodexCli;
     this.disableHooks = config.disableHooks;
     this.ignoreUserConfig = config.ignoreUserConfig;
+    this.cwd = config.cwd;
   }
 
   /**
@@ -85,10 +86,11 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute seat turn on Codex.
    */
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd }) {
     this.validateModel(seat.model);
     const disableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.disableHooks;
     const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
+    const effectiveCwd = cwd || seat?.cwd || state?.cwd || this.cwd;
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -96,7 +98,8 @@ export class CodexAdapter extends HarnessAdapter {
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(disableHooks !== undefined ? { disableHooks } : {}),
-      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {})
+      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
     };
 
     return this.executeWithTimeout(
@@ -107,12 +110,28 @@ export class CodexAdapter extends HarnessAdapter {
             model: seat.model,
             prompt,
             signal,
-            context
+            context,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
           const schemaType = phase === 'VOTING' || phase === 'confirming' ? 'vote' : 'proof';
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
+          if (err?.trace && !err._providerCallRecorded) {
+            this.recordProviderCall({
+              context,
+              onCallRecord,
+              record: {
+                participantId: context.seatId,
+                provider: 'codex',
+                model: context.model,
+                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
+                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
+                trace: { ...err.trace, outcome: 'error' }
+              }
+            });
+            err._providerCallRecorded = true;
+          }
           throw this.classifyError(err, context);
         }
       },
@@ -124,10 +143,11 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute judge turn on Codex.
    */
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd }) {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
+    const effectiveCwd = cwd || judge?.cwd || state?.cwd || this.cwd;
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -135,7 +155,8 @@ export class CodexAdapter extends HarnessAdapter {
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(disableHooks !== undefined ? { disableHooks } : {}),
-      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {})
+      ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
     };
 
     return this.executeWithTimeout(
@@ -146,11 +167,27 @@ export class CodexAdapter extends HarnessAdapter {
             model: judge.model,
             prompt,
             signal,
-            context
+            context,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
           return this.parseStructuredOutput(rawOutput, 'judge_synthesis');
         } catch (err) {
+          if (err?.trace && !err._providerCallRecorded) {
+            this.recordProviderCall({
+              context,
+              onCallRecord,
+              record: {
+                participantId: context.seatId,
+                provider: 'codex',
+                model: context.model,
+                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
+                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
+                trace: { ...err.trace, outcome: 'error' }
+              }
+            });
+            err._providerCallRecorded = true;
+          }
           throw this.classifyError(err, context);
         }
       },
@@ -210,9 +247,17 @@ export class CodexAdapter extends HarnessAdapter {
    * Internal CLI execution via direct runner.
    * @private
    */
-  async _dispatchCli({ model, prompt, signal, context }) {
+  async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      return this.spawnRunner({ executable: this.executable, model, prompt, signal, context });
+      const effectiveCwd = cwd || context?.cwd;
+      return this.spawnRunner({
+        executable: this.executable,
+        model,
+        prompt,
+        signal,
+        context,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      });
     }
     throw new HarnessExecutionError('Codex CLI dispatcher runner not configured', {
       harness: this.name,

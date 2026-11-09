@@ -28,6 +28,7 @@ export function createInitialCouncilState(config = {}) {
     : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
   const judgeDisableHooks = rawJudge.disableHooks !== undefined ? rawJudge.disableHooks : cfg.disableHooks;
   const judgeIgnoreUserConfig = rawJudge.ignoreUserConfig !== undefined ? rawJudge.ignoreUserConfig : cfg.ignoreUserConfig;
+  const judgeCwd = rawJudge.cwd !== undefined ? rawJudge.cwd : cfg.cwd;
   const judge = {
     id: rawJudge.id || defaultJudge.id,
     harness: rawJudge.harness || defaultJudge.harness,
@@ -38,7 +39,8 @@ export function createInitialCouncilState(config = {}) {
     tools: judgeTools,
     ...(typeof judgeTimeoutMs === 'number' ? { timeoutMs: judgeTimeoutMs } : {}),
     ...(typeof judgeDisableHooks === 'boolean' ? { disableHooks: judgeDisableHooks } : {}),
-    ...(typeof judgeIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: judgeIgnoreUserConfig } : {})
+    ...(typeof judgeIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: judgeIgnoreUserConfig } : {}),
+    ...(typeof judgeCwd === 'string' && judgeCwd.trim() ? { cwd: judgeCwd.trim() } : {})
   };
 
   const seats = (cfg.seats || []).map((s) => {
@@ -48,6 +50,7 @@ export function createInitialCouncilState(config = {}) {
       : (typeof cfg.timeoutMs === 'number' && cfg.timeoutMs > 0 ? cfg.timeoutMs : undefined);
     const seatDisableHooks = s.disableHooks !== undefined ? s.disableHooks : cfg.disableHooks;
     const seatIgnoreUserConfig = s.ignoreUserConfig !== undefined ? s.ignoreUserConfig : cfg.ignoreUserConfig;
+    const seatCwd = s.cwd !== undefined ? s.cwd : cfg.cwd;
     return {
       id: s.id,
       harness: s.harness,
@@ -59,7 +62,8 @@ export function createInitialCouncilState(config = {}) {
       tools: seatTools,
       ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
       ...(typeof seatDisableHooks === 'boolean' ? { disableHooks: seatDisableHooks } : {}),
-      ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {})
+      ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {}),
+      ...(typeof seatCwd === 'string' && seatCwd.trim() ? { cwd: seatCwd.trim() } : {})
     };
   });
 
@@ -99,6 +103,7 @@ export function createInitialCouncilState(config = {}) {
 
   return {
     topic: cfg.topic || DEFAULT_COUNCIL_CONFIG.topic,
+    ...(typeof cfg.cwd === 'string' && cfg.cwd.trim() ? { cwd: cfg.cwd.trim() } : {}),
     phase: initialPhase,
     canonicalPhase: toCanonicalPhase(initialPhase),
     phaseAlias: toPrototypePhase(initialPhase),

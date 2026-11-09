@@ -3,7 +3,7 @@
  * ESM Module (Node >= 22). Zero external dependencies.
  */
 
-import { parseModelAndEffort } from './cli-runner.js';
+import { parseModelAndEffort, recordProviderCall } from './cli-runner.js';
 
 export const EFFORT_TIMEOUT_MAP = Object.freeze({
   max: 240000,
@@ -101,10 +101,16 @@ export class HarnessExecutionError extends HarnessError {
     super(message, {
       ...options,
       isQuotaFault: false,
-      isRetryable: false
+      isRetryable: Boolean(options.isRetryable)
     });
     this.exitCode = options.exitCode ?? null;
     this.stderr = options.stderr || '';
+    if (options.code) {
+      this.code = options.code;
+    }
+    if (options.trace) {
+      this.trace = options.trace;
+    }
   }
 }
 
@@ -326,6 +332,15 @@ export class HarnessAdapter {
   }
 
   /**
+   * Safely records provider call telemetry via cli-runner.
+   *
+   * @param {Object} params
+   */
+  recordProviderCall(params) {
+    recordProviderCall(params);
+  }
+
+  /**
    * Template method: Classifies a raw error into the canonical error taxonomy.
    *
    * @param {Error|any} error
@@ -339,6 +354,25 @@ export class HarnessAdapter {
 
     const msg = error?.message || String(error);
     const raw = `${msg} ${error?.stderr || ''}`;
+
+    // Forbidden .council/ state access guard
+    if (
+      error?.code === 'FORBIDDEN_STATE_ACCESS' ||
+      error?.trace?.forbiddenStateAccess === true ||
+      /\[ForbiddenStateAccessError\]/i.test(msg)
+    ) {
+      return new HarnessExecutionError(msg, {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
+        stderr: error?.stderr || '',
+        code: 'FORBIDDEN_STATE_ACCESS',
+        trace: error?.trace || null,
+        isRetryable: true,
+        cause: error
+      });
+    }
 
     // Timeout pattern
     if (
@@ -386,6 +420,7 @@ export class HarnessAdapter {
         model: context.model,
         exitCode: error.exitCode || error.code || error.status,
         stderr: error.stderr || '',
+        trace: error?.trace || null,
         cause: error
       });
     }
@@ -394,6 +429,7 @@ export class HarnessAdapter {
       harness: this.name,
       seatId: context.seatId,
       model: context.model,
+      trace: error?.trace || null,
       cause: error
     });
   }

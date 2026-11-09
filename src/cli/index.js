@@ -43,6 +43,8 @@ Options:
   -q, --quorum <number>       Minimum quorum of active seats (default: 2)
   -l, --live                  Run with live CLI harnesses and visualizer stream (required unless --mock)
   -m, --mock                  Run in hermetic deterministic simulated mock mode (required unless --live)
+      --cwd <dir>             Explicit working directory for seat/judge CLI inspection (alias: --workspace)
+      --workspace <dir>       Alias for --cwd <dir>
       --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
       --by <model|seat>       Group telemetry leaderboard by canonical model or seat (default: model)
       --output-dir <path>     Custom runs/summary output directory
@@ -146,6 +148,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         quorum: { type: 'string', short: 'q' },
         live: { type: 'boolean', short: 'l', default: false },
         mock: { type: 'boolean', short: 'm', default: false },
+        cwd: { type: 'string' },
+        workspace: { type: 'string' },
         days: { type: 'string' },
         by: { type: 'string' },
         'output-dir': { type: 'string' },
@@ -312,6 +316,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     if (values.topic !== undefined) overrides.topic = values.topic;
     if (values.rounds !== undefined) overrides.maxRounds = parseInt(values.rounds, 10);
     if (values.quorum !== undefined) overrides.minQuorum = parseInt(values.quorum, 10);
+    const explicitCwd = values.cwd !== undefined ? values.cwd : values.workspace;
+    if (explicitCwd !== undefined) overrides.cwd = explicitCwd;
 
     let resolved;
     try {

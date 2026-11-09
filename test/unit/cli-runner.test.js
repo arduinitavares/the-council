@@ -1911,5 +1911,270 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(cursorRes.toolCalls[2].exitCode, 2);
       assert.deepEqual(cursorRes.skillsRead, []);
     });
+
+    it('detects forbidden .council/ access in tool call inputs while ignoring benign tool outputs and repo names (#63)', async () => {
+      const {
+        isForbiddenCouncilPathOrCommand,
+        detectForbiddenCouncilAccess,
+        parseCodexEventStream,
+        parseCursorEventStream
+      } = await import('../../src/harness/cli-runner.js');
+
+      assert.equal(isForbiddenCouncilPathOrCommand('.council/runs/latest.js'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('/Users/aaat/projects/the-council/.council/runs/r1.meta.json'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('cat ".council/runs/latest.js"'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('ls -la .council'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('rg P1 .council/telemetry'), true);
+
+      // Benign strings that must NOT match
+      assert.equal(isForbiddenCouncilPathOrCommand('/Users/aaat/projects/the-council/src/index.js'), false);
+      assert.equal(isForbiddenCouncilPathOrCommand('src/engine/council.js'), false);
+      assert.equal(isForbiddenCouncilPathOrCommand('foo.council.bar'), false);
+
+      // Benign tool output mentioning .council in stdout/result must NOT trigger false positive
+      const benignCodexStream = [
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'cmd_git_status',
+            type: 'command_execution',
+            command: 'git status -s',
+            aggregated_output: '?? .council/runs/latest.js\n',
+            status: 'completed',
+            exit_code: 0
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm1', type: 'agent_message', text: '{"vote":"accept"}' }
+        })
+      ].join('\n');
+
+      const benignParsed = parseCodexEventStream(benignCodexStream);
+      assert.equal(benignParsed.forbiddenStateAccess, false);
+      assert.deepEqual(benignParsed.forbiddenAccessDetails, []);
+
+      // Forbidden tool input in Cursor stream (JSON-stringified arguments)
+      const forbiddenCursorStream = [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            readToolCall: {
+              args: JSON.stringify({ file_path: '/repo/.council/runs/latest.js' })
+            }
+          }
+        }),
+        JSON.stringify({ type: 'result', result: '{"vote":"accept"}' })
+      ].join('\n');
+
+      const forbiddenParsed = parseCursorEventStream(forbiddenCursorStream);
+      assert.equal(forbiddenParsed.forbiddenStateAccess, true);
+      assert.deepEqual(forbiddenParsed.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
+
+      // Direct object check via detectForbiddenCouncilAccess
+      const directRes = detectForbiddenCouncilAccess([
+        { kind: 'tool_call', name: 'grep', args: { pattern: 'verdict', path: '.council/runs' } }
+      ]);
+      assert.equal(directRes.forbiddenStateAccess, true);
+      assert.deepEqual(directRes.forbiddenAccessDetails, ['.council/runs']);
+    });
+
+    it('throws FORBIDDEN_STATE_ACCESS in runCodexCli and runCursorCli when a seat inspects .council/, recording forbiddenStateAccess=true and outcome="error" (#63)', async () => {
+      const { CodexAdapter } = await import('../../src/harness/codex.js');
+      const { CursorAdapter } = await import('../../src/harness/cursor.js');
+
+      const cheatingCodexStream = [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thr_cheat' }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_cheat',
+            type: 'command_execution',
+            command: 'cat .council/runs/latest.js',
+            status: 'completed',
+            exit_code: 0
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_msg',
+            type: 'agent_message',
+            text: '{"kind":"check","statement":"Stolen from latest.js","source":".council/runs/latest.js","scope":"all"}'
+          }
+        })
+      ].join('\n');
+
+      let codexRecorded = [];
+      await assert.rejects(
+        async () => {
+          await runCodexCli({
+            model: 'gpt-6-astra (max)',
+            prompt: 'Deliberate',
+            context: { seatId: 'sol-cheater' },
+            onCallRecord: (rec) => codexRecorded.push(rec),
+            exec: async () => ({ stdout: cheatingCodexStream, stderr: '', exitCode: 0 })
+          });
+        },
+        (err) => {
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.match(err.message, /\[ForbiddenStateAccessError\].*cat \.council\/runs\/latest\.js/);
+          assert.ok(err.trace);
+          assert.equal(err.trace.forbiddenStateAccess, true);
+          assert.equal(err.trace.outcome, 'error');
+          return true;
+        }
+      );
+
+      assert.equal(codexRecorded.length, 1);
+      assert.equal(codexRecorded[0].trace.outcome, 'error');
+      assert.equal(codexRecorded[0].trace.forbiddenStateAccess, true);
+      assert.deepEqual(codexRecorded[0].trace.forbiddenAccessDetails, ['cat .council/runs/latest.js']);
+
+      // Verify CodexAdapter classifies FORBIDDEN_STATE_ACCESS as a retryable HarnessExecutionError without double-recording
+      let adapterCalls = [];
+      const codexAdapter = new CodexAdapter({
+        spawnRunner: (params) =>
+          runCodexCli({
+            ...params,
+            exec: async () => ({ stdout: cheatingCodexStream, stderr: '', exitCode: 0 })
+          })
+      });
+
+      await assert.rejects(
+        async () => {
+          await codexAdapter.executeSeat({
+            seat: { id: 'sol-cheater', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'Voter' },
+            soul: 'Voter',
+            round: 1,
+            phase: 'DELIBERATION',
+            state: { topic: 'Test' },
+            onCallRecord: (rec) => adapterCalls.push(rec)
+          });
+        },
+        (err) => {
+          assert.equal(err.name, 'HarnessExecutionError');
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.equal(err.isRetryable, true);
+          assert.equal(err.trace?.forbiddenStateAccess, true);
+          return true;
+        }
+      );
+      assert.equal(adapterCalls.length, 1, 'Must record provider call exactly once');
+
+      // Cursor stream cheating check (including agent fallback)
+      const cheatingCursorStream = [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            readToolCall: {
+              args: { path: '.council/runs/run-123.meta.json' }
+            }
+          }
+        }),
+        JSON.stringify({ type: 'result', result: '{"vote":"accept"}' })
+      ].join('\n');
+
+      let cursorRecorded = [];
+      const cursorAdapter = new CursorAdapter({
+        spawnRunner: (params) =>
+          runCursorCli({
+            ...params,
+            exec: async (bin) => {
+              if (bin === 'cursor-agent') {
+                const enoent = new Error('spawn cursor-agent ENOENT');
+                enoent.code = 'ENOENT';
+                throw enoent;
+              }
+              return { stdout: cheatingCursorStream, stderr: '', exitCode: 0 };
+            }
+          })
+      });
+
+      await assert.rejects(
+        async () => {
+          await cursorAdapter.executeSeat({
+            seat: { id: 'grok-cheater', harness: 'cursor', model: 'grok-4.7-xhigh', soul: 'Voter' },
+            soul: 'Voter',
+            round: 1,
+            phase: 'VOTING',
+            state: { topic: 'Test' },
+            onCallRecord: (rec) => cursorRecorded.push(rec)
+          });
+        },
+        (err) => {
+          assert.equal(err.name, 'HarnessExecutionError');
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.equal(err.isRetryable, true);
+          assert.deepEqual(err.trace?.forbiddenAccessDetails, ['.council/runs/run-123.meta.json']);
+          return true;
+        }
+      );
+      assert.equal(cursorRecorded.length, 1);
+      assert.equal(cursorRecorded[0].trace.forbiddenStateAccess, true);
+      assert.equal(cursorRecorded[0].trace.outcome, 'error');
+    });
+
+    it('isolates default working directory to a temporary council-seat-cwd-* directory and cleans it up unless explicit cwd is provided (#63)', async () => {
+      const observedDefaultCwds = [];
+
+      for (const runner of [
+        (exec) => runCodexCli({ model: 'gpt-6-astra (max)', prompt: 'Test', exec }),
+        (exec) => runCursorCli({ model: 'grok-4.7-xhigh', prompt: 'Test', exec }),
+        (exec) => runAntigravityCli({ model: 'gemini-4-argon (high)', prompt: 'Test', exec })
+      ]) {
+        let capturedCwd = null;
+        await runner(async (_bin, _args, opts) => {
+          capturedCwd = opts.cwd;
+          assert.ok(capturedCwd, 'Default execution must receive an isolated cwd');
+          assert.notEqual(capturedCwd, process.cwd(), 'Default cwd must not be process.cwd()');
+          assert.match(path.basename(capturedCwd), /^council-seat-cwd-/);
+          assert.equal(fs.existsSync(capturedCwd), true, 'Temp cwd must exist during execution');
+          assert.deepEqual(fs.readdirSync(capturedCwd), [], 'Temp cwd must be empty');
+          return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+        });
+        assert.equal(
+          fs.existsSync(capturedCwd),
+          false,
+          `Temp cwd "${capturedCwd}" must be cleaned up after completion`
+        );
+        observedDefaultCwds.push(capturedCwd);
+      }
+      assert.equal(observedDefaultCwds.length, 3);
+
+      // Verify explicit cwd (via params.cwd or context.cwd) is preserved and NOT deleted
+      const explicitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-explicit-workspace-'));
+      try {
+        let seenDirectCwd = null;
+        await runCodexCli({
+          model: 'gpt-6-astra (max)',
+          prompt: 'Test explicit cwd',
+          cwd: explicitDir,
+          exec: async (_bin, _args, opts) => {
+            seenDirectCwd = opts.cwd;
+            return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+          }
+        });
+        assert.equal(seenDirectCwd, explicitDir);
+        assert.equal(fs.existsSync(explicitDir), true, 'Explicit cwd must not be removed');
+
+        let seenContextCwd = null;
+        await runCursorCli({
+          model: 'grok-4.7-xhigh',
+          prompt: 'Test context cwd',
+          context: { seatId: 'grok-1', cwd: explicitDir },
+          exec: async (_bin, _args, opts) => {
+            seenContextCwd = opts.cwd;
+            return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+          }
+        });
+        assert.equal(seenContextCwd, explicitDir);
+        assert.equal(fs.existsSync(explicitDir), true, 'Context cwd must not be removed');
+      } finally {
+        fs.rmSync(explicitDir, { recursive: true, force: true });
+      }
+    });
   });
 });

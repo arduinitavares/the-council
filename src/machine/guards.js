@@ -159,12 +159,23 @@ export function guardJudgeAuditAndSynthesize(state, event) {
 
   (state.proofs || []).forEach((p) => {
     const dec = decisions[p.id];
-    if (dec && dec.status === 'admitted') {
-      admittedIds.add(p.id);
-    } else if (!dec && p.status === 'pending') {
-      admittedIds.add(p.id); // Default audit admission
-    } else if (!dec && p.status === 'admitted') {
-      admittedIds.add(p.id); // Cumulative prior admission
+    if (dec !== undefined && dec !== null) {
+      const isExplicitAdmit =
+        dec === true ||
+        (typeof dec === 'object' && (dec.admitted === true || dec.status === 'admitted'));
+      const isExplicitReject =
+        dec === false ||
+        (typeof dec === 'object' && (dec.admitted === false || dec.status === 'rejected'));
+
+      if (isExplicitAdmit) {
+        admittedIds.add(p.id);
+      } else if (!isExplicitReject && !(typeof dec === 'object' && dec.status)) {
+        if (p.status === 'pending' || p.status === 'admitted') {
+          admittedIds.add(p.id);
+        }
+      }
+    } else if (p.status === 'pending' || p.status === 'admitted') {
+      admittedIds.add(p.id); // Default or cumulative prior admission
     }
   });
 

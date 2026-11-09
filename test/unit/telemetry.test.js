@@ -663,6 +663,170 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
         fs.rmSync(tmpRoot, { recursive: true, force: true });
       }
     });
+
+    it('handles note-only decision objects and boolean decisions in JUDGE_AUDIT_AND_SYNTHESIZE guard and reducer', () => {
+      let state = createInitialCouncilState({
+        topic: 'Decision Variants Test',
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+          { id: 's2', harness: 'cursor', model: 'grok-4.7-xhigh', soul: 'S2' },
+          { id: 's3', harness: 'antigravity', model: 'gemini-4-argon (high)', soul: 'S3' }
+        ]
+      });
+
+      state = reduceCouncilState(state, { type: 'BEGIN_ROUND' });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's1',
+        id: 'P-1',
+        kind: 'check',
+        statement: 'Check 1',
+        source: 'src/a.js:1',
+        scope: 'unit'
+      });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's2',
+        id: 'P-2',
+        kind: 'citation',
+        statement: 'Cite 2',
+        source: 'docs/b.md:1',
+        scope: 'doc'
+      });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's3',
+        id: 'P-3',
+        kind: 'benchmark',
+        statement: 'Bench 3',
+        source: 'bench/c.js:1',
+        scope: 'perf'
+      });
+      state = reduceCouncilState(state, { type: 'START_JUDGING' });
+
+      // Attempt to cite P-3 when rejected via boolean `admitted: false` must be rejected by guard
+      const rejectedByGuard = reduceCouncilState(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: {
+          'P-3': { admitted: false, note: 'Rejected via boolean' }
+        },
+        summary: 'Bad synthesis citing rejected proof',
+        clauses: [{ id: 'C-1', context: 'All', conclusion: 'Bad', citedProofIds: ['P-3'] }]
+      });
+      assert.equal(rejectedByGuard.lastTransition.ok, false);
+
+      // Valid synthesis with boolean true, note-only object, and boolean false
+      state = reduceCouncilState(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: {
+          'P-1': true,
+          'P-2': { note: 'Reviewed note without explicit status' },
+          'P-3': false
+        },
+        summary: 'Valid synthesis',
+        clauses: [{ id: 'C-1', context: 'All', conclusion: 'Good', citedProofIds: ['P-1', 'P-2'] }]
+      });
+
+      assert.equal(state.lastTransition.ok, true);
+      assert.equal(state.proofs.find((p) => p.id === 'P-1').admissionKind, 'explicitly_admitted');
+      assert.equal(state.proofs.find((p) => p.id === 'P-2').status, 'admitted');
+      assert.equal(state.proofs.find((p) => p.id === 'P-2').admissionKind, 'default_admitted');
+      assert.equal(state.proofs.find((p) => p.id === 'P-3').status, 'rejected');
+      assert.equal(state.proofs.find((p) => p.id === 'P-3').admissionKind, 'judge_rejected');
+    });
+
+    it('groups multiple seats sharing the same canonical model within a single run so byModel.runs equals runs participated and preserves guardRejections when snapshots are present', () => {
+      const state = {
+        phase: 'completed',
+        round: 1,
+        topic: 'Multi-Seat Same-Model Run',
+        judge: { id: 'judge-1', harness: 'antigravity', model: 'gemini-4-argon (high)', status: 'completed' },
+        seats: [
+          { id: 'argon-seat-1', harness: 'antigravity', model: 'gemini-4-argon (high)', status: 'accepted', retries: 0 },
+          { id: 'argon-seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', status: 'accepted', retries: 1 },
+          { id: 'astra-seat-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'accepted', retries: 0 }
+        ],
+        proofs: [
+          { id: 'P-1', seatId: 'argon-seat-1', status: 'admitted', admissionKind: 'explicitly_admitted' },
+          { id: 'P-2', seatId: 'argon-seat-2', status: 'admitted', admissionKind: 'default_admitted' },
+          { id: 'P-3', seatId: 'astra-seat-1', status: 'admitted', admissionKind: 'explicitly_admitted' }
+        ],
+        verdict: {
+          kind: 'Unanimous Consensus',
+          candidate: {
+            summary: 'Consensus',
+            clauses: [{ id: 'C-1', context: 'All', conclusion: 'Agree', citedProofIds: ['P-1', 'P-3'] }]
+          }
+        }
+      };
+
+      let snapshotGetterCalled = false;
+      const stepsWithCommittedDelta = [
+        {
+          event: { type: 'SUBMIT_PROOF', seatId: 'argon-seat-1', id: 'P-1' },
+          stateDelta: { lastTransition: { ok: true, event: 'SUBMIT_PROOF' } },
+          get stateSnapshot() {
+            snapshotGetterCalled = true;
+            return { lastTransition: { ok: true, event: 'SUBMIT_PROOF' } };
+          }
+        }
+      ];
+
+      const rec = buildRunTelemetryRecord({
+        runId: 'run-multi-seat-same-model',
+        completedAt: '2026-11-09T02:00:00.000Z',
+        state,
+        snapshots: stepsWithCommittedDelta,
+        guardRejectedEvents: [
+          { event: { type: 'SUBMIT_PROOF', seatId: 'argon-seat-2' }, message: 'Invalid proof' }
+        ],
+        providerCalls: [
+          {
+            participantId: 'argon-seat-1',
+            provider: 'antigravity',
+            exitCode: 0,
+            trace: { traceCoverage: 'unavailable', toolCalls: [], skillsRead: [] }
+          },
+          {
+            participantId: 'argon-seat-2',
+            provider: 'antigravity',
+            exitCode: 0,
+            trace: { traceCoverage: 'unavailable', toolCalls: [], skillsRead: [] }
+          },
+          {
+            participantId: 'astra-seat-1',
+            provider: 'codex',
+            exitCode: 0,
+            trace: {
+              traceCoverage: 'full',
+              toolCalls: [{ kind: 'command_execution', name: 'rg' }],
+              skillsRead: [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+            }
+          }
+        ]
+      });
+
+      assert.equal(snapshotGetterCalled, false, 'Should inspect stateDelta.lastTransition before invoking lazy stateSnapshot getter');
+      const argonSeat2 = rec.seats.find((s) => s.seatId === 'argon-seat-2');
+      assert.equal(argonSeat2.guardRejectedProofs, 1, 'guardRejectedEvents must be counted even when snapshots array is non-empty');
+
+      const win = aggregateTelemetryWindow([rec], { days: null, now: '2026-11-09T03:00:00.000Z' });
+      assert.equal(win.totalRuns, 1);
+
+      const argonModel = win.byModel.find((m) => m.key === 'antigravity/gemini-4-argon (high)');
+      assert.ok(argonModel);
+      assert.equal(argonModel.runs, 1, 'Model appearing on 2 seats in 1 run must count as 1 run in byModel');
+      assert.deepEqual(argonModel.seatIds, ['argon-seat-1', 'argon-seat-2']);
+      assert.equal(argonModel.proofsSubmitted, 2);
+      assert.equal(argonModel.guardRejectedProofs, 1);
+      assert.equal(argonModel.explicitlyAdmitted, 1);
+      assert.equal(argonModel.defaultAdmitted, 1);
+      assert.equal(argonModel.retries, 1);
+      assert.equal(argonModel.traceCoverage.unavailableRuns, 1);
+      assert.equal(argonModel.observedToolCalls, null);
+
+      assert.equal(win.bySeat.length, 3);
+    });
   });
 });
 

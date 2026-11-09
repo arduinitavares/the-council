@@ -1102,7 +1102,7 @@
 
       const winData = summary && summary.windows && summary.windows[windowKey]
         ? summary.windows[windowKey]
-        : null;
+        : (windowKey === 'all' ? summary : null);
       const totalRuns = winData && typeof winData.totalRuns === 'number'
         ? winData.totalRuns
         : (summary && typeof summary.totalRuns === 'number' ? summary.totalRuns : 0);
@@ -1114,7 +1114,14 @@
         ? (groupBy === 'seat' ? (winData.bySeat || []) : (winData.byModel || []))
         : [];
       const esc = (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && CouncilVisualizer.escapeHtml)
-        || function (s) { return String(s || ''); };
+        || function (s) {
+          return String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        };
 
       if (!Array.isArray(rows) || rows.length === 0) {
         bodyEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No completed run telemetry recorded for this window yet.</div>';

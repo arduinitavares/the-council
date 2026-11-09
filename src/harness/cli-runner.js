@@ -149,6 +149,8 @@ const NON_PROMPT_VALUE_FLAGS = new Set([
  * @param {string} [explicitPrompt='']
  * @returns {string}
  */
+const SHORT_CLI_FLAG_REGEX = /^-+[a-zA-Z0-9][-a-zA-Z0-9_]*$/;
+
 export function inferPromptFromArgs(executable, args = [], explicitPrompt = '') {
   if (typeof explicitPrompt === 'string' && explicitPrompt.length > 0) {
     return explicitPrompt;
@@ -167,17 +169,22 @@ export function inferPromptFromArgs(executable, args = [], explicitPrompt = '') 
     if (
       typeof lastArg === 'string' &&
       lastArg.length > 0 &&
-      !lastArg.startsWith('-') &&
+      !SHORT_CLI_FLAG_REGEX.test(lastArg) &&
       !NON_PROMPT_VALUE_FLAGS.has(prevArg)
     ) {
       return lastArg;
+    }
+  } else if (args.length === 1) {
+    const onlyArg = args[0];
+    if (typeof onlyArg === 'string' && onlyArg.length >= 8 && !SHORT_CLI_FLAG_REGEX.test(onlyArg)) {
+      return onlyArg;
     }
   }
   return '';
 }
 
 /**
- * Sanitizes an execFile Error object so its message and cmd never leak the raw prompt.
+ * Sanitizes an execFile Error object so its message, cmd, and stderr never leak the raw prompt.
  *
  * @param {Error|any} error
  * @param {string} executable
@@ -227,6 +234,10 @@ export function sanitizeCliError(error, executable, args = [], explicitPrompt = 
     error.message = sanitizeText(error.message);
   }
 
+  if (typeof error.stderr === 'string') {
+    error.stderr = sanitizeText(error.stderr);
+  }
+
   return error;
 }
 
@@ -242,7 +253,28 @@ const EXCLUDED_TRACE_OUTPUT_KEYS = new Set([
 ]);
 
 const SKILL_PATH_REGEX =
-  /(?:^|[\s"'=:\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/gi;
+  /(?:^|[\s"'`=,:;()[\]{}\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/gi;
+
+function parseMaybeJsonObject(val) {
+  if (!val) return null;
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    return val;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Ignore non-JSON string
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Extracts verified skill reads ({ skill, evidence: 'skill_instructions_read' })
@@ -259,6 +291,10 @@ export function extractSkillsRead(input) {
     }
     if (typeof val === 'string') {
       strings.push(val);
+      const parsedObj = parseMaybeJsonObject(val);
+      if (parsedObj) {
+        collect(parsedObj, depth + 1);
+      }
       return;
     }
     if (Array.isArray(val)) {
@@ -304,6 +340,8 @@ const CODEX_EVENT_TYPES = new Set([
   'item.completed',
   'item.updated',
   'command_execution',
+  'exec_command_begin',
+  'exec_command_end',
   'mcp_tool_call',
   'file_read',
   'tool_call',
@@ -334,6 +372,9 @@ function isCodexStreamEvent(obj) {
   if (obj.item && typeof obj.item === 'object' && typeof obj.item.type === 'string') {
     return true;
   }
+  if (obj.payload && typeof obj.payload === 'object' && typeof obj.payload.type === 'string') {
+    return true;
+  }
   return false;
 }
 
@@ -343,6 +384,9 @@ function extractMessageText(item) {
   }
   if (typeof item.text === 'string' && item.text.trim()) {
     return item.text;
+  }
+  if (typeof item.message === 'string' && item.message.trim()) {
+    return item.message;
   }
   if (typeof item.content === 'string' && item.content.trim()) {
     return item.content;
@@ -384,17 +428,21 @@ export function parseCodexEventStream(stdout) {
 
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsedEvents = [];
+  const nonEventLines = [];
   for (const line of lines) {
     if (!line.startsWith('{')) {
+      nonEventLines.push(line);
       continue;
     }
     try {
       const obj = JSON.parse(line);
       if (isCodexStreamEvent(obj)) {
         parsedEvents.push(obj);
+      } else {
+        nonEventLines.push(line);
       }
     } catch {
-      // Ignore non-JSON lines in mixed output
+      nonEventLines.push(line);
     }
   }
 
@@ -424,38 +472,57 @@ export function parseCodexEventStream(stdout) {
   };
 
   for (const ev of parsedEvents) {
-    const item = ev.item && typeof ev.item === 'object' ? ev.item : ev;
+    const item =
+      ev.item && typeof ev.item === 'object'
+        ? ev.item
+        : ev.payload && typeof ev.payload === 'object'
+          ? ev.payload
+          : ev.msg && typeof ev.msg === 'object'
+            ? ev.msg
+            : ev;
     const itemType = item.type || ev.type;
 
     if (
       itemType === 'command_execution' ||
+      itemType === 'exec_command_begin' ||
+      itemType === 'exec_command_end' ||
       itemType === 'mcp_tool_call' ||
       itemType === 'file_read' ||
       itemType === 'tool_call' ||
       itemType === 'tool_use' ||
       itemType === 'web_search'
     ) {
+      const normalizedType =
+        itemType === 'exec_command_begin' || itemType === 'exec_command_end'
+          ? 'command_execution'
+          : itemType;
       const toolId = item.id || item.call_id || ev.call_id || ev.id || null;
-      const command = item.command || item.cmd || item.arguments?.command || item.input?.command || null;
+      const parsedArgsObj = parseMaybeJsonObject(item.arguments) || parseMaybeJsonObject(item.input) || parseMaybeJsonObject(item.args);
+      const rawCommand =
+        item.command ||
+        item.cmd ||
+        parsedArgsObj?.command ||
+        parsedArgsObj?.cmd ||
+        null;
+      const command = Array.isArray(rawCommand) ? rawCommand.join(' ') : rawCommand;
       const pathArg =
         item.path ||
         item.file_path ||
-        item.arguments?.path ||
-        item.arguments?.file_path ||
-        item.input?.path ||
-        item.input?.file_path ||
+        parsedArgsObj?.path ||
+        parsedArgsObj?.file_path ||
+        parsedArgsObj?.target_file ||
         null;
       const name =
         item.tool ||
         item.name ||
         (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
-        itemType;
+        normalizedType;
 
       addSkills(
         extractSkillsRead({
           command,
           path: pathArg,
-          arguments: item.arguments,
+          arguments: parsedArgsObj || item.arguments,
           input: item.input,
           args: item.args
         })
@@ -463,13 +530,13 @@ export function parseCodexEventStream(stdout) {
 
       const entry = {
         ...(toolId ? { id: String(toolId) } : {}),
-        type: itemType,
-        kind: itemType,
-        name: String(name || itemType),
+        type: normalizedType,
+        kind: normalizedType,
+        name: String(name || normalizedType),
         ...(command ? { command: String(command) } : {}),
         ...(pathArg ? { path: String(pathArg) } : {}),
         ...(typeof item.exit_code === 'number' ? { exitCode: item.exit_code } : {}),
-        status: item.status || (ev.type === 'item.completed' ? 'completed' : 'observed')
+        status: item.status || (ev.type === 'item.completed' || itemType === 'exec_command_end' ? 'completed' : 'observed')
       };
 
       if (toolId) {
@@ -507,7 +574,9 @@ export function parseCodexEventStream(stdout) {
   const extractedText =
     allMessages.length > 0
       ? allMessages.join('\n').trim()
-      : (finalResultText ? finalResultText.trim() : '');
+      : finalResultText
+        ? finalResultText.trim()
+        : nonEventLines.join('\n').trim();
 
   return {
     text: extractedText,
@@ -573,17 +642,21 @@ export function parseCursorEventStream(stdout) {
 
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsedEvents = [];
+  const nonEventLines = [];
   for (const line of lines) {
     if (!line.startsWith('{')) {
+      nonEventLines.push(line);
       continue;
     }
     try {
       const obj = JSON.parse(line);
       if (isCursorStreamEvent(obj)) {
         parsedEvents.push(obj);
+      } else {
+        nonEventLines.push(line);
       }
     } catch {
-      // Ignore non-JSON lines
+      nonEventLines.push(line);
     }
   }
 
@@ -659,12 +732,16 @@ export function parseCursorEventStream(stdout) {
           const subVal = ev.tool_call[subKey];
           toolName = subVal?.name || subKey;
           rawArgs = subVal?.args || subVal?.input || subVal || rawArgs;
-          command = command || rawArgs?.command || rawArgs?.cmd || null;
-          pathArg = pathArg || rawArgs?.path || rawArgs?.file_path || rawArgs?.target_file || null;
+          const parsedSubArgs = parseMaybeJsonObject(rawArgs);
+          command = command || parsedSubArgs?.command || parsedSubArgs?.cmd || null;
+          pathArg = pathArg || parsedSubArgs?.path || parsedSubArgs?.file_path || parsedSubArgs?.target_file || null;
         }
-      } else if (rawArgs && typeof rawArgs === 'object') {
-        command = command || rawArgs.command || rawArgs.cmd || null;
-        pathArg = pathArg || rawArgs.path || rawArgs.file_path || rawArgs.target_file || null;
+      } else {
+        const parsedRawArgs = parseMaybeJsonObject(rawArgs);
+        if (parsedRawArgs) {
+          command = command || parsedRawArgs.command || parsedRawArgs.cmd || null;
+          pathArg = pathArg || parsedRawArgs.path || parsedRawArgs.file_path || parsedRawArgs.target_file || null;
+        }
       }
 
       recordTool({
@@ -685,12 +762,13 @@ export function parseCursorEventStream(stdout) {
         for (const part of msgObj.content) {
           if (part && typeof part === 'object' && (part.type === 'tool_use' || part.type === 'tool_call')) {
             const rawArgs = part.input || part.args || part.arguments || null;
+            const parsedPartArgs = parseMaybeJsonObject(rawArgs);
             recordTool({
               id: part.id || part.call_id || null,
               type: part.type,
               name: part.name || part.tool || part.type,
-              command: rawArgs?.command || rawArgs?.cmd || null,
-              pathArg: rawArgs?.path || rawArgs?.file_path || rawArgs?.target_file || null,
+              command: parsedPartArgs?.command || parsedPartArgs?.cmd || null,
+              pathArg: parsedPartArgs?.path || parsedPartArgs?.file_path || parsedPartArgs?.target_file || null,
               rawArgs,
               status: 'completed'
             });
@@ -711,7 +789,9 @@ export function parseCursorEventStream(stdout) {
 
   const extractedText = finalResultText
     ? finalResultText.trim()
-    : assistantMessages.join('\n').trim();
+    : assistantMessages.length > 0
+      ? assistantMessages.join('\n').trim()
+      : nonEventLines.join('\n').trim();
 
   return {
     text: extractedText,

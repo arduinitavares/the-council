@@ -328,6 +328,12 @@ export function transitionCouncil(state, event) {
           } else if (typeof decision === 'object' && decision.status) {
             p.status = decision.status;
             p.judgeNote = decision.note || decision.reason || '';
+          } else if (p.status === 'pending') {
+            p.status = 'admitted';
+            p.admissionKind = 'default_admitted';
+            p.judgeNote =
+              (typeof decision === 'object' && (decision.note || decision.reason)) ||
+              'Admitted by Judge.';
           }
         } else if (p.status === 'pending') {
           p.status = 'admitted';

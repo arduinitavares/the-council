@@ -2445,7 +2445,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         assert.equal(res.forbiddenStateAccess, false, `Expected forbiddenStateAccess: false for: ${cmd}`);
       }
 
-      // Ordinary repository files and dot-directories (.cougar, .counter, scripts/run-tests.js, docs/latest.md) must NOT false-positive
+      // Ordinary repository files and dot-directories (.cougar, .counter, .codegraph*, scripts/run-tests.js, docs/latest.md) must NOT false-positive
       const benignRepoCommands = [
         'node scripts/run-tests.js',
         'cat test/run-all.js',
@@ -2458,7 +2458,19 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'cat .cougar/config.json',
         'ls .counter',
         'cat .config/settings.json',
-        'jq \'.[0].name\' package.json'
+        'ls .codegraph*',
+        'ls .cursor*',
+        'ls .claude*',
+        'ls .cache*',
+        'find . -name \'.clang*\'',
+        'find . -name \'.cspell*\'',
+        'jq \'.[0].name\' package.json',
+        'jq \'.[0][1]\' package.json',
+        'jq \'.[0][]\' package.json',
+        'jq \'.config[0]\' file.json',
+        'jq \'.clauses[0]\' file.json',
+        'grep \'.[0-9]*\' README.md',
+        'sed \'s/.[0-9]*//g\' file.txt'
       ];
       for (const cmd of benignRepoCommands) {
         assert.equal(
@@ -2494,6 +2506,8 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'rg --ignore .council/runs/latest.js -e SECRET',
         'grep --exclude-dir=.council/telemetry -rn "verdict" .council/runs/latest.js',
         'find . -path \'*/.council/telemetry/*\' -prune -o -name \'latest.js\' -print',
+        'find . -path \'*/.council/telemetry/*\' -prune -o -type f -exec cat {} +',
+        'find . ! -path \'*/.council/telemetry/*\' -type f -exec cat {} +',
         'grep --exclude-from=.council/runs/latest.js foo src/',
         'grep --exclude="$(cat .council/runs/latest.js)" foo src/',
         'rg -g "!$(cat .council/runs/latest.js)" foo src/',
@@ -2501,11 +2515,17 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'find . -path "*/.council/runs/latest.js" -prune -print',
         'find . -path "*/.council/runs/latest.js" -prune -a -exec cat {} +',
         'find . -path "*/.council/*" -o -name "node_modules" -prune',
+        'find . -path \'*/.council/*\' -name \'nonexistent\' -prune -o -type f -exec cat {} +',
+        'find . -path \'*/.council/*\' -a -name \'nonexistent\' -prune -o -type f -exec cat {} +',
+        'find . \\( -path \'*/.council/*\' -a -name \'nonexistent\' \\) -prune -o -type f -exec cat {} +',
+        'find . \\( -true -o -path \'*/.council\' -prune -o -false \\) -exec cat {} +',
         'find . -not -not -path "*/.council/*" -exec cat {} +',
         'find . ! ! -name "latest.js" -exec cat {} +',
         'find . ! \\( ! -path \'*/.council/*\' \\) -print',
+        'find . ! \\( -type d -o ! -path \'*/.council/*\' \\) -print',
         'find . -not \\( -not -path \'*/.council/*\' \\) -exec cat {} +',
         'find . ! -path \'*/.council/*\' -o -exec cat {} +',
+        'find . -type f -exec cat {} + -o ! -path \'*/.council/*\'',
         'find . ! -name .council -type f -exec cat {} +',
         'find . ! -path \'*/.council\' -type f -exec cat {} +',
         'find . -depth -path \'*/.council\' -prune -o -type f -exec cat {} +',
@@ -2520,6 +2540,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'rg --hidden -g \'*council*\' .',
         'find . -regex \'.*\\.council.*\'',
         'ls .@(council)/runs',
+        'ls .!(git)/runs',
         'cat .cou$\'\'ncil/telemetry/secret.txt',
         'cat run-1762720000000-a1b2c3.js',
         'cat runs/run-custom.json'
@@ -2568,7 +2589,19 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         },
         {
           name: 'exec',
+          args: { argv: ['find', '.', '!', '(', '-type', 'd', '-o', '!', '-path', '*/.council/*', ')', '-print'] }
+        },
+        {
+          name: 'exec',
           args: { argv: ['find', '.', '!', '-path', '*/.council/*', '-o', '-print'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '-type', 'f', '-print', '-o', '!', '-path', '*/.council/*'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '(', '-path', '*/.council/*', '-a', '-name', 'nonexistent', ')', '-prune', '-o', '-print'] }
         },
         {
           name: 'exec',
@@ -2625,6 +2658,27 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         },
         trace: { traceCoverage: 'unavailable' }
       });
+      const singleLineStreamEventWithNonEmptyTraceTools = JSON.stringify({
+        type: 'tool_call',
+        subtype: 'started',
+        tool_call: {
+          readToolCall: {
+            args: { AbsolutePath: '/repo/.council/runs/latest.js' }
+          }
+        },
+        trace: {
+          traceCoverage: 'partial',
+          toolCalls: [{ name: 'ls', args: { path: 'src' } }]
+        }
+      });
+      const envelopeWithEmptyTopLevelToolsAndTraceTools = JSON.stringify({
+        response: '{"vote":"accept"}',
+        toolCalls: [],
+        trace: {
+          traceCoverage: 'partial',
+          toolCalls: [{ name: 'read_file', args: { path: '/repo/.council/runs/latest.js' } }]
+        }
+      });
       const envelopeWithTraceForbiddenOnly = JSON.stringify({
         response: '{"vote":"accept"}',
         trace: {
@@ -2646,6 +2700,8 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         agyStreamOutput,
         singleLineStreamEvent,
         singleLineStreamEventWithTrace,
+        singleLineStreamEventWithNonEmptyTraceTools,
+        envelopeWithEmptyTopLevelToolsAndTraceTools,
         envelopeWithTraceForbiddenOnly
       ]) {
         const agyStreamRecords = [];

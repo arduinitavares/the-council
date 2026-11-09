@@ -80,6 +80,7 @@ export class CouncilEngine {
       )
     });
     this._configClarificationsPublished = false;
+    this._publishedConfigClarificationCount = 0;
     this.aborted = Boolean(this.signal?.aborted);
     this._defaultMockAdapter = null;
 
@@ -172,26 +173,21 @@ export class CouncilEngine {
     if (this.aborted || this.isCompleted()) return;
 
     const extra = Array.isArray(clarifications) ? clarifications : [];
-    let itemsToPublish = extra;
-    if (!this._configClarificationsPublished) {
-      if (
-        clarifications !== this.config.clarifications &&
-        Array.isArray(this.config.clarifications) &&
-        this.config.clarifications.length > 0
-      ) {
-        itemsToPublish = [...this.config.clarifications, ...extra];
-      }
-      if (itemsToPublish.length > 0) {
-        this._configClarificationsPublished = true;
-      }
-    }
+    const totalConfigItems = Array.isArray(this.config.clarifications) ? this.config.clarifications.length : 0;
+    const remainingConfigItems =
+      !this._configClarificationsPublished && totalConfigItems > this._publishedConfigClarificationCount
+        ? this.config.clarifications.slice(this._publishedConfigClarificationCount)
+        : [];
+    const itemsToPublish =
+      clarifications === this.config.clarifications
+        ? remainingConfigItems
+        : [...remainingConfigItems, ...extra];
 
     if (!itemsToPublish || itemsToPublish.length === 0) return;
 
-    const requiredMaxBatches = this.state.clarificationBatch + itemsToPublish.length;
-
     for (let i = 0; i < itemsToPublish.length; i++) {
       if (this.aborted || this.isCompleted()) break;
+      if (this.state.clarificationBatch >= this.state.maxClarificationBatches) break;
       const item = itemsToPublish[i];
       let answer;
       let extraMeta = {};
@@ -212,16 +208,23 @@ export class CouncilEngine {
         answer = String(item);
       }
       this._step({
-        type: 'START_CLARIFYING',
-        ...(requiredMaxBatches > this.state.maxClarificationBatches
-          ? { maxClarificationBatches: requiredMaxBatches }
-          : {})
+        type: 'START_CLARIFYING'
       });
+      if (!this.state.lastTransition?.ok) break;
       this._step({
         type: 'PUBLISH_CLARIFICATION',
         answer,
         ...extraMeta
       });
+      if (!this.state.lastTransition?.ok) break;
+      if (i < remainingConfigItems.length) {
+        this._publishedConfigClarificationCount += 1;
+        if (this._publishedConfigClarificationCount >= totalConfigItems) {
+          this._configClarificationsPublished = true;
+        }
+      } else if (totalConfigItems === 0) {
+        this._configClarificationsPublished = true;
+      }
     }
   }
 
@@ -385,6 +388,15 @@ export class CouncilEngine {
   async runRound() {
     if (this.isCompleted()) {
       return { round: this.state.round, phase: this.state.phase, verdict: this.state.verdict };
+    }
+
+    if (
+      !this._configClarificationsPublished &&
+      this.state.phase === 'preflight' &&
+      Array.isArray(this.config.clarifications) &&
+      this.config.clarifications.length > 0
+    ) {
+      await this.runDiscovery(this.config.clarifications);
     }
 
     // 1. BEGIN_ROUND

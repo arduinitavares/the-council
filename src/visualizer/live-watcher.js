@@ -1130,7 +1130,11 @@ export class VisualizerLiveWatcher {
       byRunId.set(this.runId, currentEntry);
       for (const entry of this._readExistingIndex()) {
         if (entry && entry.runId && !byRunId.has(entry.runId)) {
-          byRunId.set(entry.runId, entry);
+          const runJsPath = path.join(this.outputDir, `${entry.runId}.js`);
+          const metaJsonPath = path.join(this.outputDir, `${entry.runId}.meta.json`);
+          if (fs.existsSync(runJsPath) || fs.existsSync(metaJsonPath)) {
+            byRunId.set(entry.runId, entry);
+          }
         }
       }
       if (fs.existsSync(this.outputDir)) {

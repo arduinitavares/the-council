@@ -137,18 +137,11 @@ export function transitionCouncil(state, event) {
           'Cannot start clarification from phase "' + toPrototypePhase(state.phase) + '".'
         );
       }
-      if (
-        typeof event.maxClarificationBatches === 'number' &&
-        Number.isInteger(event.maxClarificationBatches) &&
-        event.maxClarificationBatches > next.maxClarificationBatches
-      ) {
-        next.maxClarificationBatches = event.maxClarificationBatches;
-      }
-      if (state.clarificationBatch >= next.maxClarificationBatches) {
+      if (state.clarificationBatch >= state.maxClarificationBatches) {
         return reject(
           state,
           event.type,
-          'Maximum clarification batches (' + next.maxClarificationBatches + ') reached.'
+          'Maximum clarification batches (' + state.maxClarificationBatches + ') reached.'
         );
       }
       next.phase = 'clarifying';

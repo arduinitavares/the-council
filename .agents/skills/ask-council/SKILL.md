@@ -168,26 +168,41 @@ Using a custom configuration file:
 
 ## 5. Verdict Interpretation
 
-The CLI prints the consensus deliberation outcome in a structured format:
+The CLI prints the consensus deliberation outcome in an answer-first structured format:
 
 ```text
 ========================================
          THE COUNCIL — VERDICT          
 ========================================
+Mode    : LIVE
 Topic   : Should we migrate from REST to gRPC for service-to-service communication?
 Verdict : Unanimous Consensus
 Rounds  : 1
+Judge   : judge-opus (antigravity / claude-opus-5-5-high)
 Seats   : 4 total (4 active, 0 excused)
 
-Submitted Proofs:
-  - [P1] (admitted) [benchmark] High-throughput RPC — "Netty vs HTTP/1.1 JSON benchmark": Protobuf serialization reduces CPU overhead by 68% and payload size by 42%.
-  - [P2] (admitted) [citation] Developer Tooling — "OpenAPI 3.1 tooling survey": REST ecosystems maintain broader client generator and public gateway support.
-  - [P3] (admitted) [check] Boundary Isolation — "Architecture seam audit": Internal service boundaries benefit from strict .proto contract compilation.
-  - [P4] (admitted) [citation] Blast Radius — "Envoy gRPC load balancing RFC": HTTP/2 connection reuse requires L7 client-side load balancing to prevent backend hotspotting.
+Final Answer:
+  Adopt gRPC with Protobuf for internal service-to-service RPC behind the API Gateway while retaining REST / OpenAPI 3.1 at the public edge.
 
 Candidate Clauses:
   - [C1] Internal Services: Adopt gRPC with Protobuf for internal, high-throughput microservices behind the API Gateway. (Cited: P1, P3, P4)
   - [C2] Public Ingress: Retain REST / OpenAPI 3.1 at the public edge gateway for external partners and web clients. (Cited: P2)
+
+Seat Roll Call:
+  - [ACCEPTED] astra-systems (codex / gpt-6-astra (max)) — Proofs: P1 (admitted)
+  - [ACCEPTED] sol-pragmatic (codex / gpt-6.1-sol (high)) — Proofs: P2 (admitted)
+  - [ACCEPTED] argon-staff (antigravity / gemini-4-argon-high) — Proofs: P3 (admitted)
+  - [ACCEPTED] opus-domain (antigravity / claude-opus-5-5-high) — Proofs: P4 (admitted)
+
+Submitted Proofs:
+  - [P1] (admitted) [benchmark] High-throughput RPC — "Netty vs HTTP/1.1 JSON benchmark": Protobuf serialization reduces CPU overhead by 68% and payload size by 42%.
+    Seat : astra-systems | Judge Note: Admitted — verified benchmark methodology.
+  - [P2] (admitted) [citation] Developer Tooling — "OpenAPI 3.1 tooling survey": REST ecosystems maintain broader client generator and public gateway support.
+    Seat : sol-pragmatic | Judge Note: Admitted — supports edge gateway boundary.
+  - [P3] (admitted) [check] Boundary Isolation — "Architecture seam audit": Internal service boundaries benefit from strict .proto contract compilation.
+    Seat : argon-staff | Judge Note: Admitted — verified schema contract checks.
+  - [P4] (admitted) [citation] Blast Radius — "Envoy gRPC load balancing RFC": HTTP/2 connection reuse requires L7 client-side load balancing to prevent backend hotspotting.
+    Seat : opus-domain | Judge Note: Admitted — incorporated into internal service clause.
 
 Note: All 4 active Seats accepted the Proof-bound Candidate in Round 1 with zero unresolved Objections.
 ========================================

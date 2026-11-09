@@ -36,7 +36,7 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
+- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
   ```bash
   /Users/aaat/projects/the-council/bin/council run --live -p best-of-families -t "<question>" -v
   ```
@@ -239,8 +239,15 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
    `runCodexCli` also passes `--disable hooks` (equivalent to `-c features.hooks=false`) by default. This suppresses user hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) from firing on internal Council prompts and tool calls while preserving `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json` authentication. Hooks can be re-enabled if desired via `disableHooks: false`.
 3. **Full Config Isolation (`--ignore-user-config`)**:
    For environments that also want to skip `$CODEX_HOME/config.toml` entirely, `ignoreUserConfig: true` passes `--ignore-user-config` (skipping `config.toml` while authentication still uses `CODEX_HOME`).
-4. **Telemetry & Sanitization**:
-   Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash.
+4. **Telemetry, Structured Event Traces & Sanitization**:
+   Live runs record provider call telemetry in `engine.getTelemetry().getProviderCalls()`, `result.providerCalls`, and `window.CouncilLatestLiveRun.providerCalls`, including `participantId`, `provider`, `tools`, `durationMs`, `exitCode`, normalized `trace` (`traceCoverage: 'full' | 'partial' | 'unavailable'`, `toolCalls`, `skillsRead`), and sanitized `argv` where deliberation prompts are redacted to length and SHA-256 hash (including on non-zero CLI exits).
+5. **Cross-Run Voter & Tool Telemetry Leaderboard (`council telemetry`)**:
+   At run completion, The Council persists an immutable per-run telemetry record to `.council/telemetry/runs/<runId>.json` and projects `.council/runs/telemetry-summary.{json,js}` for the browser visualizer and CLI leaderboard:
+   ```bash
+   /Users/aaat/projects/the-council/bin/council telemetry
+   /Users/aaat/projects/the-council/bin/council telemetry --days 7 --by seat
+   /Users/aaat/projects/the-council/bin/council telemetry --by model --json
+   ```
 
 ---
 
@@ -250,7 +257,7 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
 The Council enforces strict tool boundary policies across all seats and the Judge:
 - `'read-only'` (Default): Seats are provided with read-only inspection capabilities and prompt verification directives. Participants are instructed to inspect relevant codebases, standards, benchmarks, or documents before asserting facts or casting votes. The Judge is directed to spot-check submitted proof citations before admitting them.
 - `'none'`: Pure reasoning mode with zero tool invocations. Verification prompt directives are omitted.
-- **Write Capabilities Strictly Forbidden**: Specifying `write`, `read-write`, or unapproved tools immediately fails configuration validation naming the allowed values (`none`, `read-only`). For `cursor-agent`, CLI executions automatically enforce `--mode plan` and `--sandbox enabled`.
+- **Write Capabilities Strictly Forbidden**: Specifying `write`, `read-write`, or unapproved tools immediately fails configuration validation naming the allowed values (`none`, `read-only`). For `cursor-agent`, CLI executions automatically enforce `--trust`, `--output-format stream-json`, `--mode plan`, and `--sandbox enabled`.
 
 ### Parallel Deliberation & Voting Concurrency (`maxConcurrentSeats`)
 - Seat turns within Deliberation (Proof Collection) and Confirmation (Voting) execute concurrently up to `maxConcurrentSeats` (defaulting to the roster length, or 10).

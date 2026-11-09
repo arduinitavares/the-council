@@ -1107,9 +1107,45 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
           dissentOut,
           /Final Answer: \(Proposed Candidate — Dissent Report \(Round Limit Reached\)\)\n  Line 1 of proposed candidate\.\n  Line 2 of proposed candidate\./
         );
+
+        // Issue #56: Verify `council telemetry` reads persisted telemetry from those completed runs
+        const telIO = createMockIO();
+        const telCode = await runCli(
+          ['telemetry', '--by', 'model', '--days', '30', '--output-dir', path.join(tmpDir, 'runs')],
+          telIO.io
+        );
+        assert.equal(telCode, 0);
+        const telOut = telIO.getStdout();
+        assert.match(telOut, /Cross-Run Telemetry Leaderboard/i);
+        assert.match(telOut, /codex\/gpt-6\.1-sol \(max\)/);
+        assert.match(telOut, /antigravity\/gemini-4-argon \(high\)/);
+
+        const telJsonIO = createMockIO();
+        const telJsonCode = await runCli(
+          ['telemetry', '--by', 'seat', '--json', '--output-dir', path.join(tmpDir, 'runs')],
+          telJsonIO.io
+        );
+        assert.equal(telJsonCode, 0);
+        const telJson = JSON.parse(telJsonIO.getStdout());
+        assert.equal(telJson.by, 'seat');
+        assert.equal(telJson.totalRuns, 2);
+        assert.ok(Array.isArray(telJson.rows));
+        assert.ok(telJson.rows.some((r) => r.key === 'sol-voter'));
+
+        // Reject invalid --by or --days
+        const badByIO = createMockIO();
+        const badByCode = await runCli(['telemetry', '--by', 'invalid'], badByIO.io);
+        assert.equal(badByCode, 1);
+        assert.match(badByIO.getStderr(), /--by must be "model" or "seat"/);
+
+        const badDaysIO = createMockIO();
+        const badDaysCode = await runCli(['telemetry', '--days', '0'], badDaysIO.io);
+        assert.equal(badDaysCode, 1);
+        assert.match(badDaysIO.getStderr(), /--days must be a positive number/);
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
 });
+

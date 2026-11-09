@@ -406,14 +406,20 @@ export class HarnessAdapter {
    * @returns {Object}
    */
   parseStructuredOutput(rawText, schemaType) {
-    if (typeof rawText !== 'string' || !rawText.trim()) {
+    const resolvedText =
+      rawText && typeof rawText === 'object'
+        ? (typeof rawText.text === 'string'
+          ? rawText.text
+          : (typeof rawText.rawOutput === 'string' ? rawText.rawOutput : null))
+        : rawText;
+    if (typeof resolvedText !== 'string' || !resolvedText.trim()) {
       throw new InvalidResponseError('Model output was empty or not a string', {
         harness: this.name,
-        rawResponse: String(rawText)
+        rawResponse: String(resolvedText ?? rawText)
       });
     }
 
-    const trimmed = rawText.trim();
+    const trimmed = resolvedText.trim();
 
     // 1. Search for all markdown code blocks (```(?:json)? ... ```)
     const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;

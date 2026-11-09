@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDependencyAndStateGraph } from '../machine/reducer.js';
+import { persistRunTelemetry } from '../telemetry/ledger.js';
 
 /**
  * Resolves the primary actor identity responsible for a deliberation transition.
@@ -162,6 +163,7 @@ export class VisualizerLiveWatcher {
    * @param {Object} [options]
    * @param {import('../telemetry/emitter.js').CouncilTelemetryEmitter} [options.telemetry]
    * @param {string} [options.outputDir] - Target runtime directory for run artifacts and manifest
+   * @param {string} [options.telemetryDir] - Target directory for per-run telemetry ledger
    * @param {string} [options.runId] - Unique identifier for this deliberation run
    * @param {string} [options.outputPath] - Target path to latest pointer file
    * @param {Object} [options.initialConfig] - Snapshot of Council configuration
@@ -177,6 +179,7 @@ export class VisualizerLiveWatcher {
       : options.outputPath
         ? path.dirname(path.resolve(options.outputPath))
         : DEFAULT_OUTPUT_DIR;
+    this.telemetryDir = options.telemetryDir ? path.resolve(options.telemetryDir) : null;
     this.outputPath = options.outputPath
       ? path.resolve(options.outputPath)
       : path.join(this.outputDir, 'latest.js');
@@ -437,6 +440,8 @@ export class VisualizerLiveWatcher {
               status: dp.status,
               judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
             });
+            if (dp.admissionKind !== undefined) mergedProof.admissionKind = dp.admissionKind;
+            else delete mergedProof.admissionKind;
             if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote;
             else delete mergedProof.auditNote;
             return mergedProof;
@@ -625,6 +630,7 @@ export class VisualizerLiveWatcher {
           id: p.id,
           status: p.status,
           judgeNote: p.judgeNote ?? null,
+          ...(p.admissionKind !== undefined ? { admissionKind: p.admissionKind } : {}),
           ...(p.auditNote !== undefined ? { auditNote: p.auditNote } : {})
         };
         nextProofMap.set(p.id, entry);
@@ -633,6 +639,7 @@ export class VisualizerLiveWatcher {
           !prev ||
           prev.status !== entry.status ||
           prev.judgeNote !== entry.judgeNote ||
+          prev.admissionKind !== entry.admissionKind ||
           prev.auditNote !== entry.auditNote
         ) {
           proofChanges.push(entry);
@@ -947,6 +954,7 @@ export class VisualizerLiveWatcher {
               status: dp.status,
               judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
             });
+            if (dp.admissionKind !== undefined) mergedProof.admissionKind = dp.admissionKind; else delete mergedProof.admissionKind;
             if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote; else delete mergedProof.auditNote;
             return mergedProof;
           });
@@ -1210,6 +1218,20 @@ export class VisualizerLiveWatcher {
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
 `;
       this._atomicWriteFile(this.indexFilePath, indexContent);
+
+      if (this.liveRun.currentState?.phase === 'completed') {
+        persistRunTelemetry({
+          runId: this.runId,
+          mode: 'live',
+          state: this.liveRun.currentState,
+          steps: this.liveRun.steps,
+          providerCalls: this.liveRun.providerCalls,
+          startedAt: this.liveRun.startedAt,
+          completedAt: this.liveRun.updatedAt,
+          outputDir: this.outputDir,
+          ...(this.telemetryDir ? { telemetryDir: this.telemetryDir } : {})
+        });
+      }
     } catch {
       // Safe observer failure suppression: file write errors must never crash deliberation
     }

@@ -357,20 +357,20 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.equal(fromRelConfig.judge.id, 'judge-astra');
         assert.deepEqual(
           fromRelConfig.seats.map((s) => s.id),
-          ['sol-voter', 'argon-voter', 'opus-voter']
+          ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']
         );
 
         const fromShortName = loadConfigFile('best-of-families.json', {
           topic: 'External CWD short filename'
         });
         assert.equal(fromShortName.judge.id, 'judge-astra');
-        assert.equal(fromShortName.seats.length, 3);
+        assert.equal(fromShortName.seats.length, 4);
 
         const fromBareName = loadConfigFile('best-of-families', {
           topic: 'External CWD bare config name'
         });
         assert.equal(fromBareName.judge.id, 'judge-astra');
-        assert.equal(fromBareName.seats.length, 3);
+        assert.equal(fromBareName.seats.length, 4);
 
         const fromPreset = resolveConfig({
           preset: 'best-of-families',
@@ -381,7 +381,7 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.equal(fromPreset.judge.id, 'judge-astra');
         assert.deepEqual(
           fromPreset.seats.map((s) => s.id),
-          ['sol-voter', 'argon-voter', 'opus-voter']
+          ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']
         );
       } finally {
         process.chdir(prevCwd);

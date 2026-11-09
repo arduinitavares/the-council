@@ -11,6 +11,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { createTelemetryEmitter } from '../../src/telemetry/emitter.js';
 import { VisualizerLiveWatcher } from '../../src/visualizer/live-watcher.js';
+import { createInitialCouncilState } from '../../src/machine/state.js';
+import { transitionCouncil as reduceCouncilState } from '../../src/machine/reducer.js';
 
 describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () => {
   let tmpDir;
@@ -2780,8 +2782,157 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       const indexedIds = win.CouncilRunIndex.map((e) => e.runId);
       assert.deepEqual(indexedIds, ['run-surviving'], 'Deleted run must not be resurrected from stale index.js');
     });
+
+    it('preserves admissionKind across delta rehydration, emits telemetry-summary.js on completion without bloating index.js, and renders the Telemetry Leaderboard in index.html (#56)', () => {
+      const runsDir = path.join(tmpDir, 'issue-56-live-telemetry');
+      const telemetryDir = path.join(tmpDir, 'issue-56-telemetry-ledger');
+      const emitter = createTelemetryEmitter();
+      const initialConfig = {
+        topic: 'Issue 56 Live Telemetry Rehydration',
+        judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+        seats: [
+          { id: 'astra-voter', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Astra' },
+          { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon (high)', soul: 'Argon' }
+        ]
+      };
+
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: emitter,
+        outputDir: runsDir,
+        telemetryDir,
+        runId: 'run-56-live',
+        initialConfig
+      });
+
+      let state = createInitialCouncilState(initialConfig);
+      state = reduceCouncilState(state, { type: 'BEGIN_ROUND' });
+      emitter.emitStateTransition({ type: 'BEGIN_ROUND' }, state);
+
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 'astra-voter',
+        id: 'P-1',
+        kind: 'check',
+        statement: 'Check 1',
+        source: 'src/a.js:1',
+        scope: 'unit'
+      });
+      emitter.emitStateTransition({ type: 'SUBMIT_PROOF', seatId: 'astra-voter' }, state);
+
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 'argon-voter',
+        id: 'P-2',
+        kind: 'citation',
+        statement: 'Cite 2',
+        source: 'docs/b.md:1',
+        scope: 'doc'
+      });
+      emitter.emitStateTransition({ type: 'SUBMIT_PROOF', seatId: 'argon-voter' }, state);
+
+      emitter.emitProviderCall({
+        participantId: 'astra-voter',
+        provider: 'codex',
+        exitCode: 0,
+        durationMs: 50,
+        trace: {
+          traceCoverage: 'full',
+          toolCalls: [{ kind: 'command_execution', name: 'rg' }],
+          skillsRead: [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+        }
+      });
+      emitter.emitProviderCall({
+        participantId: 'argon-voter',
+        provider: 'antigravity',
+        exitCode: 0,
+        durationMs: 40,
+        trace: {
+          traceCoverage: 'unavailable',
+          toolCalls: [],
+          skillsRead: []
+        }
+      });
+
+      state = reduceCouncilState(state, { type: 'START_JUDGING' });
+      emitter.emitStateTransition({ type: 'START_JUDGING' }, state);
+
+      state = reduceCouncilState(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: {
+          'P-1': { status: 'admitted', note: 'Verified' }
+          // P-2 omitted -> default_admitted
+        },
+        summary: 'Candidate summary',
+        clauses: [{ id: 'C-1', context: 'When X', conclusion: 'Do Y', citedProofIds: ['P-1'] }]
+      });
+      emitter.emitStateTransition({ type: 'JUDGE_AUDIT_AND_SYNTHESIZE' }, state);
+
+      state = reduceCouncilState(state, { type: 'CAST_VOTE', seatId: 'astra-voter', vote: 'accept' });
+      emitter.emitStateTransition({ type: 'CAST_VOTE', seatId: 'astra-voter' }, state);
+      state = reduceCouncilState(state, { type: 'CAST_VOTE', seatId: 'argon-voter', vote: 'accept' });
+      emitter.emitStateTransition({ type: 'CAST_VOTE', seatId: 'argon-voter' }, state);
+
+      state = reduceCouncilState(state, { type: 'EVALUATE_ROUND' });
+      emitter.emitStateTransition({ type: 'EVALUATE_ROUND' }, state);
+      watcher.stop();
+
+      const bundleCode = fs.readFileSync(path.join(runsDir, 'run-56-live.js'), 'utf8');
+      const summaryCode = fs.readFileSync(path.join(runsDir, 'telemetry-summary.js'), 'utf8');
+      const indexCode = fs.readFileSync(path.join(runsDir, 'index.js'), 'utf8');
+
+      const win = {};
+      new Function('window', 'globalThis', bundleCode)(win, win);
+      new Function('window', 'globalThis', summaryCode)(win, win);
+      new Function('window', 'globalThis', indexCode)(win, win);
+
+      // Verify step rehydration preserves admissionKind
+      const judgeStep = win.CouncilRuns['run-56-live'].steps.find((s) => s.event?.type === 'JUDGE_AUDIT_AND_SYNTHESIZE');
+      assert.ok(judgeStep);
+      const rehydratedP1 = judgeStep.stateSnapshot.proofs.find((p) => p.id === 'P-1');
+      const rehydratedP2 = judgeStep.stateSnapshot.proofs.find((p) => p.id === 'P-2');
+      assert.equal(rehydratedP1.admissionKind, 'explicitly_admitted');
+      assert.equal(rehydratedP2.admissionKind, 'default_admitted');
+
+      // Verify index.js is not bloated with cross-run telemetry counters
+      assert.equal(win.CouncilRunIndex.length, 1);
+      assert.equal(win.CouncilRunIndex[0].byModel, undefined);
+
+      // Verify index.html renders the Telemetry Leaderboard from window.CouncilTelemetrySummary
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.match(html, /telemetry-summary\.js/);
+      assert.match(html, /id="telemetry-leaderboard-section"/);
+
+      const renderLeaderboardMatch = html.match(/function renderTelemetryLeaderboard\(\) \{[\s\S]*?\n    \}/);
+      assert.ok(renderLeaderboardMatch, 'index.html must define renderTelemetryLeaderboard()');
+
+      const elements = {
+        'telemetry-leaderboard-body': { innerHTML: '' },
+        'lbl-telemetry-runs': { textContent: '' },
+        'telemetry-group-by': { value: 'model' },
+        'telemetry-window': { value: 'all' }
+      };
+      const fakeDoc = {
+        getElementById: (id) => elements[id] || null
+      };
+      const renderFn = new Function(
+        'window',
+        'globalThis',
+        'document',
+        'CouncilVisualizer',
+        renderLeaderboardMatch[0] + '\nrenderTelemetryLeaderboard();'
+      );
+      renderFn(win, win, fakeDoc, { escapeHtml: (s) => String(s || '') });
+
+      assert.equal(elements['lbl-telemetry-runs'].textContent, '1 run (all)');
+      assert.match(elements['telemetry-leaderboard-body'].innerHTML, /codex\/gpt-6-astra \(max\)/);
+      assert.match(elements['telemetry-leaderboard-body'].innerHTML, /antigravity\/gemini-4-argon \(high\)/);
+      assert.match(elements['telemetry-leaderboard-body'].innerHTML, /Trace N\/A/);
+      assert.match(elements['telemetry-leaderboard-body'].innerHTML, /ask-council \(1 · skill_instructions_read\)/);
+    });
   });
 });
+
 
 
 

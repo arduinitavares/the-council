@@ -2376,18 +2376,28 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'cat /repo/.COUNCIL/telemetry/telemetry-summary.json',
         'cat .c?uncil/runs/latest.js',
         'cat .[c]ouncil/runs/latest.js',
+        'ls .[cC]ouncil',
+        'ls .[c-d]ouncil',
+        'ls .{council,git}',
+        'find .coun* -type f -exec cat {} +',
+        'find .cou* -type f',
+        'find ?council -type f -exec cat {} +',
         'cat .c*l/runs/latest.js',
         'cat .c{o}uncil/runs/latest.js',
         'ls .?ouncil/telemetry',
+        'cat .?o?n?i?/*/latest*',
         'find . -name latest.js -exec cat {} +',
         '**/latest.js',
+        'find . -name "run-*.js" -exec cat {} +',
         'cat run-20261109-abcd.meta.json',
         'cat run-20261109-abcd.events.jsonl',
         'find . -name "*.meta.json"',
         'find . -name "*.events.jsonl"',
         'cat telemetry-summary.json',
         'cat telemetry-summary.js',
-        '**/telemetry-summary.*'
+        '**/telemetry-summary.*',
+        'find . -name "telemetry-summary*"',
+        'find . -name "live-run-*"'
       ];
       for (const sample of forbiddenSamples) {
         assert.equal(
@@ -2409,7 +2419,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(globToolRes.forbiddenStateAccess, true);
       assert.deepEqual(globToolRes.forbiddenAccessDetails, ['**/latest.js']);
 
-      // Finding 2: Benign exclusion flags (!.council, --exclude-dir, --exclude, find -prune / -not) must NOT false-positive
+      // Finding 2: Benign exclusion flags (!.council, --exclude-dir, --exclude, find -prune -o / -not) must NOT false-positive
       const benignExclusionCommands = [
         'rg -g \'!.council/**\' "pattern" .',
         'rg --glob "!.council" "pattern" .',
@@ -2417,6 +2427,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         'grep --exclude-dir=.council -rn "pattern" .',
         'grep --exclude-dir=\'.council*\' --exclude=\'*.log\' -rn "pattern" .',
         'find . -path \'*/.council/*\' -prune -o -type f -print',
+        'find . \\( -path \'*/.git/*\' -o -path \'*/.council/*\' \\) -prune -o -type f -print',
         'find . -not -path \'*/.council/*\' -type f',
         'find . ! -name \'.council\' -type f'
       ];
@@ -2440,23 +2451,33 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
             SearchPath: '/repo/src',
             Includes: ['!**/node_modules/**', '!.council/**'],
             exclude: ['.council', '.council/**'],
-            argv: ['rg', '-g', '!.council/**', 'transitionCouncil', 'src']
+            argv: ['rg', '-g', '!.council/**', 'transitionCouncil', 'src'],
+            findArgv: ['find', '.', '-path', '*/.council/*', '-prune', '-o', '-type', 'f', '-print']
           }
         }
       ]);
       assert.equal(structuredExclusionRes.forbiddenStateAccess, false);
 
-      // Mixed exclusion + actual target of .council/runs/latest.js MUST STILL BE CAUGHT!
-      const mixedCommands = [
+      // Mixed exclusion + actual target of .council/runs/latest.js OR malicious exclusion bypasses MUST STILL BE CAUGHT!
+      const mixedOrMaliciousCommands = [
         'rg -g \'!.council/telemetry/**\' foo .council/runs/latest.js',
         'grep --exclude-dir=.council/telemetry -rn "verdict" .council/runs/latest.js',
-        'find . -path \'*/.council/telemetry/*\' -prune -o -name \'latest.js\' -print'
+        'find . -path \'*/.council/telemetry/*\' -prune -o -name \'latest.js\' -print',
+        'grep --exclude-from=.council/runs/latest.js foo src/',
+        'grep --exclude="$(cat .council/runs/latest.js)" foo src/',
+        'rg -g "!$(cat .council/runs/latest.js)" foo src/',
+        'find . -name "*.meta.json" -prune | xargs cat',
+        'find . -path "*/.council/runs/latest.js" -prune -print',
+        'find . -path "*/.council/runs/latest.js" -prune -a -exec cat {} +',
+        'find . -path "*/.council/*" -o -name "node_modules" -prune',
+        'find . -not -not -path "*/.council/*" -exec cat {} +',
+        'find . ! ! -name "latest.js" -exec cat {} +'
       ];
-      for (const mixedCmd of mixedCommands) {
+      for (const mixedCmd of mixedOrMaliciousCommands) {
         assert.equal(
           hasForbiddenCouncilToken(mixedCmd),
           true,
-          `Mixed exclusion + actual target must still be flagged: ${mixedCmd}`
+          `Mixed or malicious exclusion bypass must still be flagged: ${mixedCmd}`
         );
         const mixedRes = detectForbiddenCouncilAccess([
           { kind: 'command_execution', name: 'shell', command: mixedCmd }
@@ -2464,7 +2485,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         assert.equal(mixedRes.forbiddenStateAccess, true);
       }
 
-      const mixedStructuredRes = detectForbiddenCouncilAccess([
+      const maliciousStructuredCases = [
         {
           kind: 'grep_search',
           name: 'grep_search',
@@ -2473,81 +2494,117 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
             SearchPath: '/repo/.council/runs/latest.js',
             argv: ['rg', '-g', '!.council/telemetry/**', 'foo', '.council/runs/latest.js']
           }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '-name', 'latest.js', '-prune'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '-name', 'latest.js', '-prune', '-print'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['find', '.', '!', '!', '-name', 'latest.js'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['grep', '--exclude-from', '.council/runs/latest.js', 'foo'] }
+        },
+        {
+          name: 'exec',
+          args: { argv: ['grep', '--exclude', '$(cat .council/runs/latest.js)', 'foo'] }
+        },
+        {
+          name: 'exec',
+          args: { exclude: 'cat .council/runs/latest.js' }
         }
-      ]);
-      assert.equal(mixedStructuredRes.forbiddenStateAccess, true);
+      ];
+      for (const tc of maliciousStructuredCases) {
+        const res = detectForbiddenCouncilAccess([tc]);
+        assert.equal(
+          res.forbiddenStateAccess,
+          true,
+          `Expected structured bypass to be caught: ${JSON.stringify(tc)}`
+        );
+      }
 
       // Finding 3a: runAntigravityCli falling back to parseCursorEventStream preserves maybeStream.forbiddenStateAccess
-      // (where nested args.AbsolutePath is in raw stream event, not on envelopeToolCalls summary)
-      const agyStreamOutput = [
-        JSON.stringify({
-          type: 'tool_call',
-          subtype: 'started',
-          tool_call: {
-            readToolCall: {
-              args: { AbsolutePath: '/repo/.council/runs/latest.js' }
-            }
+      // (both multi-line NDJSON and single-line NDJSON stream event where JSON.parse succeeds)
+      const singleLineStreamEvent = JSON.stringify({
+        type: 'tool_call',
+        subtype: 'started',
+        tool_call: {
+          readToolCall: {
+            args: { AbsolutePath: '/repo/.council/runs/latest.js' }
           }
-        }),
+        }
+      });
+      const agyStreamOutput = [
+        singleLineStreamEvent,
         JSON.stringify({
           type: 'result',
           result: '{"vote":"accept"}'
         })
       ].join('\n');
 
-      const agyStreamRecords = [];
-      await assert.rejects(
-        async () => {
-          await runAntigravityCli({
-            model: 'gemini-4-argon (high)',
-            prompt: 'Deliberate',
-            context: { seatId: 'agy-stream-cheater' },
-            onCallRecord: (rec) => agyStreamRecords.push(rec),
-            exec: async () => ({
-              stdout: agyStreamOutput,
-              stderr: '',
-              exitCode: 0
-            })
-          });
-        },
-        (err) => {
-          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
-          assert.equal(err.trace?.forbiddenStateAccess, true);
-          assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
-          return true;
-        }
-      );
-      assert.equal(agyStreamRecords.length, 1);
-      assert.equal(agyStreamRecords[0].trace.forbiddenStateAccess, true);
+      for (const streamSample of [agyStreamOutput, singleLineStreamEvent]) {
+        const agyStreamRecords = [];
+        await assert.rejects(
+          async () => {
+            await runAntigravityCli({
+              model: 'gemini-4-argon (high)',
+              prompt: 'Deliberate',
+              context: { seatId: 'agy-stream-cheater' },
+              onCallRecord: (rec) => agyStreamRecords.push(rec),
+              exec: async () => ({
+                stdout: streamSample,
+                stderr: '',
+                exitCode: 0
+              })
+            });
+          },
+          (err) => {
+            assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+            assert.equal(err.trace?.forbiddenStateAccess, true);
+            assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
+            return true;
+          }
+        );
+        assert.equal(agyStreamRecords.length, 1);
+        assert.equal(agyStreamRecords[0].trace.forbiddenStateAccess, true);
+      }
 
       // Finding 3b: runAntigravityCli catch (err) parses err.stdout when subprocess exits non-zero after forbidden access
-      const agyErrorStdoutRecords = [];
-      await assert.rejects(
-        async () => {
-          await runAntigravityCli({
-            model: 'gemini-4-argon (high)',
-            prompt: 'Deliberate',
-            context: { seatId: 'agy-nonzero-cheater' },
-            onCallRecord: (rec) => agyErrorStdoutRecords.push(rec),
-            exec: async () => {
-              const e = new Error('Command failed with exit code 1');
-              e.exitCode = 1;
-              e.stdout = agyStreamOutput;
-              e.stderr = 'terminated';
-              throw e;
-            }
-          });
-        },
-        (err) => {
-          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
-          assert.match(err.message, /\[ForbiddenStateAccessError\]/);
-          assert.equal(err.trace?.forbiddenStateAccess, true);
-          assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
-          return true;
-        }
-      );
-      assert.equal(agyErrorStdoutRecords.length, 1);
-      assert.equal(agyErrorStdoutRecords[0].trace.forbiddenStateAccess, true);
+      for (const errStdoutSample of [agyStreamOutput, singleLineStreamEvent]) {
+        const agyErrorStdoutRecords = [];
+        await assert.rejects(
+          async () => {
+            await runAntigravityCli({
+              model: 'gemini-4-argon (high)',
+              prompt: 'Deliberate',
+              context: { seatId: 'agy-nonzero-cheater' },
+              onCallRecord: (rec) => agyErrorStdoutRecords.push(rec),
+              exec: async () => {
+                const e = new Error('Command failed with exit code 1');
+                e.exitCode = 1;
+                e.stdout = errStdoutSample;
+                e.stderr = 'terminated';
+                throw e;
+              }
+            });
+          },
+          (err) => {
+            assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+            assert.match(err.message, /\[ForbiddenStateAccessError\]/);
+            assert.equal(err.trace?.forbiddenStateAccess, true);
+            assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
+            return true;
+          }
+        );
+        assert.equal(agyErrorStdoutRecords.length, 1);
+        assert.equal(agyErrorStdoutRecords[0].trace.forbiddenStateAccess, true);
+      }
 
       // Finding 4: Scrub PWD, OLDPWD, and INIT_CWD when running in effectiveCwd
       const prevPwd = process.env.PWD;
@@ -2558,10 +2615,17 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       process.env.INIT_CWD = '/Users/aaat/projects/the-council';
 
       try {
-        const sanitized = buildSanitizedCliEnv('/tmp/isolated-seat-cwd');
+        const sanitized = buildSanitizedCliEnv('  /tmp/isolated-seat-cwd  ');
         assert.equal(sanitized.PWD, '/tmp/isolated-seat-cwd');
         assert.equal('OLDPWD' in sanitized, false);
         assert.equal('INIT_CWD' in sanitized, false);
+
+        const undefinedEnvSanitized = buildSanitizedCliEnv('/tmp/isolated-seat-cwd', {
+          OLDPWD: undefined,
+          INIT_CWD: undefined
+        });
+        assert.equal('OLDPWD' in undefinedEnvSanitized, false);
+        assert.equal('INIT_CWD' in undefinedEnvSanitized, false);
 
         // Verify runCodexCli, runCursorCli, and runAntigravityCli pass sanitized env to execFn
         let codexExecOpts = null;

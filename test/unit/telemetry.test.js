@@ -983,7 +983,7 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
             toolCalls: [],
             skillsRead: [],
             forbiddenStateAccess: false,
-            forbiddenAccessDetails: ['.council/runs/latest.js']
+            forbiddenAccessDetails: ['  .council/runs/latest.js  ']
           }
         },
         {

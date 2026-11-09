@@ -1209,9 +1209,243 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         { skill: 'ask-council', evidence: 'skill_instructions_read' }
       ]);
     });
+
+    it('extracts only the final assistant message in parseCodexEventStream so an earlier fenced JSON block in an intermediate message cannot override a final unfenced vote', async () => {
+      const { parseCodexEventStream } = await import('../../src/harness/cli-runner.js');
+      const { HarnessAdapter } = await import('../../src/harness/adapter.js');
+      const adapter = new HarnessAdapter({ name: 'codex' });
+
+      const streamWithIntermediateFencedJson = [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thr_multi_msg' }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'msg_pre_tool',
+            type: 'agent_message',
+            text: 'I will inspect the candidate first. Example accept payload:\n```json\n{"vote":"accept"}\n```'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'tool_1',
+            type: 'command_execution',
+            command: 'cat src/index.js',
+            status: 'completed',
+            exit_code: 0
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'msg_final',
+            type: 'agent_message',
+            text: '{"vote":"object","reason":"Defect found in src/index.js","proofId":"P1"}'
+          }
+        })
+      ].join('\n');
+
+      const parsedStream = parseCodexEventStream(streamWithIntermediateFencedJson);
+      assert.equal(
+        parsedStream.text,
+        '{"vote":"object","reason":"Defect found in src/index.js","proofId":"P1"}'
+      );
+      const structuredVote = adapter.parseStructuredOutput(parsedStream.text, 'vote');
+      assert.equal(structuredVote.vote, 'object');
+      assert.equal(structuredVote.proofId, 'P1');
+
+      // Also verify in-place message id update followed by unkeyed message preserves stream order
+      const streamOrderCheck = [
+        JSON.stringify({
+          type: 'item.started',
+          item: { id: 'msg_1', type: 'agent_message', text: 'Draft 1' }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'msg_1', type: 'agent_message', text: 'Completed 1' }
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: 'Final unkeyed turn response' }
+        })
+      ].join('\n');
+      assert.equal(parseCodexEventStream(streamOrderCheck).text, 'Final unkeyed turn response');
+    });
+
+    it('enforces strict read-only verification in extractSkillsRead and stream parsers (rejecting echo, rm, writeToolCall, sed -i, redirection, lowercase skill.md, and exit_code !== 0)', async () => {
+      const {
+        extractSkillsRead,
+        parseCodexEventStream,
+        parseCursorEventStream
+      } = await import('../../src/harness/cli-runner.js');
+
+      // False-positive cases must all produce []
+      assert.deepEqual(extractSkillsRead('echo "see skills/ask-council/SKILL.md"'), []);
+      assert.deepEqual(extractSkillsRead('printf "%s" "skills/ask-council/SKILL.md"'), []);
+      assert.deepEqual(extractSkillsRead('rm -f .agents/skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('mv skills/ask-council/SKILL.md /tmp/x'), []);
+      assert.deepEqual(extractSkillsRead('cp skills/ask-council/SKILL.md /tmp/x'), []);
+      assert.deepEqual(extractSkillsRead('touch skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('mkdir -p skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('tee skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead("sed -i 's/a/b/' skills/ask-council/SKILL.md"), []);
+      assert.deepEqual(extractSkillsRead('cat README.md > skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat README.md >> skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat skills/ask-council/skill.md'), []);
+      assert.deepEqual(
+        extractSkillsRead({
+          name: 'writeToolCall',
+          path: 'skills/ask-council/SKILL.md'
+        }),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead({
+          command: 'cat skills/ask-council/SKILL.md',
+          exit_code: 1
+        }),
+        []
+      );
+
+      // Valid read cases must produce [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      assert.deepEqual(
+        extractSkillsRead({
+          command: 'cat skills/ask-council/SKILL.md',
+          exit_code: 0
+        }),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      assert.deepEqual(
+        extractSkillsRead({
+          name: 'readToolCall',
+          path: '.agents/skills/ask-council/SKILL.md'
+        }),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+
+      // Codex stream: item.started / exec_command_begin followed by exit_code: 1 must NOT credit skill read
+      const codexFailedStream = [
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            id: 'cmd_fail',
+            type: 'command_execution',
+            command: 'cat skills/ask-council/SKILL.md',
+            status: 'in_progress'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'cmd_fail',
+            type: 'command_execution',
+            command: 'cat skills/ask-council/SKILL.md',
+            status: 'failed',
+            exit_code: 1
+          }
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exec_command_begin',
+            call_id: 'call_fail_2',
+            command: ['cat', 'skills/safe-refactor/SKILL.md']
+          }
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exec_command_end',
+            call_id: 'call_fail_2',
+            exit_code: 1
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'msg_done',
+            type: 'agent_message',
+            text: '{"vote":"accept"}'
+          }
+        })
+      ].join('\n');
+
+      const parsedFailed = parseCodexEventStream(codexFailedStream);
+      assert.deepEqual(parsedFailed.skillsRead, []);
+
+      // Cursor stream: writeToolCall to SKILL.md produces [], while unkeyed started+completed readToolCall is deduplicated to 1 toolCall
+      const cursorStream = [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            writeToolCall: {
+              args: { path: 'skills/ask-council/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          tool_call: {
+            readToolCall: {
+              args: { path: '.agents/skills/ask-council/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            readToolCall: {
+              args: { path: '.agents/skills/ask-council/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({ type: 'result', result: '{"vote":"accept"}' })
+      ].join('\n');
+
+      const parsedCursor = parseCursorEventStream(cursorStream);
+      assert.equal(parsedCursor.toolCalls.length, 2, 'Unkeyed started+completed readToolCall must be deduplicated into 1 entry alongside writeToolCall');
+      assert.equal(parsedCursor.toolCalls[1].name, 'readToolCall');
+      assert.equal(parsedCursor.toolCalls[1].status, 'completed');
+      assert.deepEqual(parsedCursor.skillsRead, [
+        { skill: 'ask-council', evidence: 'skill_instructions_read' }
+      ]);
+    });
+
+    it('reports traceCoverage="unavailable" on plain-text/unparsed fallback and "partial" when a JSONL stream has a truncated JSON line alongside valid events', async () => {
+      const { parseCodexEventStream, parseCursorEventStream } = await import('../../src/harness/cli-runner.js');
+
+      // Empty or plain-text / non-event JSON fallback -> 'unavailable'
+      assert.equal(parseCodexEventStream('').traceCoverage, 'unavailable');
+      assert.equal(parseCodexEventStream('{"vote":"accept"}').traceCoverage, 'unavailable');
+      assert.equal(parseCursorEventStream('').traceCoverage, 'unavailable');
+      assert.equal(parseCursorEventStream('{"vote":"accept"}').traceCoverage, 'unavailable');
+
+      // Valid event + truncated '{...' JSON line -> 'partial'
+      const truncatedCodex = [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thr_trunc' }),
+        '{"type":"item.completed","item":{"id":"truncated_line"',
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'msg_ok', type: 'agent_message', text: '{"vote":"accept"}' }
+        })
+      ].join('\n');
+      const codexRes = parseCodexEventStream(truncatedCodex);
+      assert.equal(codexRes.eventsParsed, true);
+      assert.equal(codexRes.traceCoverage, 'partial');
+      assert.equal(codexRes.text, '{"vote":"accept"}');
+
+      const truncatedCursor = [
+        JSON.stringify({ type: 'system', subtype: 'init' }),
+        '{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":',
+        JSON.stringify({ type: 'result', result: '{"vote":"accept"}' })
+      ].join('\n');
+      const cursorRes = parseCursorEventStream(truncatedCursor);
+      assert.equal(cursorRes.eventsParsed, true);
+      assert.equal(cursorRes.traceCoverage, 'partial');
+      assert.equal(cursorRes.text, '{"vote":"accept"}');
+    });
   });
 });
-
-
-
-

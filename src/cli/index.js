@@ -416,9 +416,11 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     const resolvedOutputDir = explicitOutputDir || liveWatcher?.outputDir;
     const resolvedTelemetryDir = explicitTelemetryDir || liveWatcher?.telemetryDir;
+    const allowModePersistence = mode !== 'mock' || Boolean(io.persistMockTelemetry);
     const shouldPersistTelemetry =
-      Boolean(resolvedOutputDir || resolvedTelemetryDir || io.persistTelemetry) ||
-      !process.env.NODE_TEST_CONTEXT;
+      allowModePersistence &&
+      (Boolean(resolvedOutputDir || resolvedTelemetryDir || io.persistTelemetry || io.persistMockTelemetry) ||
+        !process.env.NODE_TEST_CONTEXT);
 
     if (shouldPersistTelemetry && result?.state?.phase === 'completed') {
       try {

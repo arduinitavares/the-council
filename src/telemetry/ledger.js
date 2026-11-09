@@ -168,6 +168,10 @@ export function buildRunTelemetryRecord({
   const excusedBySeat = new Set();
 
   const seenRejectedProofEventObjects = new Set();
+  const seenRejectedProofEventKeys = new Set();
+
+  const getRejectedProofFallbackKey = (seatId, ev) =>
+    `${seatId}:${ev.id || ev.proof?.id || ''}:${ev.statement || ev.proof?.statement || ''}`;
 
   for (const item of transitionRecords) {
     if (!item || typeof item !== 'object') continue;
@@ -184,6 +188,7 @@ export function buildRunTelemetryRecord({
       const seatId = ev.seatId || ev.proof?.seatId;
       if (seatId) {
         seenRejectedProofEventObjects.add(ev);
+        seenRejectedProofEventKeys.add(getRejectedProofFallbackKey(seatId, ev));
         guardRejectedBySeat.set(seatId, (guardRejectedBySeat.get(seatId) || 0) + 1);
       }
     } else if (ev.type === 'RETRY_SEAT' && isOk) {
@@ -204,13 +209,18 @@ export function buildRunTelemetryRecord({
       ? guardRejections
       : (Array.isArray(guardRejectedEvents) ? guardRejectedEvents : []);
 
-  if (effectiveGuardRejections.length > 0 && seenRejectedProofEventObjects.size === 0) {
+  if (effectiveGuardRejections.length > 0) {
     for (const gr of effectiveGuardRejections) {
       const ev = gr?.event || gr;
       if (ev?.type === 'SUBMIT_PROOF' && !seenRejectedProofEventObjects.has(ev)) {
         const seatId = ev.seatId || ev.proof?.seatId;
         if (seatId) {
-          guardRejectedBySeat.set(seatId, (guardRejectedBySeat.get(seatId) || 0) + 1);
+          const fallbackKey = getRejectedProofFallbackKey(seatId, ev);
+          if (!seenRejectedProofEventKeys.has(fallbackKey)) {
+            seenRejectedProofEventObjects.add(ev);
+            seenRejectedProofEventKeys.add(fallbackKey);
+            guardRejectedBySeat.set(seatId, (guardRejectedBySeat.get(seatId) || 0) + 1);
+          }
         }
       }
     }
@@ -628,13 +638,17 @@ function deduplicateRecordsByRunId(records = []) {
  * @param {Date|string|number} [options.now]
  * @returns {{ window: string, days: number|null, totalRuns: number, byModel: Array<Object>, bySeat: Array<Object> }}
  */
-export function aggregateTelemetryWindow(records = [], { days = null, now = new Date() } = {}) {
+export function aggregateTelemetryWindow(
+  records = [],
+  { days = null, now = new Date(), includeMock = false } = {}
+) {
   const deduped = deduplicateRecordsByRunId(records);
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   const hasWindow = typeof days === 'number' && Number.isFinite(days) && days > 0;
   const cutoffMs = hasWindow ? nowMs - days * 24 * 60 * 60 * 1000 : null;
 
   const filtered = deduped.filter((rec) => {
+    if (!includeMock && rec.mode === 'mock') return false;
     if (cutoffMs === null) return true;
     const ts = Date.parse(rec.completedAt || rec.startedAt || '');
     if (!Number.isFinite(ts)) return true;
@@ -676,11 +690,6 @@ export function aggregateTelemetryWindow(records = [], { days = null, now = new 
             effort: canonical.effort
           })
         );
-      } else {
-        const sb = seatBuckets.get(seatKey);
-        sb.provider = canonical.provider;
-        sb.model = canonical.model;
-        sb.effort = canonical.effort;
       }
       accumulateIntoBucket(seatBuckets.get(seatKey), {
         ...s,
@@ -733,14 +742,20 @@ export function aggregateTelemetryWindow(records = [], { days = null, now = new 
  * @param {Array<Object>} records
  * @param {Object} [options]
  * @param {Date|string|number} [options.now]
+ * @param {boolean} [options.includeMock=false]
  * @returns {Object}
  */
-export function buildTelemetrySummary(records = [], { now = new Date() } = {}) {
-  const deduped = deduplicateRecordsByRunId(records);
+export function buildTelemetrySummary(
+  records = [],
+  { now = new Date(), includeMock = false } = {}
+) {
+  const deduped = deduplicateRecordsByRunId(records).filter(
+    (rec) => includeMock || rec.mode !== 'mock'
+  );
   const nowDate = now instanceof Date ? now : new Date(now);
-  const win7d = aggregateTelemetryWindow(deduped, { days: 7, now: nowDate });
-  const win30d = aggregateTelemetryWindow(deduped, { days: 30, now: nowDate });
-  const winAll = aggregateTelemetryWindow(deduped, { days: null, now: nowDate });
+  const win7d = aggregateTelemetryWindow(deduped, { days: 7, now: nowDate, includeMock });
+  const win30d = aggregateTelemetryWindow(deduped, { days: 30, now: nowDate, includeMock });
+  const winAll = aggregateTelemetryWindow(deduped, { days: null, now: nowDate, includeMock });
 
   return {
     schemaVersion: TELEMETRY_SCHEMA_VERSION,
@@ -844,7 +859,10 @@ export function persistRunTelemetry(params = {}) {
     allRecords.push(record);
   }
 
-  const summary = buildTelemetrySummary(allRecords, { now: params.now || new Date() });
+  const summary = buildTelemetrySummary(allRecords, {
+    now: params.now || new Date(),
+    includeMock: Boolean(params.includeMock)
+  });
   atomicWriteFileSync(paths.summaryJsonPath, JSON.stringify(summary, null, 2));
   atomicWriteFileSync(paths.summaryJsPath, buildTelemetrySummaryScript(summary));
 
@@ -866,9 +884,16 @@ export function persistRunTelemetry(params = {}) {
  * @param {string} [options.telemetryDir]
  * @param {number|null} [options.days=null]
  * @param {Date|string|number} [options.now]
+ * @param {boolean} [options.includeMock=false]
  * @returns {Object}
  */
-export function loadTelemetrySummary({ outputDir, telemetryDir, days = null, now = new Date() } = {}) {
+export function loadTelemetrySummary({
+  outputDir,
+  telemetryDir,
+  days = null,
+  now = new Date(),
+  includeMock = false
+} = {}) {
   const paths = resolveTelemetryDirs({ outputDir, telemetryDir });
   let records = readPersistedRunRecords(paths.runsTelemetryDir);
 
@@ -883,7 +908,7 @@ export function loadTelemetrySummary({ outputDir, telemetryDir, days = null, now
     }
   }
 
-  const summary = buildTelemetrySummary(records, { now });
+  const summary = buildTelemetrySummary(records, { now, includeMock });
   const activeWindow =
     days === 7
       ? summary.windows['7d']
@@ -891,7 +916,7 @@ export function loadTelemetrySummary({ outputDir, telemetryDir, days = null, now
         ? summary.windows['30d']
         : days === null || days === undefined
           ? summary.windows.all
-          : aggregateTelemetryWindow(records, { days, now });
+          : aggregateTelemetryWindow(records, { days, now, includeMock });
 
   return {
     ...summary,
@@ -909,9 +934,13 @@ export function loadTelemetrySummary({ outputDir, telemetryDir, days = null, now
  * @param {number|null} [options.days=null]
  * @param {string|null} [options.windowKey=null]
  * @param {Date|string|number} [options.now]
+ * @param {boolean} [options.includeMock=false]
  * @returns {string}
  */
-export function formatTelemetryTable(summary, { by = 'model', days = null, windowKey = null, now = new Date() } = {}) {
+export function formatTelemetryTable(
+  summary,
+  { by = 'model', days = null, windowKey = null, now = new Date(), includeMock = false } = {}
+) {
   const groupBy = String(by || 'model').toLowerCase() === 'seat' ? 'seat' : 'model';
   let win;
   if (windowKey && summary?.windows?.[windowKey]) {
@@ -925,7 +954,7 @@ export function formatTelemetryTable(summary, { by = 'model', days = null, windo
   } else if ((days === null || days === undefined) && summary?.windows?.all) {
     win = summary.windows.all;
   } else {
-    win = aggregateTelemetryWindow(summary?.runs || [], { days, now });
+    win = aggregateTelemetryWindow(summary?.runs || [], { days, now, includeMock });
   }
 
   const rows = groupBy === 'seat' ? win.bySeat || [] : win.byModel || [];

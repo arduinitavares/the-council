@@ -298,12 +298,16 @@ export class VisualizerLiveWatcher {
     if (!event || typeof event !== 'object') return null;
     if (event.type === 'SUBMIT_PROOF') {
       const p = event.proof && typeof event.proof === 'object' ? event.proof : event;
+      const id = p.id || event.id;
+      const seatId = p.seatId || event.seatId;
+      const kind = p.kind || event.kind;
+      const scope = p.scope || event.scope;
       return {
         type: 'SUBMIT_PROOF',
-        ...(p.id ? { id: p.id } : {}),
-        ...(p.seatId ? { seatId: p.seatId } : {}),
-        ...(p.kind ? { kind: p.kind } : {}),
-        ...(p.scope ? { scope: p.scope } : {})
+        ...(id ? { id } : {}),
+        ...(seatId ? { seatId } : {}),
+        ...(kind ? { kind } : {}),
+        ...(scope ? { scope } : {})
       };
     }
     if (event.type === 'PUBLISH_CLARIFICATION') {

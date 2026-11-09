@@ -1087,6 +1087,128 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(recordedCall.trace.toolCalls, []);
       assert.deepEqual(recordedCall.trace.skillsRead, []);
     });
+
+    it('redacts prompts starting with leading dashes (e.g. markdown "---") via inferPromptFromArgs and sanitizes error.stderr', async () => {
+      const markdownPrompt = '--- COUNCIL BRIEF ---\n- Secret item 1\n' + 'CONFIDENTIAL_TOKEN_'.repeat(80);
+      await assert.rejects(
+        async () => {
+          // Omit options.prompt so inferPromptFromArgs must detect the leading-dash prompt from args
+          await execCli(
+            process.execPath,
+            [
+              '-e',
+              'console.error("Failed on prompt: " + process.argv[1]); process.exit(1);',
+              '--',
+              markdownPrompt
+            ],
+            { timeoutMs: 2000 }
+          );
+        },
+        (err) => {
+          assert.equal(err.exitCode, 1);
+          assert.ok(!err.message.includes('CONFIDENTIAL_TOKEN_'), 'error.message must not leak leading-dash prompt');
+          assert.ok(!err.stderr.includes('CONFIDENTIAL_TOKEN_'), 'error.stderr must not leak leading-dash prompt');
+          assert.match(err.message, /\[REDACTED prompt: length=/);
+          assert.match(err.stderr, /\[REDACTED prompt: length=/);
+          return true;
+        }
+      );
+    });
+
+    it('parses Codex event_msg wrappers, JSON-stringified tool arguments, and falls back to non-event lines when events have no assistant text', async () => {
+      let recordedCall = null;
+      const eventMsgStream = [
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exec_command_begin',
+            call_id: 'call_1',
+            command: ['cat', 'skills/ask-council/SKILL.md']
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_mcp',
+            type: 'mcp_tool_call',
+            server: 'fs',
+            tool: 'read_file',
+            arguments: JSON.stringify({ file_path: '.agents/skills/safe-refactor/SKILL.md' }),
+            status: 'completed'
+          }
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'agent_message',
+            message: '{"vote":"accept","citedProofIds":["P-1"]}'
+          }
+        })
+      ].join('\n');
+
+      const out = await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'Vote',
+        onCallRecord: (rec) => {
+          recordedCall = rec;
+        },
+        exec: async () => ({ stdout: eventMsgStream, stderr: '', exitCode: 0 })
+      });
+
+      assert.equal(out, '{"vote":"accept","citedProofIds":["P-1"]}');
+      assert.equal(recordedCall.trace.traceCoverage, 'full');
+      assert.equal(recordedCall.trace.toolCalls.length, 2);
+      assert.deepEqual(recordedCall.trace.skillsRead, [
+        { skill: 'ask-council', evidence: 'skill_instructions_read' },
+        { skill: 'safe-refactor', evidence: 'skill_instructions_read' }
+      ]);
+
+      // Fallback when stream has init event + plain text response line
+      const hybridStream = [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thr_2' }),
+        '{"vote":"accept","citedProofIds":["P-2"]}'
+      ].join('\n');
+
+      const hybridOut = await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'Vote',
+        exec: async () => ({ stdout: hybridStream, stderr: '', exitCode: 0 })
+      });
+      assert.equal(hybridOut, '{"vote":"accept","citedProofIds":["P-2"]}');
+    });
+
+    it('parses Cursor stream-json with JSON-stringified tool args and falls back to non-event lines when only init events are present', async () => {
+      let recordedCall = null;
+      const cursorStream = [
+        JSON.stringify({ type: 'system', subtype: 'init' }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            readToolCall: {
+              args: JSON.stringify({ target_file: 'skills/ask-council/SKILL.md' })
+            }
+          }
+        }),
+        '{"vote":"accept","citedProofIds":["P-3"]}'
+      ].join('\n');
+
+      const out = await runCursorCli({
+        model: 'grok-4.7-xhigh',
+        prompt: 'Vote',
+        onCallRecord: (rec) => {
+          recordedCall = rec;
+        },
+        exec: async () => ({ stdout: cursorStream, stderr: '', exitCode: 0 })
+      });
+
+      assert.equal(out, '{"vote":"accept","citedProofIds":["P-3"]}');
+      assert.equal(recordedCall.trace.traceCoverage, 'full');
+      assert.equal(recordedCall.trace.toolCalls.length, 1);
+      assert.deepEqual(recordedCall.trace.skillsRead, [
+        { skill: 'ask-council', evidence: 'skill_instructions_read' }
+      ]);
+    });
   });
 });
 

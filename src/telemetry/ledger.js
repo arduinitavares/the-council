@@ -173,8 +173,8 @@ export function buildRunTelemetryRecord({
     if (!item || typeof item !== 'object') continue;
     const ev = item.event && typeof item.event === 'object' ? item.event : item;
     const lastTrans =
-      item.stateSnapshot?.lastTransition ||
       item.stateDelta?.lastTransition ||
+      item.stateSnapshot?.lastTransition ||
       item.state?.lastTransition ||
       item.lastTransition ||
       null;
@@ -204,7 +204,7 @@ export function buildRunTelemetryRecord({
       ? guardRejections
       : (Array.isArray(guardRejectedEvents) ? guardRejectedEvents : []);
 
-  if (effectiveGuardRejections.length > 0 && transitionRecords.length === 0) {
+  if (effectiveGuardRejections.length > 0 && seenRejectedProofEventObjects.size === 0) {
     for (const gr of effectiveGuardRejections) {
       const ev = gr?.event || gr;
       if (ev?.type === 'SUBMIT_PROOF' && !seenRejectedProofEventObjects.has(ev)) {
@@ -423,7 +423,14 @@ function createMutableBucket({ key, groupBy, provider, model, effort }) {
 }
 
 function accumulateIntoBucket(bucket, seatEntry) {
-  bucket.seatIdsSet.add(seatEntry.seatId);
+  if (seatEntry.seatId) {
+    bucket.seatIdsSet.add(seatEntry.seatId);
+  }
+  if (Array.isArray(seatEntry.seatIds)) {
+    for (const sid of seatEntry.seatIds) {
+      if (sid) bucket.seatIdsSet.add(sid);
+    }
+  }
   if (seatEntry.modelKey) {
     bucket.modelsSet.add(seatEntry.modelKey);
   }
@@ -462,6 +469,83 @@ function accumulateIntoBucket(bucket, seatEntry) {
       }
     }
   }
+}
+
+function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
+  if (seatsForModel.length === 1) {
+    return {
+      ...seatsForModel[0],
+      modelKey: canonicalKey
+    };
+  }
+  const seatIds = [];
+  let proofsSubmitted = 0;
+  let guardRejectedProofs = 0;
+  let explicitlyAdmitted = 0;
+  let defaultAdmitted = 0;
+  let judgeRejected = 0;
+  let finalClauseCitations = 0;
+  let distinctProofsCited = 0;
+  let retries = 0;
+  let excused = false;
+  let fullCount = 0;
+  let partialCount = 0;
+  let tracedToolCalls = 0;
+  let hasTracedSeat = false;
+  const skillsSet = new Set();
+
+  for (const s of seatsForModel) {
+    if (s.seatId) seatIds.push(s.seatId);
+    proofsSubmitted += s.proofsSubmitted || 0;
+    guardRejectedProofs += s.guardRejectedProofs || 0;
+    explicitlyAdmitted += s.explicitlyAdmitted || 0;
+    defaultAdmitted += s.defaultAdmitted || 0;
+    judgeRejected += s.judgeRejected || 0;
+    finalClauseCitations += s.finalClauseCitations || 0;
+    distinctProofsCited += s.distinctProofsCited || 0;
+    retries += s.retries || 0;
+    if (s.excused) excused = true;
+
+    const cov = s.traceCoverage || 'unavailable';
+    if (cov === 'full') fullCount += 1;
+    else if (cov === 'partial') partialCount += 1;
+
+    if (cov !== 'unavailable' && typeof s.observedToolCalls === 'number') {
+      hasTracedSeat = true;
+      tracedToolCalls += s.observedToolCalls;
+    }
+
+    if (Array.isArray(s.skillsRead)) {
+      for (const sr of s.skillsRead) {
+        const skillName = typeof sr === 'string' ? sr : sr?.skill;
+        if (skillName) skillsSet.add(skillName);
+      }
+    }
+  }
+
+  let traceCoverage = 'unavailable';
+  if (fullCount === seatsForModel.length) {
+    traceCoverage = 'full';
+  } else if (fullCount > 0 || partialCount > 0) {
+    traceCoverage = 'partial';
+  }
+
+  return {
+    seatIds,
+    modelKey: canonicalKey,
+    proofsSubmitted,
+    guardRejectedProofs,
+    explicitlyAdmitted,
+    defaultAdmitted,
+    judgeRejected,
+    finalClauseCitations,
+    distinctProofsCited,
+    retries,
+    excused,
+    traceCoverage,
+    observedToolCalls: hasTracedSeat ? tracedToolCalls : null,
+    skillsRead: [...skillsSet].map((skill) => ({ skill, evidence: 'skill_instructions_read' }))
+  };
 }
 
 function finalizeBucket(bucket) {
@@ -562,8 +646,8 @@ export function aggregateTelemetryWindow(records = [], { days = null, now = new 
 
   for (const rec of filtered) {
     const seats = Array.isArray(rec.seats) ? rec.seats : [];
-    // Track per-run participation so a model appearing on 2 seats in 1 run counts runs accurately per seat turn or per run:
-    // Each seat entry represents a seat's run participation.
+    const perRunModelSeats = new Map();
+
     for (const s of seats) {
       if (!s || typeof s !== 'object') continue;
       const canonical = s.modelKey
@@ -575,22 +659,10 @@ export function aggregateTelemetryWindow(records = [], { days = null, now = new 
           }
         : canonicalizeModelKey(s.provider, s.model, s.effort);
 
-      if (!modelBuckets.has(canonical.key)) {
-        modelBuckets.set(
-          canonical.key,
-          createMutableBucket({
-            key: canonical.key,
-            groupBy: 'model',
-            provider: canonical.provider,
-            model: canonical.model,
-            effort: canonical.effort
-          })
-        );
+      if (!perRunModelSeats.has(canonical.key)) {
+        perRunModelSeats.set(canonical.key, { canonical, seats: [] });
       }
-      accumulateIntoBucket(modelBuckets.get(canonical.key), {
-        ...s,
-        modelKey: canonical.key
-      });
+      perRunModelSeats.get(canonical.key).seats.push(s);
 
       const seatKey = s.seatId || 'unknown';
       if (!seatBuckets.has(seatKey)) {
@@ -614,6 +686,25 @@ export function aggregateTelemetryWindow(records = [], { days = null, now = new 
         ...s,
         modelKey: canonical.key
       });
+    }
+
+    for (const [modelKey, { canonical, seats: seatsForModel }] of perRunModelSeats.entries()) {
+      if (!modelBuckets.has(modelKey)) {
+        modelBuckets.set(
+          modelKey,
+          createMutableBucket({
+            key: canonical.key,
+            groupBy: 'model',
+            provider: canonical.provider,
+            model: canonical.model,
+            effort: canonical.effort
+          })
+        );
+      }
+      accumulateIntoBucket(
+        modelBuckets.get(modelKey),
+        mergeModelSeatsForRun(seatsForModel, canonical.key)
+      );
     }
   }
 

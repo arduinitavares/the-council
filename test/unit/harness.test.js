@@ -231,6 +231,116 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
       }
     });
 
+    it('forwards effectiveCwd (from executeSeat/executeJudge arg, callerContext.cwd, or adapter.cwd) into formatSeatPrompt and formatJudgePrompt across all 3 adapters', async () => {
+      const adapterSpecs = [
+        { Class: CodexAdapter, model: 'gpt-6-astra' },
+        { Class: AntigravityAdapter, model: 'gemini-4-argon' },
+        { Class: CursorAdapter, model: 'grok-4.7' }
+      ];
+
+      for (const { Class, model } of adapterSpecs) {
+        const capturedPrompts = [];
+        const adapter = new Class({
+          cwd: '/repo/from-adapter',
+          spawnRunner: async ({ prompt }) => {
+            capturedPrompts.push(prompt);
+            return JSON.stringify({
+              scope: 'Workspace',
+              kind: 'check',
+              source: 'src/index.js',
+              statement: 'Verified',
+              vote: 'accept',
+              summary: 'Judge summary',
+              proofDecisions: { P1: { status: 'admitted', note: 'ok' } },
+              clauses: [{ context: 'Workspace', conclusion: 'Verified', citedProofIds: ['P1'] }]
+            });
+          }
+        });
+
+        // 1. Adapter-level cwd activates workspace-attached directive in DELIBERATION, VOTING, and JUDGE
+        await adapter.executeSeat({
+          seat: { id: 's1', model },
+          soul: 'Pragmatic Engineer',
+          round: 1,
+          phase: 'DELIBERATION',
+          state: { topic: 'Check workspace' }
+        });
+        assert.equal(capturedPrompts.length, 1);
+        assert.equal(/No local code workspace is attached/.test(capturedPrompts[0]), false);
+
+        await adapter.executeSeat({
+          seat: { id: 's1', model },
+          soul: 'Pragmatic Engineer',
+          round: 1,
+          phase: 'VOTING',
+          state: {
+            topic: 'Check workspace',
+            candidate: { round: 1, summary: 'S', clauses: [{ context: 'C', conclusion: 'X', citedProofIds: ['P1'] }] },
+            proofs: [{ id: 'P1', kind: 'check', scope: 'C', source: 'S', statement: 'St', status: 'admitted' }]
+          }
+        });
+        assert.equal(capturedPrompts.length, 2);
+        assert.equal(/No local code workspace is attached/.test(capturedPrompts[1]), false);
+
+        await adapter.executeJudge({
+          judge: { id: 'j1', model, soul: 'Impartial Judge' },
+          round: 1,
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          proofs: [{ id: 'P1', kind: 'check', scope: 'C', source: 'S', statement: 'St' }],
+          state: { topic: 'Check workspace' }
+        });
+        assert.equal(capturedPrompts.length, 3);
+        assert.equal(/No local code workspace is attached/.test(capturedPrompts[2]), false);
+
+        // 2. Without adapter.cwd, executeSeat({ cwd }) and executeJudge({ context: { cwd } }) also activate workspace directive
+        const statelessPrompts = [];
+        const statelessAdapter = new Class({
+          spawnRunner: async ({ prompt }) => {
+            statelessPrompts.push(prompt);
+            return JSON.stringify({
+              scope: 'Workspace',
+              kind: 'check',
+              source: 'src/index.js',
+              statement: 'Verified',
+              summary: 'Judge summary',
+              proofDecisions: { P1: { status: 'admitted', note: 'ok' } },
+              clauses: [{ context: 'Workspace', conclusion: 'Verified', citedProofIds: ['P1'] }]
+            });
+          }
+        });
+
+        await statelessAdapter.executeSeat({
+          seat: { id: 's1', model },
+          soul: 'Pragmatic Engineer',
+          round: 1,
+          phase: 'DELIBERATION',
+          state: { topic: 'Check workspace' },
+          cwd: '/repo/from-call'
+        });
+        assert.equal(/No local code workspace is attached/.test(statelessPrompts[0]), false);
+
+        await statelessAdapter.executeJudge({
+          judge: { id: 'j1', model, soul: 'Impartial Judge' },
+          round: 1,
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          proofs: [{ id: 'P1', kind: 'check', scope: 'C', source: 'S', statement: 'St' }],
+          state: { topic: 'Check workspace' },
+          context: { cwd: '/repo/from-context' }
+        });
+        assert.equal(/No local code workspace is attached/.test(statelessPrompts[1]), false);
+
+        // 3. When no cwd is present anywhere, prompt still includes "No local code workspace is attached"
+        await statelessAdapter.executeSeat({
+          seat: { id: 's1', model },
+          soul: 'Pragmatic Engineer',
+          round: 1,
+          phase: 'DELIBERATION',
+          state: { topic: 'General external topic' }
+        });
+        assert.equal(/No local code workspace is attached/.test(statelessPrompts[2]), true);
+      }
+    });
+
     describe('CodexAdapter', () => {
       it('validates allowed models (gpt-6.1-sol, gpt-6-astra) and rejects invalid effort tiers or substring spoofs', () => {
         const adapter = new CodexAdapter();

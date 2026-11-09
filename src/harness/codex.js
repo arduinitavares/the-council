@@ -98,7 +98,9 @@ export class CodexAdapter extends HarnessAdapter {
     this.validateModel(seat.model);
     const disableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.disableHooks;
     const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
-    const effectiveCwd = cwd || callerContext?.cwd || seat?.cwd || state?.cwd || this.cwd || this.config?.cwd;
+    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -113,7 +115,7 @@ export class CodexAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state });
+          const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state, cwd: effectiveCwd });
           const rawOutput = await this._dispatchCli({
             model: seat.model,
             prompt,
@@ -155,7 +157,9 @@ export class CodexAdapter extends HarnessAdapter {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
-    const effectiveCwd = cwd || callerContext?.cwd || judge?.cwd || state?.cwd || this.cwd || this.config?.cwd;
+    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -170,7 +174,7 @@ export class CodexAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state });
+          const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state, cwd: effectiveCwd });
           const rawOutput = await this._dispatchCli({
             model: judge.model,
             prompt,
@@ -207,7 +211,10 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Formats seat prompt with soul temperament injection.
    */
-  formatSeatPrompt({ seat, soul, round, phase, state }) {
+  formatSeatPrompt({ seat, soul, round, phase, state, cwd }) {
+    const effectiveCwd = [cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     if (phase === 'VOTING' || phase === 'confirming') {
       const admittedProofs = (state?.proofs || []).filter((p) => p.status === 'admitted');
       const myOpenObjections = (state?.objections || []).filter(
@@ -219,7 +226,8 @@ export class CodexAdapter extends HarnessAdapter {
         candidate: state?.candidate,
         admittedProofs,
         myOpenObjections,
-        state
+        state,
+        cwd: effectiveCwd
       });
     }
 
@@ -233,21 +241,26 @@ export class CodexAdapter extends HarnessAdapter {
       clarifications: state?.clarifications,
       previousCandidate: state?.candidate,
       openObjections,
-      state
+      state,
+      cwd: effectiveCwd
     });
   }
 
   /**
    * Formats judge prompt for auditing and candidate synthesis.
    */
-  formatJudgePrompt({ judge, round, phase, proofs, state }) {
+  formatJudgePrompt({ judge, round, phase, proofs, state, cwd }) {
+    const effectiveCwd = [cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+      .find((c) => typeof c === 'string' && c.trim())
+      ?.trim();
     return formatJudgeSoulPrompt({
       judge,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
       proofs,
-      state
+      state,
+      cwd: effectiveCwd
     });
   }
 
@@ -257,7 +270,9 @@ export class CodexAdapter extends HarnessAdapter {
    */
   async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      const effectiveCwd = cwd || context?.cwd || this.cwd || this.config?.cwd;
+      const effectiveCwd = [cwd, context?.cwd, this.cwd, this.config?.cwd]
+        .find((c) => typeof c === 'string' && c.trim())
+        ?.trim();
       return this.spawnRunner({
         executable: this.executable,
         model,

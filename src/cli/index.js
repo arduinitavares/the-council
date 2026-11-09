@@ -17,6 +17,11 @@ import path from 'node:path';
 import { CouncilEngine } from '../engine/council-engine.js';
 import { loadConfigFile, resolveConfig } from '../engine/config.js';
 import { deserializeSnapshot } from '../telemetry/snapshot.js';
+import {
+  persistRunTelemetry,
+  loadTelemetrySummary,
+  formatTelemetryTable
+} from '../telemetry/ledger.js';
 import { HarnessRegistry } from '../harness/index.js';
 import { VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
 
@@ -25,22 +30,27 @@ The Council — Multi-Agent Consensus Deliberation Engine (v0.1.0)
 
 Usage:
   council run (--live | --mock) [options]
+  council telemetry [--days <N>] [--by model|seat] [--json]
   council demo [wt-better-os | wt-10-seats-quota | wt-opus-guardrails]
   council inspect <snapshot-file.json>
 
 Options:
-  -c, --config <path>    Path to JSON configuration file
-  -p, --preset <name>    Built-in preset (architecture, product-comparison, security-audit, argon-only, best-of-families)
-  -t, --topic <string>   Debate topic problem statement
-  -e, --evidence <path>  Path to JSON or Markdown/text evidence file (repeatable)
-  -r, --rounds <number>  Maximum deliberation rounds (default: 3)
-  -q, --quorum <number>  Minimum quorum of active seats (default: 2)
-  -l, --live             Run with live CLI harnesses and visualizer stream (required unless --mock)
-  -m, --mock             Run in hermetic deterministic simulated mock mode (required unless --live)
-      --json             Output result strictly as JSON (includes "mode": "live" | "mock")
-  -v, --verbose          Print real-time observer telemetry events to stderr
-  -h, --help             Show this help message
-  -V, --version          Show version
+  -c, --config <path>         Path to JSON configuration file
+  -p, --preset <name>         Built-in preset (architecture, product-comparison, security-audit, argon-only, best-of-families)
+  -t, --topic <string>        Debate topic problem statement
+  -e, --evidence <path>       Path to JSON or Markdown/text evidence file (repeatable)
+  -r, --rounds <number>       Maximum deliberation rounds (default: 3)
+  -q, --quorum <number>       Minimum quorum of active seats (default: 2)
+  -l, --live                  Run with live CLI harnesses and visualizer stream (required unless --mock)
+  -m, --mock                  Run in hermetic deterministic simulated mock mode (required unless --live)
+      --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
+      --by <model|seat>       Group telemetry leaderboard by canonical model or seat (default: model)
+      --output-dir <path>     Custom runs/summary output directory
+      --telemetry-dir <path>  Custom telemetry ledger directory
+      --json                  Output result strictly as JSON (includes "mode": "live" | "mock")
+  -v, --verbose               Print real-time observer telemetry events to stderr
+  -h, --help                  Show this help message
+  -V, --version               Show version
 `;
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '../..');
@@ -136,6 +146,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         quorum: { type: 'string', short: 'q' },
         live: { type: 'boolean', short: 'l', default: false },
         mock: { type: 'boolean', short: 'm', default: false },
+        days: { type: 'string' },
+        by: { type: 'string' },
+        'output-dir': { type: 'string' },
+        'telemetry-dir': { type: 'string' },
         json: { type: 'boolean', default: false },
         verbose: { type: 'boolean', short: 'v', default: false },
         help: { type: 'boolean', short: 'h', default: false },
@@ -158,6 +172,48 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
   if (values.version) {
     log('the-council v0.1.0 (Node ' + process.version + ')');
+    return await safeExit(0);
+  }
+
+  if (command === 'telemetry') {
+    let parsedDays = null;
+    if (values.days !== undefined) {
+      const numDays = Number(values.days);
+      if (!Number.isFinite(numDays) || numDays <= 0) {
+        logErr(`Configuration error: --days must be a positive number (received "${values.days}").`);
+        return await safeExit(1);
+      }
+      parsedDays = numDays;
+    }
+
+    const byRaw = values.by !== undefined ? String(values.by).trim().toLowerCase() : 'model';
+    if (byRaw !== 'model' && byRaw !== 'seat') {
+      logErr(`Configuration error: --by must be "model" or "seat" (received "${values.by}").`);
+      return await safeExit(1);
+    }
+
+    const outputDir = values['output-dir'] || io.outputDir || io.liveWatcherOptions?.outputDir;
+    const telemetryDir = values['telemetry-dir'] || io.telemetryDir || io.liveWatcherOptions?.telemetryDir;
+    const summary = loadTelemetrySummary({
+      outputDir,
+      telemetryDir,
+      days: parsedDays,
+      now: io.now || new Date()
+    });
+
+    if (values.json) {
+      const payload = {
+        ...summary,
+        by: byRaw,
+        groupBy: byRaw,
+        window: summary.activeWindow.window,
+        days: summary.activeWindow.days,
+        rows: byRaw === 'seat' ? summary.activeWindow.bySeat : summary.activeWindow.byModel
+      };
+      log(JSON.stringify(payload, null, 2));
+    } else {
+      log(formatTelemetryTable(summary, { by: byRaw, days: parsedDays, now: io.now || new Date() }));
+    }
     return await safeExit(0);
   }
 
@@ -288,6 +344,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     if (typeof io.harnessResolver === 'function') {
       engineOptions.harnessResolver = io.harnessResolver;
     }
+    const explicitOutputDir = values['output-dir'] || io.outputDir || io.liveWatcherOptions?.outputDir;
+    const explicitTelemetryDir = values['telemetry-dir'] || io.telemetryDir || io.liveWatcherOptions?.telemetryDir;
     let liveWatcher = null;
 
     if (values.live) {
@@ -323,11 +381,14 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         io.liveWatcher ||
         new VisualizerLiveWatcher({
           initialConfig: resolved,
+          ...(explicitOutputDir ? { outputDir: explicitOutputDir } : {}),
+          ...(explicitTelemetryDir ? { telemetryDir: explicitTelemetryDir } : {}),
           ...(io.liveWatcherOptions || {})
         });
     }
 
     const engine = new CouncilEngine(resolved, engineOptions);
+    const runStartedAt = new Date().toISOString();
 
     if (liveWatcher) {
       liveWatcher.attach(engine.getTelemetry());
@@ -350,6 +411,35 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     } finally {
       if (liveWatcher) {
         liveWatcher.stop();
+      }
+    }
+
+    const resolvedOutputDir = explicitOutputDir || liveWatcher?.outputDir;
+    const resolvedTelemetryDir = explicitTelemetryDir || liveWatcher?.telemetryDir;
+    const shouldPersistTelemetry =
+      Boolean(resolvedOutputDir || resolvedTelemetryDir || io.persistTelemetry) ||
+      !process.env.NODE_TEST_CONTEXT;
+
+    if (shouldPersistTelemetry && result?.state?.phase === 'completed') {
+      try {
+        const runId =
+          liveWatcher?.runId ||
+          io.runId ||
+          io.liveWatcherOptions?.runId ||
+          `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+        persistRunTelemetry({
+          runId,
+          mode,
+          state: result.state,
+          snapshots: engine.getTelemetry().getSnapshots(),
+          providerCalls: engine.getTelemetry().getProviderCalls(),
+          startedAt: liveWatcher?.liveRun?.startedAt || runStartedAt,
+          completedAt: new Date().toISOString(),
+          outputDir: resolvedOutputDir,
+          telemetryDir: resolvedTelemetryDir
+        });
+      } catch {
+        // Isolate observer telemetry persistence errors
       }
     }
 

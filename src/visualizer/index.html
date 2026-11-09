@@ -720,6 +720,32 @@
         </div>
         <div id="timeline-list" class="timeline-list"></div>
       </section>
+
+      <!-- 7. Cross-Run Voter & Tool Telemetry Leaderboard -->
+      <section id="telemetry-leaderboard-section" class="surface-card" aria-labelledby="heading-telemetry-leaderboard" style="margin-top:16px;">
+        <div class="panel-header" style="flex-wrap:wrap; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <h2 id="heading-telemetry-leaderboard">Cross-Run Voter &amp; Tool Telemetry Leaderboard</h2>
+            <span id="lbl-telemetry-runs" class="badge" style="background:var(--bg-elevated); color:var(--text-secondary);">0 runs</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <label for="telemetry-group-by" class="sr-only">Group telemetry by</label>
+            <select id="telemetry-group-by" aria-label="Group telemetry by" onchange="renderTelemetryLeaderboard()" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+              <option value="model">By Model</option>
+              <option value="seat">By Seat</option>
+            </select>
+            <label for="telemetry-window" class="sr-only">Telemetry time window</label>
+            <select id="telemetry-window" aria-label="Telemetry time window" onchange="renderTelemetryLeaderboard()" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+              <option value="all">Window: All</option>
+              <option value="30d">Window: 30d</option>
+              <option value="7d">Window: 7d</option>
+            </select>
+          </div>
+        </div>
+        <div id="telemetry-leaderboard-body" style="margin-top:10px; overflow-x:auto;">
+          <div class="clause-card" style="color:var(--text-muted);">No completed run telemetry recorded yet.</div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -727,6 +753,7 @@
   <script src="./live-run-latest.js" onerror="/* optional legacy fallback */"></script>
   <script src="../../.council/runs/index.js" onerror="/* optional: created on first live run */"></script>
   <script src="../../.council/runs/latest.js" onerror="/* optional: created on first live run */"></script>
+  <script src="../../.council/runs/telemetry-summary.js" onerror="/* optional: created on run completion */"></script>
   <script src="./council-visualizer.js"></script>
 
   <script>
@@ -945,6 +972,8 @@
       if (oldScript) oldScript.remove();
       const oldIndex = document.getElementById('script-index-reload');
       if (oldIndex) oldIndex.remove();
+      const oldTelemetry = document.getElementById('script-telemetry-reload');
+      if (oldTelemetry) oldTelemetry.remove();
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
       if (btn) btn.classList.remove('active');
@@ -961,6 +990,10 @@
       if (oldIndex) {
         oldIndex.remove();
       }
+      const oldTelemetry = document.getElementById('script-telemetry-reload');
+      if (oldTelemetry) {
+        oldTelemetry.remove();
+      }
 
       const idxScript = document.createElement('script');
       idxScript.id = 'script-index-reload';
@@ -973,6 +1006,18 @@
         idxScript.remove();
       };
       document.head.appendChild(idxScript);
+
+      const telScript = document.createElement('script');
+      telScript.id = 'script-telemetry-reload';
+      telScript.src = '../../.council/runs/telemetry-summary.js?t=' + Date.now();
+      telScript.onload = function () {
+        telScript.remove();
+        renderTelemetryLeaderboard();
+      };
+      telScript.onerror = function () {
+        telScript.remove();
+      };
+      document.head.appendChild(telScript);
 
       const script = document.createElement('script');
       script.id = 'script-live-reload';
@@ -1043,8 +1088,114 @@
       if (el) el.textContent = str;
     }
 
+    function renderTelemetryLeaderboard() {
+      const bodyEl = document.getElementById('telemetry-leaderboard-body');
+      const runsLblEl = document.getElementById('lbl-telemetry-runs');
+      if (!bodyEl) return;
+
+      const summary = (typeof window !== 'undefined' && window.CouncilTelemetrySummary) ||
+                      (typeof globalThis !== 'undefined' && globalThis.CouncilTelemetrySummary) || null;
+      const groupBySel = document.getElementById('telemetry-group-by');
+      const windowSel = document.getElementById('telemetry-window');
+      const groupBy = (groupBySel && groupBySel.value === 'seat') ? 'seat' : 'model';
+      const windowKey = (windowSel && (windowSel.value === '7d' || windowSel.value === '30d')) ? windowSel.value : 'all';
+
+      const winData = summary && summary.windows && summary.windows[windowKey]
+        ? summary.windows[windowKey]
+        : null;
+      const totalRuns = winData && typeof winData.totalRuns === 'number'
+        ? winData.totalRuns
+        : (summary && typeof summary.totalRuns === 'number' ? summary.totalRuns : 0);
+      if (runsLblEl) {
+        runsLblEl.textContent = totalRuns + ' run' + (totalRuns === 1 ? '' : 's') + ' (' + windowKey + ')';
+      }
+
+      const rows = winData
+        ? (groupBy === 'seat' ? (winData.bySeat || []) : (winData.byModel || []))
+        : [];
+      const esc = (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && CouncilVisualizer.escapeHtml)
+        || function (s) { return String(s || ''); };
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        bodyEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No completed run telemetry recorded for this window yet.</div>';
+        return;
+      }
+
+      const headerTitle = groupBy === 'seat' ? 'Seat ID' : 'Canonical Model';
+      let html =
+        '<table style="width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono);">' +
+          '<thead>' +
+            '<tr style="border-bottom:1px solid var(--border); color:var(--text-muted); text-align:left;">' +
+              '<th style="padding:6px 8px;">' + esc(headerTitle) + '</th>' +
+              '<th style="padding:6px 8px;">Runs</th>' +
+              '<th style="padding:6px 8px;">Proofs Submitted</th>' +
+              '<th style="padding:6px 8px;">Explicit Admission %</th>' +
+              '<th style="padding:6px 8px;">Default-Admitted</th>' +
+              '<th style="padding:6px 8px;">Judge Rejection %</th>' +
+              '<th style="padding:6px 8px;">Final Clause Citation %</th>' +
+              '<th style="padding:6px 8px;">Excused %</th>' +
+              '<th style="padding:6px 8px;">Observed Tools / Verified Skills</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody>';
+
+      for (let i = 0; i < rows.length; i++) {
+        const b = rows[i] || {};
+        const submitted = Number(b.proofsSubmitted || 0);
+        const guardRejected = Number(b.guardRejectedProofs || 0);
+        const guardBadge = guardRejected > 0
+          ? ' <span class="badge" style="background:var(--amber-soft); color:var(--amber); font-size:10px; padding:1px 5px;" title="Guard-rejected proof attempts">+' + guardRejected + ' guard-rejected</span>'
+          : '';
+        const explicitPct = (b.explicitAdmissionRate ?? 0) + '%';
+        const judgeRejPct = (b.judgeRejectionRate ?? 0) + '%';
+        const citePct = (b.finalClauseCitationRate ?? 0) + '%';
+        const excusedPct = (b.excusedRate ?? 0) + '%';
+
+        const tc = b.traceCoverage || {};
+        const isTraceUnavailable = b.observedToolCalls === null || (tc.unavailableRuns > 0 && !tc.fullRuns && !tc.partialRuns);
+        let toolsHtml = '';
+        if (isTraceUnavailable) {
+          toolsHtml = '<span class="badge" style="background:var(--bg-elevated); color:var(--text-muted); font-size:10.5px; padding:1px 6px;" title="Provider CLI does not expose tool event telemetry">Trace N/A</span>';
+        } else {
+          const partialNote = tc.partialRuns > 0 ? ' (partial)' : '';
+          toolsHtml = '<span style="color:var(--text);">' + Number(b.observedToolCalls || 0) + ' tools' + esc(partialNote) + '</span>';
+        }
+
+        const skills = Array.isArray(b.skillsRead) ? b.skillsRead : [];
+        const skillsHtml = skills.length > 0
+          ? ' ' + skills.map(function (sk) {
+              return '<span class="badge" style="background:var(--accent-soft); color:var(--accent); font-size:10px; padding:1px 6px;" title="Verified via ' + esc(sk.evidence || 'skill_instructions_read') + '">' +
+                esc(sk.skill) + ' (' + Number(sk.count || 1) + ' · ' + esc(sk.evidence || 'skill_instructions_read') + ')' +
+              '</span>';
+            }).join(' ')
+          : '';
+
+        const subLabelList = groupBy === 'seat' ? (b.models || []) : (b.seatIds || []);
+        const subLabelHtml = Array.isArray(subLabelList) && subLabelList.length > 0
+          ? '<div style="font-size:10.5px; color:var(--text-muted);">' + esc(subLabelList.join(', ')) + '</div>'
+          : '';
+
+        html +=
+          '<tr style="border-bottom:1px solid var(--border-subtle);">' +
+            '<td style="padding:7px 8px; font-weight:600; color:var(--text);">' + esc(b.key || '') + subLabelHtml + '</td>' +
+            '<td style="padding:7px 8px;">' + Number(b.runs || 0) + '</td>' +
+            '<td style="padding:7px 8px;">' + submitted + guardBadge + '</td>' +
+            '<td style="padding:7px 8px; color:var(--green);">' + Number(b.explicitlyAdmitted || 0) + ' (' + esc(explicitPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--text-secondary);">' + Number(b.defaultAdmitted || 0) + '</td>' +
+            '<td style="padding:7px 8px; color:' + (Number(b.judgeRejected || 0) > 0 ? 'var(--red)' : 'var(--text-secondary)') + ';">' + Number(b.judgeRejected || 0) + ' (' + esc(judgeRejPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--accent);">' + Number(b.finalClauseCitations || 0) + ' (' + esc(citePct) + ')</td>' +
+            '<td style="padding:7px 8px; color:' + (Number(b.excusedRuns || 0) > 0 ? 'var(--amber)' : 'var(--text-secondary)') + ';">' + Number(b.excusedRuns || 0) + ' (' + esc(excusedPct) + ')</td>' +
+            '<td style="padding:7px 8px;">' + toolsHtml + skillsHtml + '</td>' +
+          '</tr>';
+      }
+
+      html += '</tbody></table>';
+      bodyEl.innerHTML = html;
+    }
+
     function renderAll() {
       updateRunSelector();
+      renderTelemetryLeaderboard();
       const liveRun = getLiveRun();
       const esc = (CouncilVisualizer && CouncilVisualizer.escapeHtml) || function (s) { return String(s || ''); };
 

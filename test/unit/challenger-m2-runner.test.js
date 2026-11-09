@@ -444,6 +444,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
         assert.deepEqual(capturedArgs, [
           'exec',
           '--ephemeral',
+          '--json',
           '--disable', 'hooks',
           '--skip-git-repo-check',
           '--sandbox', 'read-only',

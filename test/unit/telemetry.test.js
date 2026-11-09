@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   createSnapshot,
   serializeSnapshot,
@@ -7,9 +10,16 @@ import {
   SnapshotRecorder,
   createSnapshotRecorder,
   CouncilTelemetryEmitter,
-  createTelemetryEmitter
+  createTelemetryEmitter,
+  canonicalizeModelKey,
+  buildRunTelemetryRecord,
+  aggregateTelemetryWindow,
+  persistRunTelemetry,
+  loadTelemetrySummary,
+  formatTelemetryTable
 } from '../../src/telemetry/index.js';
 import { createInitialCouncilState } from '../../src/machine/state.js';
+import { transitionCouncil as reduceCouncilState } from '../../src/machine/reducer.js';
 
 describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', () => {
   const fixedClock = () => '2026-11-07T00:00:00.000Z';
@@ -428,5 +438,232 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       assert.equal(floatEmitter.maxHistory, 500);
     });
   });
+
+  describe('Issue #56: Proof Admission Kinds & Cross-Run Telemetry Ledger', () => {
+    it('distinguishes explicitly_admitted, default_admitted, and judge_rejected in JUDGE_AUDIT_AND_SYNTHESIZE (status and boolean admitted)', () => {
+      let state = createInitialCouncilState({
+        topic: 'Admission Kind Test',
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+          { id: 's2', harness: 'cursor', model: 'grok-4.7-xhigh', soul: 'S2' },
+          { id: 's3', harness: 'antigravity', model: 'gemini-4-argon (high)', soul: 'S3' }
+        ]
+      });
+
+      state = reduceCouncilState(state, { type: 'BEGIN_ROUND' });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's1',
+        id: 'P-1',
+        kind: 'check',
+        statement: 'Check 1',
+        source: 'src/a.js:1',
+        scope: 'unit'
+      });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's2',
+        id: 'P-2',
+        kind: 'citation',
+        statement: 'Cite 2',
+        source: 'docs/b.md:1',
+        scope: 'doc'
+      });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's3',
+        id: 'P-3',
+        kind: 'benchmark',
+        statement: 'Bench 3',
+        source: 'bench/c.js:1',
+        scope: 'perf'
+      });
+
+      state = reduceCouncilState(state, { type: 'START_JUDGING' });
+      state = reduceCouncilState(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: {
+          'P-1': { admitted: true, note: 'Explicitly verified' },
+          'P-3': { admitted: false, note: 'Unreproducible benchmark' }
+          // P-2 omitted -> default_admitted
+        },
+        summary: 'Synthesized candidate',
+        clauses: [{ id: 'C-1', context: 'All', conclusion: 'Use A and B', citedProofIds: ['P-1'] }]
+      });
+
+      assert.equal(state.lastTransition.ok, true);
+      const p1 = state.proofs.find((p) => p.id === 'P-1');
+      const p2 = state.proofs.find((p) => p.id === 'P-2');
+      const p3 = state.proofs.find((p) => p.id === 'P-3');
+
+      assert.equal(p1.status, 'admitted');
+      assert.equal(p1.admissionKind, 'explicitly_admitted');
+      assert.equal(p2.status, 'admitted');
+      assert.equal(p2.admissionKind, 'default_admitted');
+      assert.equal(p3.status, 'rejected');
+      assert.equal(p3.admissionKind, 'judge_rejected');
+    });
+
+    it('canonicalizes model keys consistently across parenthesized and hyphenated effort syntax', () => {
+      const k1 = canonicalizeModelKey('antigravity', 'gemini-4-argon-high');
+      const k2 = canonicalizeModelKey('antigravity', 'gemini-4-argon (high)');
+      assert.equal(k1.key, 'antigravity/gemini-4-argon (high)');
+      assert.equal(k2.key, 'antigravity/gemini-4-argon (high)');
+
+      const k3 = canonicalizeModelKey('cursor', 'grok-4.7-xhigh');
+      assert.equal(k3.key, 'cursor/grok-4.7 (xhigh)');
+    });
+
+    it('persists idempotent per-run telemetry records, separates guard-rejected proofs, preserves Trace N/A, and counts final clause citations strictly from terminal verdict', () => {
+      const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'council-telemetry-ledger-'));
+      const outputDir = path.join(tmpRoot, 'runs');
+      const telemetryDir = path.join(tmpRoot, 'telemetry');
+
+      try {
+        const state = {
+          phase: 'completed',
+          round: 1,
+          topic: 'Telemetry Ledger Verification',
+          judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'completed' },
+          seats: [
+            { id: 'astra-voter', harness: 'codex', model: 'gpt-6-astra (max)', status: 'accepted', retries: 0 },
+            { id: 'grok-voter', harness: 'cursor', model: 'grok-4.7-xhigh', status: 'accepted', retries: 1 },
+            { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon-high', status: 'excused', retries: 1 }
+          ],
+          proofs: [
+            { id: 'P-1', seatId: 'astra-voter', status: 'admitted', admissionKind: 'explicitly_admitted' },
+            { id: 'P-2', seatId: 'grok-voter', status: 'admitted', admissionKind: 'default_admitted' },
+            { id: 'P-3', seatId: 'grok-voter', status: 'rejected', admissionKind: 'judge_rejected' }
+          ],
+          verdict: {
+            kind: 'Unanimous Consensus',
+            candidate: {
+              summary: 'Final synthesis',
+              clauses: [
+                { id: 'C-1', context: 'When X', conclusion: 'Do Y', citedProofIds: ['P-1'] }
+              ]
+            }
+          }
+        };
+
+        const guardRejectedEvents = [
+          { event: { type: 'SUBMIT_PROOF', seatId: 'grok-voter' }, message: 'Empty source' }
+        ];
+
+        const providerCalls = [
+          {
+            participantId: 'astra-voter',
+            provider: 'codex',
+            exitCode: 0,
+            durationMs: 120,
+            trace: {
+              traceCoverage: 'full',
+              toolCalls: [{ kind: 'command_execution', name: 'rg' }, { kind: 'mcp_tool_call', name: 'codegraph:explore' }],
+              skillsRead: [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+            }
+          },
+          {
+            participantId: 'grok-voter',
+            provider: 'cursor',
+            exitCode: 0,
+            durationMs: 95,
+            trace: {
+              traceCoverage: 'full',
+              toolCalls: [{ kind: 'readToolCall', name: 'readToolCall' }],
+              skillsRead: []
+            }
+          },
+          {
+            participantId: 'argon-voter',
+            provider: 'antigravity',
+            exitCode: 0,
+            durationMs: 80,
+            trace: {
+              traceCoverage: 'unavailable',
+              toolCalls: [],
+              skillsRead: []
+            }
+          }
+        ];
+
+        // Persist twice with the same runId to prove idempotency
+        persistRunTelemetry({
+          runId: 'run-test-56',
+          completedAt: '2026-11-09T00:00:00.000Z',
+          now: '2026-11-09T01:00:00.000Z',
+          state,
+          providerCalls,
+          guardRejectedEvents,
+          outputDir,
+          telemetryDir
+        });
+        const { record, summary } = persistRunTelemetry({
+          runId: 'run-test-56',
+          completedAt: '2026-11-09T00:00:00.000Z',
+          now: '2026-11-09T01:00:00.000Z',
+          state,
+          providerCalls,
+          guardRejectedEvents,
+          outputDir,
+          telemetryDir
+        });
+
+        assert.equal(record.schemaVersion, 1);
+        assert.equal(summary.totalRuns, 1, 'Repeated persistence with same runId must be idempotent');
+
+        // Verify files written on disk
+        assert.ok(fs.existsSync(path.join(telemetryDir, 'runs', 'run-test-56.json')));
+        assert.ok(fs.existsSync(path.join(outputDir, 'telemetry-summary.json')));
+        assert.ok(fs.existsSync(path.join(outputDir, 'telemetry-summary.js')));
+
+        const allWin = summary.windows.all;
+        const astraRow = allWin.byModel.find((m) => m.key === 'codex/gpt-6-astra (max)');
+        const grokRow = allWin.byModel.find((m) => m.key === 'cursor/grok-4.7 (xhigh)');
+        const argonRow = allWin.byModel.find((m) => m.key === 'antigravity/gemini-4-argon (high)');
+
+        assert.ok(astraRow);
+        assert.equal(astraRow.runs, 1);
+        assert.equal(astraRow.proofsSubmitted, 1);
+        assert.equal(astraRow.explicitlyAdmitted, 1);
+        assert.equal(astraRow.defaultAdmitted, 0);
+        assert.equal(astraRow.judgeRejected, 0);
+        assert.equal(astraRow.finalClauseCitations, 1);
+        assert.equal(astraRow.finalClauseCitationRate, 100);
+        assert.equal(astraRow.observedToolCalls, 2);
+        assert.deepEqual(astraRow.skillsRead, [
+          { skill: 'ask-council', evidence: 'skill_instructions_read', count: 1 }
+        ]);
+
+        assert.ok(grokRow);
+        assert.equal(grokRow.proofsSubmitted, 2);
+        assert.equal(grokRow.guardRejectedProofs, 1);
+        assert.equal(grokRow.explicitlyAdmitted, 0);
+        assert.equal(grokRow.defaultAdmitted, 1);
+        assert.equal(grokRow.judgeRejected, 1);
+        assert.equal(grokRow.finalClauseCitations, 0);
+        assert.equal(grokRow.retries, 1);
+        assert.equal(grokRow.observedToolCalls, 1);
+
+        assert.ok(argonRow);
+        assert.equal(argonRow.excusedRuns, 1);
+        assert.equal(argonRow.excusedRate, 100);
+        assert.equal(argonRow.observedToolCalls, null, 'Unavailable trace coverage must never be coerced to 0 tool calls');
+        assert.equal(argonRow.traceCoverage.unavailableRuns, 1);
+
+        // Verify loadTelemetrySummary and formatTelemetryTable
+        const loaded = loadTelemetrySummary({ outputDir, telemetryDir, days: 7, now: '2026-11-09T01:00:00.000Z' });
+        assert.ok(loaded.customWindow);
+        assert.equal(loaded.customWindow.totalRuns, 1);
+
+        const tableText = formatTelemetryTable(loaded, { by: 'model', windowKey: '7d' });
+        assert.match(tableText, /codex\/gpt-6-astra \(max\)/);
+        assert.match(tableText, /Trace N\/A/);
+        assert.match(tableText, /\[ask-council:skill_instructions_read\]/);
+      } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+      }
+    });
+  });
 });
+
 

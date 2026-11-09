@@ -128,9 +128,637 @@ export function extractCanonicalBaseModel(modelString, defaultEffort = 'high') {
   return baseModel;
 }
 
+const NON_PROMPT_VALUE_FLAGS = new Set([
+  '-e',
+  '--eval',
+  '-m',
+  '--model',
+  '-c',
+  '--mode',
+  '--sandbox',
+  '--output-format',
+  '--effort',
+  '--disable'
+]);
+
+/**
+ * Infers the prompt string from CLI arguments when not explicitly provided.
+ *
+ * @param {string} executable
+ * @param {string[]} [args=[]]
+ * @param {string} [explicitPrompt='']
+ * @returns {string}
+ */
+export function inferPromptFromArgs(executable, args = [], explicitPrompt = '') {
+  if (typeof explicitPrompt === 'string' && explicitPrompt.length > 0) {
+    return explicitPrompt;
+  }
+  if (!Array.isArray(args) || args.length === 0) {
+    return '';
+  }
+  for (const arg of args) {
+    if (typeof arg === 'string' && arg.startsWith('--print=') && arg.length > '--print='.length) {
+      return arg.slice('--print='.length);
+    }
+  }
+  if (args.length >= 2) {
+    const lastArg = args[args.length - 1];
+    const prevArg = String(args[args.length - 2] || '');
+    if (
+      typeof lastArg === 'string' &&
+      lastArg.length > 0 &&
+      !lastArg.startsWith('-') &&
+      !NON_PROMPT_VALUE_FLAGS.has(prevArg)
+    ) {
+      return lastArg;
+    }
+  }
+  return '';
+}
+
+/**
+ * Sanitizes an execFile Error object so its message and cmd never leak the raw prompt.
+ *
+ * @param {Error|any} error
+ * @param {string} executable
+ * @param {string[]} [args=[]]
+ * @param {string} [explicitPrompt='']
+ * @returns {Error|any}
+ */
+export function sanitizeCliError(error, executable, args = [], explicitPrompt = '') {
+  if (!error || typeof error !== 'object') {
+    return error;
+  }
+  const detectedPrompt = inferPromptFromArgs(executable, args, explicitPrompt);
+  if (!detectedPrompt) {
+    return error;
+  }
+
+  const redactedArgs = redactArgv(args, detectedPrompt);
+  const redactedSummary = redactArgv([detectedPrompt], detectedPrompt)[0] || '[PROMPT REDACTED]';
+  const rawArgsJoined = Array.isArray(args) ? args.join(' ') : '';
+  const redactedArgsJoined = redactedArgs.join(' ');
+  const rawCmd = [executable, ...(Array.isArray(args) ? args : [])].filter(Boolean).join(' ');
+  const redactedCmd = [executable, ...redactedArgs].filter(Boolean).join(' ');
+  const printArg = `--print=${detectedPrompt}`;
+  const redactedPrintArg = `--print=${redactedSummary}`;
+
+  const sanitizeText = (text) => {
+    let next = text;
+    if (rawCmd && next.includes(rawCmd)) {
+      next = next.split(rawCmd).join(redactedCmd);
+    } else if (rawArgsJoined && Array.isArray(args) && args.length >= 2 && next.includes(rawArgsJoined)) {
+      next = next.split(rawArgsJoined).join(redactedArgsJoined);
+    }
+    if (next.includes(printArg)) {
+      next = next.split(printArg).join(redactedPrintArg);
+    }
+    if ((detectedPrompt.length >= 8 || next === detectedPrompt) && next.includes(detectedPrompt)) {
+      next = next.split(detectedPrompt).join(redactedSummary);
+    }
+    return next;
+  };
+
+  if (typeof error.cmd === 'string') {
+    error.cmd = sanitizeText(error.cmd);
+  }
+
+  if (typeof error.message === 'string') {
+    error.message = sanitizeText(error.message);
+  }
+
+  return error;
+}
+
+const EXCLUDED_TRACE_OUTPUT_KEYS = new Set([
+  'aggregated_output',
+  'output',
+  'result',
+  'stdout',
+  'stderr',
+  'content',
+  'text',
+  'response'
+]);
+
+const SKILL_PATH_REGEX =
+  /(?:^|[\s"'=:\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/gi;
+
+/**
+ * Extracts verified skill reads ({ skill, evidence: 'skill_instructions_read' })
+ * from observed tool command strings, file paths, or argument objects.
+ *
+ * @param {any} input
+ * @returns {Array<{ skill: string, evidence: 'skill_instructions_read' }>}
+ */
+export function extractSkillsRead(input) {
+  const strings = [];
+  const collect = (val, depth = 0) => {
+    if (depth > 6 || val === null || val === undefined) {
+      return;
+    }
+    if (typeof val === 'string') {
+      strings.push(val);
+      return;
+    }
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        collect(item, depth + 1);
+      }
+      return;
+    }
+    if (typeof val === 'object') {
+      for (const [k, v] of Object.entries(val)) {
+        if (EXCLUDED_TRACE_OUTPUT_KEYS.has(k)) {
+          continue;
+        }
+        collect(v, depth + 1);
+      }
+    }
+  };
+
+  collect(input, 0);
+
+  const seen = new Set();
+  const skillsRead = [];
+  for (const str of strings) {
+    SKILL_PATH_REGEX.lastIndex = 0;
+    let match;
+    while ((match = SKILL_PATH_REGEX.exec(str)) !== null) {
+      const skill = match[1];
+      if (skill && !seen.has(skill)) {
+        seen.add(skill);
+        skillsRead.push({ skill, evidence: 'skill_instructions_read' });
+      }
+    }
+  }
+  return skillsRead;
+}
+
+const CODEX_EVENT_TYPES = new Set([
+  'thread.started',
+  'turn.started',
+  'turn.completed',
+  'turn.failed',
+  'item.started',
+  'item.completed',
+  'item.updated',
+  'command_execution',
+  'mcp_tool_call',
+  'file_read',
+  'tool_call',
+  'tool_use',
+  'web_search',
+  'agent_message',
+  'message',
+  'result',
+  'error',
+  'event_msg'
+]);
+
+function isCodexStreamEvent(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return false;
+  }
+  if (typeof obj.type === 'string') {
+    if (
+      CODEX_EVENT_TYPES.has(obj.type) ||
+      obj.type.startsWith('item.') ||
+      obj.type.startsWith('turn.') ||
+      obj.type.startsWith('thread.') ||
+      obj.type.startsWith('response.')
+    ) {
+      return true;
+    }
+  }
+  if (obj.item && typeof obj.item === 'object' && typeof obj.item.type === 'string') {
+    return true;
+  }
+  return false;
+}
+
+function extractMessageText(item) {
+  if (!item || typeof item !== 'object') {
+    return '';
+  }
+  if (typeof item.text === 'string' && item.text.trim()) {
+    return item.text;
+  }
+  if (typeof item.content === 'string' && item.content.trim()) {
+    return item.content;
+  }
+  if (Array.isArray(item.content)) {
+    const parts = [];
+    for (const part of item.content) {
+      if (typeof part === 'string') {
+        parts.push(part);
+      } else if (part && typeof part === 'object' && typeof part.text === 'string') {
+        parts.push(part.text);
+      }
+    }
+    return parts.join('\n');
+  }
+  return '';
+}
+
+/**
+ * Parses `codex exec --json` JSONL event stream.
+ * Extracts final assistant text, observed tool calls, and verified skill reads.
+ * Maintains backwards compatibility when plain text or single non-event JSON is returned.
+ *
+ * @param {string} stdout
+ * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, eventsParsed: boolean }}
+ */
+export function parseCodexEventStream(stdout) {
+  const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      text: '',
+      traceCoverage: 'partial',
+      toolCalls: [],
+      skillsRead: [],
+      eventsParsed: false
+    };
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const parsedEvents = [];
+  for (const line of lines) {
+    if (!line.startsWith('{')) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(line);
+      if (isCodexStreamEvent(obj)) {
+        parsedEvents.push(obj);
+      }
+    } catch {
+      // Ignore non-JSON lines in mixed output
+    }
+  }
+
+  if (parsedEvents.length === 0) {
+    return {
+      text: trimmed,
+      traceCoverage: 'partial',
+      toolCalls: [],
+      skillsRead: [],
+      eventsParsed: false
+    };
+  }
+
+  const toolCallsById = new Map();
+  const unkeyedToolCalls = [];
+  const skillsByName = new Map();
+  const messagesById = new Map();
+  const unkeyedMessages = [];
+  let finalResultText = '';
+
+  const addSkills = (skills) => {
+    for (const entry of skills) {
+      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+        skillsByName.set(entry.skill, entry);
+      }
+    }
+  };
+
+  for (const ev of parsedEvents) {
+    const item = ev.item && typeof ev.item === 'object' ? ev.item : ev;
+    const itemType = item.type || ev.type;
+
+    if (
+      itemType === 'command_execution' ||
+      itemType === 'mcp_tool_call' ||
+      itemType === 'file_read' ||
+      itemType === 'tool_call' ||
+      itemType === 'tool_use' ||
+      itemType === 'web_search'
+    ) {
+      const toolId = item.id || item.call_id || ev.call_id || ev.id || null;
+      const command = item.command || item.cmd || item.arguments?.command || item.input?.command || null;
+      const pathArg =
+        item.path ||
+        item.file_path ||
+        item.arguments?.path ||
+        item.arguments?.file_path ||
+        item.input?.path ||
+        item.input?.file_path ||
+        null;
+      const name =
+        item.tool ||
+        item.name ||
+        (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
+        itemType;
+
+      addSkills(
+        extractSkillsRead({
+          command,
+          path: pathArg,
+          arguments: item.arguments,
+          input: item.input,
+          args: item.args
+        })
+      );
+
+      const entry = {
+        ...(toolId ? { id: String(toolId) } : {}),
+        type: itemType,
+        kind: itemType,
+        name: String(name || itemType),
+        ...(command ? { command: String(command) } : {}),
+        ...(pathArg ? { path: String(pathArg) } : {}),
+        ...(typeof item.exit_code === 'number' ? { exitCode: item.exit_code } : {}),
+        status: item.status || (ev.type === 'item.completed' ? 'completed' : 'observed')
+      };
+
+      if (toolId) {
+        toolCallsById.set(String(toolId), entry);
+      } else {
+        unkeyedToolCalls.push(entry);
+      }
+      continue;
+    }
+
+    if (itemType === 'agent_message' || (itemType === 'message' && item.role !== 'user')) {
+      const msgText = extractMessageText(item);
+      if (msgText) {
+        const msgId = item.id || ev.id || null;
+        if (msgId) {
+          messagesById.set(String(msgId), msgText);
+        } else if (ev.type !== 'item.started') {
+          unkeyedMessages.push(msgText);
+        }
+      }
+      continue;
+    }
+
+    if (ev.type === 'response.output_text.done' && typeof ev.text === 'string' && ev.text.trim()) {
+      unkeyedMessages.push(ev.text);
+      continue;
+    }
+
+    if (ev.type === 'result' && typeof ev.result === 'string' && ev.result.trim()) {
+      finalResultText = ev.result;
+    }
+  }
+
+  const allMessages = [...messagesById.values(), ...unkeyedMessages];
+  const extractedText =
+    allMessages.length > 0
+      ? allMessages.join('\n').trim()
+      : (finalResultText ? finalResultText.trim() : '');
+
+  return {
+    text: extractedText,
+    traceCoverage: 'full',
+    toolCalls: [...toolCallsById.values(), ...unkeyedToolCalls],
+    skillsRead: [...skillsByName.values()],
+    eventsParsed: true
+  };
+}
+
+const CURSOR_EVENT_TYPES = new Set([
+  'system',
+  'user',
+  'assistant',
+  'tool_call',
+  'tool_use',
+  'result',
+  'message',
+  'agent_message',
+  'command_execution',
+  'mcp_tool_call',
+  'file_read',
+  'error',
+  'item.started',
+  'item.completed',
+  'turn.started',
+  'turn.completed'
+]);
+
+function isCursorStreamEvent(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return false;
+  }
+  if (typeof obj.type === 'string' && CURSOR_EVENT_TYPES.has(obj.type)) {
+    return true;
+  }
+  if (obj.tool_call && typeof obj.tool_call === 'object') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Parses `cursor-agent --output-format stream-json` event stream.
+ * Extracts final assistant text, observed tool calls, and verified skill reads.
+ * Maintains backwards compatibility when plain text or single non-event JSON is returned.
+ *
+ * @param {string} stdout
+ * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, eventsParsed: boolean }}
+ */
+export function parseCursorEventStream(stdout) {
+  const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      text: '',
+      traceCoverage: 'partial',
+      toolCalls: [],
+      skillsRead: [],
+      eventsParsed: false
+    };
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const parsedEvents = [];
+  for (const line of lines) {
+    if (!line.startsWith('{')) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(line);
+      if (isCursorStreamEvent(obj)) {
+        parsedEvents.push(obj);
+      }
+    } catch {
+      // Ignore non-JSON lines
+    }
+  }
+
+  if (parsedEvents.length === 0) {
+    return {
+      text: trimmed,
+      traceCoverage: 'partial',
+      toolCalls: [],
+      skillsRead: [],
+      eventsParsed: false
+    };
+  }
+
+  const toolCallsById = new Map();
+  const unkeyedToolCalls = [];
+  const skillsByName = new Map();
+  const assistantMessages = [];
+  let finalResultText = '';
+
+  const addSkills = (skills) => {
+    for (const entry of skills) {
+      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+        skillsByName.set(entry.skill, entry);
+      }
+    }
+  };
+
+  const recordTool = ({ id, type = 'tool_call', name, command, pathArg, rawArgs, status = 'completed' }) => {
+    addSkills(
+      extractSkillsRead({
+        command,
+        path: pathArg,
+        args: rawArgs
+      })
+    );
+    const entry = {
+      ...(id ? { id: String(id) } : {}),
+      type,
+      kind: type,
+      name: String(name || type),
+      ...(command ? { command: String(command) } : {}),
+      ...(pathArg ? { path: String(pathArg) } : {}),
+      status
+    };
+    if (id) {
+      toolCallsById.set(String(id), entry);
+    } else {
+      unkeyedToolCalls.push(entry);
+    }
+  };
+
+  for (const ev of parsedEvents) {
+    const item = ev.item && typeof ev.item === 'object' ? ev.item : ev;
+    const evType = item.type || ev.type;
+
+    if (
+      evType === 'tool_call' ||
+      evType === 'tool_use' ||
+      evType === 'command_execution' ||
+      evType === 'mcp_tool_call' ||
+      evType === 'file_read'
+    ) {
+      const callId = item.call_id || item.id || ev.call_id || ev.id || null;
+      let toolName = item.name || item.tool || evType;
+      let command = item.command || item.cmd || null;
+      let pathArg = item.path || item.file_path || null;
+      let rawArgs = item.args || item.arguments || item.input || null;
+
+      if (ev.tool_call && typeof ev.tool_call === 'object') {
+        const subKeys = Object.keys(ev.tool_call);
+        if (subKeys.length > 0) {
+          const subKey = subKeys[0];
+          const subVal = ev.tool_call[subKey];
+          toolName = subVal?.name || subKey;
+          rawArgs = subVal?.args || subVal?.input || subVal || rawArgs;
+          command = command || rawArgs?.command || rawArgs?.cmd || null;
+          pathArg = pathArg || rawArgs?.path || rawArgs?.file_path || rawArgs?.target_file || null;
+        }
+      } else if (rawArgs && typeof rawArgs === 'object') {
+        command = command || rawArgs.command || rawArgs.cmd || null;
+        pathArg = pathArg || rawArgs.path || rawArgs.file_path || rawArgs.target_file || null;
+      }
+
+      recordTool({
+        id: callId,
+        type: evType,
+        name: toolName,
+        command,
+        pathArg,
+        rawArgs,
+        status: ev.subtype || item.status || 'completed'
+      });
+      continue;
+    }
+
+    if (evType === 'assistant' || (evType === 'message' && item.role !== 'user') || evType === 'agent_message') {
+      const msgObj = ev.message && typeof ev.message === 'object' ? ev.message : item;
+      if (Array.isArray(msgObj?.content)) {
+        for (const part of msgObj.content) {
+          if (part && typeof part === 'object' && (part.type === 'tool_use' || part.type === 'tool_call')) {
+            const rawArgs = part.input || part.args || part.arguments || null;
+            recordTool({
+              id: part.id || part.call_id || null,
+              type: part.type,
+              name: part.name || part.tool || part.type,
+              command: rawArgs?.command || rawArgs?.cmd || null,
+              pathArg: rawArgs?.path || rawArgs?.file_path || rawArgs?.target_file || null,
+              rawArgs,
+              status: 'completed'
+            });
+          }
+        }
+      }
+      const msgText = extractMessageText(msgObj);
+      if (msgText) {
+        assistantMessages.push(msgText);
+      }
+      continue;
+    }
+
+    if (evType === 'result' && typeof ev.result === 'string' && ev.result.trim()) {
+      finalResultText = ev.result;
+    }
+  }
+
+  const extractedText = finalResultText
+    ? finalResultText.trim()
+    : assistantMessages.join('\n').trim();
+
+  return {
+    text: extractedText,
+    traceCoverage: 'full',
+    toolCalls: [...toolCallsById.values(), ...unkeyedToolCalls],
+    skillsRead: [...skillsByName.values()],
+    eventsParsed: true
+  };
+}
+
+/**
+ * Normalizes trace metadata on a provider call record.
+ *
+ * @param {Object} [trace]
+ * @param {Object} [defaults]
+ * @returns {{ traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, durationMs: number, outcome: 'success'|'error' }}
+ */
+export function normalizeProviderTrace(trace, defaults = {}) {
+  const validCoverages = new Set(['full', 'partial', 'unavailable']);
+  const defaultCoverage = defaults.provider === 'antigravity' ? 'unavailable' : 'partial';
+  const traceCoverage = validCoverages.has(trace?.traceCoverage)
+    ? trace.traceCoverage
+    : defaultCoverage;
+  const toolCalls = Array.isArray(trace?.toolCalls) ? trace.toolCalls : [];
+  const skillsRead = Array.isArray(trace?.skillsRead) ? trace.skillsRead : [];
+  const durationMs =
+    typeof trace?.durationMs === 'number'
+      ? trace.durationMs
+      : (typeof defaults.durationMs === 'number' ? defaults.durationMs : 0);
+  const outcome =
+    trace?.outcome === 'error' || trace?.outcome === 'success'
+      ? trace.outcome
+      : (defaults.exitCode === 0 || defaults.exitCode === undefined ? 'success' : 'error');
+
+  return {
+    traceCoverage,
+    toolCalls,
+    skillsRead,
+    durationMs,
+    outcome
+  };
+}
+
 /**
  * Executes a CLI process directly via execFile with timeout and abort support.
- * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error.
+ * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error
+ * and sanitizes error.message / error.cmd so raw prompts are never leaked.
  *
  * @param {string} executable
  * @param {string[]} [args=[]]
@@ -140,6 +768,7 @@ export function extractCanonicalBaseModel(modelString, defaultEffort = 'high') {
  * @param {string} [options.cwd]
  * @param {NodeJS.ProcessEnv} [options.env]
  * @param {string|Buffer} [options.input]
+ * @param {string} [options.prompt]
  * @param {number} [options.maxBuffer=10485760]
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
  */
@@ -170,6 +799,7 @@ export async function execCli(executable, args = [], options = {}) {
       error.exitCode = exitCode;
       error.stdout = out;
       error.stderr = errOut;
+      sanitizeCliError(error, executable, args, options.prompt);
 
       reject(error);
     });
@@ -194,9 +824,16 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
   }
   let enrichedRecord;
   try {
+    const normalizedTrace = normalizeProviderTrace(record.trace, {
+      durationMs: record.durationMs,
+      exitCode: record.exitCode,
+      provider: record.provider
+    });
     enrichedRecord = {
       ...record,
-      tools: record.tools || context?.tools || 'read-only'
+      ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
+      tools: record.tools || context?.tools || 'read-only',
+      trace: normalizedTrace
     };
   } catch {
     return;
@@ -228,6 +865,7 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
  * Unwraps { response: "..." } JSON envelope if present.
+ * Records traceCoverage: 'unavailable' because agy --print does not expose a structured tool-event stream.
  *
  * @param {Object} params
  * @param {string} [params.executable='agy']
@@ -279,9 +917,17 @@ export async function runAntigravityCli({
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'antigravity',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: 'unavailable',
+          toolCalls: [],
+          skillsRead: [],
+          durationMs,
+          outcome: 'success'
+        }
       }
     });
 
@@ -303,15 +949,25 @@ export async function runAntigravityCli({
       ? err.exitCode
       : (typeof err.code === 'number' ? err.code : 1);
 
+    sanitizeCliError(err, executable, args, prompt);
+
     recordProviderCall({
       context,
       onCallRecord,
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'antigravity',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: 'unavailable',
+          toolCalls: [],
+          skillsRead: [],
+          durationMs,
+          outcome: 'error'
+        }
       }
     });
 
@@ -321,7 +977,7 @@ export async function runAntigravityCli({
 
 /**
  * Provider Dispatcher: Codex (codex exec)
- * Args: ['exec', '--ephemeral', '--disable', 'hooks', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
+ * Args: ['exec', '--ephemeral', '--json', '--disable', 'hooks', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
  *
  * @param {Object} params
  * @param {string} [params.executable='codex']
@@ -360,6 +1016,7 @@ export async function runCodexCli({
   const args = [
     'exec',
     '--ephemeral',
+    '--json',
     ...(shouldDisableHooks ? ['--disable', 'hooks'] : []),
     '--skip-git-repo-check',
     '--sandbox', 'read-only',
@@ -379,6 +1036,7 @@ export async function runCodexCli({
     const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
+    const parsedStream = parseCodexEventStream(result?.stdout || '');
 
     recordProviderCall({
       context,
@@ -386,28 +1044,47 @@ export async function runCodexCli({
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'codex',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: parsedStream.traceCoverage,
+          toolCalls: parsedStream.toolCalls,
+          skillsRead: parsedStream.skillsRead,
+          durationMs,
+          outcome: 'success'
+        }
       }
     });
 
-    return (result?.stdout || '').trim();
+    return parsedStream.text;
   } catch (err) {
     const durationMs = Date.now() - startTime;
     exitCode = typeof err.exitCode === 'number'
       ? err.exitCode
       : (typeof err.code === 'number' ? err.code : 1);
 
+    sanitizeCliError(err, executable, args, prompt);
+    const parsedErrStream = parseCodexEventStream(err?.stdout || '');
+
     recordProviderCall({
       context,
       onCallRecord,
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'codex',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
+          toolCalls: parsedErrStream.toolCalls,
+          skillsRead: parsedErrStream.skillsRead,
+          durationMs,
+          outcome: 'error'
+        }
       }
     });
 
@@ -417,7 +1094,7 @@ export async function runCodexCli({
 
 /**
  * Provider Dispatcher: Cursor (cursor-agent --print / agent fallback)
- * Args: ['--print', '--output-format', 'text', '--model', model, prompt]
+ * Args: ['--print', '--output-format', 'stream-json', '--trust', '--mode', 'plan', '--sandbox', 'enabled', '--model', model, prompt]
  * Automatically retries with 'agent' binary if 'cursor-agent' exits with ENOENT.
  *
  * @param {Object} params
@@ -448,7 +1125,8 @@ export async function runCursorCli({
   const parsed = parseModelAndEffort(model, 'high');
   const args = [
     '--print',
-    '--output-format', 'text',
+    '--output-format', 'stream-json',
+    '--trust',
     '--mode', 'plan',
     '--sandbox', 'enabled',
     '--model', parsed.model,
@@ -462,6 +1140,7 @@ export async function runCursorCli({
     const result = await exec(executable, args, { signal, timeoutMs, cwd, env });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
+    const parsedStream = parseCursorEventStream(result?.stdout || '');
 
     recordProviderCall({
       context,
@@ -469,19 +1148,28 @@ export async function runCursorCli({
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'cursor',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: parsedStream.traceCoverage,
+          toolCalls: parsedStream.toolCalls,
+          skillsRead: parsedStream.skillsRead,
+          durationMs,
+          outcome: 'success'
+        }
       }
     });
 
-    return (result?.stdout || '').trim();
+    return parsedStream.text;
   } catch (err) {
     if (err && err.code === 'ENOENT' && executable === 'cursor-agent') {
       try {
         const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd, env });
         exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
         const durationMs = Date.now() - startTime;
+        const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '');
 
         recordProviderCall({
           context,
@@ -489,28 +1177,47 @@ export async function runCursorCli({
           record: {
             participantId: context?.seatId || context?.participantId || 'unknown',
             provider: 'cursor',
+            model,
             argv: redactArgv(args, prompt),
             exitCode,
-            durationMs
+            durationMs,
+            trace: {
+              traceCoverage: parsedFallback.traceCoverage,
+              toolCalls: parsedFallback.toolCalls,
+              skillsRead: parsedFallback.skillsRead,
+              durationMs,
+              outcome: 'success'
+            }
           }
         });
 
-        return (fallbackResult?.stdout || '').trim();
+        return parsedFallback.text;
       } catch (fallbackErr) {
         const durationMs = Date.now() - startTime;
         exitCode = typeof fallbackErr.exitCode === 'number'
           ? fallbackErr.exitCode
           : (typeof fallbackErr.code === 'number' ? fallbackErr.code : 1);
 
+        sanitizeCliError(fallbackErr, 'agent', args, prompt);
+        const parsedFallbackErr = parseCursorEventStream(fallbackErr?.stdout || '');
+
         recordProviderCall({
           context,
           onCallRecord,
           record: {
             participantId: context?.seatId || context?.participantId || 'unknown',
             provider: 'cursor',
+            model,
             argv: redactArgv(args, prompt),
             exitCode,
-            durationMs
+            durationMs,
+            trace: {
+              traceCoverage: parsedFallbackErr.eventsParsed ? parsedFallbackErr.traceCoverage : 'unavailable',
+              toolCalls: parsedFallbackErr.toolCalls,
+              skillsRead: parsedFallbackErr.skillsRead,
+              durationMs,
+              outcome: 'error'
+            }
           }
         });
 
@@ -523,15 +1230,26 @@ export async function runCursorCli({
       ? err.exitCode
       : (typeof err.code === 'number' ? err.code : 1);
 
+    sanitizeCliError(err, executable, args, prompt);
+    const parsedErrStream = parseCursorEventStream(err?.stdout || '');
+
     recordProviderCall({
       context,
       onCallRecord,
       record: {
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'cursor',
+        model,
         argv: redactArgv(args, prompt),
         exitCode,
-        durationMs
+        durationMs,
+        trace: {
+          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
+          toolCalls: parsedErrStream.toolCalls,
+          skillsRead: parsedErrStream.skillsRead,
+          durationMs,
+          outcome: 'error'
+        }
       }
     });
 

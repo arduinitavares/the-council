@@ -237,6 +237,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(captured.args, [
         'exec',
         '--ephemeral',
+        '--json',
         '--disable',
         'hooks',
         '--skip-git-repo-check',
@@ -307,7 +308,8 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(captured.args, [
         '--print',
         '--output-format',
-        'text',
+        'stream-json',
+        '--trust',
         '--mode',
         'plan',
         '--sandbox',
@@ -518,6 +520,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(captured.args, [
         'exec',
         '--ephemeral',
+        '--json',
         '--disable',
         'hooks',
         '--skip-git-repo-check',
@@ -941,7 +944,152 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.throws(() => extractCanonicalBaseModel('gpt-6-astra (ultra)'), /Unsupported reasoning effort/);
     });
   });
+
+  describe('Issue #56: Error Redaction, Event Stream Trace Capture & Verified Skill Attribution', () => {
+    it('redacts 4KB prompt from error.message and error.cmd when execCli or runner fails', async () => {
+      const secret4kbPrompt = 'SECRET_DELIBERATION_PAYLOAD_'.repeat(160);
+      await assert.rejects(
+        async () => {
+          await execCli(process.execPath, ['-e', 'console.error("Workspace Trust Required"); process.exit(2);', secret4kbPrompt], {
+            prompt: secret4kbPrompt,
+            timeoutMs: 2000
+          });
+        },
+        (err) => {
+          assert.equal(err.exitCode, 2);
+          assert.ok(!err.message.includes(secret4kbPrompt), 'error.message must not leak the 4KB prompt');
+          assert.match(err.message, /\[REDACTED prompt: length=/);
+          assert.match(err.message, /Workspace Trust Required/);
+          if (typeof err.cmd === 'string') {
+            assert.ok(!err.cmd.includes(secret4kbPrompt), 'error.cmd must not leak the 4KB prompt');
+          }
+          return true;
+        }
+      );
+    });
+
+    it('parses Codex --json JSONL event stream, extracts final response, toolCalls, and verified SKILL.md reads with traceCoverage="full"', async () => {
+      let recordedCall = null;
+      const jsonlStream = [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thr_1' }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_1',
+            type: 'command_execution',
+            command: 'cat .agents/skills/ask-council/SKILL.md',
+            status: 'completed',
+            exit_code: 0
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_2',
+            type: 'mcp_tool_call',
+            server: 'codegraph',
+            tool: 'codegraph_explore',
+            arguments: { path: 'skills/safe-refactor/SKILL.md' },
+            status: 'completed'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'item_3',
+            type: 'agent_message',
+            text: '{"kind":"check","statement":"Verified","source":"src/index.js:1","scope":"unit"}'
+          }
+        })
+      ].join('\n');
+
+      const out = await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'Submit proof',
+        context: { seatId: 'astra-voter' },
+        onCallRecord: (rec) => {
+          recordedCall = rec;
+        },
+        exec: async () => ({ stdout: jsonlStream, stderr: '', exitCode: 0 })
+      });
+
+      assert.equal(out, '{"kind":"check","statement":"Verified","source":"src/index.js:1","scope":"unit"}');
+      assert.ok(recordedCall);
+      assert.equal(recordedCall.trace.traceCoverage, 'full');
+      assert.equal(recordedCall.trace.toolCalls.length, 2);
+      assert.equal(recordedCall.trace.toolCalls[0].kind, 'command_execution');
+      assert.equal(recordedCall.trace.toolCalls[1].kind, 'mcp_tool_call');
+      assert.deepEqual(recordedCall.trace.skillsRead, [
+        { skill: 'ask-council', evidence: 'skill_instructions_read' },
+        { skill: 'safe-refactor', evidence: 'skill_instructions_read' }
+      ]);
+    });
+
+    it('parses Cursor --output-format stream-json event stream, passes --trust, and extracts tool/skill telemetry with traceCoverage="full"', async () => {
+      let capturedArgs = null;
+      let recordedCall = null;
+      const streamJson = [
+        JSON.stringify({ type: 'system', subtype: 'init' }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          tool_call: {
+            readToolCall: {
+              args: { path: '/repo/skills/ask-council/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'result',
+          result: '{"vote":"accept","citedProofIds":["P-1"]}'
+        })
+      ].join('\n');
+
+      const out = await runCursorCli({
+        model: 'grok-4.7-xhigh',
+        prompt: 'Vote on candidate',
+        context: { seatId: 'grok-voter' },
+        onCallRecord: (rec) => {
+          recordedCall = rec;
+        },
+        exec: async (_bin, args) => {
+          capturedArgs = args;
+          return { stdout: streamJson, stderr: '', exitCode: 0 };
+        }
+      });
+
+      assert.ok(capturedArgs.includes('--trust'), 'Cursor CLI args must include --trust');
+      assert.ok(capturedArgs.includes('stream-json'), 'Cursor CLI args must include stream-json');
+      assert.equal(out, '{"vote":"accept","citedProofIds":["P-1"]}');
+      assert.ok(recordedCall);
+      assert.equal(recordedCall.trace.traceCoverage, 'full');
+      assert.equal(recordedCall.trace.toolCalls.length, 1);
+      assert.deepEqual(recordedCall.trace.skillsRead, [
+        { skill: 'ask-council', evidence: 'skill_instructions_read' }
+      ]);
+    });
+
+    it('records traceCoverage="unavailable" for Antigravity CLI when no tool-event stream is exposed', async () => {
+      let recordedCall = null;
+      const out = await runAntigravityCli({
+        model: 'gemini-4-argon (high)',
+        prompt: 'Deliberate',
+        context: { seatId: 'argon-voter' },
+        onCallRecord: (rec) => {
+          recordedCall = rec;
+        },
+        exec: async () => ({ stdout: '{"response":"{\\"vote\\":\\"accept\\"}"}', stderr: '', exitCode: 0 })
+      });
+
+      assert.equal(out, '{"vote":"accept"}');
+      assert.ok(recordedCall);
+      assert.equal(recordedCall.trace.traceCoverage, 'unavailable');
+      assert.deepEqual(recordedCall.trace.toolCalls, []);
+      assert.deepEqual(recordedCall.trace.skillsRead, []);
+    });
+  });
 });
+
 
 
 

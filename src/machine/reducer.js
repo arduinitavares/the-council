@@ -304,11 +304,34 @@ export function transitionCouncil(state, event) {
       }
       const decisions = event.proofDecisions || {};
       next.proofs.forEach((p) => {
-        if (decisions[p.id]) {
-          p.status = decisions[p.id].status;
-          p.judgeNote = decisions[p.id].note || '';
+        const decision = decisions[p.id];
+        if (decision !== undefined && decision !== null) {
+          const isExplicitAdmit =
+            decision === true ||
+            (typeof decision === 'object' &&
+              (decision.admitted === true || decision.status === 'admitted'));
+          const isExplicitReject =
+            decision === false ||
+            (typeof decision === 'object' &&
+              (decision.admitted === false || decision.status === 'rejected'));
+
+          if (isExplicitAdmit) {
+            p.status = 'admitted';
+            p.admissionKind = 'explicitly_admitted';
+            p.judgeNote =
+              (typeof decision === 'object' && (decision.note || decision.reason)) || '';
+          } else if (isExplicitReject) {
+            p.status = 'rejected';
+            p.admissionKind = 'judge_rejected';
+            p.judgeNote =
+              (typeof decision === 'object' && (decision.note || decision.reason)) || '';
+          } else if (typeof decision === 'object' && decision.status) {
+            p.status = decision.status;
+            p.judgeNote = decision.note || decision.reason || '';
+          }
         } else if (p.status === 'pending') {
           p.status = 'admitted';
+          p.admissionKind = 'default_admitted';
           p.judgeNote = 'Admitted by Judge.';
         }
       });

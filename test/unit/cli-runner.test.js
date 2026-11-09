@@ -2176,5 +2176,190 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         fs.rmSync(explicitDir, { recursive: true, force: true });
       }
     });
+
+    it('detects forbidden .council/ access across nested input keys (name/id/content/action), shell operators, globs, inline quotes/backslashes, and deep tool payloads (#63)', async () => {
+      const {
+        isForbiddenCouncilPathOrCommand,
+        detectForbiddenCouncilAccess,
+        parseCodexEventStream,
+        parseCursorEventStream,
+        normalizeProviderTrace,
+        runAntigravityCli
+      } = await import('../../src/harness/cli-runner.js');
+      const { CodexAdapter } = await import('../../src/harness/codex.js');
+      const { CursorAdapter } = await import('../../src/harness/cursor.js');
+      const { AntigravityAdapter } = await import('../../src/harness/antigravity.js');
+
+      // 1. Shell operator / glob / quote / backslash bypasses
+      assert.equal(isForbiddenCouncilPathOrCommand('cd .council&&cat runs/latest.js'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('ls .council|cat'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('cat<.council/runs/latest.js'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('ls .council*'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('find . -name ".council*"'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('cat .c"o"uncil/runs/latest.js'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand("cat .c'o'uncil/runs/latest.js"), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('cat \\.c\\o\\u\\n\\c\\i\\l/runs/latest.js'), true);
+      assert.equal(isForbiddenCouncilPathOrCommand('echo .council-notes.md'), false);
+      assert.equal(isForbiddenCouncilPathOrCommand('cat src/council/index.js'), false);
+
+      // 2. Tool input arguments whose keys collide with outer metadata keys (name, id, content, text, action, type)
+      const findByNameRes = detectForbiddenCouncilAccess([
+        {
+          kind: 'tool_call',
+          name: 'find_by_name',
+          args: { name: '.council/runs/latest.js', id: '.council/telemetry' }
+        }
+      ]);
+      assert.equal(findByNameRes.forbiddenStateAccess, true);
+      assert.deepEqual(findByNameRes.forbiddenAccessDetails, [
+        '.council/runs/latest.js',
+        '.council/telemetry'
+      ]);
+
+      // JSON-stringified arguments with inner "name" or "content" keys
+      const jsonArgsRes = detectForbiddenCouncilAccess([
+        {
+          kind: 'mcp_tool_call',
+          name: 'search',
+          rawInput: {
+            type: 'mcp_tool_call',
+            arguments: JSON.stringify({ name: '.council/runs/latest.js' }),
+            result: 'ignored output'
+          }
+        }
+      ]);
+      assert.equal(jsonArgsRes.forbiddenStateAccess, true);
+      assert.deepEqual(jsonArgsRes.forbiddenAccessDetails, ['.council/runs/latest.js']);
+
+      // Deeply nested tool input (depth > 6)
+      const deepRes = detectForbiddenCouncilAccess([
+        {
+          args: {
+            l1: { l2: { l3: { l4: { l5: { l6: { l7: { target: '.council/runs/latest.js' } } } } } } }
+          }
+        }
+      ]);
+      assert.equal(deepRes.forbiddenStateAccess, true);
+      assert.deepEqual(deepRes.forbiddenAccessDetails, ['.council/runs/latest.js']);
+
+      // 3. Codex local_shell_call / function_call / message.content tool_use events
+      const codexAltEvents = [
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'call_1',
+            type: 'local_shell_call',
+            action: { type: 'exec', command: ['bash', '-lc', 'cat .council/runs/latest.js'] }
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'call_2',
+            type: 'function_call',
+            name: 'read_file',
+            arguments: JSON.stringify({ name: '.council/runs/run-429.meta.json' })
+          }
+        }),
+        JSON.stringify({
+          type: 'message',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                name: 'grep_search',
+                input: { query: 'verdict', path: '.council/runs' }
+              },
+              {
+                type: 'output_text',
+                text: '{"vote":"accept"}'
+              }
+            ]
+          }
+        })
+      ].join('\n');
+
+      const parsedCodexAlt = parseCodexEventStream(codexAltEvents);
+      assert.equal(parsedCodexAlt.forbiddenStateAccess, true);
+      assert.equal(parsedCodexAlt.toolCalls.length, 3);
+      assert.ok(parsedCodexAlt.forbiddenAccessDetails.includes('bash -lc cat .council/runs/latest.js'));
+      assert.ok(parsedCodexAlt.forbiddenAccessDetails.includes('.council/runs/run-429.meta.json'));
+      assert.ok(parsedCodexAlt.forbiddenAccessDetails.includes('.council/runs'));
+
+      // Cursor function_call event
+      const parsedCursorAlt = parseCursorEventStream(
+        JSON.stringify({
+          type: 'function_call',
+          name: 'find_by_name',
+          arguments: JSON.stringify({ name: '.council/runs/latest.js' })
+        })
+      );
+      assert.equal(parsedCursorAlt.forbiddenStateAccess, true);
+      assert.deepEqual(parsedCursorAlt.forbiddenAccessDetails, ['.council/runs/latest.js']);
+
+      // 4. normalizeProviderTrace consistency when forbiddenAccessDetails or toolCalls has violations
+      const normFromDetails = normalizeProviderTrace({
+        outcome: 'success',
+        forbiddenAccessDetails: ['.council/runs/latest.js']
+      });
+      assert.equal(normFromDetails.forbiddenStateAccess, true);
+      assert.equal(normFromDetails.outcome, 'error');
+
+      const normFromTools = normalizeProviderTrace({
+        outcome: 'success',
+        forbiddenStateAccess: false,
+        toolCalls: [{ command: 'cat .council/runs/latest.js' }]
+      });
+      assert.equal(normFromTools.forbiddenStateAccess, true);
+      assert.equal(normFromTools.outcome, 'error');
+      assert.deepEqual(normFromTools.forbiddenAccessDetails, ['cat .council/runs/latest.js']);
+
+      // 5. Subclass classifyError must NOT misclassify FORBIDDEN_STATE_ACCESS as QuotaExhaustionError when path contains "429" or "rate_limit"
+      const forbidden429Err = new Error(
+        '[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: cat .council/runs/run-429-rate_limit.meta.json'
+      );
+      forbidden429Err.code = 'FORBIDDEN_STATE_ACCESS';
+      forbidden429Err.trace = normFromDetails;
+
+      for (const adapter of [new CodexAdapter(), new CursorAdapter(), new AntigravityAdapter()]) {
+        const classified = adapter.classifyError(forbidden429Err, { seatId: 's1', model: 'm1' });
+        assert.equal(classified.name, 'HarnessExecutionError');
+        assert.equal(classified.isQuotaFault, false);
+        assert.equal(classified.code, 'FORBIDDEN_STATE_ACCESS');
+        assert.equal(classified.trace?.forbiddenStateAccess, true);
+      }
+
+      // 6. runAntigravityCli detects forbidden tool calls in JSON output and records error trace
+      let agyRecorded = [];
+      await assert.rejects(
+        async () => {
+          await runAntigravityCli({
+            model: 'gemini-4-argon (high)',
+            prompt: 'Deliberate',
+            context: { seatId: 'agy-cheater' },
+            onCallRecord: (rec) => agyRecorded.push(rec),
+            exec: async () => ({
+              stdout: JSON.stringify({
+                response: '{"vote":"accept"}',
+                toolCalls: [{ name: 'view_file', args: { name: '.council/runs/latest.js' } }]
+              }),
+              stderr: '',
+              exitCode: 0
+            })
+          });
+        },
+        (err) => {
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.equal(err.trace?.forbiddenStateAccess, true);
+          assert.equal(err.trace?.outcome, 'error');
+          return true;
+        }
+      );
+      assert.equal(agyRecorded.length, 1);
+      assert.equal(agyRecorded[0].trace.forbiddenStateAccess, true);
+      assert.equal(agyRecorded[0].trace.outcome, 'error');
+    });
   });
 });
+

@@ -52,6 +52,14 @@ export class AntigravityAdapter extends HarnessAdapter {
       return error;
     }
 
+    if (
+      error?.code === 'FORBIDDEN_STATE_ACCESS' ||
+      error?.trace?.forbiddenStateAccess === true ||
+      /\[ForbiddenStateAccessError\]/i.test(error?.message || '')
+    ) {
+      return super.classifyError(error, context);
+    }
+
     const raw = (error?.message || '') + ' ' + (error?.stderr || '');
 
     // Gemini and Claude quota & rate limit signatures
@@ -75,9 +83,9 @@ export class AntigravityAdapter extends HarnessAdapter {
     return super.classifyError(error, context);
   }
 
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(seat.model);
-    const effectiveCwd = cwd || seat?.cwd || state?.cwd || this.cwd;
+    const effectiveCwd = cwd || callerContext?.cwd || seat?.cwd || state?.cwd || this.cwd || this.config?.cwd;
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -125,9 +133,9 @@ export class AntigravityAdapter extends HarnessAdapter {
     );
   }
 
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(judge.model);
-    const effectiveCwd = cwd || judge?.cwd || state?.cwd || this.cwd;
+    const effectiveCwd = cwd || callerContext?.cwd || judge?.cwd || state?.cwd || this.cwd || this.config?.cwd;
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -217,7 +225,7 @@ export class AntigravityAdapter extends HarnessAdapter {
 
   async _dispatchCli({ model, prompt, signal, context, cwd }) {
     if (this.spawnRunner) {
-      const effectiveCwd = cwd || context?.cwd;
+      const effectiveCwd = cwd || context?.cwd || this.cwd || this.config?.cwd;
       return this.spawnRunner({
         executable: this.executable,
         model,

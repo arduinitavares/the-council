@@ -378,8 +378,17 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       const candidate = result.verdict?.candidate || result.state?.candidate || null;
       const candidateSummary = typeof candidate?.summary === 'string' ? candidate.summary.trim() : '';
       if (candidateSummary) {
-        log('\nFinal Answer:');
-        log(`  ${candidateSummary}`);
+        const finalAnswerHeader =
+          result.verdict?.kind === 'Unanimous Consensus'
+            ? 'Final Answer:'
+            : `Final Answer: (Proposed Candidate — ${result.verdict?.kind || 'Dissent Report'})`;
+        log(`\n${finalAnswerHeader}`);
+        log(
+          candidateSummary
+            .split('\n')
+            .map((line) => '  ' + line)
+            .join('\n')
+        );
       }
 
       if (candidate && Array.isArray(candidate.clauses) && candidate.clauses.length > 0) {

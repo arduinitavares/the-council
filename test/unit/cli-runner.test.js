@@ -1583,7 +1583,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         }),
         JSON.stringify({
           type: 'item.completed',
-          item: { id: 'm_dev', type: 'message', role: 'developer', text: 'Developer trailer' }
+          item: { id: 'm_dev', type: 'message', message: { role: 'developer', content: 'Developer trailer' } }
         }),
         JSON.stringify({
           type: 'result',
@@ -1593,13 +1593,34 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
 
       const parsedCodex = parseCodexEventStream(codexOutOfOrderUpdateStream);
       assert.equal(parsedCodex.text, finalVoteMsg);
+
+      // Status-only completion event (without repeating text) still moves m_early to the end
+      const statusOnlyCompletionStream = [
+        JSON.stringify({
+          type: 'item.started',
+          item: { id: 'm_early', type: 'agent_message', text: finalVoteMsg }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_mid', type: 'agent_message', text: preToolMsg }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_early', type: 'agent_message', status: 'completed' }
+        })
+      ].join('\n');
+      assert.equal(parseCodexEventStream(statusOnlyCompletionStream).text, finalVoteMsg);
     });
 
-    it('unwraps shell flags (-o pipefail, --norc, --rcfile) without infinite recursion and bounds recursion depth in extractSkillsRead', async () => {
+    it('unwraps shell flags (-o pipefail, --norc, --rcfile, -ce), subshells, and trailing positional args without infinite recursion', async () => {
       const { extractSkillsRead } = await import('../../src/harness/cli-runner.js');
 
       assert.deepEqual(
         extractSkillsRead("bash -o pipefail -c 'cat skills/ask-council/SKILL.md'"),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      assert.deepEqual(
+        extractSkillsRead("bash -ce 'cat skills/ask-council/SKILL.md'"),
         [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
       );
       assert.deepEqual(
@@ -1609,6 +1630,16 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(
         extractSkillsRead('bash --rcfile /tmp/bashrc -euo pipefail -c "head -n 20 skills/ask-council/SKILL.md"'),
         [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      // Subshell wrapping bash -c with compound read + mutation must unwrap and reject the mutated skill
+      assert.deepEqual(
+        extractSkillsRead('(bash -c "cat skills/ask-council/SKILL.md && rm skills/ask-council/SKILL.md")'),
+        []
+      );
+      // Trailing $0 / positional arguments after -c script string must not spoof a skill read
+      assert.deepEqual(
+        extractSkillsRead("bash -c 'cat README.md' _ skills/ask-council/SKILL.md"),
+        []
       );
       // Shell invocation without -c must not infinitely recurse or credit non-read script args
       assert.deepEqual(
@@ -1629,15 +1660,19 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(extractSkillsRead('cat skills/ask-council/SKILL.md~'), []);
       assert.deepEqual(extractSkillsRead({ path: 'skills/ask-council/SKILL.md.bak' }), []);
 
-      // Unquoted shell comments must be stripped
+      // Unquoted shell comments must be stripped while preserving quoted '#'
       assert.deepEqual(extractSkillsRead('cat README.md # skills/ask-council/SKILL.md'), []);
       assert.deepEqual(extractSkillsRead('cat README.md # ; cat skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(
+        extractSkillsRead('grep "# heading" "skills/ask-council/SKILL.md" # skills/fake-skill/SKILL.md'),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
       assert.deepEqual(
         extractSkillsRead('cat README.md # comment\ncat skills/ask-council/SKILL.md'),
         [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
       );
 
-      // Compound commands / pipelines that read and mutate the same skill must exclude the mutated skill
+      // Compound commands / pipelines / background '&' / brace groups that read and mutate the same skill must exclude the mutated skill
       assert.deepEqual(
         extractSkillsRead('cat skills/ask-council/SKILL.md | tee skills/ask-council/SKILL.md'),
         []
@@ -1647,11 +1682,23 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         []
       );
       assert.deepEqual(
+        extractSkillsRead('cat skills/ask-council/SKILL.md & rm skills/ask-council/SKILL.md'),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead('cat skills/ask-council/SKILL.md && { rm skills/ask-council/SKILL.md; }'),
+        []
+      );
+      assert.deepEqual(
         extractSkillsRead("cat skills/ask-council/SKILL.md && sed -i 's/a/b/' skills/ask-council/SKILL.md"),
         []
       );
       assert.deepEqual(
         extractSkillsRead("cat skills/ask-council/SKILL.md && sed 'w skills/ask-council/SKILL.md' README.md"),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("cat skills/ask-council/SKILL.md && sed '1w skills/ask-council/SKILL.md' README.md"),
         []
       );
       assert.deepEqual(
@@ -1677,7 +1724,19 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         []
       );
       assert.deepEqual(
+        extractSkillsRead("python3 -c \"open('skills/ask-council/SKILL.md', 'r+').read()\""),
+        []
+      );
+      assert.deepEqual(
         extractSkillsRead("python3 -c \"open('skills/ask-council/SKILL.md', mode='a')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead([
+          'python3',
+          '-c',
+          "open('skills/ask-council/SKILL.md').read(); shutil.copy('README.md', 'skills/ask-council/SKILL.md')"
+        ]),
         []
       );
       assert.deepEqual(
@@ -1712,7 +1771,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       // Codex stream:
       // 1) tool_call with tool_name: 'write_file' must be rejected as mutating
       // 2) unkeyed item.started (with tool_name: 'read_file') -> item.updated (with path) -> item.completed (omitting tool_name & args, with string exit_code: "1") must merge to 1 failed tool call and NOT credit skill
-      // 3) unkeyed item.started -> item.updated -> item.completed with exit_code: "0" must merge to 1 completed tool call and credit skill
+      // 3) interleaved unkeyed tool_call with explicitName 'read_file' vs unkeyed tool_call without explicitName: completion with tool_name 'read_file' and exit_code: '1' must match the 'read_file' entry
       const codexStream = [
         JSON.stringify({
           type: 'item.completed',
@@ -1749,14 +1808,23 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           type: 'item.started',
           item: {
             type: 'tool_call',
-            tool_name: 'read_file'
+            tool_name: 'read_file',
+            args: { path: 'skills/interleaved-fail/SKILL.md' }
           }
         }),
         JSON.stringify({
-          type: 'item.updated',
+          type: 'item.started',
           item: {
             type: 'tool_call',
             args: { path: 'skills/safe-refactor/SKILL.md' }
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            type: 'tool_call',
+            tool_name: 'read_file',
+            exit_code: '1'
           }
         }),
         JSON.stringify({
@@ -1773,22 +1841,24 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       ].join('\n');
 
       const codexRes = parseCodexEventStream(codexStream);
-      assert.equal(codexRes.toolCalls.length, 3);
+      assert.equal(codexRes.toolCalls.length, 4);
       assert.equal(codexRes.toolCalls[0].name, 'write_file');
       assert.equal(codexRes.toolCalls[1].name, 'read_file');
       assert.equal(codexRes.toolCalls[1].path, 'skills/failed-skill/SKILL.md');
       assert.equal(codexRes.toolCalls[1].status, 'failed');
       assert.equal(codexRes.toolCalls[1].exitCode, 1);
       assert.equal(codexRes.toolCalls[2].name, 'read_file');
-      assert.equal(codexRes.toolCalls[2].path, 'skills/safe-refactor/SKILL.md');
-      assert.equal(codexRes.toolCalls[2].status, 'completed');
+      assert.equal(codexRes.toolCalls[2].path, 'skills/interleaved-fail/SKILL.md');
+      assert.equal(codexRes.toolCalls[2].status, 'failed');
+      assert.equal(codexRes.toolCalls[3].path, 'skills/safe-refactor/SKILL.md');
+      assert.equal(codexRes.toolCalls[3].status, 'completed');
       assert.deepEqual(codexRes.skillsRead, [
         { skill: 'safe-refactor', evidence: 'skill_instructions_read' }
       ]);
 
       // Cursor stream:
       // 1) tool_call with tool_name: 'write_file' rejected as mutating
-      // 2) item.started (unkeyed, tool_name: 'read_file', path: 'skills/err-skill/SKILL.md') -> completed with result.error (and omitted tool_name) merges and marks status='failed'
+      // 2) item.started (unkeyed, tool_name: 'read_file') -> item.updated (with status: 'started', path: 'skills/err-skill/SKILL.md') -> completed with result.error (and omitted tool_name) merges and marks status='failed'
       // 3) subtype: 'completed' with result.failure.exitCode: 2 marks status='failed'
       const cursorStream = [
         JSON.stringify({
@@ -1801,7 +1871,14 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           type: 'item.started',
           item: {
             type: 'tool_call',
-            tool_name: 'read_file',
+            tool_name: 'read_file'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            type: 'tool_call',
+            status: 'started',
             args: { path: 'skills/err-skill/SKILL.md' }
           }
         }),
@@ -1827,6 +1904,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(cursorRes.toolCalls.length, 3);
       assert.equal(cursorRes.toolCalls[0].name, 'write_file');
       assert.equal(cursorRes.toolCalls[1].name, 'read_file');
+      assert.equal(cursorRes.toolCalls[1].path, 'skills/err-skill/SKILL.md');
       assert.equal(cursorRes.toolCalls[1].status, 'failed');
       assert.equal(cursorRes.toolCalls[2].name, 'shellToolCall');
       assert.equal(cursorRes.toolCalls[2].status, 'failed');

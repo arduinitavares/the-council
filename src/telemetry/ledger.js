@@ -336,8 +336,30 @@ export function buildRunTelemetryRecord({
     let traceCoverage = 'unavailable';
     let observedToolCalls = null;
     const skillsByName = new Map();
+    let forbiddenStateAccess = Boolean(seat.forbiddenStateAccess);
+    const forbiddenDetailsSet = new Set(
+      Array.isArray(seat.forbiddenAccessDetails)
+        ? seat.forbiddenAccessDetails.filter((d) => typeof d === 'string' && d.trim())
+        : []
+    );
 
     if (seatCalls.length > 0) {
+      for (const c of seatCalls) {
+        if (c.trace?.forbiddenStateAccess === true || c.forbiddenStateAccess === true) {
+          forbiddenStateAccess = true;
+        }
+        const callDetails = [
+          ...(Array.isArray(c.trace?.forbiddenAccessDetails) ? c.trace.forbiddenAccessDetails : []),
+          ...(Array.isArray(c.forbiddenAccessDetails) ? c.forbiddenAccessDetails : [])
+        ];
+        for (const d of callDetails) {
+          if (typeof d === 'string' && d.trim()) {
+            forbiddenDetailsSet.add(d);
+            forbiddenStateAccess = true;
+          }
+        }
+      }
+
       const coverages = seatCalls.map((c) => {
         if (c.trace && typeof c.trace.traceCoverage === 'string') {
           return c.trace.traceCoverage;
@@ -379,6 +401,10 @@ export function buildRunTelemetryRecord({
       }
     }
 
+    if (forbiddenDetailsSet.size > 0) {
+      forbiddenStateAccess = true;
+    }
+
     return Object.freeze({
       seatId,
       provider: canonical.provider,
@@ -398,7 +424,9 @@ export function buildRunTelemetryRecord({
       distinctProofsCited,
       traceCoverage,
       observedToolCalls,
-      skillsRead: Object.freeze([...skillsByName.values()].map((s) => Object.freeze({ ...s })))
+      skillsRead: Object.freeze([...skillsByName.values()].map((s) => Object.freeze({ ...s }))),
+      forbiddenStateAccess,
+      forbiddenAccessDetails: Object.freeze([...forbiddenDetailsSet])
     });
   });
 

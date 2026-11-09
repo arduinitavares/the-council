@@ -1148,14 +1148,83 @@ function findMatchingPendingUnkeyedIndex(
 }
 
 const FORBIDDEN_COUNCIL_PATH_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/;
+  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/i;
 
-function hasForbiddenCouncilToken(str) {
+const FORBIDDEN_COUNCIL_GLOB_REGEX =
+  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_-]*[?*\[\]{}][?*\[\]{}a-z0-9_-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|latest\.js|telemetry-summary\.)|\.(?:c[?*\[\]{}a-z0-9_-]*[?*\[\]{}][?*\[\]{}a-z0-9_-]*(?:cil|l)|[?*\[\]{}]+ouncil)(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]))/i;
+
+const FORBIDDEN_COUNCIL_ARTIFACT_REGEX =
+  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.js|run-[a-z0-9_-]+\.(?:meta\.json|events\.jsonl|json|js)|[a-z0-9_*?[\]{}-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary\.(?:json|js|[*?a-z0-9_-]+))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
+
+function stripBenignCouncilExclusions(str) {
+  if (typeof str !== 'string' || !str) return '';
+  let next = str;
+
+  // 1. Standalone negated glob string (e.g., "!.council/**", "'!.council/**'", "!*/.council/*")
+  if (/^(?:'![^'\s;|&<>()`$]+'|"![^"\s;|&<>()`$]+"|![^\s;|&<>()`$]+)$/.test(next.trim())) {
+    return '';
+  }
+
+  // 2. Search/grep exclusion flags: --exclude-dir, --exclude, --ignore-dir, --ignore
+  next = next.replace(
+    /(?:^|\s)--(?:exclude-dir|exclude-from|exclude|ignore-dir|ignore)(?:=|\s+)(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)/gi,
+    ' '
+  );
+
+  // 3. Negated glob flags (-g '!.council*', --glob '!.council*', --iglob=!.council*)
+  next = next.replace(
+    /(?:^|\s)(?:-g|--i?glob|--filter)(?:=|\s+)(?:'![^']*'|"![^"]*"|![^\s;|&<>()`]+)/gi,
+    ' '
+  );
+
+  // 4. find exclusion clauses:
+  //    a) -path / -ipath / -wholename / -name / -iname / -regex followed by -prune (not followed by -exec/-ok)
+  next = next.replace(
+    /(?:\\\(|[(])?\s*(?:-i?(?:path|wholename|name|regex)\s+(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)\s*(?:-o|-or|-a|-and)?\s*)+(?:\\\)|[)])?\s*-prune\b(?!\s+-(?:exec|execdir|ok|okdir)\b)/gi,
+    ' '
+  );
+  //    b) ! or -not preceding -path / -ipath / -wholename / -name / -iname / -regex
+  next = next.replace(
+    /(?:^|[\s(])(?:\\!|!|-not)\s+-i?(?:path|wholename|name|regex)\s+(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)/gi,
+    ' '
+  );
+
+  // 5. Standalone negated glob tokens inside a command or list (e.g., rg "pattern" -g '!.council/**')
+  next = next.replace(
+    /(?:^|[\s,\[])(?:'![^'\s;|&<>()`$]+'|"![^"\s;|&<>()`$]+"|!(?=[.*\\/a-zA-Z0-9_?\[\]{}-]*\.(?:council|meta\.json|events\.jsonl)|[.*\\/a-zA-Z0-9_?\[\]{}-]*(?:latest\.js|telemetry-summary))[.*\\/a-zA-Z0-9_?\[\]{}-]+)(?=$|[\s,\]])/gi,
+    ' '
+  );
+
+  return next;
+}
+
+function matchesForbiddenCouncilPattern(str) {
+  if (!str) return false;
+  return (
+    FORBIDDEN_COUNCIL_PATH_REGEX.test(str) ||
+    FORBIDDEN_COUNCIL_GLOB_REGEX.test(str) ||
+    FORBIDDEN_COUNCIL_ARTIFACT_REGEX.test(str)
+  );
+}
+
+export function hasForbiddenCouncilToken(str) {
   if (typeof str !== 'string' || !str) return false;
-  if (FORBIDDEN_COUNCIL_PATH_REGEX.test(str)) return true;
-  if ((str.includes('"') || str.includes("'") || str.includes('\\')) && /c/i.test(str)) {
-    const dequoted = str.replace(/\\(?=[.a-zA-Z0-9_/])/g, '').replace(/["']/g, '');
-    if (dequoted !== str && FORBIDDEN_COUNCIL_PATH_REGEX.test(dequoted)) {
+  const sanitized = stripBenignCouncilExclusions(str);
+  if (!sanitized || !sanitized.trim()) return false;
+  if (matchesForbiddenCouncilPattern(sanitized)) return true;
+  if (
+    sanitized.includes('"') ||
+    sanitized.includes("'") ||
+    sanitized.includes('\\') ||
+    sanitized.includes('[') ||
+    sanitized.includes('{')
+  ) {
+    const dequoted = sanitized
+      .replace(/\\(?=[.a-zA-Z0-9_/*?[\]{}-])/g, '')
+      .replace(/["']/g, '')
+      .replace(/\[([a-zA-Z0-9_.-])\]/g, '$1')
+      .replace(/\{([a-zA-Z0-9_.-]+)\}/g, '$1');
+    if (dequoted !== sanitized && matchesForbiddenCouncilPattern(dequoted)) {
       return true;
     }
   }
@@ -1171,6 +1240,20 @@ const FORBIDDEN_ACCESS_OUTPUT_KEYS = new Set([
   'response',
   'error',
   'failure'
+]);
+
+const FORBIDDEN_ACCESS_EXCLUSION_KEYS = new Set([
+  'exclude',
+  'excludes',
+  'Excludes',
+  'exclude_dir',
+  'excludeDir',
+  'excludePatterns',
+  'ignore',
+  'ignores',
+  'ignorePatterns',
+  'ignore_dir',
+  'ignoreDir'
 ]);
 
 const FORBIDDEN_ACCESS_OUTER_SKIP_KEYS = new Set([
@@ -1192,6 +1275,39 @@ const FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS = new Set([
   'parameters',
   'params'
 ]);
+
+function filterBenignStringArrayExclusions(arr) {
+  const result = [];
+  for (let i = 0; i < arr.length; i += 1) {
+    const token = arr[i].trim();
+    const nextToken = typeof arr[i + 1] === 'string' ? arr[i + 1].trim() : '';
+    const thirdToken = typeof arr[i + 2] === 'string' ? arr[i + 2].trim() : '';
+    const fourthToken = typeof arr[i + 3] === 'string' ? arr[i + 3].trim() : '';
+
+    if (/^--(?:exclude-dir|exclude-from|exclude|ignore-dir|ignore)$/i.test(token) && i + 1 < arr.length) {
+      i += 1;
+      continue;
+    }
+    if (/^(?:-g|--i?glob|--filter)$/i.test(token) && /^['"]?!/.test(nextToken)) {
+      i += 1;
+      continue;
+    }
+    if (/^(?:!|-not)$/i.test(token) && /^-i?(?:path|wholename|name|regex)$/i.test(nextToken) && i + 2 < arr.length) {
+      i += 2;
+      continue;
+    }
+    if (
+      /^-i?(?:path|wholename|name|regex)$/i.test(token) &&
+      thirdToken === '-prune' &&
+      !/^-(?:exec|execdir|ok|okdir)$/i.test(fourthToken)
+    ) {
+      i += 2;
+      continue;
+    }
+    result.push(arr[i]);
+  }
+  return result;
+}
 
 /**
  * Checks whether a path, command string, or tool-call object targets `.council/`.
@@ -1277,13 +1393,19 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
     visitedModes.add(visitKey);
 
     if (Array.isArray(val)) {
-      for (const item of val) {
+      const itemsToInspect = val.every((item) => typeof item === 'string')
+        ? filterBenignStringArrayExclusions(val)
+        : val;
+      for (const item of itemsToInspect) {
         inspectValue(item, visited, depth + 1, inInputContainer);
       }
       return;
     }
 
     for (const [k, v] of Object.entries(val)) {
+      if (FORBIDDEN_ACCESS_EXCLUSION_KEYS.has(k)) {
+        continue;
+      }
       if (!inInputContainer) {
         if ((k === 'action' || k === 'operation') && v && typeof v === 'object') {
           inspectValue(v, visited, depth + 1, true);
@@ -2252,6 +2374,30 @@ export function normalizeProviderTrace(trace, defaults = {}) {
 }
 
 /**
+ * Builds a sanitized child process environment when executing in `cwd`,
+ * setting `PWD` to `cwd` and scrubbing inherited `OLDPWD` and `INIT_CWD`
+ * so isolated seats do not inherit host repository paths from the parent shell/npm.
+ *
+ * @param {string|null|undefined} cwd
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {NodeJS.ProcessEnv|undefined}
+ */
+export function buildSanitizedCliEnv(cwd, env) {
+  if (!cwd) {
+    return env;
+  }
+  const baseEnv = env || process.env;
+  const nextEnv = { ...baseEnv, PWD: cwd };
+  if (!env || !Object.prototype.hasOwnProperty.call(env, 'OLDPWD')) {
+    delete nextEnv.OLDPWD;
+  }
+  if (!env || !Object.prototype.hasOwnProperty.call(env, 'INIT_CWD')) {
+    delete nextEnv.INIT_CWD;
+  }
+  return nextEnv;
+}
+
+/**
  * Executes a CLI process directly via execFile with timeout and abort support.
  * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error
  * and sanitizes error.message / error.cmd so raw prompts are never leaked.
@@ -2270,11 +2416,12 @@ export function normalizeProviderTrace(trace, defaults = {}) {
  */
 export async function execCli(executable, args = [], options = {}) {
   const maxBuffer = options.maxBuffer || DEFAULT_MAX_BUFFER;
+  const effectiveEnv = buildSanitizedCliEnv(options.cwd, options.env);
   const execOptions = {
     maxBuffer,
     encoding: 'utf8',
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.env ? { env: options.env } : {}),
+    ...(effectiveEnv ? { env: effectiveEnv } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.timeoutMs ? { timeout: options.timeoutMs } : {})
   };
@@ -2367,6 +2514,108 @@ function createForbiddenStateAccessError(details, trace, exitCode = 0) {
   return err;
 }
 
+function parseAntigravityOutput(raw) {
+  const str = typeof raw === 'string' ? raw : String(raw || '');
+  let unwrappedResponse = null;
+  let toolCalls = [];
+  let traceCoverage = 'unavailable';
+  let streamForbidden = false;
+  let streamForbiddenDetails = [];
+  let streamSkillsRead = [];
+  let eventsParsed = false;
+
+  if (!str.trim()) {
+    return {
+      unwrappedResponse,
+      toolCalls,
+      skillsRead: [],
+      traceCoverage,
+      forbiddenStateAccess: false,
+      forbiddenAccessDetails: [],
+      eventsParsed: false
+    };
+  }
+
+  try {
+    const json = JSON.parse(str);
+    if (json && typeof json === 'object') {
+      if (typeof json.response === 'string') {
+        unwrappedResponse = json.response;
+      }
+      const rawTools = Array.isArray(json.toolCalls)
+        ? json.toolCalls
+        : Array.isArray(json.tool_calls)
+          ? json.tool_calls
+          : Array.isArray(json.trace?.toolCalls)
+            ? json.trace.toolCalls
+            : null;
+      if (rawTools) {
+        toolCalls = rawTools;
+        traceCoverage = json.trace?.traceCoverage || 'partial';
+        eventsParsed = true;
+      }
+      if (json.trace && typeof json.trace === 'object') {
+        if (typeof json.trace.traceCoverage === 'string') {
+          traceCoverage = json.trace.traceCoverage;
+        }
+        if (json.trace.forbiddenStateAccess === true) {
+          streamForbidden = true;
+        }
+        if (Array.isArray(json.trace.forbiddenAccessDetails)) {
+          streamForbiddenDetails = json.trace.forbiddenAccessDetails;
+        }
+        if (Array.isArray(json.trace.skillsRead)) {
+          streamSkillsRead = json.trace.skillsRead;
+        }
+      }
+    }
+  } catch {
+    const maybeStream = parseCursorEventStream(str);
+    if (maybeStream.eventsParsed) {
+      eventsParsed = true;
+      toolCalls = maybeStream.toolCalls;
+      traceCoverage = maybeStream.traceCoverage;
+      streamForbidden = maybeStream.forbiddenStateAccess;
+      streamForbiddenDetails = maybeStream.forbiddenAccessDetails || [];
+      streamSkillsRead = maybeStream.skillsRead || [];
+      if (maybeStream.text) {
+        unwrappedResponse = maybeStream.text;
+      }
+    }
+  }
+
+  const envelopeCheck =
+    toolCalls.length > 0
+      ? detectForbiddenCouncilAccess(toolCalls)
+      : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
+  const forbiddenAccessDetails = [
+    ...new Set([...streamForbiddenDetails, ...envelopeCheck.forbiddenAccessDetails])
+  ];
+  const forbiddenStateAccess =
+    Boolean(streamForbidden) ||
+    envelopeCheck.forbiddenStateAccess ||
+    forbiddenAccessDetails.length > 0;
+
+  const envelopeSkills = toolCalls.length > 0 ? extractSkillsRead(toolCalls) : [];
+  const skillsByName = new Map();
+  for (const s of [...streamSkillsRead, ...envelopeSkills]) {
+    const skillName = typeof s === 'string' ? s : s?.skill;
+    if (skillName && !skillsByName.has(skillName)) {
+      skillsByName.set(skillName, { skill: skillName, evidence: 'skill_instructions_read' });
+    }
+  }
+
+  return {
+    unwrappedResponse,
+    toolCalls,
+    skillsRead: [...skillsByName.values()],
+    traceCoverage,
+    forbiddenStateAccess,
+    forbiddenAccessDetails,
+    eventsParsed
+  };
+}
+
 /**
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
@@ -2409,6 +2658,7 @@ export async function runAntigravityCli({
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
   const effectiveCwd = explicitCwd || tempCwdDir;
+  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
   const args = [
     '--output-format', 'json',
     '--mode', 'plan',
@@ -2423,63 +2673,29 @@ export async function runAntigravityCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
+    const result = await exec(executable, args, {
+      signal,
+      timeoutMs,
+      cwd: effectiveCwd,
+      env: effectiveEnv
+    });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const raw = result?.stdout || '';
-    let unwrappedResponse = null;
-    let envelopeToolCalls = [];
-    let envelopeCoverage = 'unavailable';
-
-    try {
-      const json = JSON.parse(raw);
-      if (json && typeof json === 'object') {
-        if (typeof json.response === 'string') {
-          unwrappedResponse = json.response;
-        }
-        const rawTools =
-          Array.isArray(json.toolCalls)
-            ? json.toolCalls
-            : Array.isArray(json.tool_calls)
-              ? json.tool_calls
-              : Array.isArray(json.trace?.toolCalls)
-                ? json.trace.toolCalls
-                : null;
-        if (rawTools) {
-          envelopeToolCalls = rawTools;
-          envelopeCoverage = json.trace?.traceCoverage || 'partial';
-        }
-      }
-    } catch {
-      const maybeStream = parseCursorEventStream(raw);
-      if (maybeStream.eventsParsed && maybeStream.toolCalls.length > 0) {
-        envelopeToolCalls = maybeStream.toolCalls;
-        envelopeCoverage = maybeStream.traceCoverage;
-        if (maybeStream.text) {
-          unwrappedResponse = maybeStream.text;
-        }
-      }
-    }
-
-    const forbiddenCheck =
-      envelopeToolCalls.length > 0
-        ? detectForbiddenCouncilAccess(envelopeToolCalls)
-        : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
-    const skillsRead =
-      envelopeToolCalls.length > 0 ? extractSkillsRead(envelopeToolCalls) : [];
+    const parsedOut = parseAntigravityOutput(raw);
 
     const trace = {
-      traceCoverage: envelopeCoverage,
-      toolCalls: envelopeToolCalls,
-      skillsRead,
-      forbiddenStateAccess: forbiddenCheck.forbiddenStateAccess,
-      forbiddenAccessDetails: forbiddenCheck.forbiddenAccessDetails,
+      traceCoverage: parsedOut.traceCoverage,
+      toolCalls: parsedOut.toolCalls,
+      skillsRead: parsedOut.skillsRead,
+      forbiddenStateAccess: parsedOut.forbiddenStateAccess,
+      forbiddenAccessDetails: parsedOut.forbiddenAccessDetails,
       durationMs,
-      outcome: forbiddenCheck.forbiddenStateAccess ? 'error' : 'success'
+      outcome: parsedOut.forbiddenStateAccess ? 'error' : 'success'
     };
 
-    if (forbiddenCheck.forbiddenStateAccess) {
-      throw createForbiddenStateAccessError(forbiddenCheck.forbiddenAccessDetails, trace, exitCode);
+    if (parsedOut.forbiddenStateAccess) {
+      throw createForbiddenStateAccessError(parsedOut.forbiddenAccessDetails, trace, exitCode);
     }
 
     recordProviderCall({
@@ -2496,8 +2712,8 @@ export async function runAntigravityCli({
       }
     });
 
-    if (typeof unwrappedResponse === 'string') {
-      return unwrappedResponse;
+    if (typeof parsedOut.unwrappedResponse === 'string') {
+      return parsedOut.unwrappedResponse;
     }
 
     return raw.trim();
@@ -2508,6 +2724,10 @@ export async function runAntigravityCli({
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
+    const parsedErr =
+      !err?.trace && typeof err?.stdout === 'string' && err.stdout.trim()
+        ? parseAntigravityOutput(err.stdout)
+        : null;
 
     const errorTrace = err?.trace
       ? {
@@ -2516,14 +2736,18 @@ export async function runAntigravityCli({
           outcome: 'error'
         }
       : {
-          traceCoverage: 'unavailable',
-          toolCalls: [],
-          skillsRead: [],
-          forbiddenStateAccess: false,
-          forbiddenAccessDetails: [],
+          traceCoverage: parsedErr ? parsedErr.traceCoverage : 'unavailable',
+          toolCalls: parsedErr ? parsedErr.toolCalls : [],
+          skillsRead: parsedErr ? parsedErr.skillsRead : [],
+          forbiddenStateAccess: parsedErr ? parsedErr.forbiddenStateAccess : false,
+          forbiddenAccessDetails: parsedErr ? parsedErr.forbiddenAccessDetails : [],
           durationMs,
           outcome: 'error'
         };
+    if (!err.trace && parsedErr?.forbiddenStateAccess) {
+      err.code = 'FORBIDDEN_STATE_ACCESS';
+      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErr.forbiddenAccessDetails.join(', ')}`;
+    }
     err.trace = errorTrace;
     err._providerCallRecorded = true;
 
@@ -2597,6 +2821,7 @@ export async function runCodexCli({
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
   const effectiveCwd = explicitCwd || tempCwdDir;
+  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
   const shouldDisableHooks =
     disableHooks !== undefined ? Boolean(disableHooks) : context?.disableHooks !== false;
   const shouldIgnoreUserConfig =
@@ -2621,7 +2846,12 @@ export async function runCodexCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
+    const result = await exec(executable, args, {
+      signal,
+      timeoutMs,
+      cwd: effectiveCwd,
+      env: effectiveEnv
+    });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const parsedStream = parseCodexEventStream(result?.stdout || '');
@@ -2752,6 +2982,7 @@ export async function runCursorCli({
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
   const effectiveCwd = explicitCwd || tempCwdDir;
+  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
   const args = [
     '--print',
     '--output-format', 'stream-json',
@@ -2766,7 +2997,12 @@ export async function runCursorCli({
   let exitCode = 0;
 
   try {
-    const result = await exec(executable, args, { signal, timeoutMs, cwd: effectiveCwd, env });
+    const result = await exec(executable, args, {
+      signal,
+      timeoutMs,
+      cwd: effectiveCwd,
+      env: effectiveEnv
+    });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const parsedStream = parseCursorEventStream(result?.stdout || '');
@@ -2803,7 +3039,12 @@ export async function runCursorCli({
   } catch (err) {
     if (err && err.code === 'ENOENT' && executable === 'cursor-agent') {
       try {
-        const fallbackResult = await exec('agent', args, { signal, timeoutMs, cwd: effectiveCwd, env });
+        const fallbackResult = await exec('agent', args, {
+          signal,
+          timeoutMs,
+          cwd: effectiveCwd,
+          env: effectiveEnv
+        });
         exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
         const durationMs = Date.now() - startTime;
         const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '');

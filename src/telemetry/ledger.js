@@ -339,7 +339,9 @@ export function buildRunTelemetryRecord({
     let forbiddenStateAccess = Boolean(seat.forbiddenStateAccess);
     const forbiddenDetailsSet = new Set(
       Array.isArray(seat.forbiddenAccessDetails)
-        ? seat.forbiddenAccessDetails.filter((d) => typeof d === 'string' && d.trim())
+        ? seat.forbiddenAccessDetails
+            .filter((d) => typeof d === 'string' && d.trim())
+            .map((d) => d.trim())
         : []
     );
 
@@ -354,7 +356,7 @@ export function buildRunTelemetryRecord({
         ];
         for (const d of callDetails) {
           if (typeof d === 'string' && d.trim()) {
-            forbiddenDetailsSet.add(d);
+            forbiddenDetailsSet.add(d.trim());
             forbiddenStateAccess = true;
           }
         }
@@ -550,6 +552,8 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
   let tracedToolCalls = 0;
   let hasTracedSeat = false;
   const skillsSet = new Set();
+  let forbiddenStateAccess = false;
+  const forbiddenDetailsSet = new Set();
 
   for (const s of seatsForModel) {
     if (s.seatId) seatIds.push(s.seatId);
@@ -562,6 +566,15 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
     distinctProofsCited += s.distinctProofsCited || 0;
     retries += s.retries || 0;
     if (s.excused) excused = true;
+    if (s.forbiddenStateAccess) forbiddenStateAccess = true;
+    if (Array.isArray(s.forbiddenAccessDetails)) {
+      for (const d of s.forbiddenAccessDetails) {
+        if (typeof d === 'string' && d.trim()) {
+          forbiddenDetailsSet.add(d.trim());
+          forbiddenStateAccess = true;
+        }
+      }
+    }
 
     const cov = s.traceCoverage || 'unavailable';
     if (cov === 'full') fullCount += 1;
@@ -601,7 +614,9 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
     excused,
     traceCoverage,
     observedToolCalls: hasTracedSeat ? tracedToolCalls : null,
-    skillsRead: [...skillsSet].map((skill) => ({ skill, evidence: 'skill_instructions_read' }))
+    skillsRead: [...skillsSet].map((skill) => ({ skill, evidence: 'skill_instructions_read' })),
+    forbiddenStateAccess,
+    forbiddenAccessDetails: Object.freeze([...forbiddenDetailsSet])
   };
 }
 

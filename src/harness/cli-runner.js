@@ -1151,47 +1151,83 @@ const FORBIDDEN_COUNCIL_PATH_REGEX =
   /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/i;
 
 const FORBIDDEN_COUNCIL_GLOB_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_-]*[?*\[\]{}][?*\[\]{}a-z0-9_-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|latest\.js|telemetry-summary\.)|\.(?:c[?*\[\]{}a-z0-9_-]*[?*\[\]{}][?*\[\]{}a-z0-9_-]*(?:cil|l)|[?*\[\]{}]+ouncil)(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]))/i;
+  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_,-]*[?*\[\]{}][?*\[\]{}a-z0-9_,-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:live-run-)?latest[.*a-z0-9_-]*|telemetry-summary[.*a-z0-9_-]*|[*?]+[\\/](?:(?:live-run-)?latest|run-|telemetry-summary))|\.(?:cou[?*\[\]{}a-z0-9_,-]*|c[?*\[\]{}a-z0-9_,-]*[?*\[\]{}][?*\[\]{}a-z0-9_,-]*(?:ouncil|uncil|ncil|cil|l)|(?:\[[a-z0-9_.-]+\]|\{[a-z0-9_.,-]+\}|[?*])+(?:council|ouncil|uncil|ncil)|\{[^}\s/]*council[^}\s/]*\})(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|\?council(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]))/i;
 
 const FORBIDDEN_COUNCIL_ARTIFACT_REGEX =
-  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.js|run-[a-z0-9_-]+\.(?:meta\.json|events\.jsonl|json|js)|[a-z0-9_*?[\]{}-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary\.(?:json|js|[*?a-z0-9_-]+))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
+  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.(?:js|json|[*?a-z0-9_-]+)|live-run-[a-z0-9_*?[\]{}.-]+|run-[a-z0-9_*?[\]{}-]+\.(?:meta\.json|events\.jsonl|json|js)|[a-z0-9_*?[\]{}-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary(?:\.(?:json|js|[*?a-z0-9_-]+)|[*?][*?a-z0-9_.-]*))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
+
+const SAFE_EXCLUSION_ARG_PATTERN =
+  '(?:\'[^\'\\r\\n;|&<>()`$]*\'|"[^"\\r\\n;|&<>()`$]*"|[^\\s;|&<>()`$]+)';
+
+const SAFE_NEGATED_GLOB_ARG_PATTERN =
+  '(?:\'![^\'\\r\\n;|&<>()`$]*\'|"![^"\\r\\n;|&<>()`$]*"|![^\\s;|&<>()`$]+)';
+
+const SEARCH_EXCLUSION_FLAG_REGEX = new RegExp(
+  `(?:^|\\s)--(?:exclude-dir|exclude|ignore-dir|ignore)(?:=|\\s+)${SAFE_EXCLUSION_ARG_PATTERN}`,
+  'gi'
+);
+
+const NEGATED_GLOB_FLAG_REGEX = new RegExp(
+  `(?:^|\\s)(?:-g|--i?glob|--filter)(?:=|\\s+)${SAFE_NEGATED_GLOB_ARG_PATTERN}`,
+  'gi'
+);
+
+const FIND_PAREN_PRUNE_REGEX = new RegExp(
+  `(?:\\\\\\(|[(])\\s*(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}\\s*(?:(?:-o|-or|-a|-and)\\s+)?)+(?:\\\\\\)|[)])\\s*-prune\\s+(?:-o|-or)\\b`,
+  'gi'
+);
+
+const FIND_SIMPLE_PRUNE_REGEX = new RegExp(
+  `(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}\\s*(?:(?:-a|-and)\\s+)?)+-prune\\s+(?:-o|-or)\\b`,
+  'gi'
+);
+
+const FIND_NEGATED_PATH_REGEX = new RegExp(
+  `(?:^|[\\s(])(?<!(?:^|[\\s(])(?:\\\\!|!|-not)\\s+)(?:\\\\!|!|-not)\\s+-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}`,
+  'gi'
+);
+
+function isSafeExclusionToken(token) {
+  if (typeof token !== 'string') return false;
+  const trimmed = token.trim();
+  return trimmed.length > 0 && !/[\s;|&<>()`$\r\n]/.test(trimmed);
+}
+
+function isSafeExclusionValue(val) {
+  if (typeof val === 'string') {
+    return isSafeExclusionToken(val);
+  }
+  if (Array.isArray(val)) {
+    return val.every((item) => isSafeExclusionToken(item));
+  }
+  return false;
+}
 
 function stripBenignCouncilExclusions(str) {
   if (typeof str !== 'string' || !str) return '';
   let next = str;
 
   // 1. Standalone negated glob string (e.g., "!.council/**", "'!.council/**'", "!*/.council/*")
-  if (/^(?:'![^'\s;|&<>()`$]+'|"![^"\s;|&<>()`$]+"|![^\s;|&<>()`$]+)$/.test(next.trim())) {
+  if (/^(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|![^\s;|&<>()`$]+)$/.test(next.trim())) {
     return '';
   }
 
   // 2. Search/grep exclusion flags: --exclude-dir, --exclude, --ignore-dir, --ignore
-  next = next.replace(
-    /(?:^|\s)--(?:exclude-dir|exclude-from|exclude|ignore-dir|ignore)(?:=|\s+)(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)/gi,
-    ' '
-  );
+  next = next.replace(SEARCH_EXCLUSION_FLAG_REGEX, ' ');
 
   // 3. Negated glob flags (-g '!.council*', --glob '!.council*', --iglob=!.council*)
-  next = next.replace(
-    /(?:^|\s)(?:-g|--i?glob|--filter)(?:=|\s+)(?:'![^']*'|"![^"]*"|![^\s;|&<>()`]+)/gi,
-    ' '
-  );
+  next = next.replace(NEGATED_GLOB_FLAG_REGEX, ' ');
 
   // 4. find exclusion clauses:
-  //    a) -path / -ipath / -wholename / -name / -iname / -regex followed by -prune (not followed by -exec/-ok)
-  next = next.replace(
-    /(?:\\\(|[(])?\s*(?:-i?(?:path|wholename|name|regex)\s+(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)\s*(?:-o|-or|-a|-and)?\s*)+(?:\\\)|[)])?\s*-prune\b(?!\s+-(?:exec|execdir|ok|okdir)\b)/gi,
-    ' '
-  );
-  //    b) ! or -not preceding -path / -ipath / -wholename / -name / -iname / -regex
-  next = next.replace(
-    /(?:^|[\s(])(?:\\!|!|-not)\s+-i?(?:path|wholename|name|regex)\s+(?:'[^']*'|"[^"]*"|[^\s;|&<>()`]+)/gi,
-    ' '
-  );
+  //    a) parenthesized or simple -path / -ipath / -wholename / -name / -iname / -regex followed by -prune -o
+  next = next.replace(FIND_PAREN_PRUNE_REGEX, ' ');
+  next = next.replace(FIND_SIMPLE_PRUNE_REGEX, ' ');
+  //    b) single ! or -not preceding -path / -ipath / -wholename / -name / -iname / -regex
+  next = next.replace(FIND_NEGATED_PATH_REGEX, ' ');
 
   // 5. Standalone negated glob tokens inside a command or list (e.g., rg "pattern" -g '!.council/**')
   next = next.replace(
-    /(?:^|[\s,\[])(?:'![^'\s;|&<>()`$]+'|"![^"\s;|&<>()`$]+"|!(?=[.*\\/a-zA-Z0-9_?\[\]{}-]*\.(?:council|meta\.json|events\.jsonl)|[.*\\/a-zA-Z0-9_?\[\]{}-]*(?:latest\.js|telemetry-summary))[.*\\/a-zA-Z0-9_?\[\]{}-]+)(?=$|[\s,\]])/gi,
+    /(?:^|[\s,\[])(?:'![^'\r\n\s;|&<>()`$]+'|"![^"\r\n\s;|&<>()`$]+"|!(?=[.*\\/a-zA-Z0-9_?\[\]{}-]*\.(?:council|meta\.json|events\.jsonl)|[.*\\/a-zA-Z0-9_?\[\]{}-]*(?:latest\.js|telemetry-summary))[.*\\/a-zA-Z0-9_?\[\]{}-]+)(?=$|[\s,\]])/gi,
     ' '
   );
 
@@ -1279,29 +1315,45 @@ const FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS = new Set([
 function filterBenignStringArrayExclusions(arr) {
   const result = [];
   for (let i = 0; i < arr.length; i += 1) {
+    const prevToken = i > 0 && typeof arr[i - 1] === 'string' ? arr[i - 1].trim() : '';
     const token = arr[i].trim();
     const nextToken = typeof arr[i + 1] === 'string' ? arr[i + 1].trim() : '';
     const thirdToken = typeof arr[i + 2] === 'string' ? arr[i + 2].trim() : '';
     const fourthToken = typeof arr[i + 3] === 'string' ? arr[i + 3].trim() : '';
 
-    if (/^--(?:exclude-dir|exclude-from|exclude|ignore-dir|ignore)$/i.test(token) && i + 1 < arr.length) {
+    if (
+      /^--(?:exclude-dir|exclude|ignore-dir|ignore)$/i.test(token) &&
+      i + 1 < arr.length &&
+      isSafeExclusionToken(nextToken)
+    ) {
       i += 1;
       continue;
     }
-    if (/^(?:-g|--i?glob|--filter)$/i.test(token) && /^['"]?!/.test(nextToken)) {
+    if (
+      /^(?:-g|--i?glob|--filter)$/i.test(token) &&
+      /^['"]?!/.test(nextToken) &&
+      isSafeExclusionToken(nextToken)
+    ) {
       i += 1;
       continue;
     }
-    if (/^(?:!|-not)$/i.test(token) && /^-i?(?:path|wholename|name|regex)$/i.test(nextToken) && i + 2 < arr.length) {
+    if (
+      /^(?:\\!|!|-not)$/i.test(token) &&
+      !/^(?:\\!|!|-not)$/i.test(prevToken) &&
+      /^-i?(?:path|wholename|name|regex)$/i.test(nextToken) &&
+      i + 2 < arr.length &&
+      isSafeExclusionToken(thirdToken)
+    ) {
       i += 2;
       continue;
     }
     if (
       /^-i?(?:path|wholename|name|regex)$/i.test(token) &&
+      isSafeExclusionToken(nextToken) &&
       thirdToken === '-prune' &&
-      !/^-(?:exec|execdir|ok|okdir)$/i.test(fourthToken)
+      /^(?:-o|-or)$/i.test(fourthToken)
     ) {
-      i += 2;
+      i += 3;
       continue;
     }
     result.push(arr[i]);
@@ -1403,7 +1455,7 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
     }
 
     for (const [k, v] of Object.entries(val)) {
-      if (FORBIDDEN_ACCESS_EXCLUSION_KEYS.has(k)) {
+      if (FORBIDDEN_ACCESS_EXCLUSION_KEYS.has(k) && isSafeExclusionValue(v)) {
         continue;
       }
       if (!inInputContainer) {
@@ -2383,15 +2435,16 @@ export function normalizeProviderTrace(trace, defaults = {}) {
  * @returns {NodeJS.ProcessEnv|undefined}
  */
 export function buildSanitizedCliEnv(cwd, env) {
-  if (!cwd) {
+  const normalizedCwd = typeof cwd === 'string' ? cwd.trim() : '';
+  if (!normalizedCwd) {
     return env;
   }
   const baseEnv = env || process.env;
-  const nextEnv = { ...baseEnv, PWD: cwd };
-  if (!env || !Object.prototype.hasOwnProperty.call(env, 'OLDPWD')) {
+  const nextEnv = { ...baseEnv, PWD: normalizedCwd };
+  if (!env || env.OLDPWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'OLDPWD')) {
     delete nextEnv.OLDPWD;
   }
-  if (!env || !Object.prototype.hasOwnProperty.call(env, 'INIT_CWD')) {
+  if (!env || env.INIT_CWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'INIT_CWD')) {
     delete nextEnv.INIT_CWD;
   }
   return nextEnv;
@@ -2416,11 +2469,13 @@ export function buildSanitizedCliEnv(cwd, env) {
  */
 export async function execCli(executable, args = [], options = {}) {
   const maxBuffer = options.maxBuffer || DEFAULT_MAX_BUFFER;
-  const effectiveEnv = buildSanitizedCliEnv(options.cwd, options.env);
+  const normalizedCwd =
+    typeof options.cwd === 'string' && options.cwd.trim() ? options.cwd.trim() : undefined;
+  const effectiveEnv = buildSanitizedCliEnv(normalizedCwd, options.env);
   const execOptions = {
     maxBuffer,
     encoding: 'utf8',
-    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
     ...(effectiveEnv ? { env: effectiveEnv } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.timeoutMs ? { timeout: options.timeoutMs } : {})
@@ -2566,6 +2621,20 @@ function parseAntigravityOutput(raw) {
         }
         if (Array.isArray(json.trace.skillsRead)) {
           streamSkillsRead = json.trace.skillsRead;
+        }
+      }
+      if (!rawTools && !json.trace) {
+        const maybeStream = parseCursorEventStream(str);
+        if (maybeStream.eventsParsed) {
+          eventsParsed = true;
+          toolCalls = maybeStream.toolCalls;
+          traceCoverage = maybeStream.traceCoverage;
+          streamForbidden = maybeStream.forbiddenStateAccess;
+          streamForbiddenDetails = maybeStream.forbiddenAccessDetails || [];
+          streamSkillsRead = maybeStream.skillsRead || [];
+          if (unwrappedResponse === null && maybeStream.text) {
+            unwrappedResponse = maybeStream.text;
+          }
         }
       }
     }

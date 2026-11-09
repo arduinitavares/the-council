@@ -189,8 +189,11 @@ export function buildRunTelemetryRecord({
       const seatId = ev.seatId || ev.proof?.seatId;
       if (seatId) {
         const proofId = ev.id || ev.proof?.id || '';
+        const statement = ev.statement || ev.proof?.statement || '';
         seenRejectedProofEventObjects.add(ev);
-        seenRejectedProofEventKeys.add(getRejectedProofFallbackKey(seatId, ev));
+        if (proofId || statement) {
+          seenRejectedProofEventKeys.add(getRejectedProofFallbackKey(seatId, ev));
+        }
         if (proofId) {
           seenRejectedProofIdKeys.add(`${seatId}:${proofId}`);
         }

@@ -872,7 +872,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
 
       // Calling runDiscovery(extraClarifications) on a fresh engine with pre-supplied config.clarifications
       // must append extraClarifications rather than wiping the pre-supplied clarifications, purely via _step transitions
-      const engineWithExtra = new CouncilEngine(configInput);
+      const engineWithExtra = new CouncilEngine({ ...configInput, maxClarificationBatches: 4 });
       engineWithExtra.initRoster();
       await engineWithExtra.runDiscovery([{ question: 'Dynamic Q?', answer: 'Dynamic A' }]);
       assert.equal(engineWithExtra.state.clarifications.length, 4);
@@ -880,12 +880,40 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(engineWithExtra.state.clarifications[3].question, 'Dynamic Q?');
       assert.equal(engineWithExtra.state.clarifications[3].answer, 'Dynamic A');
 
+      // Reducer must reject START_CLARIFYING when clarificationBatch >= maxClarificationBatches even if event passes maxClarificationBatches: 999
+      const rejectedOverride = transitionCouncil(engineWithExtra.state, {
+        type: 'START_CLARIFYING',
+        maxClarificationBatches: 999
+      });
+      assert.equal(rejectedOverride.lastTransition.ok, false);
+      assert.equal(rejectedOverride.maxClarificationBatches, 4);
+      assert.match(rejectedOverride.lastTransition.message, /Maximum clarification batches \(4\) reached/);
+
       // Calling runDiscovery() with no arguments on a fresh engine with pre-supplied config.clarifications
       // must publish the 3 pre-supplied clarifications via transitions
       const engineNoArgDiscovery = new CouncilEngine(configInput);
       engineNoArgDiscovery.initRoster();
       await engineNoArgDiscovery.runDiscovery();
       assert.equal(engineNoArgDiscovery.state.clarifications.length, 3);
+
+      // Calling runRound() directly after initRoster() (without run()) must publish config.clarifications
+      const engineDirectRound = new CouncilEngine(configInput);
+      engineDirectRound.initRoster();
+      await engineDirectRound.runRound();
+      assert.equal(engineDirectRound.state.clarifications.length, 3);
+      assert.equal(engineDirectRound._configClarificationsPublished, true);
+
+      // Calling runDiscovery() in an invalid phase (reviewing) must not set _configClarificationsPublished = true or dispatch PUBLISH_CLARIFICATION
+      const engineInvalidPhase = new CouncilEngine(configInput);
+      engineInvalidPhase.initRoster();
+      engineInvalidPhase._step({ type: 'BEGIN_ROUND' });
+      assert.equal(engineInvalidPhase.state.phase, 'reviewing');
+      const eventsEmitted = [];
+      engineInvalidPhase.getTelemetry().on('state_transition', ({ event }) => eventsEmitted.push(event.type));
+      await engineInvalidPhase.runDiscovery();
+      assert.deepEqual(eventsEmitted, ['START_CLARIFYING']);
+      assert.equal(engineInvalidPhase._configClarificationsPublished, false);
+      assert.equal(engineInvalidPhase.state.clarifications.length, 0);
     });
   });
 });

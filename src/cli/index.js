@@ -370,7 +370,47 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       log(`Topic   : ${resolved.topic}`);
       log(`Verdict : ${result.verdict?.kind || 'No verdict emitted'}`);
       log(`Rounds  : ${result.state.round}`);
+      if (result.state?.judge) {
+        log(`Judge   : ${result.state.judge.id} (${result.state.judge.harness} / ${result.state.judge.model})`);
+      }
       log(`Seats   : ${result.state.seats.length} total (${result.verdict?.activeSeatCount || 0} active, ${result.verdict?.excusedSeatCount || 0} excused)`);
+
+      const candidate = result.verdict?.candidate || result.state?.candidate || null;
+      const candidateSummary = typeof candidate?.summary === 'string' ? candidate.summary.trim() : '';
+      if (candidateSummary) {
+        log('\nFinal Answer:');
+        log(`  ${candidateSummary}`);
+      }
+
+      if (candidate && Array.isArray(candidate.clauses) && candidate.clauses.length > 0) {
+        log('\nCandidate Clauses:');
+        candidate.clauses.forEach((c) => {
+          log(`  - [${c.id || c.context}] ${c.context}: ${c.conclusion} (Cited: ${(c.citedProofIds || []).join(', ')})`);
+        });
+      }
+
+      if (result.state?.seats?.length > 0) {
+        log('\nSeat Roll Call:');
+        const allProofs = result.state?.proofs || [];
+        const allObjections = result.state?.objections || [];
+        result.state.seats.forEach((s) => {
+          const statusUpper = String(s.status || 'idle').toUpperCase();
+          const seatProofs = allProofs.filter((p) => p && p.seatId === s.id);
+          const proofsLabel =
+            seatProofs.length > 0
+              ? seatProofs.map((p) => `${p.id} (${p.status || 'pending'})`).join(', ')
+              : 'none';
+          const activeObjs = allObjections.filter((o) => o && o.seatId === s.id && o.status !== 'withdrawn');
+          let extraSuffix = '';
+          if (activeObjs.length > 0) {
+            extraSuffix += ` — Objections: ${activeObjs.map((o) => o.id).join(', ')}`;
+          }
+          if (s.status === 'excused' && s.excusedReason) {
+            extraSuffix += ` — Excused: ${s.excusedReason}`;
+          }
+          log(`  - [${statusUpper}] ${s.id} (${s.harness} / ${s.model}) — Proofs: ${proofsLabel}${extraSuffix}`);
+        });
+      }
 
       const excusedList = (result.state?.seats || []).filter((s) => s.status === 'excused');
       if (excusedList.length > 0) {
@@ -380,25 +420,37 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         });
       }
 
-      if (result.state?.proofs?.length > 0) {
-        log('\nSubmitted Proofs:');
-        result.state.proofs.forEach((p) => {
-          log(`  - [${p.id}] (${p.status}) [${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
-        });
-      }
-
-      if (result.verdict?.candidate) {
-        log('\nCandidate Clauses:');
-        result.verdict.candidate.clauses.forEach((c) => {
-          log(`  - [${c.id || c.context}] ${c.context}: ${c.conclusion} (Cited: ${(c.citedProofIds || []).join(', ')})`);
-        });
-      }
       if (result.verdict?.unresolvedObjections?.length > 0) {
         log('\nUnresolved Objections:');
         result.verdict.unresolvedObjections.forEach((o) => {
           log(`  - [${o.id}] (${o.status}) Seat "${o.seatId}": ${o.reason} (Proof: ${o.proofId})`);
         });
       }
+
+      if (result.state?.proofs?.length > 0) {
+        log('\nSubmitted Proofs:');
+        result.state.proofs.forEach((p) => {
+          log(`  - [${p.id}] (${p.status}) [${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
+          const seatIdStr = typeof p.seatId === 'string' && p.seatId.trim() ? p.seatId.trim() : '';
+          const rawNote =
+            typeof p.judgeNote === 'string'
+              ? p.judgeNote.trim()
+              : typeof p.auditNote === 'string'
+              ? p.auditNote.trim()
+              : '';
+          const metaParts = [];
+          if (seatIdStr) {
+            metaParts.push(`Seat : ${seatIdStr}`);
+          }
+          if (rawNote) {
+            metaParts.push(`Judge Note: ${rawNote}`);
+          }
+          if (metaParts.length > 0) {
+            log(`    ${metaParts.join(' | ')}`);
+          }
+        });
+      }
+
       log(`\nNote: ${result.verdict?.note || 'None'}`);
       log('========================================\n');
       if (mode === 'mock') {

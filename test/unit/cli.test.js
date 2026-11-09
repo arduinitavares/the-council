@@ -281,21 +281,31 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       assert.match(mockIO.getStderr(), /Unknown preset ""/);
     });
 
-    it('prints Submitted Proofs: section before Candidate Clauses: in text verdict output', async () => {
+    it('prints answer-first verdict hierarchy (Final Answer -> Candidate Clauses -> Seat Roll Call -> Submitted Proofs) with Judge, seat roll call, and proof attribution (#53)', async () => {
       const mockIO = createMockIO();
-      const code = await runCli(['run', '--mock', '--topic', 'Proof Formatting Test'], mockIO.io);
+      const code = await runCli(['run', '--mock', '-p', 'architecture', '--topic', 'Proof Formatting Test'], mockIO.io);
 
       assert.equal(code, 0);
       const out = mockIO.getStdout();
-      assert.match(out, /Submitted Proofs:/);
+      assert.match(out, /Judge\s+:\s+judge-opus \(antigravity \/ claude-opus-5-5-high\)/);
+      assert.match(out, /Final Answer:/);
       assert.match(out, /Candidate Clauses:/);
+      assert.match(out, /Seat Roll Call:/);
+      assert.match(out, /Submitted Proofs:/);
 
-      const proofsIndex = out.indexOf('Submitted Proofs:');
+      const finalAnswerIndex = out.indexOf('Final Answer:');
       const clausesIndex = out.indexOf('Candidate Clauses:');
-      assert.ok(proofsIndex > 0, 'Submitted Proofs must be present');
-      assert.ok(clausesIndex > proofsIndex, 'Submitted Proofs must appear BEFORE Candidate Clauses');
+      const rollCallIndex = out.indexOf('Seat Roll Call:');
+      const proofsIndex = out.indexOf('Submitted Proofs:');
 
+      assert.ok(finalAnswerIndex > 0, 'Final Answer must be present');
+      assert.ok(clausesIndex > finalAnswerIndex, 'Candidate Clauses must appear after Final Answer');
+      assert.ok(rollCallIndex > clausesIndex, 'Seat Roll Call must appear after Candidate Clauses');
+      assert.ok(proofsIndex > rollCallIndex, 'Submitted Proofs must appear after Seat Roll Call');
+
+      assert.match(out, /-\s+\[ACCEPTED\]\s+astra-systems \(codex \/ gpt-6-astra \(max\)\) — Proofs: P1 \(admitted\)/);
       assert.match(out, /\s+-\s+\[P\d+\]\s+\(admitted\)\s+\[check\]/);
+      assert.match(out, /Seat : astra-systems \| Judge Note:/);
     });
 
     it('runs deliberation with --live flag, attaching VisualizerLiveWatcher and HarnessRegistry', async () => {
@@ -971,6 +981,94 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       } finally {
         process.chdir(prevCwd);
         fs.rmSync(tmpExtCwd, { recursive: true, force: true });
+      }
+    });
+
+    it('surfaces candidate.summary as Final Answer, seat roll call with rejected/none proofs, and Judge Note rationale in human verdict output (#53)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const { QuotaExhaustionError } = await import('../../src/harness/adapter.js');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-53-'));
+      const cfgPath = path.join(tmpDir, 'cfg.json');
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          topic: 'Who invented the airplane?',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            { id: 'sol-voter', harness: 'codex', model: 'gpt-6.1-sol (max)', soul: 'Sol' },
+            { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Argon' },
+            { id: 'excused-voter', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Opus' }
+          ]
+        })
+      );
+
+      try {
+        const customAdapter = {
+          executeSeatProof: async ({ seat }) => {
+            if (seat.id === 'excused-voter') {
+              throw new QuotaExhaustionError('429 rate limit exceeded', {
+                harness: seat.harness,
+                seatId: seat.id,
+                model: seat.model
+              });
+            }
+            if (seat.id === 'sol-voter') {
+              return {
+                scope: 'Controlled Powered Flight',
+                kind: 'citation',
+                source: 'Smithsonian NASM 1903 Log',
+                statement: 'Wright Flyer achieved sustained controlled flight on 17 December 1903.'
+              };
+            }
+            return {
+              scope: 'Unverified Claim',
+              kind: 'citation',
+              source: 'Secondary Blog',
+              statement: 'Unsubstantiated claim without telemetry.'
+            };
+          },
+          executeJudgeAuditAndSynthesis: async () => ({
+            summary: 'Under sustained, powered, pilot-controlled flight criteria, the Wright brothers (1903) and Santos-Dumont (1906) represent distinct FAI vs.assisted-takeoff milestones.',
+            proofDecisions: {
+              P1: { status: 'admitted', note: 'Primary archival telemetry verified.' },
+              P2: { status: 'rejected', note: 'Rejected: lacks primary source verification.' }
+            },
+            clauses: [
+              {
+                id: 'C1',
+                context: 'Controlled Powered Flight (1903)',
+                conclusion: 'Wilbur and Orville Wright achieved sustained controlled flight at Kitty Hawk.',
+                citedProofIds: ['P1']
+              }
+            ]
+          }),
+          executeSeatVote: async () => ({ vote: 'accept' })
+        };
+
+        const registry = new HarnessRegistry();
+        registry.register('codex', customAdapter);
+        registry.register('antigravity', customAdapter);
+
+        const mockIO = createMockIO();
+        mockIO.io.harnessRegistry = registry;
+        mockIO.io.liveWatcherOptions = { outputDir: path.join(tmpDir, 'runs'), runId: 'run-cli-53' };
+
+        const code = await runCli(['run', '--live', '-c', cfgPath], mockIO.io);
+        assert.equal(code, 0);
+        const out = mockIO.getStdout();
+
+        assert.match(out, /Judge\s+:\s+judge-astra \(codex \/ gpt-6-astra \(max\)\)/);
+        assert.match(out, /Final Answer:\n\s+Under sustained, powered, pilot-controlled flight criteria/);
+        assert.match(out, /-\s+\[ACCEPTED\]\s+sol-voter \(codex \/ gpt-6\.1-sol \(max\)\) — Proofs: P1 \(admitted\)/);
+        assert.match(out, /-\s+\[ACCEPTED\]\s+argon-voter \(antigravity \/ gemini-4-argon-high\) — Proofs: P2 \(rejected\)/);
+        assert.match(out, /-\s+\[EXCUSED\]\s+excused-voter \(antigravity \/ claude-opus-5-5-high\) — Proofs: none — Excused:/);
+        assert.match(out, /Seat : sol-voter \| Judge Note: Primary archival telemetry verified\./);
+        assert.match(out, /Seat : argon-voter \| Judge Note: Rejected: lacks primary source verification\./);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });

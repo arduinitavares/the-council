@@ -2425,6 +2425,274 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         'Out-of-order onload for run-1 must not clobber currently selected run-2'
       );
     });
+
+    it('guards selectRun against A -> B -> A stale script.onload, resets all DOM panels when !councilState or script.onerror, and renders #proofs-list and seat proof badges (#53)', () => {
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      assert.match(html, /id=["']proofs-list["']/, 'index.html must contain #proofs-list');
+      assert.match(html, /id=["']lbl-proofs-count["']/, 'index.html must contain #lbl-proofs-count');
+      const inlineScriptMatch = html.match(/<script>\s*([\s\S]*?)\s*<\/script>\s*<\/body>/);
+      assert.ok(inlineScriptMatch);
+
+      const elements = new Map();
+      const getEl = (id) => {
+        if (!elements.has(id)) {
+          elements.set(id, {
+            id,
+            textContent: '',
+            innerHTML: '',
+            value: id === 'run-selector' ? 'latest' : '',
+            className: '',
+            style: {},
+            classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+            remove: function () {
+              elements.delete(this.id);
+            }
+          });
+        }
+        return elements.get(id);
+      };
+
+      const appendedScripts = [];
+      const mockDoc = {
+        getElementById: (id) => getEl(id),
+        createElement: (tag) => ({
+          tagName: tag.toUpperCase(),
+          id: '',
+          src: '',
+          onload: null,
+          onerror: null,
+          remove: function () {
+            if (this.id) elements.delete(this.id);
+          }
+        }),
+        head: {
+          appendChild: (el) => {
+            appendedScripts.push(el);
+          }
+        }
+      };
+
+      const mockVisualizer = {
+        escapeHtml: (s) => String(s ?? ''),
+        formatSoul: (s) => String(s ?? ''),
+        renderSoulCardHtml: (s) => `<div>${String(s ?? '')}</div>`,
+        renderStateMachineSVG: () => {},
+        renderCausalDependencySVG: () => {}
+      };
+
+      const domWin = {
+        CouncilRunIndex: [
+          { runId: 'run-A', topic: 'Topic A', isRunning: false },
+          { runId: 'run-B', topic: 'Topic B', isRunning: false },
+          { runId: 'run-missing', topic: 'Missing Run', isRunning: false }
+        ],
+        CouncilLatestLiveRun: {
+          runId: 'run-latest',
+          currentState: {
+            topic: 'Latest Deliberation with Proofs',
+            phase: 'completed',
+            round: 1,
+            maxRounds: 3,
+            minQuorum: 2,
+            verdict: { kind: 'Unanimous Consensus', note: 'Consensus reached' },
+            candidate: {
+              summary: 'Synthesized candidate summary',
+              clauses: [{ id: 'C1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }]
+            },
+            judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (max)', status: 'idle', soul: 'Judge' },
+            seats: [
+              { id: 'sol-voter', harness: 'codex', model: 'gpt-6.1-sol (max)', status: 'accepted', soul: 'Sol', retries: 0 },
+              { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon-high', status: 'accepted', soul: 'Argon', retries: 0 },
+              { id: 'silent-voter', harness: 'antigravity', model: 'claude-opus-5-5-high', status: 'excused', soul: 'Opus', retries: 1, excusedReason: 'Quota exceeded' }
+            ],
+            proofs: [
+              {
+                id: 'P1',
+                seatId: 'sol-voter',
+                kind: 'citation',
+                scope: 'Aerodynamics',
+                source: 'NASM 1903',
+                statement: 'Sustained controlled flight verified.',
+                status: 'admitted',
+                judgeNote: 'Admitted: primary archival record.'
+              },
+              {
+                id: 'P2',
+                seatId: 'argon-voter',
+                kind: 'check',
+                scope: 'Secondary Claim',
+                source: 'Blog Post',
+                statement: 'Unverified secondary claim.',
+                status: 'rejected',
+                judgeNote: 'Rejected: lacks primary evidence.'
+              }
+            ],
+            objections: [],
+            history: ['Completed']
+          },
+          steps: [
+            {
+              label: 'Step 1: Pending Proof',
+              stateSnapshot: {
+                topic: 'Latest Deliberation with Proofs',
+                phase: 'reviewing',
+                round: 1,
+                maxRounds: 3,
+                minQuorum: 2,
+                seats: [
+                  { id: 'sol-voter', harness: 'codex', model: 'gpt-6.1-sol (max)', status: 'proof_submitted', soul: 'Sol', retries: 0 },
+                  { id: 'argon-voter', harness: 'antigravity', model: 'gemini-4-argon-high', status: 'thinking', soul: 'Argon', retries: 0 }
+                ],
+                proofs: [
+                  {
+                    id: 'P1',
+                    seatId: 'sol-voter',
+                    kind: 'citation',
+                    scope: 'Aerodynamics',
+                    source: 'NASM 1903',
+                    statement: 'Sustained controlled flight verified.',
+                    status: 'pending',
+                    judgeNote: null
+                  }
+                ],
+                objections: [],
+                history: ['Step 1']
+              }
+            }
+          ]
+        },
+        CouncilRuns: {}
+      };
+
+      const controllerFn = new Function(
+        'window',
+        'globalThis',
+        'document',
+        'CouncilVisualizer',
+        'setInterval',
+        'clearInterval',
+        inlineScriptMatch[1] + '\nreturn { selectRun, inspectStep, restoreLatestSnapshot };'
+      );
+      const controller = controllerFn(domWin, domWin, mockDoc, mockVisualizer, () => 123, () => {});
+
+      // 1. Verify #proofs-list and seat proof badges on initial render of Latest Run
+      assert.equal(getEl('lbl-proofs-count').textContent, '2 proofs');
+      assert.match(getEl('proofs-list').innerHTML, /P1/);
+      assert.match(getEl('proofs-list').innerHTML, /admitted/);
+      assert.match(getEl('proofs-list').innerHTML, /Seat: sol-voter/);
+      assert.match(getEl('proofs-list').innerHTML, /Judge Note:<\/strong> Admitted: primary archival record\./);
+      assert.match(getEl('proofs-list').innerHTML, /P2/);
+      assert.match(getEl('proofs-list').innerHTML, /rejected/);
+      assert.match(getEl('proofs-list').innerHTML, /Rejected: lacks primary evidence\./);
+      assert.match(getEl('seats-grid').innerHTML, /P1: admitted/);
+      assert.match(getEl('seats-grid').innerHTML, /P2: rejected/);
+      assert.match(getEl('seats-grid').innerHTML, /Proofs: none/);
+
+      // 2. Scrubbing to historical Step 0 updates #proofs-list and seat badges to pending state
+      controller.inspectStep(0);
+      assert.equal(getEl('lbl-proofs-count').textContent, '1 proof');
+      assert.match(getEl('proofs-list').innerHTML, /pending/);
+      assert.doesNotMatch(getEl('proofs-list').innerHTML, /Admitted: primary archival record/);
+      assert.match(getEl('seats-grid').innerHTML, /P1: pending/);
+      controller.restoreLatestSnapshot();
+      assert.equal(getEl('lbl-proofs-count').textContent, '2 proofs');
+
+      // 3. Test A -> B -> A sequence: selectRun('run-A'), then selectRun('run-B'), then selectRun('run-A') again
+      controller.selectRun('run-A');
+      const scriptA1 = appendedScripts[appendedScripts.length - 1];
+      // Immediately upon selecting an unloaded run, stale panels from previous run must be cleared
+      assert.equal(getEl('seats-grid').innerHTML, '');
+      assert.equal(getEl('lbl-proofs-count').textContent, '0 proofs');
+      assert.match(getEl('proofs-list').innerHTML, /No proofs submitted yet/);
+      assert.match(getEl('clauses-list').innerHTML, /No candidate clauses synthesized yet/);
+
+      controller.selectRun('run-B');
+      controller.selectRun('run-A');
+      const scriptA2 = appendedScripts[appendedScripts.length - 1];
+      assert.notEqual(scriptA1, scriptA2);
+
+      // Suppose scriptA1 (stale first request for run-A) fires onload with stale data -> must be ignored by reqId guard!
+      domWin.CouncilRuns['run-A'] = {
+        runId: 'run-A',
+        currentState: {
+          topic: 'Stale First Request Run A',
+          phase: 'reviewing',
+          round: 1,
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: []
+        },
+        steps: []
+      };
+      scriptA1.onload();
+      assert.notEqual(
+        getEl('heading-topic').textContent,
+        'Stale First Request Run A',
+        'First scriptA1 onload in A -> B -> A sequence must be ignored by monotonic request counter'
+      );
+
+      // Now scriptA2 (current request for run-A) fires onload with fresh data -> must render!
+      domWin.CouncilRuns['run-A'] = {
+        runId: 'run-A',
+        currentState: {
+          topic: 'Fresh Second Request Run A',
+          phase: 'completed',
+          round: 1,
+          seats: [],
+          proofs: [],
+          objections: [],
+          history: []
+        },
+        steps: []
+      };
+      scriptA2.onload();
+      assert.equal(getEl('heading-topic').textContent, 'Fresh Second Request Run A');
+
+      // 4. Test script.onerror: selecting a missing/corrupt run clears stale state and displays failure message
+      controller.selectRun('run-missing');
+      const scriptMissing = appendedScripts[appendedScripts.length - 1];
+      scriptMissing.onerror();
+      assert.equal(getEl('badge-live-tag').textContent, 'Run: run-missing');
+      assert.equal(getEl('heading-topic').textContent, 'Failed to load run run-missing.');
+      assert.equal(getEl('seats-grid').innerHTML, '');
+      assert.equal(getEl('lbl-proofs-count').textContent, '0 proofs');
+    });
+
+    it('evicts deleted runs from index.js when neither <runId>.js nor <runId>.meta.json exists on disk', () => {
+      const runsDir = path.join(tmpDir, 'deleted-run-eviction');
+      const emitter1 = createTelemetryEmitter();
+      const watcher1 = new VisualizerLiveWatcher({
+        telemetry: emitter1,
+        outputDir: runsDir,
+        runId: 'run-to-delete',
+        initialConfig: { topic: 'Deleted Run Topic' }
+      });
+      watcher1.stop();
+
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-to-delete.js')));
+      assert.ok(fs.existsSync(path.join(runsDir, 'run-to-delete.meta.json')));
+
+      // Delete both <runId>.js and <runId>.meta.json from disk while leaving index.js intact
+      fs.unlinkSync(path.join(runsDir, 'run-to-delete.js'));
+      fs.unlinkSync(path.join(runsDir, 'run-to-delete.meta.json'));
+
+      // Run a new watcher in the same directory
+      const emitter2 = createTelemetryEmitter();
+      const watcher2 = new VisualizerLiveWatcher({
+        telemetry: emitter2,
+        outputDir: runsDir,
+        runId: 'run-surviving',
+        initialConfig: { topic: 'Surviving Run Topic' }
+      });
+      watcher2.stop();
+
+      const win = {};
+      new Function('window', 'globalThis', fs.readFileSync(path.join(runsDir, 'index.js'), 'utf8'))(win, win);
+      const indexedIds = win.CouncilRunIndex.map((e) => e.runId);
+      assert.deepEqual(indexedIds, ['run-surviving'], 'Deleted run must not be resurrected from stale index.js');
+    });
   });
 });
 

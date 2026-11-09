@@ -684,6 +684,17 @@
         <div id="seats-grid" class="roster-grid"></div>
       </section>
 
+      <!-- 4b. Submitted Proofs & Judge Audit Trail -->
+      <section class="surface-card" aria-labelledby="heading-proofs" style="margin-top:16px;">
+        <div class="panel-header">
+          <h2 id="heading-proofs">Submitted Proofs &amp; Judge Audit Trail</h2>
+          <span id="lbl-proofs-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 proofs</span>
+        </div>
+        <div id="proofs-list" class="clauses-list" style="margin-top:10px; max-height:340px;">
+          <div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>
+        </div>
+      </section>
+
       <!-- 5. Deliberation Graphs (State Machine Flow & Causal DAG) -->
       <section class="surface-card" aria-labelledby="heading-graphs" style="margin-top:16px;">
         <h2 id="heading-graphs" class="sr-only">Deliberation Graphs</h2>
@@ -727,6 +738,7 @@
     let currentStepIdx = -1;
     let activeGraphTab = 'topology';
     let selectedRunId = 'latest';
+    let selectRunRequestId = 0;
 
     // Format structured soul cleanly delegating to CouncilVisualizer without [object Object]
     function formatSoul(soul) {
@@ -822,15 +834,14 @@
     }
 
     function selectRun(runId) {
+      const reqId = ++selectRunRequestId;
       selectedRunId = runId || 'latest';
       currentStepIdx = -1;
       const badgeTag = document.getElementById('badge-live-tag');
       if (selectedRunId === 'latest') {
         if (badgeTag) badgeTag.textContent = 'Latest Live Run';
         const latestRun = getLiveRun();
-        if (latestRun && latestRun.currentState) {
-          councilState = latestRun.currentState;
-        }
+        councilState = (latestRun && latestRun.currentState) ? latestRun.currentState : null;
         startLiveFollow();
         renderAll();
         return;
@@ -844,20 +855,26 @@
         return;
       }
       const requestedRunId = selectedRunId;
+      councilState = null;
+      renderAll();
       const script = document.createElement('script');
       script.src = '../../.council/runs/' + encodeURIComponent(requestedRunId) + '.js?t=' + Date.now();
       script.onload = function () {
         script.remove();
-        if (selectedRunId !== requestedRunId) return;
+        if (reqId !== selectRunRequestId || selectedRunId !== requestedRunId) return;
         const loadedRun = getLiveRun();
-        if (loadedRun && loadedRun.currentState) {
-          councilState = loadedRun.currentState;
-        }
+        councilState = (loadedRun && loadedRun.currentState) ? loadedRun.currentState : null;
         renderAll();
+        if (!councilState) {
+          document.getElementById('heading-topic').textContent = 'Failed to load run ' + requestedRunId + '.';
+        }
       };
       script.onerror = function () {
         script.remove();
-        if (selectedRunId !== requestedRunId) return;
+        if (reqId !== selectRunRequestId || selectedRunId !== requestedRunId) return;
+        councilState = null;
+        renderAll();
+        document.getElementById('heading-topic').textContent = 'Failed to load run ' + requestedRunId + '.';
       };
       document.head.appendChild(script);
     }
@@ -879,10 +896,9 @@
       if (liveFollowTimer) {
         stopLiveFollow();
       } else {
-        selectedRunId = 'latest';
         const sel = document.getElementById('run-selector');
         if (sel) sel.value = 'latest';
-        startLiveFollow();
+        selectRun('latest');
       }
     }
 
@@ -1012,6 +1028,51 @@
 
       if (!councilState) {
         document.getElementById('heading-topic').textContent = 'Waiting for live deliberation to start...';
+        document.getElementById('lbl-phase').textContent = 'preflight';
+        document.getElementById('lbl-round').textContent = 0;
+        document.getElementById('lbl-max-rounds').textContent = 3;
+        document.getElementById('lbl-quorum').textContent = 2;
+        const statusPill = document.getElementById('status-pill');
+        const statusPillText = document.getElementById('status-pill-text');
+        const verdictStatusPill = document.getElementById('lbl-verdict-status');
+        if (statusPill) statusPill.className = 'badge badge-running';
+        if (statusPillText) statusPillText.textContent = 'IDLE';
+        if (verdictStatusPill) {
+          verdictStatusPill.className = 'badge badge-running';
+          verdictStatusPill.textContent = 'EVALUATING';
+        }
+        const vBox = document.getElementById('verdict-box');
+        const vTitle = document.getElementById('verdict-title');
+        const vBody = document.getElementById('verdict-body');
+        if (vBox) vBox.className = 'verdict-banner running';
+        if (vTitle) vTitle.textContent = 'Deliberation in Progress';
+        if (vBody) vBody.textContent = 'Gathering structured evidence and testing hypotheses across multi-model participant seats.';
+        const synEl = document.getElementById('synthesis-text');
+        if (synEl) synEl.textContent = 'Awaiting initial proof collection before candidate synthesis can begin.';
+        const transText = document.getElementById('transition-text');
+        if (transText) transText.textContent = 'Deliberation engine connected. Awaiting state transitions.';
+        const lblClausesCount = document.getElementById('lbl-clauses-count');
+        if (lblClausesCount) lblClausesCount.textContent = '0 clauses';
+        const clausesList = document.getElementById('clauses-list');
+        if (clausesList) clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
+        const lblObjsCount = document.getElementById('lbl-objs-count');
+        if (lblObjsCount) lblObjsCount.textContent = '0 open';
+        const objsList = document.getElementById('objections-list');
+        if (objsList) objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
+        const lblRosterCount = document.getElementById('lbl-roster-count');
+        if (lblRosterCount) lblRosterCount.textContent = '0 members';
+        const seatsGrid = document.getElementById('seats-grid');
+        if (seatsGrid) seatsGrid.innerHTML = '';
+        const lblProofsCount = document.getElementById('lbl-proofs-count');
+        if (lblProofsCount) lblProofsCount.textContent = '0 proofs';
+        const proofsList = document.getElementById('proofs-list');
+        if (proofsList) proofsList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+        const stateSvg = document.getElementById('state-machine-svg');
+        if (stateSvg) stateSvg.innerHTML = '';
+        const causalSvg = document.getElementById('causal-dependency-svg');
+        if (causalSvg) causalSvg.innerHTML = '';
+        const timelineEl = document.getElementById('timeline-list');
+        if (timelineEl) timelineEl.innerHTML = '';
         return;
       }
 
@@ -1125,6 +1186,7 @@
       const seatsGrid = document.getElementById('seats-grid');
       const seats = councilState.seats || [];
       const judge = councilState.judge;
+      const allProofs = Array.isArray(councilState.proofs) ? councilState.proofs : [];
       document.getElementById('lbl-roster-count').textContent = (seats.length + (judge ? 1 : 0)) + ' members';
 
       let judgeHtml = '';
@@ -1146,6 +1208,18 @@
 
       const seatsHtml = seats.map(function (s) {
         const seatFault = s.excusedReason || s.faultReason;
+        const seatProofs = allProofs.filter(function (p) { return p && p.seatId === s.id; });
+        const seatProofsHtml = seatProofs.length > 0
+          ? seatProofs.map(function (p) {
+              const pStatus = p.status || 'pending';
+              const badgeStyle = pStatus === 'admitted'
+                ? 'background:var(--green-soft); color:var(--green);'
+                : (pStatus === 'rejected'
+                  ? 'background:var(--red-soft); color:var(--red);'
+                  : 'background:var(--amber-soft); color:var(--amber);');
+              return '<span class="badge" style="font-size:10.5px; padding:1px 6px; ' + badgeStyle + '">' + esc(p.id) + ': ' + esc(pStatus) + '</span>';
+            }).join(' ')
+          : '<span style="color:var(--text-muted);">Proofs: none</span>';
         return (
           '<div class="participant-card status-' + esc(s.status) + '">' +
             '<div style="display:flex; justify-content:space-between; align-items:center;">' +
@@ -1154,6 +1228,9 @@
             '</div>' +
             '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (s.retries || 0) + '/' + (councilState.maxRetriesPerSeat || 1) + '</div>' +
             renderSoulCardHtml(s.soul, esc) +
+            '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; font-size:11px; font-family:var(--mono); margin-top:2px;">' +
+              seatProofsHtml +
+            '</div>' +
             '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
               '<span style="color:var(--accent);">Status: ' + esc((s.status || 'idle').toUpperCase()) + '</span>' +
               (seatFault ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(seatFault) + '</span>' : '') +
@@ -1163,6 +1240,46 @@
       }).join('');
 
       seatsGrid.innerHTML = judgeHtml + seatsHtml;
+
+      // 5b. Submitted Proofs & Judge Audit Trail
+      const proofsListEl = document.getElementById('proofs-list');
+      const proofsCountEl = document.getElementById('lbl-proofs-count');
+      if (proofsCountEl) {
+        proofsCountEl.textContent = allProofs.length + ' proof' + (allProofs.length === 1 ? '' : 's');
+      }
+      if (proofsListEl) {
+        if (allProofs.length === 0) {
+          proofsListEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+        } else {
+          proofsListEl.innerHTML = allProofs.map(function (p) {
+            const pStatus = p.status || 'pending';
+            const statusStyle = pStatus === 'admitted'
+              ? 'background:var(--green-soft); color:var(--green);'
+              : (pStatus === 'rejected'
+                ? 'background:var(--red-soft); color:var(--red);'
+                : 'background:var(--amber-soft); color:var(--amber);');
+            const noteText = p.judgeNote || p.auditNote || '';
+            return (
+              '<div class="clause-card">' +
+                '<div class="clause-head" style="flex-wrap:wrap;">' +
+                  '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">' +
+                    '<span class="clause-id">' + esc(p.id) + '</span>' +
+                    '<span class="badge" style="' + statusStyle + '">' + esc(pStatus) + '</span>' +
+                    '<span style="font-family:var(--mono); font-size:11px; color:var(--accent);">[' + esc(p.kind || 'proof') + ']</span>' +
+                    (p.seatId ? '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">Seat: ' + esc(p.seatId) + '</span>' : '') +
+                  '</div>' +
+                  '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">' + esc(p.scope || '') + '</span>' +
+                '</div>' +
+                '<div class="clause-body">' +
+                  (p.source ? '<strong>Source (' + esc(p.source) + '):</strong> ' : '') +
+                  esc(p.statement || '') +
+                '</div>' +
+                (noteText ? '<div style="font-size:11.5px; color:var(--text-secondary); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Judge Note:</strong> ' + esc(noteText) + '</div>' : '') +
+              '</div>'
+            );
+          }).join('');
+        }
+      }
 
       // 6. Deliberation Graphs
       const stepGraph = (currentStepIdx >= 0 && liveRun && Array.isArray(liveRun.steps) && liveRun.steps[currentStepIdx])

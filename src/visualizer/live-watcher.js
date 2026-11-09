@@ -1064,30 +1064,52 @@ export class VisualizerLiveWatcher {
       }
     }
   }
+  function isNotStale(existing, incoming) {
+    if (!existing) return true;
+    const existingSteps = Array.isArray(existing.steps) ? existing.steps.length : 0;
+    const incomingSteps = Array.isArray(incoming.steps) ? incoming.steps.length : 0;
+    if (incomingSteps !== existingSteps) return incomingSteps > existingSteps;
+    return String(incoming.updatedAt || '') >= String(existing.updatedAt || '');
+  }
   if (typeof window !== 'undefined') {
     window.CouncilRuns = window.CouncilRuns || {};
-    if (data.runId) {
+    if (data.runId && isNotStale(window.CouncilRuns[data.runId], data)) {
       window.CouncilRuns[data.runId] = data;
     }
-    if (isLatestPointer || !window.CouncilLatestLiveRun || window.CouncilLatestLiveRun.runId === data.runId) {
+    if (
+      !window.CouncilLatestLiveRun ||
+      (window.CouncilLatestLiveRun.runId === data.runId
+        ? isNotStale(window.CouncilLatestLiveRun, data)
+        : isLatestPointer)
+    ) {
       window.CouncilLatestLiveRun = data;
     }
   }
   if (typeof globalThis !== 'undefined') {
     globalThis.CouncilRuns = globalThis.CouncilRuns || {};
-    if (data.runId) {
+    if (data.runId && isNotStale(globalThis.CouncilRuns[data.runId], data)) {
       globalThis.CouncilRuns[data.runId] = data;
     }
-    if (isLatestPointer || !globalThis.CouncilLatestLiveRun || globalThis.CouncilLatestLiveRun.runId === data.runId) {
+    if (
+      !globalThis.CouncilLatestLiveRun ||
+      (globalThis.CouncilLatestLiveRun.runId === data.runId
+        ? isNotStale(globalThis.CouncilLatestLiveRun, data)
+        : isLatestPointer)
+    ) {
       globalThis.CouncilLatestLiveRun = data;
     }
   }
   if (root) {
     root.CouncilRuns = root.CouncilRuns || {};
-    if (data.runId) {
+    if (data.runId && isNotStale(root.CouncilRuns[data.runId], data)) {
       root.CouncilRuns[data.runId] = data;
     }
-    if (isLatestPointer || !root.CouncilLatestLiveRun || root.CouncilLatestLiveRun.runId === data.runId) {
+    if (
+      !root.CouncilLatestLiveRun ||
+      (root.CouncilLatestLiveRun.runId === data.runId
+        ? isNotStale(root.CouncilLatestLiveRun, data)
+        : isLatestPointer)
+    ) {
       root.CouncilLatestLiveRun = data;
     }
   }

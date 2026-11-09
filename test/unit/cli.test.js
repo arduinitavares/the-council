@@ -801,7 +801,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const parsed1 = JSON.parse(mockIO1.getStdout());
         assert.equal(parsed1.ok, true);
         assert.equal(parsed1.state.judge.id, 'judge-astra');
-        assert.deepEqual(parsed1.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter']);
+        assert.deepEqual(parsed1.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']);
 
         const mockIO2 = createMockIO();
         const code2 = await runCli(
@@ -812,7 +812,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const parsed2 = JSON.parse(mockIO2.getStdout());
         assert.equal(parsed2.ok, true);
         assert.equal(parsed2.state.judge.id, 'judge-astra');
-        assert.deepEqual(parsed2.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter']);
+        assert.deepEqual(parsed2.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']);
         assert.deepEqual(fs.readdirSync(tmpExtCwd), [], 'Caller cwd must remain completely empty');
       } finally {
         process.chdir(prevCwd);
@@ -1067,6 +1067,46 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         assert.match(out, /-\s+\[EXCUSED\]\s+excused-voter \(antigravity \/ claude-opus-5-5-high\) — Proofs: none — Excused:/);
         assert.match(out, /Seat : sol-voter \| Judge Note: Primary archival telemetry verified\./);
         assert.match(out, /Seat : argon-voter \| Judge Note: Rejected: lacks primary source verification\./);
+
+        // Verify non-consensus (Dissent Report) qualifies Final Answer header and indents multi-line candidateSummary
+        const dissentAdapter = {
+          ...customAdapter,
+          executeJudgeAuditAndSynthesis: async () => ({
+            summary: 'Line 1 of proposed candidate.\nLine 2 of proposed candidate.',
+            proofDecisions: {
+              P1: { status: 'admitted', note: 'Primary archival telemetry verified.' },
+              P2: { status: 'admitted', note: 'Admitted for objection test.' }
+            },
+            clauses: [
+              {
+                id: 'C1',
+                context: 'Controlled Powered Flight (1903)',
+                conclusion: 'Wilbur and Orville Wright achieved sustained controlled flight at Kitty Hawk.',
+                citedProofIds: ['P1']
+              }
+            ]
+          }),
+          executeSeatVote: async ({ seat }) =>
+            seat.id === 'argon-voter'
+              ? { vote: 'object', reason: 'Disputes catapult vs unassisted criteria', proofId: 'P2' }
+              : { vote: 'accept' }
+        };
+        const dissentRegistry = new HarnessRegistry();
+        dissentRegistry.register('codex', dissentAdapter);
+        dissentRegistry.register('antigravity', dissentAdapter);
+
+        const dissentIO = createMockIO();
+        dissentIO.io.harnessRegistry = dissentRegistry;
+        dissentIO.io.liveWatcherOptions = { outputDir: path.join(tmpDir, 'runs'), runId: 'run-cli-53-dissent' };
+
+        const dissentCode = await runCli(['run', '--live', '-c', cfgPath], dissentIO.io);
+        assert.equal(dissentCode, 2);
+        const dissentOut = dissentIO.getStdout();
+        assert.match(dissentOut, /Verdict\s+:\s+Dissent Report \(Round Limit Reached\)/);
+        assert.match(
+          dissentOut,
+          /Final Answer: \(Proposed Candidate — Dissent Report \(Round Limit Reached\)\)\n  Line 1 of proposed candidate\.\n  Line 2 of proposed candidate\./
+        );
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

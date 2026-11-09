@@ -2462,12 +2462,15 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
           src: '',
           onload: null,
           onerror: null,
+          removed: false,
           remove: function () {
-            if (this.id) elements.delete(this.id);
+            this.removed = true;
+            if (this.id && elements.get(this.id) === this) elements.delete(this.id);
           }
         }),
         head: {
           appendChild: (el) => {
+            if (el.id) elements.set(el.id, el);
             appendedScripts.push(el);
           }
         }
@@ -2601,6 +2604,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       // 3. Test A -> B -> A sequence: selectRun('run-A'), then selectRun('run-B'), then selectRun('run-A') again
       controller.selectRun('run-A');
       const scriptA1 = appendedScripts[appendedScripts.length - 1];
+      assert.equal(scriptA1.id, 'script-run-select');
       // Immediately upon selecting an unloaded run, stale panels from previous run must be cleared
       assert.equal(getEl('seats-grid').innerHTML, '');
       assert.equal(getEl('lbl-proofs-count').textContent, '0 proofs');
@@ -2608,56 +2612,139 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(getEl('clauses-list').innerHTML, /No candidate clauses synthesized yet/);
 
       controller.selectRun('run-B');
+      assert.equal(scriptA1.removed, true, 'Prior #script-run-select must be removed when a new run is selected');
       controller.selectRun('run-A');
       const scriptA2 = appendedScripts[appendedScripts.length - 1];
+      assert.equal(scriptA2.id, 'script-run-select');
       assert.notEqual(scriptA1, scriptA2);
 
-      // Suppose scriptA1 (stale first request for run-A) fires onload with stale data -> must be ignored by reqId guard!
-      domWin.CouncilRuns['run-A'] = {
-        runId: 'run-A',
-        currentState: {
-          topic: 'Stale First Request Run A',
-          phase: 'reviewing',
-          round: 1,
-          seats: [],
-          proofs: [],
-          objections: [],
-          history: []
-        },
-        steps: []
-      };
-      scriptA1.onload();
-      assert.notEqual(
-        getEl('heading-topic').textContent,
-        'Stale First Request Run A',
-        'First scriptA1 onload in A -> B -> A sequence must be ignored by monotonic request counter'
+      // Build bundle scripts for A2 (newer/completed, 2 steps, newer updatedAt) and A1 (older/judging, 1 step, older updatedAt)
+      const bundleA2 = VisualizerLiveWatcher.prototype._buildBundleScript(
+        JSON.stringify({
+          runId: 'run-A',
+          updatedAt: '2026-11-09T02:00:00.000Z',
+          isRunning: false,
+          currentState: {
+            topic: 'Fresh Second Request Run A',
+            phase: 'completed',
+            round: 1,
+            verdict: { kind: 'Unanimous Consensus', note: 'Consensus reached' },
+            seats: [],
+            proofs: [],
+            objections: [],
+            history: ['Step 1', 'Step 2']
+          },
+          steps: [
+            {
+              label: 'Step 1: Reviewing',
+              stateSnapshot: {
+                topic: 'Fresh Second Request Run A',
+                phase: 'reviewing',
+                round: 1,
+                seats: [],
+                proofs: [],
+                objections: [],
+                history: ['Step 1']
+              }
+            },
+            {
+              label: 'Step 2: Completed',
+              stateSnapshot: {
+                topic: 'Fresh Second Request Run A',
+                phase: 'completed',
+                round: 1,
+                verdict: { kind: 'Unanimous Consensus', note: 'Consensus reached' },
+                seats: [],
+                proofs: [],
+                objections: [],
+                history: ['Step 1', 'Step 2']
+              }
+            }
+          ]
+        }),
+        false
       );
 
-      // Now scriptA2 (current request for run-A) fires onload with fresh data -> must render!
-      domWin.CouncilRuns['run-A'] = {
-        runId: 'run-A',
-        currentState: {
-          topic: 'Fresh Second Request Run A',
-          phase: 'completed',
-          round: 1,
-          seats: [],
-          proofs: [],
-          objections: [],
-          history: []
-        },
-        steps: []
-      };
+      const bundleA1 = VisualizerLiveWatcher.prototype._buildBundleScript(
+        JSON.stringify({
+          runId: 'run-A',
+          updatedAt: '2026-11-09T01:00:00.000Z',
+          isRunning: true,
+          currentState: {
+            topic: 'Stale First Request Run A',
+            phase: 'judging',
+            round: 1,
+            seats: [],
+            proofs: [],
+            objections: [],
+            history: ['Step 1']
+          },
+          steps: [
+            {
+              label: 'Step 1: Judging',
+              stateSnapshot: {
+                topic: 'Stale First Request Run A',
+                phase: 'judging',
+                round: 1,
+                seats: [],
+                proofs: [],
+                objections: [],
+                history: ['Step 1']
+              }
+            }
+          ]
+        }),
+        false
+      );
+
+      // Suppose A2 (newer/completed) executes its bundle script and fires onload BEFORE A1 (older/judging)
+      new Function('window', 'globalThis', bundleA2)(domWin, domWin);
       scriptA2.onload();
       assert.equal(getEl('heading-topic').textContent, 'Fresh Second Request Run A');
+      assert.equal(getEl('lbl-phase').textContent, 'completed');
 
-      // 4. Test script.onerror: selecting a missing/corrupt run clears stale state and displays failure message
+      // Now stale A1 executes its bundle script and fires onload AFTER A2 -> must NOT overwrite CouncilRuns['run-A'] or DOM!
+      new Function('window', 'globalThis', bundleA1)(domWin, domWin);
+      scriptA1.onload();
+      assert.equal(getEl('heading-topic').textContent, 'Fresh Second Request Run A');
+      assert.equal(getEl('lbl-phase').textContent, 'completed');
+      assert.equal(domWin.CouncilRuns['run-A'].currentState.phase, 'completed');
+      assert.equal(domWin.CouncilRuns['run-A'].steps.length, 2);
+
+      // Scrubbing to step 0 and calling restoreLatestSnapshot() and selectRun('run-A') afterward must still reflect A2 (completed)
+      controller.inspectStep(0);
+      assert.equal(getEl('lbl-phase').textContent, 'reviewing');
+      controller.restoreLatestSnapshot();
+      assert.equal(getEl('heading-topic').textContent, 'Fresh Second Request Run A');
+      assert.equal(getEl('lbl-phase').textContent, 'completed');
+
+      controller.selectRun('run-A');
+      assert.equal(getEl('heading-topic').textContent, 'Fresh Second Request Run A');
+      assert.equal(getEl('lbl-phase').textContent, 'completed');
+
+      // 4. Test script.onerror and !councilState after onload: clears stale state and displays LOAD FAILED banner
       controller.selectRun('run-missing');
       const scriptMissing = appendedScripts[appendedScripts.length - 1];
       scriptMissing.onerror();
       assert.equal(getEl('badge-live-tag').textContent, 'Run: run-missing');
       assert.equal(getEl('heading-topic').textContent, 'Failed to load run run-missing.');
+      assert.equal(getEl('status-pill').className, 'badge badge-failed');
+      assert.equal(getEl('status-pill-text').textContent, 'LOAD FAILED');
+      assert.equal(getEl('lbl-verdict-status').className, 'badge badge-failed');
+      assert.equal(getEl('lbl-verdict-status').textContent, 'LOAD FAILED');
+      assert.equal(getEl('verdict-box').className, 'verdict-banner fault');
+      assert.equal(getEl('verdict-title').textContent, 'Failed to load run run-missing');
+      assert.equal(getEl('verdict-body').textContent, 'Run artifact could not be loaded from disk.');
       assert.equal(getEl('seats-grid').innerHTML, '');
       assert.equal(getEl('lbl-proofs-count').textContent, '0 proofs');
+
+      controller.selectRun('run-corrupt');
+      const scriptCorrupt = appendedScripts[appendedScripts.length - 1];
+      scriptCorrupt.onload();
+      assert.equal(getEl('heading-topic').textContent, 'Failed to load run run-corrupt.');
+      assert.equal(getEl('status-pill-text').textContent, 'LOAD FAILED');
+      assert.equal(getEl('verdict-title').textContent, 'Failed to load run run-corrupt');
+      assert.equal(getEl('verdict-body').textContent, 'Run artifact could not be loaded from disk.');
     });
 
     it('evicts deleted runs from index.js when neither <runId>.js nor <runId>.meta.json exists on disk', () => {

@@ -833,8 +833,29 @@
       sel.value = hasTargetOption ? targetValue : 'latest';
     }
 
+    function renderFailedRunLoad(failedRunId) {
+      document.getElementById('heading-topic').textContent = 'Failed to load run ' + failedRunId + '.';
+      const statusPill = document.getElementById('status-pill');
+      const statusPillText = document.getElementById('status-pill-text');
+      const verdictStatusPill = document.getElementById('lbl-verdict-status');
+      if (statusPill) statusPill.className = 'badge badge-failed';
+      if (statusPillText) statusPillText.textContent = 'LOAD FAILED';
+      if (verdictStatusPill) {
+        verdictStatusPill.className = 'badge badge-failed';
+        verdictStatusPill.textContent = 'LOAD FAILED';
+      }
+      const vBox = document.getElementById('verdict-box');
+      const vTitle = document.getElementById('verdict-title');
+      const vBody = document.getElementById('verdict-body');
+      if (vBox) vBox.className = 'verdict-banner fault';
+      if (vTitle) vTitle.textContent = 'Failed to load run ' + failedRunId;
+      if (vBody) vBody.textContent = 'Run artifact could not be loaded from disk.';
+    }
+
     function selectRun(runId) {
       const reqId = ++selectRunRequestId;
+      const oldSelectScript = document.getElementById('script-run-select');
+      if (oldSelectScript) oldSelectScript.remove();
       selectedRunId = runId || 'latest';
       currentStepIdx = -1;
       const badgeTag = document.getElementById('badge-live-tag');
@@ -858,6 +879,7 @@
       councilState = null;
       renderAll();
       const script = document.createElement('script');
+      script.id = 'script-run-select';
       script.src = '../../.council/runs/' + encodeURIComponent(requestedRunId) + '.js?t=' + Date.now();
       script.onload = function () {
         script.remove();
@@ -866,7 +888,7 @@
         councilState = (loadedRun && loadedRun.currentState) ? loadedRun.currentState : null;
         renderAll();
         if (!councilState) {
-          document.getElementById('heading-topic').textContent = 'Failed to load run ' + requestedRunId + '.';
+          renderFailedRunLoad(requestedRunId);
         }
       };
       script.onerror = function () {
@@ -874,7 +896,7 @@
         if (reqId !== selectRunRequestId || selectedRunId !== requestedRunId) return;
         councilState = null;
         renderAll();
-        document.getElementById('heading-topic').textContent = 'Failed to load run ' + requestedRunId + '.';
+        renderFailedRunLoad(requestedRunId);
       };
       document.head.appendChild(script);
     }

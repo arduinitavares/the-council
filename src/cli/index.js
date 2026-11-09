@@ -194,11 +194,13 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     const outputDir = values['output-dir'] || io.outputDir || io.liveWatcherOptions?.outputDir;
     const telemetryDir = values['telemetry-dir'] || io.telemetryDir || io.liveWatcherOptions?.telemetryDir;
+    const includeMock = Boolean(io.includeMock || io.persistMockTelemetry);
     const summary = loadTelemetrySummary({
       outputDir,
       telemetryDir,
       days: parsedDays,
-      now: io.now || new Date()
+      now: io.now || new Date(),
+      includeMock
     });
 
     if (values.json) {
@@ -212,7 +214,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       };
       log(JSON.stringify(payload, null, 2));
     } else {
-      log(formatTelemetryTable(summary, { by: byRaw, days: parsedDays, now: io.now || new Date() }));
+      log(formatTelemetryTable(summary, { by: byRaw, days: parsedDays, now: io.now || new Date(), includeMock }));
     }
     return await safeExit(0);
   }
@@ -438,7 +440,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           startedAt: liveWatcher?.liveRun?.startedAt || runStartedAt,
           completedAt: new Date().toISOString(),
           outputDir: resolvedOutputDir,
-          telemetryDir: resolvedTelemetryDir
+          telemetryDir: resolvedTelemetryDir,
+          includeMock: Boolean(io.persistMockTelemetry)
         });
       } catch {
         // Isolate observer telemetry persistence errors

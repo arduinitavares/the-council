@@ -1289,12 +1289,41 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.deepEqual(extractSkillsRead('mkdir -p skills/ask-council/SKILL.md'), []);
       assert.deepEqual(extractSkillsRead('tee skills/ask-council/SKILL.md'), []);
       assert.deepEqual(extractSkillsRead("sed -i 's/a/b/' skills/ask-council/SKILL.md"), []);
+      assert.deepEqual(extractSkillsRead("sed -ibak 's/a/b/' skills/ask-council/SKILL.md"), []);
+      assert.deepEqual(extractSkillsRead("sed -n -i.bak 's/a/b/' skills/ask-council/SKILL.md"), []);
+      assert.deepEqual(extractSkillsRead("sed --in-place=.bak 's/a/b/' skills/ask-council/SKILL.md"), []);
+      assert.deepEqual(extractSkillsRead("awk -i inplace '{print}' skills/ask-council/SKILL.md"), []);
       assert.deepEqual(extractSkillsRead('cat README.md > skills/ask-council/SKILL.md'), []);
       assert.deepEqual(extractSkillsRead('cat README.md >> skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat README.md >| skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat README.md &> skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat README.md > "/path with spaces/skills/ask-council/SKILL.md"'), []);
       assert.deepEqual(extractSkillsRead('cat skills/ask-council/skill.md'), []);
       assert.deepEqual(
         extractSkillsRead({
           name: 'writeToolCall',
+          path: 'skills/ask-council/SKILL.md'
+        }),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead({
+          name: 'writefile',
+          path: 'skills/ask-council/SKILL.md'
+        }),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead({
+          tool_name: 'write_file',
+          path: 'skills/ask-council/SKILL.md'
+        }),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead({
+          type: 'tool_call',
+          function: { name: 'editfile' },
           path: 'skills/ask-council/SKILL.md'
         }),
         []
@@ -1322,8 +1351,12 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
         }),
         [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
       );
+      assert.deepEqual(
+        extractSkillsRead("sed -n '1,50p' skills/ask-council/SKILL.md"),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
 
-      // Codex stream: item.started / exec_command_begin followed by exit_code: 1 must NOT credit skill read
+      // Codex stream: item.started / exec_command_begin (keyed and unkeyed) followed by exit_code: 1 must NOT credit skill read
       const codexFailedStream = [
         JSON.stringify({
           type: 'item.started',
@@ -1361,6 +1394,20 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           }
         }),
         JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exec_command_begin',
+            command: ['cat', 'skills/unkeyed-fail/SKILL.md']
+          }
+        }),
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exec_command_end',
+            exit_code: 1
+          }
+        }),
+        JSON.stringify({
           type: 'item.completed',
           item: {
             id: 'msg_done',
@@ -1371,9 +1418,11 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       ].join('\n');
 
       const parsedFailed = parseCodexEventStream(codexFailedStream);
+      assert.equal(parsedFailed.toolCalls.length, 3);
       assert.deepEqual(parsedFailed.skillsRead, []);
 
-      // Cursor stream: writeToolCall to SKILL.md produces [], while unkeyed started+completed readToolCall is deduplicated to 1 toolCall
+      // Cursor stream: writeToolCall to SKILL.md produces [], unkeyed failed shellToolCall (omitting args on completed) produces [],
+      // while unkeyed started+completed readToolCall (even when completed only carries result) is deduplicated to 1 toolCall and credited
       const cursorStream = [
         JSON.stringify({
           type: 'tool_call',
@@ -1381,6 +1430,24 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           tool_call: {
             writeToolCall: {
               args: { path: 'skills/ask-council/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          tool_call: {
+            shellToolCall: {
+              args: { command: 'cat skills/failed-skill/SKILL.md' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            shellToolCall: {
+              result: { exitCode: 1, stderr: 'No such file' }
             }
           }
         }),
@@ -1398,7 +1465,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
           subtype: 'completed',
           tool_call: {
             readToolCall: {
-              args: { path: '.agents/skills/ask-council/SKILL.md' }
+              result: { content: '# Ask Council Skill' }
             }
           }
         }),
@@ -1406,9 +1473,17 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       ].join('\n');
 
       const parsedCursor = parseCursorEventStream(cursorStream);
-      assert.equal(parsedCursor.toolCalls.length, 2, 'Unkeyed started+completed readToolCall must be deduplicated into 1 entry alongside writeToolCall');
-      assert.equal(parsedCursor.toolCalls[1].name, 'readToolCall');
-      assert.equal(parsedCursor.toolCalls[1].status, 'completed');
+      assert.equal(
+        parsedCursor.toolCalls.length,
+        3,
+        'Unkeyed started+completed pairs must be deduplicated even when completed event only carries result'
+      );
+      assert.equal(parsedCursor.toolCalls[1].name, 'shellToolCall');
+      assert.equal(parsedCursor.toolCalls[1].status, 'failed');
+      assert.equal(parsedCursor.toolCalls[1].exitCode, 1);
+      assert.equal(parsedCursor.toolCalls[2].name, 'readToolCall');
+      assert.equal(parsedCursor.toolCalls[2].status, 'completed');
+      assert.equal(parsedCursor.toolCalls[2].path, '.agents/skills/ask-council/SKILL.md');
       assert.deepEqual(parsedCursor.skillsRead, [
         { skill: 'ask-council', evidence: 'skill_instructions_read' }
       ]);

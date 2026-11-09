@@ -314,6 +314,9 @@ const MUTATING_TOOL_WORDS = new Set([
 
 function isMutatingToolIdentifier(id) {
   if (typeof id !== 'string' || !id.trim()) return false;
+  if (/(?:write|edit|(?<!dis)patch|replace|delete|remove|create|mkdir|rmdir|touch|overwrite|unlink)/i.test(id)) {
+    return true;
+  }
   const words = id
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
@@ -357,6 +360,12 @@ const IGNORED_META_KEYS = new Set([
   'kind',
   'name',
   'tool',
+  'tool_name',
+  'toolName',
+  'function_name',
+  'functionName',
+  'action',
+  'operation',
   'server',
   'status',
   'subtype',
@@ -419,7 +428,7 @@ function splitShellSegments(str) {
       i += 1;
       continue;
     }
-    if (ch === '|') {
+    if (ch === '|' && str[i - 1] !== '>') {
       if (current.trim()) segments.push(current.trim());
       current = '';
       continue;
@@ -475,8 +484,12 @@ function extractSkillsFromCommand(cmdInput) {
   for (const seg of segments) {
     if (!seg.includes('SKILL.md')) continue;
 
-    // Reject output redirection (> or >>) targeting SKILL.md
-    if (/>{1,2}\s*["']?[^\s;|&\n]*SKILL\.md\b/.test(seg)) {
+    // Reject output redirection (>, >>, >|, &>, &>>) targeting SKILL.md
+    if (
+      /(?:[0-9]*>>?\|?|&>>?)\s*(?:"[^"]*SKILL\.md\b[^"]*"|'[^']*SKILL\.md\b[^']*'|[^\s;|&><]*SKILL\.md\b)/.test(
+        seg
+      )
+    ) {
       continue;
     }
 
@@ -512,8 +525,13 @@ function extractSkillsFromCommand(cmdInput) {
       continue;
     }
 
-    // Reject in-place sed mutations (sed -i / sed --in-place)
-    if (cmdBase === 'sed' && /\s-(?:[a-zA-Z]*i\b|-in-place\b)/.test(restSeg)) {
+    // Reject in-place sed mutations (sed -i / sed -ni / sed -i.bak / sed -ibak / sed --in-place)
+    if (cmdBase === 'sed' && /\s(?:--in-place(?:=|\b)|-[neEfrluzsb]*i)/.test(restSeg)) {
+      continue;
+    }
+
+    // Reject in-place awk mutations (awk -i inplace)
+    if (cmdBase === 'awk' && /\s-i\b/.test(restSeg)) {
       continue;
     }
 
@@ -557,13 +575,25 @@ function getToolIdentityStrings(obj) {
   const ids = [];
   const collectIds = (o) => {
     if (!o || typeof o !== 'object') return;
-    for (const k of ['name', 'type', 'kind', 'tool']) {
+    for (const k of [
+      'name',
+      'type',
+      'kind',
+      'tool',
+      'tool_name',
+      'toolName',
+      'function_name',
+      'functionName',
+      'action',
+      'operation'
+    ]) {
       if (typeof o[k] === 'string' && o[k].trim()) {
         ids.push(o[k].trim());
       }
     }
   };
   collectIds(obj);
+  collectIds(obj?.function);
   collectIds(obj?.item);
   collectIds(obj?.payload);
   collectIds(obj?.msg);
@@ -809,14 +839,22 @@ function isPendingToolStatus(status) {
   return status === 'started' || status === 'in_progress' || status === 'observed';
 }
 
-function findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry) {
+function findMatchingPendingUnkeyedIndex(unkeyedToolCalls, { type, name, command, path }) {
   for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
     const existing = unkeyedToolCalls[i];
     if (!isPendingToolStatus(existing.status)) continue;
-    if (existing.type !== entry.type || existing.name !== entry.name) continue;
-    const sameCmd = (existing.command || null) === (entry.command || null);
-    const samePath = (existing.path || null) === (entry.path || null);
+    if (existing.type !== type || (name && existing.name !== name)) continue;
+    const sameCmd = (existing.command || null) === (command || null);
+    const samePath = (existing.path || null) === (path || null);
     if (sameCmd && samePath) {
+      return i;
+    }
+  }
+  if (!command && !path) {
+    for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
+      const existing = unkeyedToolCalls[i];
+      if (!isPendingToolStatus(existing.status)) continue;
+      if (existing.type !== type || (name && existing.name !== name)) continue;
       return i;
     }
   }
@@ -909,35 +947,54 @@ export function parseCodexEventStream(stdout) {
           ? 'command_execution'
           : itemType;
       const toolId = item.id || item.call_id || ev.call_id || ev.id || null;
-      const prevEntry = toolId ? toolCallsById.get(String(toolId)) : null;
-      const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
 
       const parsedArgsObj =
         parseMaybeJsonObject(item.arguments) ||
         parseMaybeJsonObject(item.input) ||
         parseMaybeJsonObject(item.args);
-      const rawCommand =
-        item.command ||
-        item.cmd ||
-        parsedArgsObj?.command ||
-        parsedArgsObj?.cmd ||
-        prevEntry?.command ||
-        null;
-      const command = Array.isArray(rawCommand) ? rawCommand.join(' ') : rawCommand;
-      const pathArg =
+      const incomingRawCommand =
+        item.command || item.cmd || parsedArgsObj?.command || parsedArgsObj?.cmd || null;
+      const incomingCommand = Array.isArray(incomingRawCommand)
+        ? incomingRawCommand.join(' ')
+        : incomingRawCommand;
+      const incomingPath =
         item.path ||
         item.file_path ||
         parsedArgsObj?.path ||
         parsedArgsObj?.file_path ||
         parsedArgsObj?.target_file ||
-        prevEntry?.path ||
         null;
-      const name =
+      const incomingName =
         item.tool ||
         item.name ||
         (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
-        prevEntry?.name ||
-        normalizedType;
+        null;
+      const isCompletionEvent =
+        ev.type === 'item.completed' ||
+        itemType === 'exec_command_end' ||
+        (typeof item.status === 'string' && !isPendingToolStatus(item.status));
+
+      const matchIdx =
+        !toolId && isCompletionEvent
+          ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, {
+              type: normalizedType,
+              name: incomingName || normalizedType,
+              command: incomingCommand ? String(incomingCommand) : null,
+              path: incomingPath ? String(incomingPath) : null
+            })
+          : -1;
+
+      const prevEntry = toolId
+        ? toolCallsById.get(String(toolId))
+        : matchIdx !== -1
+          ? unkeyedToolCalls[matchIdx]
+          : null;
+      const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
+
+      const rawCommand = incomingRawCommand || prevRaw?.command || prevEntry?.command || null;
+      const command = incomingCommand || prevEntry?.command || null;
+      const pathArg = incomingPath || prevEntry?.path || null;
+      const name = incomingName || prevEntry?.name || normalizedType;
       const exitCode =
         typeof item.exit_code === 'number'
           ? item.exit_code
@@ -978,31 +1035,13 @@ export function parseCodexEventStream(stdout) {
         status
       };
 
+      rawInputsByToolEntry.set(entry, mergedRawInput);
       if (toolId) {
-        rawInputsByToolEntry.set(entry, mergedRawInput);
         toolCallsById.set(String(toolId), entry);
+      } else if (matchIdx !== -1) {
+        unkeyedToolCalls[matchIdx] = entry;
       } else {
-        const matchIdx = !isPendingToolStatus(status)
-          ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry)
-          : -1;
-        if (matchIdx !== -1) {
-          const existing = unkeyedToolCalls[matchIdx];
-          const existingRaw = rawInputsByToolEntry.get(existing);
-          const updated = {
-            ...existing,
-            ...entry,
-            ...(entry.command || existing.command ? { command: entry.command || existing.command } : {}),
-            ...(entry.path || existing.path ? { path: entry.path || existing.path } : {})
-          };
-          rawInputsByToolEntry.set(updated, {
-            ...existingRaw,
-            ...mergedRawInput
-          });
-          unkeyedToolCalls[matchIdx] = updated;
-        } else {
-          rawInputsByToolEntry.set(entry, mergedRawInput);
-          unkeyedToolCalls.push(entry);
-        }
+        unkeyedToolCalls.push(entry);
       }
       continue;
     }
@@ -1166,11 +1205,29 @@ export function parseCursorEventStream(stdout) {
     exitCode,
     status = 'completed'
   }) => {
-    const prevEntry = id ? toolCallsById.get(String(id)) : null;
+    const matchIdx =
+      !id && !isPendingToolStatus(status)
+        ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, {
+            type,
+            name: String(name || type),
+            command: command ? String(command) : null,
+            path: pathArg ? String(pathArg) : null
+          })
+        : -1;
+
+    const prevEntry = id
+      ? toolCallsById.get(String(id))
+      : matchIdx !== -1
+        ? unkeyedToolCalls[matchIdx]
+        : null;
     const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
     const effectiveCommand = command || prevEntry?.command || null;
     const effectivePath = pathArg || prevEntry?.path || null;
     const effectiveExitCode = typeof exitCode === 'number' ? exitCode : prevEntry?.exitCode;
+    const effectiveStatus =
+      status === 'completed' && typeof effectiveExitCode === 'number' && effectiveExitCode !== 0
+        ? 'failed'
+        : status;
 
     const entry = {
       ...(id ? { id: String(id) } : {}),
@@ -1180,7 +1237,7 @@ export function parseCursorEventStream(stdout) {
       ...(effectiveCommand ? { command: String(effectiveCommand) } : {}),
       ...(effectivePath ? { path: String(effectivePath) } : {}),
       ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
-      status
+      status: effectiveStatus
     };
 
     const rawInput = {
@@ -1192,34 +1249,16 @@ export function parseCursorEventStream(stdout) {
       path: effectivePath,
       args: rawArgs ?? prevRaw?.args,
       ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
-      status
+      status: effectiveStatus
     };
 
+    rawInputsByToolEntry.set(entry, rawInput);
     if (id) {
-      rawInputsByToolEntry.set(entry, rawInput);
       toolCallsById.set(String(id), entry);
+    } else if (matchIdx !== -1) {
+      unkeyedToolCalls[matchIdx] = entry;
     } else {
-      const matchIdx = !isPendingToolStatus(status)
-        ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, entry)
-        : -1;
-      if (matchIdx !== -1) {
-        const existing = unkeyedToolCalls[matchIdx];
-        const existingRaw = rawInputsByToolEntry.get(existing);
-        const updated = {
-          ...existing,
-          ...entry,
-          ...(entry.command || existing.command ? { command: entry.command || existing.command } : {}),
-          ...(entry.path || existing.path ? { path: entry.path || existing.path } : {})
-        };
-        rawInputsByToolEntry.set(updated, {
-          ...existingRaw,
-          ...rawInput
-        });
-        unkeyedToolCalls[matchIdx] = updated;
-      } else {
-        rawInputsByToolEntry.set(entry, rawInput);
-        unkeyedToolCalls.push(entry);
-      }
+      unkeyedToolCalls.push(entry);
     }
   };
 
@@ -1253,7 +1292,15 @@ export function parseCursorEventStream(stdout) {
           const subKey = subKeys[0];
           const subVal = ev.tool_call[subKey];
           toolName = subVal?.name || subKey;
-          rawArgs = subVal?.args || subVal?.input || subVal || rawArgs;
+          rawArgs = subVal?.args ?? subVal?.input ?? subVal?.arguments ?? rawArgs;
+          if (!rawArgs && subVal && typeof subVal === 'object') {
+            const hasDirectArgKey = Object.keys(subVal).some(
+              (k) => COMMAND_OBJECT_KEYS.has(k) || PATH_OBJECT_KEYS.has(k)
+            );
+            if (hasDirectArgKey) {
+              rawArgs = subVal;
+            }
+          }
           const parsedSubArgs = parseMaybeJsonObject(rawArgs);
           command = command || parsedSubArgs?.command || parsedSubArgs?.cmd || null;
           pathArg = pathArg || parsedSubArgs?.path || parsedSubArgs?.file_path || parsedSubArgs?.target_file || null;
@@ -1318,7 +1365,7 @@ export function parseCursorEventStream(stdout) {
             messageIndexById.set(key, orderedMessages.length);
             orderedMessages.push(msgText);
           }
-        } else {
+        } else if (ev.type !== 'item.started') {
           orderedMessages.push(msgText);
         }
       }

@@ -361,6 +361,61 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
       });
       assert.ok(delibToolsNone.includes(ANTI_CHEATING_RULE));
       assert.ok(!delibToolsNone.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+
+      // Issue #63 follow-up: ANTI_CHEATING_RULE names all Council artifact patterns explicitly
+      for (const token of [
+        '.council/',
+        '.council/runs/',
+        '.council/telemetry/',
+        '.council/runs/latest.js',
+        'latest.js',
+        '*.meta.json',
+        '*.events.jsonl',
+        'telemetry-summary.*'
+      ]) {
+        assert.ok(
+          ANTI_CHEATING_RULE.includes(token),
+          `Expected ANTI_CHEATING_RULE to explicitly mention ${token}`
+        );
+      }
+
+      // Issue #63 follow-up: Without cwd (!hasWorkspaceCwd), prompts explicitly forbid local filesystem search/grep/find commands
+      for (const p of [delibNoEv, voteNoEv, judgeNoEv]) {
+        assert.match(
+          p,
+          /No local code workspace is attached \(running in an isolated sandbox directory\); do NOT run local filesystem search\/grep\/find commands \(rg, grep, find, ls\) to search a codebase\./
+        );
+      }
+
+      // When workspace cwd IS attached (via seat.cwd, judge.cwd, state.cwd, or cwd), emit workspace verification directive
+      const delibWithCwd = formatDeliberationPrompt({
+        soul,
+        seat: { ...seatContext, cwd: '/Users/aaat/projects/target-repo' },
+        topic: 'Audit target-repo'
+      });
+      const voteWithCwd = formatVotingPrompt({
+        soul,
+        seat: seatContext,
+        candidate: { round: 1, summary: 'Candidate', clauses: [] },
+        admittedProofs: [],
+        state: { cwd: '/Users/aaat/projects/target-repo' }
+      });
+      const judgeWithCwd = formatJudgePrompt({
+        judge: { id: 'judge-1', soul: 'Auditor', cwd: '/Users/aaat/projects/target-repo' },
+        topic: 'Audit target-repo',
+        round: 1,
+        proofs: []
+      });
+
+      for (const p of [delibWithCwd, voteWithCwd, judgeWithCwd]) {
+        assert.ok(
+          !p.includes('No local code workspace is attached'),
+          'Workspace-attached prompts must not claim no local workspace is attached'
+        );
+      }
+      assert.match(delibWithCwd, /verify claims against sources \(specifications, benchmarks, codebase, or documentation\)/);
+      assert.match(voteWithCwd, /Verify disputed candidate clauses or cited proof sources using your read-only tools/);
+      assert.match(judgeWithCwd, /Spot-check submitted proof sources and citations using your read-only tools/);
     });
   });
 });

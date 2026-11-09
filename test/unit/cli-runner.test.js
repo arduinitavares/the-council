@@ -2360,6 +2360,250 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(agyRecorded[0].trace.forbiddenStateAccess, true);
       assert.equal(agyRecorded[0].trace.outcome, 'error');
     });
+
+    it('resolves Issue #63 follow-up review findings: case-insensitive/glob/artifact detection, benign exclusions, Antigravity stream/error-stdout parsing, and PWD/OLDPWD/INIT_CWD scrubbing', async () => {
+      const {
+        detectForbiddenCouncilAccess,
+        hasForbiddenCouncilToken,
+        buildSanitizedCliEnv,
+        parseCodexEventStream,
+        parseCursorEventStream
+      } = await import('../../src/harness/cli-runner.js');
+
+      // Finding 1: Case-insensitive .Council, wildcard/bracket/brace globs, and direct Council artifact targeting
+      const forbiddenSamples = [
+        'cat .Council/runs/latest.js',
+        'cat /repo/.COUNCIL/telemetry/telemetry-summary.json',
+        'cat .c?uncil/runs/latest.js',
+        'cat .[c]ouncil/runs/latest.js',
+        'cat .c*l/runs/latest.js',
+        'cat .c{o}uncil/runs/latest.js',
+        'ls .?ouncil/telemetry',
+        'find . -name latest.js -exec cat {} +',
+        '**/latest.js',
+        'cat run-20261109-abcd.meta.json',
+        'cat run-20261109-abcd.events.jsonl',
+        'find . -name "*.meta.json"',
+        'find . -name "*.events.jsonl"',
+        'cat telemetry-summary.json',
+        'cat telemetry-summary.js',
+        '**/telemetry-summary.*'
+      ];
+      for (const sample of forbiddenSamples) {
+        assert.equal(
+          hasForbiddenCouncilToken(sample),
+          true,
+          `Expected forbidden Council token detection for: ${sample}`
+        );
+      }
+
+      const apfsCaseRes = detectForbiddenCouncilAccess([
+        { kind: 'readToolCall', name: 'readToolCall', args: { AbsolutePath: '/repo/.Council/runs/latest.js' } }
+      ]);
+      assert.equal(apfsCaseRes.forbiddenStateAccess, true);
+      assert.deepEqual(apfsCaseRes.forbiddenAccessDetails, ['/repo/.Council/runs/latest.js']);
+
+      const globToolRes = detectForbiddenCouncilAccess([
+        { kind: 'find_by_name', name: 'find_by_name', args: { Pattern: '**/latest.js' } }
+      ]);
+      assert.equal(globToolRes.forbiddenStateAccess, true);
+      assert.deepEqual(globToolRes.forbiddenAccessDetails, ['**/latest.js']);
+
+      // Finding 2: Benign exclusion flags (!.council, --exclude-dir, --exclude, find -prune / -not) must NOT false-positive
+      const benignExclusionCommands = [
+        'rg -g \'!.council/**\' "pattern" .',
+        'rg --glob "!.council" "pattern" .',
+        'rg --iglob \'!.Council/**\' "pattern" src/',
+        'grep --exclude-dir=.council -rn "pattern" .',
+        'grep --exclude-dir=\'.council*\' --exclude=\'*.log\' -rn "pattern" .',
+        'find . -path \'*/.council/*\' -prune -o -type f -print',
+        'find . -not -path \'*/.council/*\' -type f',
+        'find . ! -name \'.council\' -type f'
+      ];
+      for (const cmd of benignExclusionCommands) {
+        assert.equal(
+          hasForbiddenCouncilToken(cmd),
+          false,
+          `Expected benign exclusion command NOT to be flagged: ${cmd}`
+        );
+        const res = detectForbiddenCouncilAccess([{ kind: 'command_execution', name: 'shell', command: cmd }]);
+        assert.equal(res.forbiddenStateAccess, false, `Expected forbiddenStateAccess: false for: ${cmd}`);
+      }
+
+      // Structured tool args with exclusion arrays or separate ['-g', '!.council/**'] tokens
+      const structuredExclusionRes = detectForbiddenCouncilAccess([
+        {
+          kind: 'grep_search',
+          name: 'grep_search',
+          args: {
+            Query: 'transitionCouncil',
+            SearchPath: '/repo/src',
+            Includes: ['!**/node_modules/**', '!.council/**'],
+            exclude: ['.council', '.council/**'],
+            argv: ['rg', '-g', '!.council/**', 'transitionCouncil', 'src']
+          }
+        }
+      ]);
+      assert.equal(structuredExclusionRes.forbiddenStateAccess, false);
+
+      // Mixed exclusion + actual target of .council/runs/latest.js MUST STILL BE CAUGHT!
+      const mixedCommands = [
+        'rg -g \'!.council/telemetry/**\' foo .council/runs/latest.js',
+        'grep --exclude-dir=.council/telemetry -rn "verdict" .council/runs/latest.js',
+        'find . -path \'*/.council/telemetry/*\' -prune -o -name \'latest.js\' -print'
+      ];
+      for (const mixedCmd of mixedCommands) {
+        assert.equal(
+          hasForbiddenCouncilToken(mixedCmd),
+          true,
+          `Mixed exclusion + actual target must still be flagged: ${mixedCmd}`
+        );
+        const mixedRes = detectForbiddenCouncilAccess([
+          { kind: 'command_execution', name: 'shell', command: mixedCmd }
+        ]);
+        assert.equal(mixedRes.forbiddenStateAccess, true);
+      }
+
+      const mixedStructuredRes = detectForbiddenCouncilAccess([
+        {
+          kind: 'grep_search',
+          name: 'grep_search',
+          args: {
+            Includes: ['!.council/telemetry/**'],
+            SearchPath: '/repo/.council/runs/latest.js',
+            argv: ['rg', '-g', '!.council/telemetry/**', 'foo', '.council/runs/latest.js']
+          }
+        }
+      ]);
+      assert.equal(mixedStructuredRes.forbiddenStateAccess, true);
+
+      // Finding 3a: runAntigravityCli falling back to parseCursorEventStream preserves maybeStream.forbiddenStateAccess
+      // (where nested args.AbsolutePath is in raw stream event, not on envelopeToolCalls summary)
+      const agyStreamOutput = [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'started',
+          tool_call: {
+            readToolCall: {
+              args: { AbsolutePath: '/repo/.council/runs/latest.js' }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: 'result',
+          result: '{"vote":"accept"}'
+        })
+      ].join('\n');
+
+      const agyStreamRecords = [];
+      await assert.rejects(
+        async () => {
+          await runAntigravityCli({
+            model: 'gemini-4-argon (high)',
+            prompt: 'Deliberate',
+            context: { seatId: 'agy-stream-cheater' },
+            onCallRecord: (rec) => agyStreamRecords.push(rec),
+            exec: async () => ({
+              stdout: agyStreamOutput,
+              stderr: '',
+              exitCode: 0
+            })
+          });
+        },
+        (err) => {
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.equal(err.trace?.forbiddenStateAccess, true);
+          assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
+          return true;
+        }
+      );
+      assert.equal(agyStreamRecords.length, 1);
+      assert.equal(agyStreamRecords[0].trace.forbiddenStateAccess, true);
+
+      // Finding 3b: runAntigravityCli catch (err) parses err.stdout when subprocess exits non-zero after forbidden access
+      const agyErrorStdoutRecords = [];
+      await assert.rejects(
+        async () => {
+          await runAntigravityCli({
+            model: 'gemini-4-argon (high)',
+            prompt: 'Deliberate',
+            context: { seatId: 'agy-nonzero-cheater' },
+            onCallRecord: (rec) => agyErrorStdoutRecords.push(rec),
+            exec: async () => {
+              const e = new Error('Command failed with exit code 1');
+              e.exitCode = 1;
+              e.stdout = agyStreamOutput;
+              e.stderr = 'terminated';
+              throw e;
+            }
+          });
+        },
+        (err) => {
+          assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+          assert.match(err.message, /\[ForbiddenStateAccessError\]/);
+          assert.equal(err.trace?.forbiddenStateAccess, true);
+          assert.deepEqual(err.trace?.forbiddenAccessDetails, ['/repo/.council/runs/latest.js']);
+          return true;
+        }
+      );
+      assert.equal(agyErrorStdoutRecords.length, 1);
+      assert.equal(agyErrorStdoutRecords[0].trace.forbiddenStateAccess, true);
+
+      // Finding 4: Scrub PWD, OLDPWD, and INIT_CWD when running in effectiveCwd
+      const prevPwd = process.env.PWD;
+      const prevOldPwd = process.env.OLDPWD;
+      const prevInitCwd = process.env.INIT_CWD;
+      process.env.PWD = '/Users/aaat/projects/the-council';
+      process.env.OLDPWD = '/Users/aaat/projects/the-council/src';
+      process.env.INIT_CWD = '/Users/aaat/projects/the-council';
+
+      try {
+        const sanitized = buildSanitizedCliEnv('/tmp/isolated-seat-cwd');
+        assert.equal(sanitized.PWD, '/tmp/isolated-seat-cwd');
+        assert.equal('OLDPWD' in sanitized, false);
+        assert.equal('INIT_CWD' in sanitized, false);
+
+        // Verify runCodexCli, runCursorCli, and runAntigravityCli pass sanitized env to execFn
+        let codexExecOpts = null;
+        await runCodexCli({
+          model: 'gpt-6-astra (high)',
+          prompt: 'test',
+          exec: async (_bin, _args, opts) => {
+            codexExecOpts = opts;
+            return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
+          }
+        });
+        assert.equal(codexExecOpts.env.PWD, codexExecOpts.cwd);
+        assert.equal('OLDPWD' in codexExecOpts.env, false);
+        assert.equal('INIT_CWD' in codexExecOpts.env, false);
+
+        // Verify real child process spawned via execCli in temp cwd has PWD=tmpDir and no OLDPWD/INIT_CWD
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-env-scrub-test-'));
+        try {
+          const envRes = await execCli(
+            process.execPath,
+            [
+              '-e',
+              'process.stdout.write(JSON.stringify({ PWD: process.env.PWD, OLDPWD: process.env.OLDPWD || null, INIT_CWD: process.env.INIT_CWD || null }))'
+            ],
+            { cwd: tmpDir }
+          );
+          const childEnv = JSON.parse(envRes.stdout);
+          assert.equal(childEnv.PWD, tmpDir);
+          assert.equal(childEnv.OLDPWD, null);
+          assert.equal(childEnv.INIT_CWD, null);
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (prevPwd === undefined) delete process.env.PWD;
+        else process.env.PWD = prevPwd;
+        if (prevOldPwd === undefined) delete process.env.OLDPWD;
+        else process.env.OLDPWD = prevOldPwd;
+        if (prevInitCwd === undefined) delete process.env.INIT_CWD;
+        else process.env.INIT_CWD = prevInitCwd;
+      }
+    });
   });
 });
 

@@ -202,7 +202,7 @@ export function createSoul(input) {
 }
 
 export const ANTI_CHEATING_RULE =
-  'STRICT ANTI-CHEATING RULE: Never read, grep, or inspect ".council/" (including ".council/runs/latest.js", run snapshots, or telemetry files). Accessing ".council/" violates blind deliberation independence and immediately invalidates your turn.';
+  'STRICT ANTI-CHEATING RULE: Never read, grep, or inspect ".council/" (including ".council/runs/", ".council/telemetry/", ".council/runs/latest.js", "latest.js", "*.meta.json", "*.events.jsonl", "telemetry-summary.*", run snapshots, or telemetry files). Accessing ".council/" violates blind deliberation independence and immediately invalidates your turn.';
 
 /**
  * Formats the system prompt preamble establishing the Seat's identity and Soul temperament.
@@ -293,6 +293,8 @@ export function formatGroundingSection(evidence = [], clarifications = []) {
  * @param {Object|null} [params.previousCandidate=null]
  * @param {Array<Object>} [params.openObjections=[]]
  * @param {Object|null} [params.state=null]
+ * @param {'none' | 'read-only'} [params.tools]
+ * @param {string} [params.cwd]
  * @returns {string}
  */
 export function formatDeliberationPrompt({
@@ -306,10 +308,16 @@ export function formatDeliberationPrompt({
   previousCandidate = null,
   openObjections = [],
   state = null,
-  tools
+  tools,
+  cwd
 }) {
   const s = createSoul(soul);
   const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
+  const hasWorkspaceCwd = Boolean(
+    (typeof cwd === 'string' && cwd.trim()) ||
+    (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
+    (typeof state?.cwd === 'string' && state.cwd.trim())
+  );
 
   const resolvedTopic = topic || state?.topic || '';
   const resolvedRound = round || state?.round || 1;
@@ -343,10 +351,15 @@ export function formatDeliberationPrompt({
     ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
     : '';
 
+  const deliberationToolDirective = hasWorkspaceCwd
+    ? `You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".${evidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
+    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Before submitting your proof, verify claims against sources (provided grounding evidence packet, authoritative specifications, benchmarks, or analytical/mathematical derivation) and cite the exact sources in your proof "source" and "statement".${evidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
+
   const verificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
-You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".${evidenceGuidance}
-Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.
+${deliberationToolDirective}
 ${ANTI_CHEATING_RULE}\n`
     : `\n${ANTI_CHEATING_RULE}\n`;
 
@@ -375,6 +388,7 @@ OUTPUT CONTRACT (strict JSON):
  * @param {Array<Object>} [params.myOpenObjections=[]]
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
+ * @param {string} [params.cwd]
  * @returns {string}
  */
 export function formatVotingPrompt({
@@ -386,10 +400,16 @@ export function formatVotingPrompt({
   clarifications = [],
   myOpenObjections = [],
   state = null,
-  tools
+  tools,
+  cwd
 }) {
   const s = createSoul(soul);
   const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
+  const hasWorkspaceCwd = Boolean(
+    (typeof cwd === 'string' && cwd.trim()) ||
+    (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
+    (typeof state?.cwd === 'string' && state.cwd.trim())
+  );
   const cand = candidate || state?.candidate;
   const proofs = admittedProofs || (state?.proofs || []).filter((p) => p.status === 'admitted');
   const resolvedEvidence = (evidence && evidence.length > 0)
@@ -417,10 +437,15 @@ export function formatVotingPrompt({
     ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
     : '';
 
+  const votingToolDirective = hasWorkspaceCwd
+    ? `You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
+    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Verify disputed candidate clauses or cited proof sources against any provided grounding evidence packet, authoritative specifications, or analytical/mathematical derivations before casting your vote. If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
+Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
+
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
-You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
-Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.
+${votingToolDirective}
 ${ANTI_CHEATING_RULE}\n`
     : `\n${ANTI_CHEATING_RULE}\n`;
 
@@ -458,6 +483,7 @@ If objecting:
  * @param {Array<Object>} [params.clarifications=[]]
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
+ * @param {string} [params.cwd]
  * @returns {string}
  */
 export function formatJudgePrompt({
@@ -469,12 +495,18 @@ export function formatJudgePrompt({
   evidence = [],
   clarifications = [],
   state = null,
-  tools
+  tools,
+  cwd
 }) {
   const judgeSoul = typeof judge?.soul === 'object' && judge?.soul
     ? judge.soul
     : createSoul(judge?.soul || 'Impartial Proof Auditor');
   const resolvedTools = tools !== undefined ? tools : (judge?.tools || 'read-only');
+  const hasWorkspaceCwd = Boolean(
+    (typeof cwd === 'string' && cwd.trim()) ||
+    (typeof judge?.cwd === 'string' && judge.cwd.trim()) ||
+    (typeof state?.cwd === 'string' && state.cwd.trim())
+  );
   const resolvedTopic = topic || state?.topic || '';
   const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
   const resolvedEvidence = (evidence && evidence.length > 0)
@@ -507,9 +539,10 @@ export function formatJudgePrompt({
     const judgeEvidenceGuidance = resolvedEvidence.length > 0
       ? ' Pre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
       : '';
-    judgeDirectives.push(
-      `4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
-    );
+    const judgeToolGuidance = hasWorkspaceCwd
+      ? `4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
+      : `4. Spot-check proof sources: You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Spot-check submitted proof sources and citations against any provided grounding evidence packet, authoritative specifications, or analytical/mathematical derivations to verify that cited sources substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
+    judgeDirectives.push(judgeToolGuidance);
   }
   judgeDirectives.push(`${judgeDirectives.length + 1}. ${ANTI_CHEATING_RULE}`);
 

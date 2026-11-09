@@ -933,5 +933,96 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       });
       assert.equal(withMockWin.totalRuns, 3, 'Mock run must be included when includeMock: true');
     });
+
+    it('aggregates forbiddenStateAccess and deduplicated forbiddenAccessDetails onto persisted seat telemetry records (Issue #63)', () => {
+      const state = {
+        phase: 'completed',
+        round: 1,
+        topic: 'Anti-Cheating Telemetry Persistence',
+        judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'completed' },
+        seats: [
+          { id: 'cheater-retried', harness: 'codex', model: 'gpt-6-astra (max)', status: 'accepted', retries: 1 },
+          { id: 'clean-seat', harness: 'cursor', model: 'grok-4.7-xhigh', status: 'accepted', retries: 0 }
+        ],
+        proofs: [
+          { id: 'P-1', seatId: 'cheater-retried', status: 'admitted', admissionKind: 'explicitly_admitted' },
+          { id: 'P-2', seatId: 'clean-seat', status: 'admitted', admissionKind: 'explicitly_admitted' }
+        ],
+        verdict: {
+          kind: 'Unanimous Consensus',
+          candidate: {
+            summary: 'Consensus',
+            clauses: [{ id: 'C-1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P-1', 'P-2'] }]
+          }
+        }
+      };
+
+      const providerCalls = [
+        {
+          participantId: 'cheater-retried',
+          provider: 'codex',
+          exitCode: 1,
+          durationMs: 110,
+          trace: {
+            traceCoverage: 'full',
+            outcome: 'error',
+            toolCalls: [{ kind: 'command_execution', name: 'cat', command: 'cat .council/runs/latest.js' }],
+            skillsRead: [],
+            forbiddenStateAccess: true,
+            forbiddenAccessDetails: ['cat .council/runs/latest.js', '.council/runs/latest.js']
+          }
+        },
+        {
+          participantId: 'cheater-retried',
+          provider: 'codex',
+          exitCode: 0,
+          durationMs: 95,
+          trace: {
+            traceCoverage: 'full',
+            outcome: 'success',
+            toolCalls: [],
+            skillsRead: [],
+            forbiddenStateAccess: false,
+            forbiddenAccessDetails: ['.council/runs/latest.js']
+          }
+        },
+        {
+          participantId: 'clean-seat',
+          provider: 'cursor',
+          exitCode: 0,
+          durationMs: 80,
+          trace: {
+            traceCoverage: 'full',
+            outcome: 'success',
+            toolCalls: [],
+            skillsRead: [],
+            forbiddenStateAccess: false,
+            forbiddenAccessDetails: []
+          }
+        }
+      ];
+
+      const rec = buildRunTelemetryRecord({
+        runId: 'run-cheater-telemetry-63',
+        mode: 'live',
+        completedAt: '2026-11-09T03:00:00.000Z',
+        state,
+        providerCalls
+      });
+
+      const cheaterRec = rec.seats.find((s) => s.seatId === 'cheater-retried');
+      const cleanRec = rec.seats.find((s) => s.seatId === 'clean-seat');
+
+      assert.equal(cheaterRec.forbiddenStateAccess, true);
+      assert.ok(Object.isFrozen(cheaterRec.forbiddenAccessDetails));
+      assert.deepEqual(cheaterRec.forbiddenAccessDetails, [
+        'cat .council/runs/latest.js',
+        '.council/runs/latest.js'
+      ]);
+
+      assert.equal(cleanRec.forbiddenStateAccess, false);
+      assert.ok(Object.isFrozen(cleanRec.forbiddenAccessDetails));
+      assert.deepEqual(cleanRec.forbiddenAccessDetails, []);
+    });
   });
 });

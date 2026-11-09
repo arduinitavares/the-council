@@ -850,8 +850,10 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
         }
       };
 
-      // Snapshot already has a rejected SUBMIT_PROOF for seat-shared (P-bad-1, compacted without statement),
+      // Snapshot already has a rejected SUBMIT_PROOF for seat-shared (P-bad-1, compacted without statement)
+      // AND a keyless/statementless rejected SUBMIT_PROOF for seat-other,
       // while guardRejectedEvents has a full duplicate of P-bad-1 (with statement) and two distinct keyless/statementless rejected proofs for seat-other.
+      const sharedEmptyRef = { type: 'SUBMIT_PROOF', seatId: 'seat-other' };
       const olderLiveRec = buildRunTelemetryRecord({
         runId: 'run-live-old',
         mode: 'live',
@@ -867,11 +869,15 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
           {
             event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1' },
             lastTransition: { ok: false, event: 'SUBMIT_PROOF' }
+          },
+          {
+            event: sharedEmptyRef,
+            lastTransition: { ok: false, event: 'SUBMIT_PROOF' }
           }
         ],
         guardRejectedEvents: [
           { event: { type: 'SUBMIT_PROOF', seatId: 'seat-shared', id: 'P-bad-1', statement: 'Bad 1' } },
-          { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', statement: '' } },
+          { event: sharedEmptyRef },
           { event: { type: 'SUBMIT_PROOF', seatId: 'seat-other', statement: '' } }
         ]
       });
@@ -884,7 +890,7 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       assert.equal(
         olderLiveRec.seats.find((s) => s.seatId === 'seat-other').guardRejectedProofs,
         2,
-        'Supplemental guardRejectedEvents for seat-other (including distinct keyless/statementless events) must be counted when snapshots has a rejected proof for seat-shared'
+        'A keyless/statementless snapshot rejection must deduplicate by object reference but must not suppress a distinct keyless/statementless guardRejectedEvents entry for the same seat'
       );
 
       const newerLiveRec = buildRunTelemetryRecord({

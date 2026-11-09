@@ -1522,5 +1522,316 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
       assert.equal(cursorRes.traceCoverage, 'partial');
       assert.equal(cursorRes.text, '{"vote":"accept"}');
     });
+
+    it('prefers final assistant message over concatenated result event, moves updated msgId to latest position, and ignores non-assistant message roles', async () => {
+      const { parseCodexEventStream, parseCursorEventStream } = await import('../../src/harness/cli-runner.js');
+      const { HarnessAdapter } = await import('../../src/harness/adapter.js');
+      const adapter = new HarnessAdapter({ name: 'cursor' });
+
+      const preToolMsg = 'I will inspect the files first.\n```json\n{"vote":"accept"}\n```';
+      const finalVoteMsg = '{"vote":"object","reason":"Critical flaw found","proofId":"P-9"}';
+
+      // Cursor stream with both assistant messages and a concatenated result event
+      const cursorConcatenatedResultStream = [
+        JSON.stringify({ type: 'system', subtype: 'init' }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: preToolMsg }] }
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { id: 'm2', role: 'assistant', content: [{ type: 'text', text: finalVoteMsg }] }
+        }),
+        JSON.stringify({
+          type: 'message',
+          role: 'system',
+          text: '{"vote":"accept","system_override":true}'
+        }),
+        JSON.stringify({
+          type: 'message',
+          message: { role: 'developer', content: '{"vote":"accept","dev_override":true}' }
+        }),
+        JSON.stringify({
+          type: 'result',
+          result: `${preToolMsg}\n${finalVoteMsg}`
+        })
+      ].join('\n');
+
+      const parsedCursor = parseCursorEventStream(cursorConcatenatedResultStream);
+      assert.equal(parsedCursor.text, finalVoteMsg);
+      const parsedVote = adapter.parseStructuredOutput(parsedCursor.text, 'vote');
+      assert.equal(parsedVote.vote, 'object');
+      assert.equal(parsedVote.proofId, 'P-9');
+
+      // Message started early (m_early), followed by intermediate m_mid, then m_early updated/completed last
+      const codexOutOfOrderUpdateStream = [
+        JSON.stringify({
+          type: 'item.started',
+          item: { id: 'm_early', type: 'agent_message', text: 'Draft response...' }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_mid', type: 'agent_message', text: 'Intermediate note\n```json\n{"vote":"accept"}\n```' }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_early', type: 'agent_message', text: finalVoteMsg }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_sys', type: 'message', role: 'system', text: 'System trailer' }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_dev', type: 'message', role: 'developer', text: 'Developer trailer' }
+        }),
+        JSON.stringify({
+          type: 'result',
+          result: `Intermediate note\n\`\`\`json\n{"vote":"accept"}\n\`\`\`\n${finalVoteMsg}`
+        })
+      ].join('\n');
+
+      const parsedCodex = parseCodexEventStream(codexOutOfOrderUpdateStream);
+      assert.equal(parsedCodex.text, finalVoteMsg);
+    });
+
+    it('unwraps shell flags (-o pipefail, --norc, --rcfile) without infinite recursion and bounds recursion depth in extractSkillsRead', async () => {
+      const { extractSkillsRead } = await import('../../src/harness/cli-runner.js');
+
+      assert.deepEqual(
+        extractSkillsRead("bash -o pipefail -c 'cat skills/ask-council/SKILL.md'"),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      assert.deepEqual(
+        extractSkillsRead('zsh --norc --noprofile -e -x -c "cat .agents/skills/safe-refactor/SKILL.md"'),
+        [{ skill: 'safe-refactor', evidence: 'skill_instructions_read' }]
+      );
+      assert.deepEqual(
+        extractSkillsRead('bash --rcfile /tmp/bashrc -euo pipefail -c "head -n 20 skills/ask-council/SKILL.md"'),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      // Shell invocation without -c must not infinitely recurse or credit non-read script args
+      assert.deepEqual(
+        extractSkillsRead('bash -o pipefail script.sh skills/ask-council/SKILL.md'),
+        []
+      );
+      // Deeply nested shell wrappers (> 4 levels) terminate safely without stack overflow
+      const deeplyNested =
+        'bash -c "bash -c \'bash -c \\"bash -c \\\\\\"bash -c \\\\\\\\\\"bash -c \'cat skills/ask-council/SKILL.md\'\\\\\\\\\\"\\\\\\"\\"\'"';
+      assert.deepEqual(extractSkillsRead(deeplyNested), []);
+    });
+
+    it('tightens SKILL_PATH_REGEX end boundary, strips shell comments, rejects whole-command skill mutations, and requires script read indicators', async () => {
+      const { extractSkillsRead } = await import('../../src/harness/cli-runner.js');
+
+      // SKILL.md.bak or SKILL.md~ must not match
+      assert.deepEqual(extractSkillsRead('cat skills/ask-council/SKILL.md.bak'), []);
+      assert.deepEqual(extractSkillsRead('cat skills/ask-council/SKILL.md~'), []);
+      assert.deepEqual(extractSkillsRead({ path: 'skills/ask-council/SKILL.md.bak' }), []);
+
+      // Unquoted shell comments must be stripped
+      assert.deepEqual(extractSkillsRead('cat README.md # skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(extractSkillsRead('cat README.md # ; cat skills/ask-council/SKILL.md'), []);
+      assert.deepEqual(
+        extractSkillsRead('cat README.md # comment\ncat skills/ask-council/SKILL.md'),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+
+      // Compound commands / pipelines that read and mutate the same skill must exclude the mutated skill
+      assert.deepEqual(
+        extractSkillsRead('cat skills/ask-council/SKILL.md | tee skills/ask-council/SKILL.md'),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead('cat skills/ask-council/SKILL.md && rm skills/ask-council/SKILL.md'),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("cat skills/ask-council/SKILL.md && sed -i 's/a/b/' skills/ask-council/SKILL.md"),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("cat skills/ask-council/SKILL.md && sed 'w skills/ask-council/SKILL.md' README.md"),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("cat skills/ask-council/SKILL.md && awk -iinplace '{print}' skills/ask-council/SKILL.md"),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("cat skills/ask-council/SKILL.md && awk --include inplace '{print}' skills/ask-council/SKILL.md"),
+        []
+      );
+
+      // Python / Node commands require read indicators and reject write/copy/rename/delete operations
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"print('skills/ask-council/SKILL.md')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("node -e \"console.log('skills/ask-council/SKILL.md')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"open('skills/ask-council/SKILL.md', mode='w').write('x')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"open('skills/ask-council/SKILL.md', mode='a')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"from pathlib import Path; Path('skills/ask-council/SKILL.md').write_bytes(b'x')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"import shutil; shutil.copy('README.md', 'skills/ask-council/SKILL.md')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("node -e \"fs.renameSync('skills/ask-council/SKILL.md', '/tmp/x')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("node -e \"fs.copyFileSync('README.md', 'skills/ask-council/SKILL.md')\""),
+        []
+      );
+      assert.deepEqual(
+        extractSkillsRead("python3 -c \"print(open('skills/ask-council/SKILL.md').read())\""),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+      assert.deepEqual(
+        extractSkillsRead("node -e \"console.log(fs.readFileSync('skills/ask-council/SKILL.md', 'utf8'))\""),
+        [{ skill: 'ask-council', evidence: 'skill_instructions_read' }]
+      );
+    });
+
+    it('preserves tool_name and failure metadata and merges unkeyed started/updated/completed tool calls in Codex and Cursor streams', async () => {
+      const { parseCodexEventStream, parseCursorEventStream } = await import('../../src/harness/cli-runner.js');
+
+      // Codex stream:
+      // 1) tool_call with tool_name: 'write_file' must be rejected as mutating
+      // 2) unkeyed item.started (with tool_name: 'read_file') -> item.updated (with path) -> item.completed (omitting tool_name & args, with string exit_code: "1") must merge to 1 failed tool call and NOT credit skill
+      // 3) unkeyed item.started -> item.updated -> item.completed with exit_code: "0" must merge to 1 completed tool call and credit skill
+      const codexStream = [
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'mut_1',
+            type: 'tool_call',
+            tool_name: 'write_file',
+            args: { path: 'skills/ask-council/SKILL.md' },
+            status: 'completed'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            type: 'tool_call',
+            tool_name: 'read_file'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            type: 'tool_call',
+            args: { path: 'skills/failed-skill/SKILL.md' }
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            type: 'tool_call',
+            exit_code: '1'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            type: 'tool_call',
+            tool_name: 'read_file'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.updated',
+          item: {
+            type: 'tool_call',
+            args: { path: 'skills/safe-refactor/SKILL.md' }
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: {
+            type: 'tool_call',
+            exit_code: '0'
+          }
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'm_done', type: 'agent_message', text: '{"vote":"accept"}' }
+        })
+      ].join('\n');
+
+      const codexRes = parseCodexEventStream(codexStream);
+      assert.equal(codexRes.toolCalls.length, 3);
+      assert.equal(codexRes.toolCalls[0].name, 'write_file');
+      assert.equal(codexRes.toolCalls[1].name, 'read_file');
+      assert.equal(codexRes.toolCalls[1].path, 'skills/failed-skill/SKILL.md');
+      assert.equal(codexRes.toolCalls[1].status, 'failed');
+      assert.equal(codexRes.toolCalls[1].exitCode, 1);
+      assert.equal(codexRes.toolCalls[2].name, 'read_file');
+      assert.equal(codexRes.toolCalls[2].path, 'skills/safe-refactor/SKILL.md');
+      assert.equal(codexRes.toolCalls[2].status, 'completed');
+      assert.deepEqual(codexRes.skillsRead, [
+        { skill: 'safe-refactor', evidence: 'skill_instructions_read' }
+      ]);
+
+      // Cursor stream:
+      // 1) tool_call with tool_name: 'write_file' rejected as mutating
+      // 2) item.started (unkeyed, tool_name: 'read_file', path: 'skills/err-skill/SKILL.md') -> completed with result.error (and omitted tool_name) merges and marks status='failed'
+      // 3) subtype: 'completed' with result.failure.exitCode: 2 marks status='failed'
+      const cursorStream = [
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_name: 'write_file',
+          args: { path: 'skills/ask-council/SKILL.md' }
+        }),
+        JSON.stringify({
+          type: 'item.started',
+          item: {
+            type: 'tool_call',
+            tool_name: 'read_file',
+            args: { path: 'skills/err-skill/SKILL.md' }
+          }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          result: { error: 'Permission denied' }
+        }),
+        JSON.stringify({
+          type: 'tool_call',
+          subtype: 'completed',
+          tool_call: {
+            shellToolCall: {
+              args: { command: 'cat skills/fail-obj/SKILL.md' },
+              result: { failure: { exitCode: 2 } }
+            }
+          }
+        }),
+        JSON.stringify({ type: 'result', result: '{"vote":"accept"}' })
+      ].join('\n');
+
+      const cursorRes = parseCursorEventStream(cursorStream);
+      assert.equal(cursorRes.toolCalls.length, 3);
+      assert.equal(cursorRes.toolCalls[0].name, 'write_file');
+      assert.equal(cursorRes.toolCalls[1].name, 'read_file');
+      assert.equal(cursorRes.toolCalls[1].status, 'failed');
+      assert.equal(cursorRes.toolCalls[2].name, 'shellToolCall');
+      assert.equal(cursorRes.toolCalls[2].status, 'failed');
+      assert.equal(cursorRes.toolCalls[2].exitCode, 2);
+      assert.deepEqual(cursorRes.skillsRead, []);
+    });
   });
 });

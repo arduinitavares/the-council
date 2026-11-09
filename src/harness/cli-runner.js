@@ -253,7 +253,7 @@ const EXCLUDED_TRACE_OUTPUT_KEYS = new Set([
 ]);
 
 const SKILL_PATH_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md\b/g;
+  /(?:^|[\s"'`=,:;()[\]{}\\/])(?:\.agents[\\/])?(?:[\w.-]+[\\/])*skills[\\/]([a-zA-Z0-9._-]+)[\\/]SKILL\.md(?=$|[\s"'`=,:;()[\]{}])/g;
 
 const ALLOWED_READ_COMMANDS = new Set([
   'cat',
@@ -275,9 +275,7 @@ const ALLOWED_READ_COMMANDS = new Set([
   'view'
 ]);
 
-const FORBIDDEN_COMMAND_NAMES = new Set([
-  'echo',
-  'printf',
+const MUTATING_SHELL_COMMANDS = new Set([
   'rm',
   'mv',
   'cp',
@@ -290,8 +288,22 @@ const FORBIDDEN_COMMAND_NAMES = new Set([
   'install',
   'ln',
   'chmod',
-  'chown'
+  'chown',
+  'patch',
+  'sponge'
 ]);
+
+const FORBIDDEN_COMMAND_NAMES = new Set([
+  'echo',
+  'printf',
+  ...MUTATING_SHELL_COMMANDS
+]);
+
+const SCRIPT_MUTATION_REGEX =
+  /\b(?:write_text|write_bytes|writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|unlinkSync|unlink|rmSync|rmdirSync|renameSync|rename|copyFileSync|copyFile|truncateSync|ftruncateSync|shutil\.(?:copy|copy2|copyfile|move|rmtree)|os\.(?:remove|unlink|rename|replace|truncate))\b|\.write\s*\(|open\s*\([^)]*(?:,\s*['"][wax+]|mode\s*=\s*['"][wax+])/;
+
+const SCRIPT_READ_REGEX =
+  /(?:\bopen\s*\(|\bread_text\b|\bread_bytes\b|\breadFileSync\b|\breadFile\b|\bcreateReadStream\b|\bfs\.read\b)/;
 
 const MUTATING_TOOL_WORDS = new Set([
   'write',
@@ -394,6 +406,35 @@ function parseMaybeJsonObject(val) {
   return null;
 }
 
+function stripShellComment(str) {
+  let quote = null;
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < str.length) {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '\\' && i + 1 < str.length) {
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '#' && (i === 0 || /[\s;()|&]/.test(str[i - 1]))) {
+      return str.slice(0, i).trimEnd();
+    }
+  }
+  return str;
+}
+
 function splitShellSegments(str) {
   const segments = [];
   let current = '';
@@ -412,9 +453,22 @@ function splitShellSegments(str) {
       current += ch;
       continue;
     }
+    if (ch === '\\' && i + 1 < str.length) {
+      current += ch + str[i + 1];
+      i += 1;
+      continue;
+    }
     if (ch === '"' || ch === "'") {
       quote = ch;
       current += ch;
+      continue;
+    }
+    if (ch === '#' && (i === 0 || /[\s;()|&]/.test(str[i - 1]))) {
+      while (i < str.length && str[i] !== '\n') {
+        i += 1;
+      }
+      if (current.trim()) segments.push(current.trim());
+      current = '';
       continue;
     }
     if (ch === ';' || ch === '\n') {
@@ -441,55 +495,126 @@ function splitShellSegments(str) {
   return segments;
 }
 
-function extractSkillsFromCommand(cmdInput) {
-  if (!cmdInput) return [];
+function unwrapShellCommand(cmdStr) {
+  if (typeof cmdStr !== 'string') return null;
+  const trimmed = cmdStr.trim();
+  const shellPrefix = trimmed.match(
+    /^(?:\/usr\/bin\/env\s+)?(?:\/[\w.-]+)*\/?(?:zsh|bash|sh)\s+([\s\S]+)$/
+  );
+  if (!shellPrefix) return null;
+
+  let rest = shellPrefix[1].trimStart();
+  while (rest.length > 0) {
+    const cMatch = rest.match(/^-[a-zA-Z]*c\s+([\s\S]+)$/);
+    if (cMatch) {
+      let inner = cMatch[1].trim();
+      if (!inner) return null;
+      if (inner.startsWith('"') || inner.startsWith("'")) {
+        const q = inner[0];
+        let closeIdx = -1;
+        for (let i = 1; i < inner.length; i += 1) {
+          if (inner[i] === '\\' && q === '"' && i + 1 < inner.length) {
+            i += 1;
+            continue;
+          }
+          if (inner[i] === q) {
+            closeIdx = i;
+            break;
+          }
+        }
+        if (closeIdx === inner.length - 1) {
+          inner = inner.slice(1, -1);
+          if (q === '"') {
+            inner = inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          }
+        }
+      }
+      inner = inner.trim();
+      return inner && inner !== trimmed ? inner : null;
+    }
+
+    const optWithArgMatch = rest.match(
+      /^(?:[-+][a-zA-Z]*[oO]|--(?:rcfile|init-file))\s+(?:"[^"]*"|'[^']*'|[^\s]+)\s+([\s\S]+)$/
+    );
+    if (optWithArgMatch) {
+      rest = optWithArgMatch[1].trimStart();
+      continue;
+    }
+
+    const flagMatch = rest.match(
+      /^(?:--[a-zA-Z0-9_-]+(?:=(?:"[^"]*"|'[^']*'|[^\s]+))?|[-+][a-zA-Z]+)\s+([\s\S]+)$/
+    );
+    if (flagMatch) {
+      rest = flagMatch[1].trimStart();
+      continue;
+    }
+
+    return null;
+  }
+  return null;
+}
+
+function extractSkillNamesFromText(text) {
+  if (typeof text !== 'string' || !text.includes('SKILL.md')) return [];
+  const names = [];
+  SKILL_PATH_REGEX.lastIndex = 0;
+  let match;
+  while ((match = SKILL_PATH_REGEX.exec(text)) !== null) {
+    if (match[1]) {
+      names.push(match[1]);
+    }
+  }
+  return names;
+}
+
+function analyzeCommandSkills(cmdInput, depth = 0) {
+  const result = { read: [], mutated: new Set() };
+  if (!cmdInput || depth > 4) return result;
+
   if (Array.isArray(cmdInput)) {
     const strItems = cmdInput.filter((x) => typeof x === 'string');
-    if (strItems.length === 0) return [];
+    if (strItems.length === 0) return result;
     const firstBase = strItems[0].split(/[\\/]/).pop().toLowerCase();
     if ((firstBase === 'sh' || firstBase === 'bash' || firstBase === 'zsh') && strItems.length >= 3) {
       const cIdx = strItems.findIndex((arg, idx) => idx > 0 && /^-[a-zA-Z]*c$/.test(arg));
       if (cIdx !== -1 && typeof strItems[cIdx + 1] === 'string') {
-        return extractSkillsFromCommand(strItems[cIdx + 1]);
+        return analyzeCommandSkills(strItems[cIdx + 1], depth + 1);
       }
     }
-    return extractSkillsFromCommand(strItems.join(' '));
+    return analyzeCommandSkills(strItems.join(' '), depth + 1);
   }
+
   if (typeof cmdInput !== 'string' || !cmdInput.includes('SKILL.md')) {
-    return [];
+    return result;
   }
 
-  let cmdStr = cmdInput.trim();
-  const shellWrapperMatch = cmdStr.match(
-    /^(?:\/usr\/bin\/env\s+)?(?:\/[\w.-]+)*\/?(?:zsh|bash|sh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+([\s\S]+)$/
-  );
-  if (shellWrapperMatch) {
-    let inner = shellWrapperMatch[1].trim();
-    if (
-      (inner.startsWith('"') && inner.endsWith('"')) ||
-      (inner.startsWith("'") && inner.endsWith("'"))
-    ) {
-      const q = inner[0];
-      inner = inner.slice(1, -1);
-      if (q === '"') {
-        inner = inner.replace(/\\"/g, '"');
-      }
-    }
-    return extractSkillsFromCommand(inner);
-  }
-
-  const matchedSkills = [];
+  const cmdStr = cmdInput.trim();
   const segments = splitShellSegments(cmdStr);
 
-  for (const seg of segments) {
-    if (!seg.includes('SKILL.md')) continue;
+  if (segments.length === 1) {
+    const singleSeg = stripShellComment(segments[0]).trim();
+    if (!singleSeg || !singleSeg.includes('SKILL.md')) {
+      return result;
+    }
+    const unwrappedTop = unwrapShellCommand(singleSeg);
+    if (unwrappedTop && unwrappedTop !== singleSeg && unwrappedTop !== cmdStr) {
+      return analyzeCommandSkills(unwrappedTop, depth + 1);
+    }
+  }
 
-    // Reject output redirection (>, >>, >|, &>, &>>) targeting SKILL.md
+  for (const rawSeg of segments) {
+    const seg = stripShellComment(rawSeg).trim();
+    if (!seg || !seg.includes('SKILL.md')) continue;
+
+    // Reject output redirection (>, >>, >|, &>, &>>) targeting SKILL.md and mark target skills as mutated
     if (
-      /(?:[0-9]*>>?\|?|&>>?)\s*(?:"[^"]*SKILL\.md\b[^"]*"|'[^']*SKILL\.md\b[^']*'|[^\s;|&><]*SKILL\.md\b)/.test(
+      /(?:[0-9]*>>?\|?|&>>?)\s*(?:"[^"]*SKILL\.md(?=$|[\s"'`=,:;()[\]{}])[^"]*"|'[^']*SKILL\.md(?=$|[\s"'`=,:;()[\]{}])[^']*'|[^\s;|&><]*SKILL\.md(?=$|[\s"'`=,:;()[\]{}]))/.test(
         seg
       )
     ) {
+      for (const s of extractSkillNamesFromText(seg)) {
+        result.mutated.add(s);
+      }
       continue;
     }
 
@@ -501,7 +626,7 @@ function extractSkillsFromCommand(cmdInput) {
         continue;
       }
       const wrapperMatch = restSeg.match(
-        /^(?:sudo|env|command|builtin|nohup|time)\s+(?:-[a-zA-Z0-9-]+\s+)*/
+        /^(?:sudo|\/usr\/bin\/env|env|command|builtin|nohup|time)\s+(?:-[a-zA-Z0-9-]+\s+)*/
       );
       if (wrapperMatch) {
         restSeg = restSeg.slice(wrapperMatch[0].length);
@@ -511,8 +636,11 @@ function extractSkillsFromCommand(cmdInput) {
     }
 
     if (/^(?:\/[\w.-]+)*\/?(?:zsh|bash|sh)\s+/.test(restSeg)) {
-      for (const s of extractSkillsFromCommand(restSeg)) {
-        matchedSkills.push(s);
+      const unwrappedSeg = unwrapShellCommand(restSeg);
+      if (unwrappedSeg && unwrappedSeg !== restSeg && unwrappedSeg !== seg && unwrappedSeg !== cmdStr) {
+        const nested = analyzeCommandSkills(unwrappedSeg, depth + 1);
+        for (const s of nested.read) result.read.push(s);
+        for (const m of nested.mutated) result.mutated.add(m);
       }
       continue;
     }
@@ -521,52 +649,128 @@ function extractSkillsFromCommand(cmdInput) {
     if (!firstTokenMatch) continue;
     const cmdBase = firstTokenMatch[1].split(/[\\/]/).pop().toLowerCase();
 
+    if (MUTATING_SHELL_COMMANDS.has(cmdBase)) {
+      for (const s of extractSkillNamesFromText(restSeg)) {
+        result.mutated.add(s);
+      }
+      continue;
+    }
+
     if (FORBIDDEN_COMMAND_NAMES.has(cmdBase) || !ALLOWED_READ_COMMANDS.has(cmdBase)) {
       continue;
     }
 
-    // Reject in-place sed mutations (sed -i / sed -ni / sed -i.bak / sed -ibak / sed --in-place)
-    if (cmdBase === 'sed' && /\s(?:--in-place(?:=|\b)|-[neEfrluzsb]*i)/.test(restSeg)) {
-      continue;
-    }
-
-    // Reject in-place awk mutations (awk -i inplace)
-    if (cmdBase === 'awk' && /\s-i\b/.test(restSeg)) {
-      continue;
-    }
-
-    // Reject inline script file writes in python/node
+    // Reject in-place sed mutations (sed -i / sed -ni / sed -i.bak / sed -ibak / sed --in-place) or sed write flag
     if (
-      (cmdBase === 'python' || cmdBase === 'python3' || cmdBase === 'node') &&
-      (/\b(?:write_text|writeFileSync|writeFile|appendFileSync|appendFile|unlinkSync|unlink|rmSync|rmdirSync)\b/.test(
-        restSeg
-      ) ||
-        /open\s*\([^)]*,\s*['"][wa+]/.test(restSeg))
+      cmdBase === 'sed' &&
+      (/\s(?:--in-place(?:=|\b)|-[neEfrluzsb]*i)/.test(restSeg) ||
+        /['"][^'"]*\b[wW]\s+[^'"]*SKILL\.md/.test(restSeg))
     ) {
+      for (const s of extractSkillNamesFromText(restSeg)) {
+        result.mutated.add(s);
+      }
       continue;
     }
 
-    SKILL_PATH_REGEX.lastIndex = 0;
-    let match;
-    while ((match = SKILL_PATH_REGEX.exec(restSeg)) !== null) {
-      if (match[1]) {
-        matchedSkills.push(match[1]);
+    // Reject in-place awk mutations (awk -i inplace / -iinplace / --include inplace)
+    if (
+      cmdBase === 'awk' &&
+      /\s(?:-i\s*inplace\b|-i\b|--include(?:=|\s+)['"]?inplace\b)/.test(restSeg)
+    ) {
+      for (const s of extractSkillNamesFromText(restSeg)) {
+        result.mutated.add(s);
       }
+      continue;
+    }
+
+    // Handle inline script execution in python/python3/node
+    if (cmdBase === 'python' || cmdBase === 'python3' || cmdBase === 'node') {
+      if (SCRIPT_MUTATION_REGEX.test(restSeg)) {
+        for (const s of extractSkillNamesFromText(restSeg)) {
+          result.mutated.add(s);
+        }
+        continue;
+      }
+      if (!SCRIPT_READ_REGEX.test(restSeg)) {
+        continue;
+      }
+    }
+
+    for (const s of extractSkillNamesFromText(restSeg)) {
+      result.read.push(s);
     }
   }
 
-  return matchedSkills;
+  return result;
+}
+
+function extractSkillsFromCommand(cmdInput, depth = 0) {
+  const { read, mutated } = analyzeCommandSkills(cmdInput, depth);
+  return read.filter((s) => !mutated.has(s));
+}
+
+const FAILED_STATUS_REGEX =
+  /^(?:failed|error|cancelled|canceled|aborted|declined|denied|timed_out|timeout)$/i;
+
+function parseExitCodeValue(val) {
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    return val;
+  }
+  if (typeof val === 'string' && val.trim() !== '') {
+    const num = Number(val.trim());
+    if (Number.isFinite(num)) {
+      return num;
+    }
+  }
+  return undefined;
+}
+
+function extractExitCode(obj) {
+  if (!obj || typeof obj !== 'object') return undefined;
+  const candidates = [
+    obj.exit_code,
+    obj.exitCode,
+    obj.result?.exit_code,
+    obj.result?.exitCode,
+    obj.result?.success?.exit_code,
+    obj.result?.success?.exitCode,
+    obj.result?.failure?.exit_code,
+    obj.result?.failure?.exitCode,
+    obj.error?.exit_code,
+    obj.error?.exitCode,
+    obj.failure?.exit_code,
+    obj.failure?.exitCode
+  ];
+  for (const c of candidates) {
+    const parsed = parseExitCodeValue(c);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function isFailedToolObject(obj) {
   if (!obj || typeof obj !== 'object') return false;
-  if (typeof obj.exit_code === 'number' && obj.exit_code !== 0) return true;
-  if (typeof obj.exitCode === 'number' && obj.exitCode !== 0) return true;
-  if (typeof obj.status === 'string' && /^(?:failed|error|cancelled|aborted)$/i.test(obj.status.trim())) {
+  const code = extractExitCode(obj);
+  if (typeof code === 'number' && code !== 0) return true;
+  if (typeof obj.status === 'string' && FAILED_STATUS_REGEX.test(obj.status.trim())) {
     return true;
   }
-  if (typeof obj.subtype === 'string' && /^(?:failed|error|cancelled|aborted)$/i.test(obj.subtype.trim())) {
+  if (typeof obj.subtype === 'string' && FAILED_STATUS_REGEX.test(obj.subtype.trim())) {
     return true;
+  }
+  if (obj.success === false || obj.ok === false) return true;
+  if (Boolean(obj.error) || Boolean(obj.failure)) return true;
+  if (obj.result && typeof obj.result === 'object') {
+    if (obj.result.success === false || obj.result.ok === false) return true;
+    if (Boolean(obj.result.error) || Boolean(obj.result.failure)) return true;
+    if (
+      typeof obj.result.status === 'string' &&
+      FAILED_STATUS_REGEX.test(obj.result.status.trim())
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -836,25 +1040,45 @@ function extractMessageText(item) {
 }
 
 function isPendingToolStatus(status) {
-  return status === 'started' || status === 'in_progress' || status === 'observed';
+  return (
+    status === 'started' ||
+    status === 'in_progress' ||
+    status === 'observed' ||
+    status === 'updated' ||
+    status === 'running' ||
+    status === 'pending'
+  );
 }
 
-function findMatchingPendingUnkeyedIndex(unkeyedToolCalls, { type, name, command, path }) {
+function findMatchingPendingUnkeyedIndex(
+  unkeyedToolCalls,
+  { type, explicitName = null, command = null, path = null },
+  explicitNameByToolEntry = null
+) {
+  const hasExplicitNameConflict = (existing) => {
+    const existingExplicit = explicitNameByToolEntry
+      ? explicitNameByToolEntry.get(existing) || null
+      : existing.explicitName || null;
+    return Boolean(existingExplicit && explicitName && existingExplicit !== explicitName);
+  };
+
   for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
     const existing = unkeyedToolCalls[i];
     if (!isPendingToolStatus(existing.status)) continue;
-    if (existing.type !== type || (name && existing.name !== name)) continue;
+    if (existing.type !== type || hasExplicitNameConflict(existing)) continue;
     const sameCmd = (existing.command || null) === (command || null);
     const samePath = (existing.path || null) === (path || null);
     if (sameCmd && samePath) {
       return i;
     }
   }
-  if (!command && !path) {
-    for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
-      const existing = unkeyedToolCalls[i];
-      if (!isPendingToolStatus(existing.status)) continue;
-      if (existing.type !== type || (name && existing.name !== name)) continue;
+  for (let i = unkeyedToolCalls.length - 1; i >= 0; i -= 1) {
+    const existing = unkeyedToolCalls[i];
+    if (!isPendingToolStatus(existing.status)) continue;
+    if (existing.type !== type || hasExplicitNameConflict(existing)) continue;
+    const compatibleCmd = !existing.command || !command || existing.command === command;
+    const compatiblePath = !existing.path || !path || existing.path === path;
+    if (compatibleCmd && compatiblePath) {
       return i;
     }
   }
@@ -917,6 +1141,7 @@ export function parseCodexEventStream(stdout) {
   const toolCallsById = new Map();
   const unkeyedToolCalls = [];
   const rawInputsByToolEntry = new WeakMap();
+  const explicitNameByToolEntry = new WeakMap();
   const orderedMessages = [];
   const messageIndexById = new Map();
   let finalResultText = '';
@@ -967,21 +1192,44 @@ export function parseCodexEventStream(stdout) {
       const incomingName =
         item.tool ||
         item.name ||
+        item.tool_name ||
+        item.toolName ||
+        item.function?.name ||
+        item.function_name ||
+        item.functionName ||
+        ev.tool_name ||
+        ev.toolName ||
+        ev.name ||
         (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
         null;
-      const isCompletionEvent =
+
+      const isStartEvent =
+        ev.type === 'item.started' ||
+        ev.subtype === 'started' ||
+        itemType === 'exec_command_begin' ||
+        item.status === 'started';
+      const isUpdateOrCompletionEvent =
+        ev.type === 'item.updated' ||
         ev.type === 'item.completed' ||
+        ev.subtype === 'updated' ||
+        ev.subtype === 'completed' ||
         itemType === 'exec_command_end' ||
-        (typeof item.status === 'string' && !isPendingToolStatus(item.status));
+        (!isStartEvent && typeof item.status === 'string' && item.status !== 'started') ||
+        isFailedToolObject(item) ||
+        isFailedToolObject(ev);
 
       const matchIdx =
-        !toolId && isCompletionEvent
-          ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, {
-              type: normalizedType,
-              name: incomingName || normalizedType,
-              command: incomingCommand ? String(incomingCommand) : null,
-              path: incomingPath ? String(incomingPath) : null
-            })
+        !toolId && isUpdateOrCompletionEvent
+          ? findMatchingPendingUnkeyedIndex(
+              unkeyedToolCalls,
+              {
+                type: normalizedType,
+                explicitName: incomingName ? String(incomingName) : null,
+                command: incomingCommand ? String(incomingCommand) : null,
+                path: incomingPath ? String(incomingPath) : null
+              },
+              explicitNameByToolEntry
+            )
           : -1;
 
       const prevEntry = toolId
@@ -990,24 +1238,39 @@ export function parseCodexEventStream(stdout) {
           ? unkeyedToolCalls[matchIdx]
           : null;
       const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
+      const prevExplicitName = prevEntry ? explicitNameByToolEntry.get(prevEntry) || null : null;
 
       const rawCommand = incomingRawCommand || prevRaw?.command || prevEntry?.command || null;
       const command = incomingCommand || prevEntry?.command || null;
       const pathArg = incomingPath || prevEntry?.path || null;
-      const name = incomingName || prevEntry?.name || normalizedType;
-      const exitCode =
-        typeof item.exit_code === 'number'
-          ? item.exit_code
-          : typeof item.exitCode === 'number'
-            ? item.exitCode
-            : prevEntry?.exitCode;
-      const status =
-        item.status ||
-        (ev.type === 'item.completed' || itemType === 'exec_command_end'
-          ? typeof exitCode === 'number' && exitCode !== 0
-            ? 'failed'
-            : 'completed'
-          : prevEntry?.status || 'observed');
+      const explicitName = incomingName ? String(incomingName) : prevExplicitName;
+      const name = explicitName || prevEntry?.name || normalizedType;
+
+      const parsedCode = extractExitCode(item) ?? extractExitCode(ev);
+      const exitCode = typeof parsedCode === 'number' ? parsedCode : prevEntry?.exitCode;
+      const isFailed =
+        isFailedToolObject(item) ||
+        isFailedToolObject(ev) ||
+        (typeof exitCode === 'number' && exitCode !== 0) ||
+        prevEntry?.status === 'failed';
+
+      const rawStatus =
+        typeof item.status === 'string' && item.status.trim()
+          ? item.status.trim()
+          : typeof ev.subtype === 'string' && ev.subtype.trim()
+            ? ev.subtype.trim()
+            : null;
+      const status = isFailed
+        ? 'failed'
+        : rawStatus && !FAILED_STATUS_REGEX.test(rawStatus)
+          ? rawStatus
+          : ev.type === 'item.completed' || itemType === 'exec_command_end'
+            ? 'completed'
+            : ev.type === 'item.updated'
+              ? prevEntry?.status || 'in_progress'
+              : ev.type === 'item.started' || itemType === 'exec_command_begin'
+                ? 'started'
+                : prevEntry?.status || 'observed';
 
       const entry = {
         ...(toolId ? { id: String(toolId) } : {}),
@@ -1022,20 +1285,32 @@ export function parseCodexEventStream(stdout) {
 
       const mergedRawInput = {
         ...prevRaw,
+        ...ev,
+        ...item,
         type: normalizedType,
         kind: normalizedType,
         name: String(name || normalizedType),
-        tool: item.tool || prevRaw?.tool,
+        tool: item.tool ?? prevRaw?.tool,
+        tool_name: item.tool_name ?? ev.tool_name ?? prevRaw?.tool_name,
+        toolName: item.toolName ?? ev.toolName ?? prevRaw?.toolName,
+        function: item.function ?? ev.function ?? prevRaw?.function,
         command: rawCommand || command,
         path: pathArg,
         arguments: parsedArgsObj || item.arguments || prevRaw?.arguments,
         input: item.input ?? prevRaw?.input,
         args: item.args ?? prevRaw?.args,
+        result: item.result ?? ev.result ?? prevRaw?.result,
+        error: item.error ?? ev.error ?? prevRaw?.error,
+        failure: item.failure ?? ev.failure ?? prevRaw?.failure,
+        subtype: ev.subtype ?? item.subtype ?? prevRaw?.subtype,
         ...(typeof exitCode === 'number' ? { exitCode } : {}),
         status
       };
 
       rawInputsByToolEntry.set(entry, mergedRawInput);
+      if (explicitName) {
+        explicitNameByToolEntry.set(entry, explicitName);
+      }
       if (toolId) {
         toolCallsById.set(String(toolId), entry);
       } else if (matchIdx !== -1) {
@@ -1046,18 +1321,21 @@ export function parseCodexEventStream(stdout) {
       continue;
     }
 
-    if (itemType === 'agent_message' || (itemType === 'message' && item.role !== 'user')) {
+    const msgRole = item.role || ev.role;
+    if (
+      itemType === 'agent_message' ||
+      (itemType === 'message' && (!msgRole || msgRole === 'assistant'))
+    ) {
       const msgText = extractMessageText(item);
       if (msgText && msgText.trim()) {
         const msgId = item.id || ev.id || null;
         if (msgId) {
           const key = String(msgId);
           if (messageIndexById.has(key)) {
-            orderedMessages[messageIndexById.get(key)] = msgText;
-          } else {
-            messageIndexById.set(key, orderedMessages.length);
-            orderedMessages.push(msgText);
+            orderedMessages[messageIndexById.get(key)] = '';
           }
+          messageIndexById.set(key, orderedMessages.length);
+          orderedMessages.push(msgText);
         } else if (ev.type !== 'item.started') {
           orderedMessages.push(msgText);
         }
@@ -1079,19 +1357,23 @@ export function parseCodexEventStream(stdout) {
   const skillsByName = new Map();
   for (const tc of finalToolCalls) {
     const skillInput = rawInputsByToolEntry.get(tc) || tc;
-    for (const entry of extractSkillsRead(skillInput)) {
-      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
-        skillsByName.set(entry.skill, entry);
+    try {
+      for (const entry of extractSkillsRead(skillInput)) {
+        if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+          skillsByName.set(entry.skill, entry);
+        }
       }
+    } catch {
+      // Isolate telemetry extraction edge cases
     }
   }
 
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
-    finalResultText && finalResultText.trim()
-      ? finalResultText.trim()
-      : nonEmptyMessages.length > 0
-        ? nonEmptyMessages[nonEmptyMessages.length - 1]
+    nonEmptyMessages.length > 0
+      ? nonEmptyMessages[nonEmptyMessages.length - 1]
+      : finalResultText && finalResultText.trim()
+        ? finalResultText.trim()
         : nonEventLines.join('\n').trim();
 
   return {
@@ -1113,10 +1395,13 @@ const CURSOR_EVENT_TYPES = new Set([
   'message',
   'agent_message',
   'command_execution',
+  'exec_command_begin',
+  'exec_command_end',
   'mcp_tool_call',
   'file_read',
   'error',
   'item.started',
+  'item.updated',
   'item.completed',
   'turn.started',
   'turn.completed'
@@ -1126,10 +1411,16 @@ function isCursorStreamEvent(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
     return false;
   }
-  if (typeof obj.type === 'string' && CURSOR_EVENT_TYPES.has(obj.type)) {
+  if (
+    typeof obj.type === 'string' &&
+    (CURSOR_EVENT_TYPES.has(obj.type) || obj.type.startsWith('item.'))
+  ) {
     return true;
   }
   if (obj.tool_call && typeof obj.tool_call === 'object') {
+    return true;
+  }
+  if (obj.item && typeof obj.item === 'object' && typeof obj.item.type === 'string') {
     return true;
   }
   return false;
@@ -1191,6 +1482,7 @@ export function parseCursorEventStream(stdout) {
   const toolCallsById = new Map();
   const unkeyedToolCalls = [];
   const rawInputsByToolEntry = new WeakMap();
+  const explicitNameByToolEntry = new WeakMap();
   const orderedMessages = [];
   const messageIndexById = new Map();
   let finalResultText = '';
@@ -1198,21 +1490,32 @@ export function parseCursorEventStream(stdout) {
   const recordTool = ({
     id,
     type = 'tool_call',
-    name,
+    explicitName = null,
     command,
     pathArg,
     rawArgs,
     exitCode,
-    status = 'completed'
+    status = 'completed',
+    isFailed = false,
+    rawEvent = null,
+    rawItem = null,
+    rawSubVal = null
   }) => {
+    const normalizedType =
+      type === 'exec_command_begin' || type === 'exec_command_end' ? 'command_execution' : type;
+    const isStart = status === 'started';
     const matchIdx =
-      !id && !isPendingToolStatus(status)
-        ? findMatchingPendingUnkeyedIndex(unkeyedToolCalls, {
-            type,
-            name: String(name || type),
-            command: command ? String(command) : null,
-            path: pathArg ? String(pathArg) : null
-          })
+      !id && !isStart
+        ? findMatchingPendingUnkeyedIndex(
+            unkeyedToolCalls,
+            {
+              type: normalizedType,
+              explicitName: explicitName ? String(explicitName) : null,
+              command: command ? String(command) : null,
+              path: pathArg ? String(pathArg) : null
+            },
+            explicitNameByToolEntry
+          )
         : -1;
 
     const prevEntry = id
@@ -1221,19 +1524,25 @@ export function parseCursorEventStream(stdout) {
         ? unkeyedToolCalls[matchIdx]
         : null;
     const prevRaw = prevEntry ? rawInputsByToolEntry.get(prevEntry) : null;
+    const prevExplicitName = prevEntry ? explicitNameByToolEntry.get(prevEntry) || null : null;
+
+    const effectiveExplicitName = explicitName ? String(explicitName) : prevExplicitName;
+    const resolvedName = effectiveExplicitName || prevEntry?.name || normalizedType;
     const effectiveCommand = command || prevEntry?.command || null;
     const effectivePath = pathArg || prevEntry?.path || null;
     const effectiveExitCode = typeof exitCode === 'number' ? exitCode : prevEntry?.exitCode;
     const effectiveStatus =
-      status === 'completed' && typeof effectiveExitCode === 'number' && effectiveExitCode !== 0
+      isFailed ||
+      prevEntry?.status === 'failed' ||
+      (typeof effectiveExitCode === 'number' && effectiveExitCode !== 0)
         ? 'failed'
         : status;
 
     const entry = {
       ...(id ? { id: String(id) } : {}),
-      type,
-      kind: type,
-      name: String(name || prevEntry?.name || type),
+      type: normalizedType,
+      kind: normalizedType,
+      name: String(resolvedName),
       ...(effectiveCommand ? { command: String(effectiveCommand) } : {}),
       ...(effectivePath ? { path: String(effectivePath) } : {}),
       ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
@@ -1242,17 +1551,36 @@ export function parseCursorEventStream(stdout) {
 
     const rawInput = {
       ...prevRaw,
-      type,
-      kind: type,
-      name: String(name || prevEntry?.name || type),
+      ...(rawEvent && typeof rawEvent === 'object' ? rawEvent : {}),
+      ...(rawItem && typeof rawItem === 'object' ? rawItem : {}),
+      ...(rawSubVal && typeof rawSubVal === 'object' ? rawSubVal : {}),
+      type: normalizedType,
+      kind: normalizedType,
+      name: String(resolvedName),
+      tool: rawSubVal?.tool ?? rawItem?.tool ?? prevRaw?.tool,
+      tool_name:
+        rawSubVal?.tool_name ?? rawItem?.tool_name ?? rawEvent?.tool_name ?? prevRaw?.tool_name,
+      toolName:
+        rawSubVal?.toolName ?? rawItem?.toolName ?? rawEvent?.toolName ?? prevRaw?.toolName,
+      function:
+        rawSubVal?.function ?? rawItem?.function ?? rawEvent?.function ?? prevRaw?.function,
       command: effectiveCommand,
       path: effectivePath,
+      arguments: rawItem?.arguments ?? prevRaw?.arguments,
+      input: rawItem?.input ?? prevRaw?.input,
       args: rawArgs ?? prevRaw?.args,
+      result: rawSubVal?.result ?? rawItem?.result ?? rawEvent?.result ?? prevRaw?.result,
+      error: rawSubVal?.error ?? rawItem?.error ?? rawEvent?.error ?? prevRaw?.error,
+      failure: rawSubVal?.failure ?? rawItem?.failure ?? rawEvent?.failure ?? prevRaw?.failure,
+      subtype: rawEvent?.subtype ?? rawItem?.subtype ?? prevRaw?.subtype,
       ...(typeof effectiveExitCode === 'number' ? { exitCode: effectiveExitCode } : {}),
       status: effectiveStatus
     };
 
     rawInputsByToolEntry.set(entry, rawInput);
+    if (effectiveExplicitName) {
+      explicitNameByToolEntry.set(entry, effectiveExplicitName);
+    }
     if (id) {
       toolCallsById.set(String(id), entry);
     } else if (matchIdx !== -1) {
@@ -1263,35 +1591,64 @@ export function parseCursorEventStream(stdout) {
   };
 
   for (const ev of parsedEvents) {
-    const item = ev.item && typeof ev.item === 'object' ? ev.item : ev;
+    const item =
+      ev.item && typeof ev.item === 'object'
+        ? ev.item
+        : ev.payload && typeof ev.payload === 'object'
+          ? ev.payload
+          : ev;
     const evType = item.type || ev.type;
 
     if (
       evType === 'tool_call' ||
       evType === 'tool_use' ||
       evType === 'command_execution' ||
+      evType === 'exec_command_begin' ||
+      evType === 'exec_command_end' ||
       evType === 'mcp_tool_call' ||
       evType === 'file_read'
     ) {
       const callId = item.call_id || item.id || ev.call_id || ev.id || null;
-      let toolName = item.name || item.tool || evType;
+      let explicitName =
+        item.tool ||
+        item.name ||
+        item.tool_name ||
+        item.toolName ||
+        item.function?.name ||
+        item.function_name ||
+        item.functionName ||
+        ev.tool_name ||
+        ev.toolName ||
+        ev.name ||
+        (item.server && item.tool ? `${item.server}.${item.tool}` : null) ||
+        null;
       let command = item.command || item.cmd || null;
       let pathArg = item.path || item.file_path || null;
       let rawArgs = item.args || item.arguments || item.input || null;
-      let exitCode =
-        typeof item.exit_code === 'number'
-          ? item.exit_code
-          : typeof item.exitCode === 'number'
-            ? item.exitCode
-            : undefined;
-      let status = ev.subtype || item.status || 'completed';
+      let exitCode = extractExitCode(item) ?? extractExitCode(ev);
+      let subVal = null;
 
-      if (ev.tool_call && typeof ev.tool_call === 'object') {
-        const subKeys = Object.keys(ev.tool_call);
+      const toolCallObj =
+        ev.tool_call && typeof ev.tool_call === 'object'
+          ? ev.tool_call
+          : item.tool_call && typeof item.tool_call === 'object'
+            ? item.tool_call
+            : null;
+
+      if (toolCallObj) {
+        const subKeys = Object.keys(toolCallObj);
         if (subKeys.length > 0) {
           const subKey = subKeys[0];
-          const subVal = ev.tool_call[subKey];
-          toolName = subVal?.name || subKey;
+          subVal = toolCallObj[subKey];
+          explicitName =
+            subVal?.tool ||
+            subVal?.name ||
+            subVal?.tool_name ||
+            subVal?.toolName ||
+            subVal?.function?.name ||
+            explicitName ||
+            subKey ||
+            null;
           rawArgs = subVal?.args ?? subVal?.input ?? subVal?.arguments ?? rawArgs;
           if (!rawArgs && subVal && typeof subVal === 'object') {
             const hasDirectArgKey = Object.keys(subVal).some(
@@ -1303,18 +1660,27 @@ export function parseCursorEventStream(stdout) {
           }
           const parsedSubArgs = parseMaybeJsonObject(rawArgs);
           command = command || parsedSubArgs?.command || parsedSubArgs?.cmd || null;
-          pathArg = pathArg || parsedSubArgs?.path || parsedSubArgs?.file_path || parsedSubArgs?.target_file || null;
-          if (typeof subVal?.exit_code === 'number') exitCode = subVal.exit_code;
-          else if (typeof subVal?.exitCode === 'number') exitCode = subVal.exitCode;
-          else if (typeof subVal?.result?.exit_code === 'number') exitCode = subVal.result.exit_code;
-          else if (typeof subVal?.result?.exitCode === 'number') exitCode = subVal.result.exitCode;
-          if (typeof subVal?.status === 'string') status = subVal.status;
+          pathArg =
+            pathArg ||
+            parsedSubArgs?.path ||
+            parsedSubArgs?.file_path ||
+            parsedSubArgs?.target_file ||
+            null;
+          const subExitCode = extractExitCode(subVal);
+          if (typeof subExitCode === 'number') {
+            exitCode = subExitCode;
+          }
         }
       } else {
         const parsedRawArgs = parseMaybeJsonObject(rawArgs);
         if (parsedRawArgs) {
           command = command || parsedRawArgs.command || parsedRawArgs.cmd || null;
-          pathArg = pathArg || parsedRawArgs.path || parsedRawArgs.file_path || parsedRawArgs.target_file || null;
+          pathArg =
+            pathArg ||
+            parsedRawArgs.path ||
+            parsedRawArgs.file_path ||
+            parsedRawArgs.target_file ||
+            null;
         }
       }
 
@@ -1322,34 +1688,86 @@ export function parseCursorEventStream(stdout) {
         command = command.join(' ');
       }
 
+      const isFailed =
+        isFailedToolObject(subVal) ||
+        isFailedToolObject(item) ||
+        isFailedToolObject(ev) ||
+        (typeof exitCode === 'number' && exitCode !== 0);
+
+      const rawStatus =
+        typeof subVal?.status === 'string' && subVal.status.trim()
+          ? subVal.status.trim()
+          : typeof item.status === 'string' && item.status.trim()
+            ? item.status.trim()
+            : typeof ev.subtype === 'string' && ev.subtype.trim()
+              ? ev.subtype.trim()
+              : null;
+
+      const status = isFailed
+        ? 'failed'
+        : rawStatus && !FAILED_STATUS_REGEX.test(rawStatus)
+          ? rawStatus
+          : ev.type === 'item.started' || evType === 'exec_command_begin'
+            ? 'started'
+            : ev.type === 'item.updated'
+              ? 'in_progress'
+              : 'completed';
+
       recordTool({
         id: callId,
         type: evType,
-        name: toolName,
+        explicitName,
         command,
         pathArg,
         rawArgs,
         exitCode,
-        status
+        status,
+        isFailed,
+        rawEvent: ev,
+        rawItem: item,
+        rawSubVal: subVal
       });
       continue;
     }
 
-    if (evType === 'assistant' || (evType === 'message' && item.role !== 'user') || evType === 'agent_message') {
-      const msgObj = ev.message && typeof ev.message === 'object' ? ev.message : item;
+    const msgObj = ev.message && typeof ev.message === 'object' ? ev.message : item;
+    const msgRole = msgObj?.role || item.role || ev.role;
+    if (
+      evType === 'assistant' ||
+      evType === 'agent_message' ||
+      (evType === 'message' && (!msgRole || msgRole === 'assistant'))
+    ) {
       if (Array.isArray(msgObj?.content)) {
         for (const part of msgObj.content) {
           if (part && typeof part === 'object' && (part.type === 'tool_use' || part.type === 'tool_call')) {
             const rawArgs = part.input || part.args || part.arguments || null;
             const parsedPartArgs = parseMaybeJsonObject(rawArgs);
+            const partExplicitName =
+              part.tool ||
+              part.name ||
+              part.tool_name ||
+              part.toolName ||
+              part.function?.name ||
+              null;
+            const partExitCode = extractExitCode(part);
+            const partFailed =
+              isFailedToolObject(part) ||
+              (typeof partExitCode === 'number' && partExitCode !== 0);
             recordTool({
               id: part.id || part.call_id || null,
               type: part.type,
-              name: part.name || part.tool || part.type,
+              explicitName: partExplicitName,
               command: parsedPartArgs?.command || parsedPartArgs?.cmd || null,
-              pathArg: parsedPartArgs?.path || parsedPartArgs?.file_path || parsedPartArgs?.target_file || null,
+              pathArg:
+                parsedPartArgs?.path ||
+                parsedPartArgs?.file_path ||
+                parsedPartArgs?.target_file ||
+                null,
               rawArgs,
-              status: part.status || 'completed'
+              exitCode: partExitCode,
+              status: partFailed ? 'failed' : part.status || 'completed',
+              isFailed: partFailed,
+              rawItem: part
             });
           }
         }
@@ -1360,11 +1778,10 @@ export function parseCursorEventStream(stdout) {
         if (msgId) {
           const key = String(msgId);
           if (messageIndexById.has(key)) {
-            orderedMessages[messageIndexById.get(key)] = msgText;
-          } else {
-            messageIndexById.set(key, orderedMessages.length);
-            orderedMessages.push(msgText);
+            orderedMessages[messageIndexById.get(key)] = '';
           }
+          messageIndexById.set(key, orderedMessages.length);
+          orderedMessages.push(msgText);
         } else if (ev.type !== 'item.started') {
           orderedMessages.push(msgText);
         }
@@ -1381,19 +1798,23 @@ export function parseCursorEventStream(stdout) {
   const skillsByName = new Map();
   for (const tc of finalToolCalls) {
     const skillInput = rawInputsByToolEntry.get(tc) || tc;
-    for (const entry of extractSkillsRead(skillInput)) {
-      if (entry && entry.skill && !skillsByName.has(entry.skill)) {
-        skillsByName.set(entry.skill, entry);
+    try {
+      for (const entry of extractSkillsRead(skillInput)) {
+        if (entry && entry.skill && !skillsByName.has(entry.skill)) {
+          skillsByName.set(entry.skill, entry);
+        }
       }
+    } catch {
+      // Isolate telemetry extraction edge cases
     }
   }
 
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
-    finalResultText && finalResultText.trim()
-      ? finalResultText.trim()
-      : nonEmptyMessages.length > 0
-        ? nonEmptyMessages[nonEmptyMessages.length - 1]
+    nonEmptyMessages.length > 0
+      ? nonEmptyMessages[nonEmptyMessages.length - 1]
+      : finalResultText && finalResultText.trim()
+        ? finalResultText.trim()
         : nonEventLines.join('\n').trim();
 
   return {

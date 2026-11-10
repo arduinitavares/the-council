@@ -397,14 +397,30 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
     });
 
     describe('AntigravityAdapter', () => {
-      it('validates allowed models (gemini-4-argon, claude-sonnet-5-5, claude-opus-5-5) and rejects invalid effort tiers or substring spoofs', () => {
+      it('validates allowed models (gemini-4-argon, gemini-4-carbon, claude-sonnet-5-5, claude-opus-5-5) and rejects invalid effort tiers or substring spoofs', () => {
         const adapter = new AntigravityAdapter();
         assert.doesNotThrow(() => adapter.validateModel('gemini-4-argon-high'));
+        assert.doesNotThrow(() => adapter.validateModel('gemini-4-carbon-high'));
+        assert.doesNotThrow(() => adapter.validateModel('gemini-4-carbon-low'));
+        assert.doesNotThrow(() => adapter.validateModel('gemini-4-carbon-medium'));
+        assert.doesNotThrow(() => adapter.validateModel('gemini-4-carbon'));
+        assert.doesNotThrow(() => adapter.validateModel('gemini-4-carbon (high)'));
         assert.doesNotThrow(() => adapter.validateModel('claude-sonnet-5-5-high'));
         assert.doesNotThrow(() => adapter.validateModel('claude-opus-5-5-high'));
-        assert.throws(() => adapter.validateModel('gpt-6.1-sol'), /not permitted under Antigravity route/);
+        assert.throws(
+          () => adapter.validateModel('gpt-6.1-sol'),
+          (err) =>
+            err instanceof HarnessExecutionError &&
+            /not permitted under Antigravity route\. Allowed: gemini-4-argon-\*, gemini-4-carbon-\*, claude-sonnet-5-5-\*, claude-opus-5-5-\*\./.test(
+              err.message
+            )
+        );
         assert.throws(
           () => adapter.validateModel('gemini-4-argon (bogus)'),
+          (err) => err instanceof HarnessExecutionError && /Unsupported reasoning effort "bogus"/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('gemini-4-carbon (bogus)'),
           (err) => err instanceof HarnessExecutionError && /Unsupported reasoning effort "bogus"/.test(err.message)
         );
         assert.throws(
@@ -412,9 +428,51 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
           (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
         );
         assert.throws(
+          () => adapter.validateModel('not-gemini-4-carbon-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
+        );
+        assert.throws(
+          () => adapter.validateModel('gemini-4-carbon-high (high)'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
+        );
+        assert.throws(
           () => adapter.validateModel('claude-opus-5-5-bogus (high)'),
           (err) => err instanceof HarnessExecutionError && /not permitted under Antigravity route/.test(err.message)
         );
+      });
+
+      it('rejects gemini-4-carbon-high on CodexAdapter and CursorAdapter, resolves timeouts by effort tier, and downshifts cleanly for VOTING (#75)', async () => {
+        const agy = new AntigravityAdapter();
+        const codex = new CodexAdapter();
+        const cursor = new CursorAdapter();
+
+        assert.throws(
+          () => codex.validateModel('gemini-4-carbon-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Codex route/.test(err.message)
+        );
+        assert.throws(
+          () => cursor.validateModel('gemini-4-carbon-high'),
+          (err) => err instanceof HarnessExecutionError && /not permitted under Cursor route/.test(err.message)
+        );
+
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-high'), 120000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon (high)'), 120000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-medium'), 60000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-low'), 60000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon'), 60000);
+
+        const { downshiftModel } = await import('../../src/harness/cli-runner.js');
+        const { resolveVotingSeatConfig } = await import('../../src/engine/council-engine.js');
+
+        assert.equal(downshiftModel('gemini-4-carbon-high', 'low'), 'gemini-4-carbon-low');
+        const votingSeat = resolveVotingSeatConfig({
+          id: 'carbon-voter',
+          harness: 'antigravity',
+          model: 'gemini-4-carbon-high'
+        });
+        assert.equal(votingSeat.model, 'gemini-4-carbon-low');
+        assert.equal(votingSeat.tools, 'none');
+        assert.doesNotThrow(() => agy.validateModel(votingSeat.model));
       });
 
       it('classifies Gemini and Claude quota and resource errors', () => {

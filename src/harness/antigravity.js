@@ -1,6 +1,6 @@
 /**
  * @fileoverview Antigravity (AGY) Harness Adapter for The Council.
- * Connects to Google Gemini (gemini-4-argon-high) and Anthropic Claude
+ * Connects to Google Gemini (gemini-4-argon-*, gemini-4-carbon-*) and Anthropic Claude
  * (claude-sonnet-5-5-*, claude-opus-5-5-*) via Orca CLI/API per ADR 0002.
  */
 
@@ -36,12 +36,13 @@ export class AntigravityAdapter extends HarnessAdapter {
     }
 
     const isGeminiArgon = baseModel === 'gemini-4-argon';
+    const isGeminiCarbon = baseModel === 'gemini-4-carbon';
     const isClaudeSonnet = baseModel === 'claude-sonnet-5-5';
     const isClaudeOpus = baseModel === 'claude-opus-5-5';
 
-    if (!isGeminiArgon && !isClaudeSonnet && !isClaudeOpus) {
+    if (!isGeminiArgon && !isGeminiCarbon && !isClaudeSonnet && !isClaudeOpus) {
       throw new HarnessExecutionError(
-        `Model "${model}" is not permitted under Antigravity route. Allowed: gemini-4-argon-high, claude-sonnet-5-5-*, claude-opus-5-5-*.`,
+        `Model "${model}" is not permitted under Antigravity route. Allowed: gemini-4-argon-*, gemini-4-carbon-*, claude-sonnet-5-5-*, claude-opus-5-5-*.`,
         { harness: this.name, model }
       );
     }

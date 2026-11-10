@@ -510,6 +510,16 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       assert.equal(k1.key, 'antigravity/gemini-4-argon (high)');
       assert.equal(k2.key, 'antigravity/gemini-4-argon (high)');
 
+      const c1 = canonicalizeModelKey('antigravity', 'gemini-4-carbon-high');
+      const c2 = canonicalizeModelKey('antigravity', 'gemini-4-carbon (high)');
+      assert.equal(c1.key, 'antigravity/gemini-4-carbon (high)');
+      assert.equal(c2.key, 'antigravity/gemini-4-carbon (high)');
+      assert.equal(c1.model, 'gemini-4-carbon');
+      assert.equal(c1.effort, 'high');
+
+      const cLow = canonicalizeModelKey('antigravity', 'gemini-4-carbon-low');
+      assert.equal(cLow.key, 'antigravity/gemini-4-carbon (low)');
+
       const k3 = canonicalizeModelKey('cursor', 'grok-4.7-xhigh');
       assert.equal(k3.key, 'cursor/grok-4.7 (xhigh)');
     });

@@ -36,7 +36,7 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
+- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `carbon-voter` (`antigravity` / `gemini-4-carbon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
   ```bash
   /Users/aaat/projects/the-council/bin/council run --live -p best-of-families -t "<question>" -v
   ```
@@ -284,7 +284,7 @@ Per-turn time budgets can be configured at the top level or overridden on indivi
 | Effort Tier | Models / Suffixes | Default Timeout |
 |---|---|---|
 | `max` / `xhigh` | `gpt-6-astra (max)`, `gpt-6.1-sol (xhigh)` | 240,000 ms (4.0 min) |
-| `high` | `gemini-4-argon-high`, `claude-opus-5-5-high`, `*-high` | 120,000 ms (2.0 min) |
+| `high` | `gemini-4-argon-high`, `gemini-4-carbon-high`, `claude-opus-5-5-high`, `*-high` | 120,000 ms (2.0 min) |
 | `medium` / `low` | `claude-sonnet-4-5-medium`, `*-medium`, `*-low` | 60,000 ms (1.0 min) |
 | Fallback | Models without explicit effort tier | 60,000 ms (1.0 min) |
 

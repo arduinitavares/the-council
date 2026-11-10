@@ -357,20 +357,20 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.equal(fromRelConfig.judge.id, 'judge-astra');
         assert.deepEqual(
           fromRelConfig.seats.map((s) => s.id),
-          ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']
+          ['sol-voter', 'argon-voter', 'carbon-voter', 'opus-voter', 'grok-voter']
         );
 
         const fromShortName = loadConfigFile('best-of-families.json', {
           topic: 'External CWD short filename'
         });
         assert.equal(fromShortName.judge.id, 'judge-astra');
-        assert.equal(fromShortName.seats.length, 4);
+        assert.equal(fromShortName.seats.length, 5);
 
         const fromBareName = loadConfigFile('best-of-families', {
           topic: 'External CWD bare config name'
         });
         assert.equal(fromBareName.judge.id, 'judge-astra');
-        assert.equal(fromBareName.seats.length, 4);
+        assert.equal(fromBareName.seats.length, 5);
 
         const fromPreset = resolveConfig({
           preset: 'best-of-families',
@@ -381,12 +381,57 @@ describe('Unit: Built-in Council Presets & Preset-Aware resolveConfig', () => {
         assert.equal(fromPreset.judge.id, 'judge-astra');
         assert.deepEqual(
           fromPreset.seats.map((s) => s.id),
-          ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']
+          ['sol-voter', 'argon-voter', 'carbon-voter', 'opus-voter', 'grok-voter']
         );
       } finally {
         process.chdir(prevCwd);
         fs.rmSync(tmpExtDir, { recursive: true, force: true });
       }
+    });
+
+    it('resolves best-of-families with all 5 voter seats including carbon-voter (gemini-4-carbon-high) and verifies live adapter and skill parity (#75)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const registry = new HarnessRegistry();
+
+      const resolved = resolveConfig({ preset: 'best-of-families', topic: 'Test' });
+      assert.equal(resolved.seats.length, 5);
+      assert.deepEqual(
+        resolved.seats.map((s) => s.id),
+        ['sol-voter', 'argon-voter', 'carbon-voter', 'opus-voter', 'grok-voter']
+      );
+
+      const carbonSeat = resolved.seats.find((s) => s.id === 'carbon-voter');
+      assert.ok(carbonSeat, 'carbon-voter must exist in best-of-families');
+      assert.equal(carbonSeat.harness, 'antigravity');
+      assert.equal(carbonSeat.model, 'gemini-4-carbon-high');
+      assert.deepEqual(carbonSeat.soul, {
+        name: 'Principal Formal & Analytical Verifier',
+        temperament: 'analytical',
+        lens: 'Formal logic, causal rigor, algorithmic invariants, and quantitative trade-off verification.',
+        rules: [
+          'Verify that every causal claim follows strictly from primary evidence or mathematical/structural invariants.',
+          'Challenge unstated assumptions, conflated definitions, and under-specified boundary conditions.'
+        ]
+      });
+
+      const validation = validateConfig(resolved);
+      assert.equal(validation.valid, true, `best-of-families failed validateConfig: ${validation.errors.join(', ')}`);
+
+      assert.doesNotThrow(() => registry.get(resolved.judge.harness).validateModel(resolved.judge.model));
+      for (const seat of resolved.seats) {
+        assert.doesNotThrow(
+          () => registry.get(seat.harness).validateModel(seat.model),
+          `best-of-families seat "${seat.id}" (${seat.harness} / ${seat.model}) must pass validateModel`
+        );
+      }
+
+      const skillPath = path.resolve(import.meta.dirname, '../../skills/ask-council/SKILL.md');
+      const agentSkillPath = path.resolve(import.meta.dirname, '../../.agents/skills/ask-council/SKILL.md');
+      const skillContent = fs.readFileSync(skillPath, 'utf8');
+      const agentSkillContent = fs.readFileSync(agentSkillPath, 'utf8');
+      assert.equal(skillContent, agentSkillContent, 'skills/ask-council/SKILL.md and .agents/skills/ask-council/SKILL.md must stay in sync');
+      assert.ok(skillContent.includes('carbon-voter'), 'SKILL.md must document carbon-voter');
+      assert.ok(skillContent.includes('gemini-4-carbon-high'), 'SKILL.md must document gemini-4-carbon-high');
     });
   });
 });

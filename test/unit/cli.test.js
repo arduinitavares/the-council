@@ -803,7 +803,10 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const parsed1 = JSON.parse(mockIO1.getStdout());
         assert.equal(parsed1.ok, true);
         assert.equal(parsed1.state.judge.id, 'judge-astra');
-        assert.deepEqual(parsed1.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']);
+        assert.deepEqual(
+          parsed1.state.seats.map((s) => s.id),
+          ['sol-voter', 'argon-voter', 'carbon-voter', 'opus-voter', 'grok-voter']
+        );
 
         const mockIO2 = createMockIO();
         const code2 = await runCli(
@@ -814,7 +817,10 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         const parsed2 = JSON.parse(mockIO2.getStdout());
         assert.equal(parsed2.ok, true);
         assert.equal(parsed2.state.judge.id, 'judge-astra');
-        assert.deepEqual(parsed2.state.seats.map((s) => s.id), ['sol-voter', 'argon-voter', 'opus-voter', 'grok-voter']);
+        assert.deepEqual(
+          parsed2.state.seats.map((s) => s.id),
+          ['sol-voter', 'argon-voter', 'carbon-voter', 'opus-voter', 'grok-voter']
+        );
         assert.deepEqual(fs.readdirSync(tmpExtCwd), [], 'Caller cwd must remain completely empty');
       } finally {
         process.chdir(prevCwd);

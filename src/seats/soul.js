@@ -359,11 +359,15 @@ Local filesystem tools are only for topics that explicitly concern files in the 
     : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Before submitting your proof, verify claims against sources (Pre-Gathered Baseline Evidence packet, authoritative specifications, benchmarks, web search (if needed for external facts), or analytical/mathematical derivation) and cite the exact sources in your proof "source" and "statement".${evidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
 
+  const toolFreeDeliberationDirective =
+    'Do not invoke any tools (no shell, file reads, or web searches) on this turn. Synthesize and return your strict JSON proof immediately from the provided context and baseline evidence.';
+
   const verificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
 ${deliberationToolDirective}
 ${ANTI_CHEATING_RULE}\n`
-    : `\n${ANTI_CHEATING_RULE}\n`;
+    : `\n${toolFreeDeliberationDirective}
+${ANTI_CHEATING_RULE}\n`;
 
   return `### Deliberation Round ${resolvedRound}/${resolvedMaxRounds} — Proof Submission
 ${contextBlock}
@@ -573,6 +577,10 @@ export function formatJudgePrompt({
       ? `4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
       : `4. Spot-check proof sources: You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Spot-check submitted proof sources and citations against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations to verify that cited sources substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
     judgeDirectives.push(judgeToolGuidance);
+  } else {
+    judgeDirectives.push(
+      '4. Tool-free audit & synthesis: Do not invoke any tools on this turn. Audit the submitted proofs strictly against the in-prompt evidence and return your strict JSON synthesis immediately.'
+    );
   }
 
   const answerFirstDirective = `${judgeDirectives.length + 1}. Standalone Answer-First Summary: candidate.summary ("summary") MUST be a standalone, direct, user-facing executive synthesis that directly answers the user's topic in clear prose. It MUST NOT contain internal proof IDs (e.g. P1, P2, [P1]) or audit process commentary (e.g. "P1 was admitted...", "P2-P4 require corrections..."). All proof audit commentary belongs strictly in proofDecisions, and proof citations belong strictly in "clauses[].citedProofIds".`;

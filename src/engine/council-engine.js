@@ -978,7 +978,7 @@ export class CouncilEngine {
           const retryTimeoutMs = Math.min(voteTimeoutMs, 90000, remainingBudget);
           const effectiveRetryTools = isTimeout
             ? 'none'
-            : (votingSeat.tools !== undefined ? votingSeat.tools : 'none');
+            : (currentSeatConfig.tools !== undefined ? currentSeatConfig.tools : 'none');
           currentSeatConfig = {
             ...currentSeatConfig,
             tools: effectiveRetryTools,

@@ -731,7 +731,7 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
       assert.ok(!calls[2].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
     });
 
-    it('2e: Sticky tool-loop guard: Attempt 1 TimeoutError strips tools to "none"; subsequent non-timeout retry behavior', async () => {
+    it('2e: Sticky tool-loop guard: Attempt 1 TimeoutError strips tools to "none"; subsequent non-timeout retry stays "none"', async () => {
       const capturedVoteCalls = [];
       const mockHarness = new MockAdapter();
 
@@ -807,8 +807,10 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
       // Attempt 2: retry after TimeoutError -> tools forced to 'none'
       assert.equal(calls[1].tools, 'none');
 
-      // Attempt 3: retry after InvalidResponseError
-      assert.equal(calls[2].tools, 'read-only', 'Per-fault logic restores explicit votingTools on non-timeout fault');
+      // Attempt 3: retry after InvalidResponseError -> tools remains sticky at 'none'
+      assert.equal(calls[2].tools, 'none', 'Sticky tool-loop guard keeps tools stripped to "none" on subsequent non-timeout retry');
+      assert.equal(calls[2].seatTools, 'none');
+      assert.equal(calls[2].seatVotingTools, 'none');
     });
 
     it('2f: Seat-level votingTools: "none" overrides engine-level votingTools: "read-only" on retry', async () => {

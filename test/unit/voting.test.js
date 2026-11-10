@@ -4,7 +4,7 @@ import { downshiftEffort, downshiftModel } from '../../src/harness/cli-runner.js
 import { resolveVotingSeatConfig, CouncilEngine } from '../../src/engine/council-engine.js';
 import { formatVotingPrompt } from '../../src/seats/soul.js';
 import { MockAdapter } from '../../src/harness/mock.js';
-import { InvalidResponseError } from '../../src/harness/adapter.js';
+import { InvalidResponseError, TimeoutError } from '../../src/harness/adapter.js';
 
 describe('Unit: Confirmation Voting Optimization (Milestone M5 / Issue #72)', () => {
   describe('downshiftEffort helper', () => {
@@ -350,6 +350,103 @@ describe('Unit: Confirmation Voting Optimization (Milestone M5 / Issue #72)', ()
       assert.equal(invalidVoterCalls[1].seatVotingTools, 'none');
       assert.ok(invalidVoterCalls[1].prompt.includes('Do not invoke any tools during confirmation voting'));
       assert.ok(!invalidVoterCalls[1].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+    });
+
+    it('keeps tools: "none" sticky across subsequent non-timeout retries when votingTools is "read-only" and Retry 1 timed out', async () => {
+      const capturedVoteCalls = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatVote = async (ctx) => {
+        const seatAttempt = capturedVoteCalls.filter((c) => c.seatId === ctx.seat.id).length + 1;
+        capturedVoteCalls.push({
+          seatId: ctx.seat.id,
+          attempt: seatAttempt,
+          tools: ctx.tools,
+          seatTools: ctx.seat.tools,
+          seatVotingTools: ctx.seat.votingTools,
+          prompt: formatVotingPrompt({
+            soul: ctx.soul,
+            seat: ctx.seat,
+            tools: ctx.tools,
+            candidate: ctx.candidate,
+            admittedProofs: (ctx.state?.proofs || []).filter((p) => p.status === 'admitted')
+          })
+        });
+
+        if (ctx.seat.id === 'voter-sticky-timeout') {
+          if (seatAttempt === 1) {
+            throw new TimeoutError('Voting tool hang timed out on attempt 1', {
+              seatId: ctx.seat.id,
+              harness: 'mock',
+              timeoutMs: 30000
+            });
+          }
+          if (seatAttempt === 2) {
+            throw new InvalidResponseError('Malformed JSON in retry 1 vote output', {
+              seatId: ctx.seat.id,
+              harness: 'mock'
+            });
+          }
+        }
+
+        return { vote: 'accept' };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Sticky tools:none across chained TimeoutError -> InvalidResponseError voting retries',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 2,
+          votingTools: 'read-only',
+          judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            {
+              id: 'voter-sticky-timeout',
+              harness: 'mock',
+              model: 'grok-4.7-xhigh',
+              soul: 'Skeptic',
+              tools: 'read-only',
+              timeoutMs: 240000
+            },
+            {
+              id: 'voter-2',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)',
+              soul: 'Partner',
+              tools: 'read-only'
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      const stickyCalls = capturedVoteCalls.filter((c) => c.seatId === 'voter-sticky-timeout');
+      assert.equal(stickyCalls.length, 3);
+
+      // Attempt 1: configured votingTools: 'read-only'
+      assert.equal(stickyCalls[0].tools, 'read-only');
+      assert.equal(stickyCalls[0].seatTools, 'read-only');
+      assert.equal(stickyCalls[0].seatVotingTools, 'read-only');
+      assert.ok(stickyCalls[0].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+
+      // Attempt 2 (Retry 1 after TimeoutError): stripped to tools: 'none'
+      assert.equal(stickyCalls[1].tools, 'none');
+      assert.equal(stickyCalls[1].seatTools, 'none');
+      assert.equal(stickyCalls[1].seatVotingTools, 'none');
+      assert.ok(stickyCalls[1].prompt.includes('Do not invoke any tools during confirmation voting'));
+      assert.ok(!stickyCalls[1].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+
+      // Attempt 3 (Retry 2 after InvalidResponseError): must remain sticky at tools: 'none'
+      assert.equal(stickyCalls[2].tools, 'none');
+      assert.equal(stickyCalls[2].seatTools, 'none');
+      assert.equal(stickyCalls[2].seatVotingTools, 'none');
+      assert.ok(stickyCalls[2].prompt.includes('Do not invoke any tools during confirmation voting'));
+      assert.ok(!stickyCalls[2].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
     });
   });
 });

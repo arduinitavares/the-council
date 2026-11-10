@@ -547,6 +547,83 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
         /Proofs with status "partially_admitted" are valid citations for their narrowed Admitted Core and may be cited in "proofId"/
       );
     });
+
+    it('injects explicit tool-free directives in formatDeliberationPrompt and formatJudgePrompt when tools is "none" while preserving ANTI_CHEATING_RULE', async () => {
+      const { ANTI_CHEATING_RULE } = await import('../../src/seats/soul.js');
+      const expectedDelibDirective =
+        'Do not invoke any tools (no shell, file reads, or web searches) on this turn. Synthesize and return your strict JSON proof immediately from the provided context and baseline evidence.';
+      const expectedJudgeDirective =
+        '4. Tool-free audit & synthesis: Do not invoke any tools on this turn. Audit the submitted proofs strictly against the in-prompt evidence and return your strict JSON synthesis immediately.';
+
+      const delibViaParam = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'Tool-free retry proof submission',
+        evidence: testEvidence,
+        tools: 'none'
+      });
+      const delibViaSeat = formatDeliberationPrompt({
+        soul,
+        seat: { ...seatContext, tools: 'none' },
+        topic: 'Tool-free retry proof submission',
+        evidence: testEvidence
+      });
+
+      for (const p of [delibViaParam, delibViaSeat]) {
+        assert.ok(p.includes(expectedDelibDirective));
+        assert.ok(p.includes(ANTI_CHEATING_RULE));
+        assert.ok(
+          p.indexOf(expectedDelibDirective) < p.indexOf(ANTI_CHEATING_RULE),
+          'Tool-free deliberation directive must appear before ANTI_CHEATING_RULE'
+        );
+        assert.ok(!p.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+      }
+
+      const delibReadOnly = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'Read-only proof submission',
+        tools: 'read-only'
+      });
+      assert.ok(!delibReadOnly.includes(expectedDelibDirective));
+      assert.ok(delibReadOnly.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
+
+      const judgeViaParam = formatJudgePrompt({
+        judge: { id: 'judge-opus', model: 'claude-opus-5-5-high' },
+        topic: 'Tool-free judge retry audit',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Statement', source: 'Source' }],
+        evidence: testEvidence,
+        tools: 'none'
+      });
+      const judgeViaConfig = formatJudgePrompt({
+        judge: { id: 'judge-opus', model: 'claude-opus-5-5-high', tools: 'none' },
+        topic: 'Tool-free judge retry audit',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Statement', source: 'Source' }],
+        evidence: testEvidence
+      });
+
+      for (const p of [judgeViaParam, judgeViaConfig]) {
+        assert.ok(p.includes(expectedJudgeDirective));
+        assert.ok(p.includes(ANTI_CHEATING_RULE));
+        assert.ok(
+          p.indexOf(expectedJudgeDirective) < p.indexOf(ANTI_CHEATING_RULE),
+          'Tool-free judge directive must appear before ANTI_CHEATING_RULE'
+        );
+        assert.ok(!p.includes('4. Spot-check proof sources:'));
+      }
+
+      const judgeReadOnly = formatJudgePrompt({
+        judge: { id: 'judge-opus', model: 'claude-opus-5-5-high' },
+        topic: 'Read-only judge audit',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Statement', source: 'Source' }],
+        tools: 'read-only'
+      });
+      assert.ok(!judgeReadOnly.includes(expectedJudgeDirective));
+      assert.ok(judgeReadOnly.includes('4. Spot-check proof sources:'));
+    });
   });
 });
 

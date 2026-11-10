@@ -1301,6 +1301,76 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.equal(result.state.phase, 'completed');
       assert.match(result.state.verdict.kind, /Terminated|Fault|Dissent/i);
     });
+
+    it('does not inflate initial deliberation or Judge timeout above model effort timeout when totalSeatBudgetMs < 480000 (#70)', async () => {
+      const deliberationTimeouts = [];
+      const judgeTimeouts = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatProof = async (ctx) => {
+        deliberationTimeouts.push({ seatId: ctx.seat.id, timeoutMs: ctx.timeoutMs });
+        return {
+          scope: 'Arch',
+          kind: 'check',
+          source: 'Spec',
+          statement: `Proof by ${ctx.seat.id}`
+        };
+      };
+
+      mockHarness.executeJudgeAuditAndSynthesis = async (ctx) => {
+        judgeTimeouts.push(ctx.timeoutMs);
+        return {
+          summary: 'Synthesized',
+          clauses: [{ id: 'C1', context: 'Arch', conclusion: 'Verified', citedProofIds: ['P1'] }],
+          proofDecisions: { P1: { status: 'admitted', note: 'OK' } }
+        };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'No timeout inflation check',
+          maxRounds: 1,
+          minQuorum: 2,
+          totalSeatBudgetMs: 180000, // Explicit < 480000 without explicit timeoutMs
+          judge: {
+            id: 'judge-high',
+            harness: 'mock',
+            model: 'gemini-4-argon-high', // model effort timeout is 120000ms (< 180000ms budget)
+            soul: 'Judge'
+          },
+          seats: [
+            {
+              id: 's-high-effort',
+              harness: 'mock',
+              model: 'gemini-4-argon-high', // model effort timeout is 120000ms (< 180000ms budget)
+              soul: 'S1'
+            },
+            {
+              id: 's-capped-by-budget',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)', // model effort timeout is 240000ms (> 180000ms budget)
+              soul: 'S2'
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // s-high-effort has model timeout 120000ms (< 180000ms budget), so turnTimeoutMs must stay undefined (not inflated to 180000ms)
+      const s1Delib = deliberationTimeouts.find((d) => d.seatId === 's-high-effort');
+      assert.equal(s1Delib.timeoutMs, undefined);
+
+      // s-capped-by-budget has model timeout 240000ms (> 180000ms budget), so turnTimeoutMs is clamped to 180000ms
+      const s2Delib = deliberationTimeouts.find((d) => d.seatId === 's-capped-by-budget');
+      assert.equal(s2Delib.timeoutMs, 180000);
+
+      // judge-high has model timeout 120000ms (< 180000ms budget), so initialJudgeTimeoutMs must stay undefined
+      assert.equal(judgeTimeouts[0], undefined);
+    });
   });
 });
 

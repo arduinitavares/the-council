@@ -586,6 +586,12 @@ describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', (
       assert.equal(p1.judgeAdmittedStatement, null);
       assert.equal(resolveCitedProofStatus(nextState, 'P1'), 'partially_admitted');
       assert.equal(resolveCitedProofStatus(nextState, 'P2'), 'admitted');
+
+      // Also verify string priorProof = 'partially_admitted' with note-only decision preserves judgeAdmittedStatement: null
+      const normFromStringPrior = normalizeProofDecision({ note: 'Updated caveat' }, 'partially_admitted', 'P1');
+      assert.equal(normFromStringPrior.ok, true);
+      assert.equal(normFromStringPrior.status, 'partially_admitted');
+      assert.equal(normFromStringPrior.judgeAdmittedStatement, null);
     });
   });
 });

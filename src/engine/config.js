@@ -295,6 +295,12 @@ export function validateConfig(config) {
     if (config.judge.timeout !== undefined) {
       validatePositiveInteger(config.judge.timeout, 'Judge timeout', errors);
     }
+    if (config.judge.seatBudget !== undefined) {
+      validatePositiveInteger(config.judge.seatBudget, 'Judge seatBudget', errors);
+    }
+    if (config.judge.totalSeatBudgetMs !== undefined) {
+      validatePositiveInteger(config.judge.totalSeatBudgetMs, 'Judge totalSeatBudgetMs', errors);
+    }
     if (config.judge.disableHooks !== undefined && typeof config.judge.disableHooks !== 'boolean') {
       errors.push('Judge requires "disableHooks" to be a boolean.');
     }
@@ -696,8 +702,14 @@ export function resolveConfig(userConfig = {}) {
         : (defaultJudge.tools || defaultTools),
       ...(userConfig.judge?.timeoutMs !== undefined || userConfig.judge?.timeout !== undefined
         ? {
-            timeoutMs: userConfig.judge.timeoutMs ?? userConfig.judge.timeout,
-            timeout: userConfig.judge.timeoutMs ?? userConfig.judge.timeout
+            timeoutMs:
+              userConfig.judge.timeoutMs !== undefined
+                ? userConfig.judge.timeoutMs
+                : userConfig.judge.timeout,
+            timeout:
+              userConfig.judge.timeoutMs !== undefined
+                ? userConfig.judge.timeoutMs
+                : userConfig.judge.timeout
           }
         : {}),
       ...(userConfig.judge?.totalSeatBudgetMs !== undefined ||
@@ -705,13 +717,17 @@ export function resolveConfig(userConfig = {}) {
       userConfig.judge?.['seat-budget'] !== undefined
         ? {
             totalSeatBudgetMs:
-              userConfig.judge.totalSeatBudgetMs ??
-              userConfig.judge.seatBudget ??
-              userConfig.judge['seat-budget'],
+              userConfig.judge.totalSeatBudgetMs !== undefined
+                ? userConfig.judge.totalSeatBudgetMs
+                : (userConfig.judge.seatBudget !== undefined
+                    ? userConfig.judge.seatBudget
+                    : userConfig.judge['seat-budget']),
             seatBudget:
-              userConfig.judge.totalSeatBudgetMs ??
-              userConfig.judge.seatBudget ??
-              userConfig.judge['seat-budget']
+              userConfig.judge.totalSeatBudgetMs !== undefined
+                ? userConfig.judge.totalSeatBudgetMs
+                : (userConfig.judge.seatBudget !== undefined
+                    ? userConfig.judge.seatBudget
+                    : userConfig.judge['seat-budget'])
           }
         : {}),
       ...(userConfig.judge?.disableHooks !== undefined

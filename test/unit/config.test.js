@@ -296,5 +296,38 @@ describe('Unit: Config Validation & Resolution (Milestone M5 / Issues #70, #72)'
       assert.equal(reResolved.seats[1].totalSeatBudgetMs, 100000);
       assert.equal(reResolved.seats[2].totalSeatBudgetMs, 95000);
     });
+
+    it('rejects non-positive or non-integer judge.totalSeatBudgetMs and judge.seatBudget (#70)', () => {
+      for (const badVal of [0, -100, 12.5, '180000', null, NaN]) {
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'Invalid judge budget check',
+              judge: {
+                id: 'j',
+                harness: 'codex',
+                model: 'gpt-6-astra (max)',
+                soul: 'Judge',
+                totalSeatBudgetMs: badVal
+              }
+            }),
+          /Judge totalSeatBudgetMs must be a positive integer/
+        );
+        assert.throws(
+          () =>
+            resolveConfig({
+              topic: 'Invalid judge seatBudget check',
+              judge: {
+                id: 'j',
+                harness: 'codex',
+                model: 'gpt-6-astra (max)',
+                soul: 'Judge',
+                seatBudget: badVal
+              }
+            }),
+          /Judge seatBudget must be a positive integer/
+        );
+      }
+    });
   });
 });

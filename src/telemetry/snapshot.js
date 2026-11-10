@@ -59,6 +59,7 @@ export function createSnapshot(event, state, options = {}) {
   const excused = (stateCopy.seats || []).filter((s) => s.status === 'excused');
   const proofs = stateCopy.proofs || [];
   const admitted = proofs.filter((p) => p.status === 'admitted');
+  const partiallyAdmitted = proofs.filter((p) => p.status === 'partially_admitted');
   const openObjs = (stateCopy.objections || []).filter((o) => o.status === 'open');
   const preservedObjs = (stateCopy.objections || []).filter((o) => o.status === 'preserved_excused');
 
@@ -70,6 +71,7 @@ export function createSnapshot(event, state, options = {}) {
     excusedSeatCount: excused.length,
     proofCount: proofs.length,
     admittedProofCount: admitted.length,
+    partiallyAdmittedProofCount: partiallyAdmitted.length,
     openObjectionCount: openObjs.length,
     preservedObjectionCount: preservedObjs.length,
     hasVerdict: Boolean(stateCopy.verdict),

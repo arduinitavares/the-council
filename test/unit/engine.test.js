@@ -396,7 +396,10 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
 
       const s3 = result.state.seats.find((s) => s.id === 's3-timeout');
       assert.equal(s3.status, 'excused');
-      assert.match(s3.excusedReason, /Exhausted retries \(1\/1\):.*timed out after 240000ms/);
+      assert.match(
+        s3.excusedReason,
+        /(?:Exhausted retries \(1\/1\)|Exhausted total seat phase time budget).*timed out after 240000ms/
+      );
       assert.doesNotMatch(s3.excusedReason, /or quota/i);
     });
 
@@ -914,6 +917,219 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       assert.deepEqual(eventsEmitted, ['START_CLARIFYING']);
       assert.equal(engineInvalidPhase._configClarificationsPublished, false);
       assert.equal(engineInvalidPhase.state.clarifications.length, 0);
+    });
+  });
+
+  describe('Milestone M5: Bounded Retry Time Budgets and Tool-Loop Guard (#70)', () => {
+    it('caps retry timeout to Math.min(turnTimeoutMs, 90000, remainingBudget) and suppresses tools on retry after TimeoutError', async () => {
+      const capturedAttempts = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatProof = async (ctx) => {
+        capturedAttempts.push({
+          seatId: ctx.seat.id,
+          timeoutMs: ctx.timeoutMs,
+          tools: ctx.tools,
+          seatTools: ctx.seat.tools
+        });
+
+        if (capturedAttempts.length === 1) {
+          throw new TimeoutError('Harness execution timed out after 240000ms', {
+            seatId: ctx.seat.id,
+            harness: 'mock',
+            timeoutMs: 240000
+          });
+        }
+
+        return {
+          scope: 'Architecture',
+          kind: 'check',
+          source: 'System Spec',
+          statement: 'Proof after bounded retry'
+        };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Retry bounding check',
+          maxRounds: 1,
+          minQuorum: 2,
+          judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            {
+              id: 's-bound',
+              harness: 'mock',
+              model: 'grok-4.7-xhigh',
+              soul: 'Skeptic',
+              timeoutMs: 240000,
+              totalSeatBudgetMs: 300000, // 300s budget
+              tools: 'read-only'
+            },
+            {
+              id: 's-stable',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)',
+              soul: 'Architect',
+              timeoutMs: 60000
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // Verify attempts for s-bound: 1 initial failure + 1 bounded retry
+      const sBoundAttempts = capturedAttempts.filter((a) => a.seatId === 's-bound');
+      assert.equal(sBoundAttempts.length, 2);
+
+      // Attempt 1: full 240000ms, tools read-only
+      assert.equal(sBoundAttempts[0].timeoutMs, 240000);
+      assert.equal(sBoundAttempts[0].tools, 'read-only');
+
+      // Attempt 2 (retry): remaining budget = 300000 - 240000 = 60000ms.
+      // retryTimeoutMs = min(240000, 90000, 60000) = 60000ms.
+      assert.equal(sBoundAttempts[1].timeoutMs, 60000);
+      // Tool-loop guard: tools forced to 'none'
+      assert.equal(sBoundAttempts[1].tools, 'none');
+      assert.equal(sBoundAttempts[1].seatTools, 'none');
+    });
+
+    it('excuses seat immediately without retry when totalSeatBudgetMs is exhausted on initial attempt', async () => {
+      let attempts = 0;
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's-exhausted') {
+          attempts++;
+          throw new TimeoutError('Harness execution timed out after 240000ms', {
+            seatId: ctx.seat.id,
+            harness: 'mock',
+            timeoutMs: 240000
+          });
+        }
+        return {
+          scope: 'Architecture',
+          kind: 'check',
+          source: 'Spec',
+          statement: 'Peer proof'
+        };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Budget exhaustion check',
+          maxRounds: 1,
+          minQuorum: 2,
+          judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            {
+              id: 's-exhausted',
+              harness: 'mock',
+              model: 'grok-4.7-xhigh',
+              soul: 'Skeptic',
+              timeoutMs: 240000,
+              totalSeatBudgetMs: 240000 // exactly equal to turn timeout
+            },
+            {
+              id: 's-stable-1',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)',
+              soul: 'Architect'
+            },
+            {
+              id: 's-stable-2',
+              harness: 'mock',
+              model: 'gemini-4-argon-high',
+              soul: 'Verifier'
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // Must NOT attempt a retry because remainingBudget = 240000 - 240000 = 0 <= 0
+      assert.equal(attempts, 1);
+
+      const seatState = result.state.seats.find((s) => s.id === 's-exhausted');
+      assert.equal(seatState.status, 'excused');
+      assert.match(
+        seatState.excusedReason,
+        /Exhausted total seat phase time budget \(240000ms >= 240000ms\)/
+      );
+    });
+
+    it('bounds voting retry timeout and forces tools to none on retry after voting TimeoutError', async () => {
+      const voteAttempts = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatVote = async (ctx) => {
+        voteAttempts.push({
+          seatId: ctx.seat.id,
+          timeoutMs: ctx.timeoutMs,
+          tools: ctx.tools
+        });
+
+        if (ctx.seat.id === 's-voter-timeout' && voteAttempts.filter((a) => a.seatId === 's-voter-timeout').length === 1) {
+          throw new TimeoutError('Voting call timed out after 90000ms', {
+            seatId: ctx.seat.id,
+            harness: 'mock',
+            timeoutMs: 90000
+          });
+        }
+
+        return { vote: 'accept' };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Voting retry bounding check',
+          maxRounds: 1,
+          minQuorum: 2,
+          judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            {
+              id: 's-voter-timeout',
+              harness: 'mock',
+              model: 'grok-4.7-xhigh',
+              soul: 'Voter',
+              timeoutMs: 240000,
+              totalSeatBudgetMs: 150000, // 150s total budget
+              votingTools: 'read-only' // explicitly starts with read-only
+            },
+            {
+              id: 's-voter-2',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)',
+              soul: 'Partner'
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      const voterTimeoutAttempts = voteAttempts.filter((a) => a.seatId === 's-voter-timeout');
+      assert.equal(voterTimeoutAttempts.length, 2);
+
+      // Attempt 1: 90000ms, tools read-only
+      assert.equal(voterTimeoutAttempts[0].timeoutMs, 90000);
+      assert.equal(voterTimeoutAttempts[0].tools, 'read-only');
+
+      // Attempt 2 (retry): remaining budget = 150000 - 90000 = 60000ms.
+      // retryTimeoutMs = min(90000, 90000, 60000) = 60000ms.
+      assert.equal(voterTimeoutAttempts[1].timeoutMs, 60000);
+      // Tool-loop guard on retry: forced to 'none'
+      assert.equal(voterTimeoutAttempts[1].tools, 'none');
     });
   });
 });

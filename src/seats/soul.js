@@ -266,7 +266,7 @@ export function formatGroundingSection(evidence = [], clarifications = []) {
   let section = '';
 
   if (Array.isArray(evidence) && evidence.length > 0) {
-    section += `\nPre-Gathered Grounding Evidence:\n` +
+    section += `\nPre-Gathered Baseline Evidence (Attributed & Challengeable):\n` +
       evidence.map((e, i) => {
         const eid = e.id || `E${i + 1}`;
         return `--- BEGIN EVIDENCE [${eid}] ${e.label} (Source: ${e.source}) ---\n[${eid}] ${e.label} (Source: ${e.source}): ${e.text}\n--- END EVIDENCE [${eid}] ---`;
@@ -348,13 +348,15 @@ export function formatDeliberationPrompt({
   }
 
   const evidenceGuidance = resolvedEvidence.length > 0
-    ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+    ? (hasWorkspaceCwd
+        ? `\nPre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: Use these items as shared baseline evidence so you do not need to re-fetch or re-read facts already excerpted here. Do NOT re-read or duplicate inspection of files already excerpted in [E#]. Cap any local file reads to targeted verification of claims not already covered by [E1]–[E${resolvedEvidence.length}] (at most 3–5 targeted reads), reserving tool exploration for disputed or unverified claims. [E#] items are auditable: if you can prove from a primary source or exact line citation that an [E#] summary is incomplete or imprecise, explicitly state the qualification, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`
+        : `\nPre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: Use these items as shared baseline evidence so you do not need to re-fetch or re-read facts already excerpted here. [E#] items are auditable: if you can prove from a primary source or exact line citation that an [E#] summary is incomplete or imprecise, explicitly state the qualification, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
     : '';
 
   const deliberationToolDirective = hasWorkspaceCwd
     ? `You have read-only inspection tools enabled. Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".${evidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
-    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Before submitting your proof, verify claims against sources (provided grounding evidence packet, authoritative specifications, benchmarks, or analytical/mathematical derivation) and cite the exact sources in your proof "source" and "statement".${evidenceGuidance}
+    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Before submitting your proof, verify claims against sources (Pre-Gathered Baseline Evidence packet, authoritative specifications, benchmarks, web search (if needed for external facts), or analytical/mathematical derivation) and cite the exact sources in your proof "source" and "statement".${evidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
 
   const verificationBlock = resolvedTools === 'read-only'
@@ -404,14 +406,19 @@ export function formatVotingPrompt({
   cwd
 }) {
   const s = createSoul(soul);
-  const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
+  const resolvedTools =
+    tools !== undefined
+      ? tools
+      : (seat?.votingTools !== undefined ? seat.votingTools : (seat?.tools || 'read-only'));
   const hasWorkspaceCwd = Boolean(
     (typeof cwd === 'string' && cwd.trim()) ||
     (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
     (typeof state?.cwd === 'string' && state.cwd.trim())
   );
   const cand = candidate || state?.candidate;
-  const proofs = admittedProofs || (state?.proofs || []).filter((p) => p.status === 'admitted');
+  const proofs = admittedProofs || (state?.proofs || []).filter(
+    (p) => p.status === 'admitted' || p.status === 'partially_admitted'
+  );
   const resolvedEvidence = (evidence && evidence.length > 0)
     ? evidence
     : (state?.evidence || []);
@@ -420,9 +427,23 @@ export function formatVotingPrompt({
     : (state?.clarifications || []);
 
   const proofList = (proofs && proofs.length > 0)
-    ? proofs.map((p, idx) =>
-        `- [${p.id || `P${idx + 1}`}] (${p.kind || 'check'}) [${p.scope || 'general'}]: ${p.statement || ''} (source: ${p.source || 'unspecified'})`
-      ).join('\n')
+    ? proofs.map((p, idx) => {
+        const pid = p.id || `P${idx + 1}`;
+        const kind = p.kind || 'check';
+        const scope = p.scope || 'general';
+        const stmt = p.judgeAdmittedStatement || p.statement || '';
+        const src = p.source || 'unspecified';
+        let line = `- [${pid}] (${kind}) [${scope}]: ${stmt}`;
+        if (p.status === 'partially_admitted') {
+          const noteStr = p.judgeNote ? `: ${p.judgeNote}` : '';
+          line += ` [PARTIALLY ADMITTED${noteStr}]`;
+          if (p.judgeAdmittedStatement) {
+            line += ` (Admitted Core: ${p.judgeAdmittedStatement})`;
+          }
+        }
+        line += ` (source: ${src})`;
+        return line;
+      }).join('\n')
     : 'No admitted proofs for this round.';
 
   const clauseList = (cand?.clauses && cand.clauses.length > 0)
@@ -434,20 +455,26 @@ export function formatVotingPrompt({
   const groundingSection = formatGroundingSection(resolvedEvidence, resolvedClarifications);
 
   const votingEvidenceGuidance = resolvedEvidence.length > 0
-    ? '\nPre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+    ? (hasWorkspaceCwd
+        ? `\nPre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: Do NOT re-read or duplicate inspection of files already excerpted in [E#]. Cap any local file reads to targeted verification of claims not already covered by [E1]–[E${resolvedEvidence.length}] (at most 3–5 targeted reads), reserving tool exploration for disputed or unverified claims, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`
+        : `\nPre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: Rely on the baseline evidence packet and web search, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
     : '';
 
   const votingToolDirective = hasWorkspaceCwd
     ? `You have read-only inspection tools enabled. Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
-    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Verify disputed candidate clauses or cited proof sources against any provided grounding evidence packet, authoritative specifications, or analytical/mathematical derivations before casting your vote. If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
+    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Verify disputed candidate clauses or cited proof sources against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations before casting your vote. If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
+
+  const toolFreeVotingDirective =
+    'Do not invoke any tools during confirmation voting. Evaluate the Candidate Clauses strictly against the audited Proofs provided above and return your JSON vote immediately.';
 
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
 ${votingToolDirective}
 ${ANTI_CHEATING_RULE}\n`
-    : `\n${ANTI_CHEATING_RULE}\n`;
+    : `\n${toolFreeVotingDirective}
+${ANTI_CHEATING_RULE}\n`;
 
   return `### Voting on Round ${cand?.round || 1} Candidate
 Candidate Summary: "${cand?.summary || ''}"
@@ -530,20 +557,25 @@ export function formatJudgePrompt({
     : 'No proofs submitted for auditing.';
 
   const judgeDirectives = [
-    '1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" with a concrete "note".',
-    '2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]).',
+    '1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" (or "partially_admitted" / "admitted_with_caveat") with a concrete "note". If "partially_admitted", provide "admittedStatement" (the verified citable core statement) and "note" stating the caveat. When a seat relies on a supplied [E#] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted, excising or qualifying the imprecise phrase via admittedStatement / note, rather than binary rejected if the proof\'s core argument remains valid.',
+    '2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]). Proofs with status "partially_admitted" are valid to cite for their verified core statement.',
     '3. Bare opinions or conclusions ungrounded in admitted proofs are strictly forbidden.'
   ];
 
   if (resolvedTools === 'read-only') {
     const judgeEvidenceGuidance = resolvedEvidence.length > 0
-      ? ' Pre-Gathered Grounding Evidence is provided above: audit and cite the provided evidence packet first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.'
+      ? (hasWorkspaceCwd
+          ? ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first; avoid re-reading excerpted files, and cap local file spot-checks to at most 3–5 targeted reads so you finish well within your turn timeout, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`
+          : ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first. When a seat relies on a supplied [E#] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted (excising or qualifying the imprecise phrase via admittedStatement / note) rather than binary rejected if the proof's core argument remains valid, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
       : '';
     const judgeToolGuidance = hasWorkspaceCwd
       ? `4. Spot-check proof sources: You have read-only inspection tools enabled. Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
-      : `4. Spot-check proof sources: You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Spot-check submitted proof sources and citations against any provided grounding evidence packet, authoritative specifications, or analytical/mathematical derivations to verify that cited sources substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
+      : `4. Spot-check proof sources: You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Spot-check submitted proof sources and citations against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations to verify that cited sources substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
     judgeDirectives.push(judgeToolGuidance);
   }
+
+  const answerFirstDirective = `${judgeDirectives.length + 1}. Standalone Answer-First Summary: candidate.summary ("summary") MUST be a standalone, direct, user-facing executive synthesis that directly answers the user's topic in clear prose. It MUST NOT contain internal proof IDs (e.g. P1, P2, [P1]) or audit process commentary (e.g. "P1 was admitted...", "P2-P4 require corrections..."). All proof audit commentary belongs strictly in proofDecisions, and proof citations belong strictly in "clauses[].citedProofIds".`;
+  judgeDirectives.push(answerFirstDirective);
   judgeDirectives.push(`${judgeDirectives.length + 1}. ${ANTI_CHEATING_RULE}`);
 
   return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}
@@ -559,9 +591,10 @@ ${judgeDirectives.join('\n')}
 
 OUTPUT CONTRACT (strict JSON):
 {
-  "summary": "<Context-partitioned consensus synthesis summary>",
+  "summary": "<Direct, standalone, user-facing executive answer to the user's topic in clear prose — MUST NOT contain internal proof IDs like P1, P2 or audit process commentary>",
   "proofDecisions": {
-    "P1": { "status": "admitted", "note": "Verified source" }
+    "P1": { "status": "admitted", "note": "Verified source" },
+    "P2": { "status": "partially_admitted", "admittedStatement": "<Narrowed verified core claim>", "note": "<Caveat or qualification>" }
   },
   "clauses": [
     {

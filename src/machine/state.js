@@ -206,7 +206,10 @@ export function getPreservedObjections(state) {
 export function getAdmittedProofs(state, round) {
   if (!state || !Array.isArray(state.proofs)) return [];
   return state.proofs.filter(
-    (p) => p && p.status === 'admitted' && (round === undefined || p.round === round)
+    (p) =>
+      p &&
+      (p.status === 'admitted' || p.status === 'partially_admitted') &&
+      (round === undefined || p.round === round)
   );
 }
 

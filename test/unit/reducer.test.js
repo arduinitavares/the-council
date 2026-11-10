@@ -378,4 +378,201 @@ describe('Unit: Production State Machine Reducer (src/machine/reducer.js)', () =
     assert.equal(graph.activeNodeId, 'preflight');
     assert.ok(Array.isArray(graph.causalLinks));
   });
+
+  // ==========================================================================
+  // ISSUE #71: PARTIAL PROOF ADMISSION & FAIL-CLOSED REDUCER
+  // ==========================================================================
+  describe('Issue #71: Partial Proof Admission & Fail-Closed Reducer (JUDGE_AUDIT_AND_SYNTHESIZE)', () => {
+    function setupReviewingState() {
+      let state = createInitialCouncilState({ minQuorum: 2 });
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.ADD_SEAT,
+        seat: { id: 's1', harness: 'codex', model: 'gpt-6', soul: 'Engineer' }
+      });
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.ADD_SEAT,
+        seat: { id: 's2', harness: 'antigravity', model: 'gemini-4', soul: 'QA' }
+      });
+      state = transitionCouncil(state, { type: COUNCIL_EVENTS.BEGIN_ROUND });
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.SUBMIT_PROOF,
+        id: 'P1',
+        seatId: 's1',
+        scope: 'Flight',
+        kind: 'citation',
+        source: 'fai-record.pdf',
+        statement: 'Wright flight reached 852 ft in calm air.'
+      });
+      return state;
+    }
+
+    function setupJudgingState() {
+      const state = setupReviewingState();
+      return transitionCouncil(state, { type: COUNCIL_EVENTS.START_JUDGING });
+    }
+
+    it('RED-1: supports partially_admitted proof with admittedStatement, judgeNote, and candidate citation', () => {
+      const state = setupJudgingState();
+      const synthesized = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+        summary: 'Partial admission synthesis',
+        proofDecisions: {
+          P1: {
+            status: 'partially_admitted',
+            admittedStatement: 'Wright flight reached 852 ft.',
+            note: 'Excised "in calm air" claim due to recorded 21 mph headwind.'
+          }
+        },
+        clauses: [{ context: 'Flight Distance', conclusion: 'Verified 852 ft', citedProofIds: ['P1'] }]
+      });
+
+      assert.equal(synthesized.lastTransition.ok, true);
+      assert.equal(synthesized.phase, 'confirming');
+      assert.equal(synthesized.canonicalPhase, 'VOTING');
+      const p1 = synthesized.proofs.find((p) => p.id === 'P1');
+      assert.equal(p1.status, 'partially_admitted');
+      assert.equal(p1.judgeAdmittedStatement, 'Wright flight reached 852 ft.');
+      assert.equal(p1.judgeNote, 'Excised "in calm air" claim due to recorded 21 mph headwind.');
+      assert.ok(p1.admissionKind === 'partially_admitted' || p1.admissionKind === 'explicitly_admitted');
+      assert.equal(synthesized.candidate.clauses.length, 1);
+      assert.deepEqual(synthesized.candidate.clauses[0].citedProofIds, ['P1']);
+    });
+
+    it('RED-2: canonicalizes admitted_with_caveat alias to partially_admitted status', () => {
+      const state = setupJudgingState();
+      const synthesized = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+        summary: 'Caveat alias synthesis',
+        proofDecisions: {
+          P1: {
+            status: 'admitted_with_caveat',
+            note: 'Admitted subject to wind tunnel calibration.'
+          }
+        },
+        clauses: [{ context: 'Aerodynamics', conclusion: 'Calibrated', citedProofIds: ['P1'] }]
+      });
+
+      assert.equal(synthesized.lastTransition.ok, true);
+      const p1 = synthesized.proofs.find((p) => p.id === 'P1');
+      assert.equal(p1.status, 'partially_admitted');
+      assert.equal(p1.judgeNote, 'Admitted subject to wind tunnel calibration.');
+      assert.equal(p1.judgeAdmittedStatement, null);
+    });
+
+    it('RED-4 & RED-5: handles mixed proof decisions (admitted, partially_admitted, rejected, default) and enforces citation boundaries', () => {
+      let state = setupReviewingState();
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.SUBMIT_PROOF,
+        id: 'P2',
+        seatId: 's1',
+        scope: 'Engine',
+        kind: 'benchmark',
+        source: 'bench.log',
+        statement: '12 hp output.'
+      });
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.SUBMIT_PROOF,
+        id: 'P3',
+        seatId: 's2',
+        scope: 'Patent',
+        kind: 'derivation',
+        source: 'patent.pdf',
+        statement: 'Flawed claim.'
+      });
+      state = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.SUBMIT_PROOF,
+        id: 'P4',
+        seatId: 's2',
+        scope: 'Glider',
+        kind: 'check',
+        source: 'notes.txt',
+        statement: '1902 glider trials.'
+      });
+      state = transitionCouncil(state, { type: COUNCIL_EVENTS.START_JUDGING });
+
+      // Valid mixed synthesis: P1 admitted, P2 partially_admitted, P3 rejected, P4 omitted (default admitted)
+      const validMixed = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+        summary: 'Mixed synthesis',
+        proofDecisions: {
+          P1: { status: 'admitted', note: 'Solid citation' },
+          P2: { status: 'partially_admitted', admittedStatement: '12 hp', note: 'RPM variance ignored' },
+          P3: { status: 'rejected', note: 'Derivation contains mathematical error' }
+          // P4 omitted -> default_admitted
+        },
+        clauses: [
+          { context: 'Power & Flight', conclusion: 'Proven', citedProofIds: ['P1', 'P2'] },
+          { context: 'Glider Prior Art', conclusion: 'Solid', citedProofIds: ['P4'] }
+        ]
+      });
+
+      assert.equal(validMixed.lastTransition.ok, true);
+      assert.equal(validMixed.proofs.find((p) => p.id === 'P1').status, 'admitted');
+      assert.equal(validMixed.proofs.find((p) => p.id === 'P2').status, 'partially_admitted');
+      assert.equal(validMixed.proofs.find((p) => p.id === 'P3').status, 'rejected');
+      assert.equal(validMixed.proofs.find((p) => p.id === 'P4').status, 'admitted');
+
+      // Attempt to cite rejected P3 alongside P2 must be rejected by guard
+      const badCitation = transitionCouncil(state, {
+        type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+        summary: 'Invalid mixed synthesis citing rejected P3',
+        proofDecisions: {
+          P1: { status: 'admitted' },
+          P2: { status: 'partially_admitted', note: 'Caveat' },
+          P3: { status: 'rejected', note: 'Error' }
+        },
+        clauses: [{ context: 'Mixed', conclusion: 'Invalid', citedProofIds: ['P2', 'P3'] }]
+      });
+
+      assert.equal(badCitation.lastTransition.ok, false);
+      assert.equal(badCitation.phase, 'judging');
+      assert.match(badCitation.lastTransition.message, /cites unverified Proof "P3"/);
+    });
+
+    it('RED-6: fails closed when explicit decision contains an unrecognized status string', () => {
+      const state = setupJudgingState();
+      const invalidStatuses = ['unknown', 'pending', 'needs_work', 'invalid_decision', ''];
+
+      for (const badStatus of invalidStatuses) {
+        const res = transitionCouncil(state, {
+          type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+          summary: 'Bad status synthesis',
+          proofDecisions: {
+            P1: { status: badStatus, note: 'Some note' }
+          },
+          clauses: [{ context: 'Context', conclusion: 'Conclusion', citedProofIds: ['P1'] }]
+        });
+
+        assert.equal(res.lastTransition.ok, false, `Expected failure for status: "${badStatus}"`);
+        assert.equal(res.phase, 'judging');
+        assert.equal(res.proofs[0].status, 'pending', 'Proof status must not be corrupted by failed transition');
+        assert.match(res.lastTransition.message, /Unrecognized|invalid.*status/i);
+      }
+    });
+
+    it('RED-7: fails closed when partially_admitted decision lacks both note and admittedStatement', () => {
+      const state = setupJudgingState();
+      const emptyCaveats = [
+        { status: 'partially_admitted' },
+        { status: 'partially_admitted', note: '' },
+        { status: 'partially_admitted', note: '   ', admittedStatement: '  ' },
+        { status: 'admitted_with_caveat' },
+        { status: 'admitted_with_caveat', note: '' }
+      ];
+
+      for (const badCaveat of emptyCaveats) {
+        const res = transitionCouncil(state, {
+          type: COUNCIL_EVENTS.JUDGE_AUDIT_AND_SYNTHESIZE,
+          summary: 'Empty caveat synthesis',
+          proofDecisions: { P1: badCaveat },
+          clauses: [{ context: 'Context', conclusion: 'Conclusion', citedProofIds: ['P1'] }]
+        });
+
+        assert.equal(res.lastTransition.ok, false);
+        assert.equal(res.phase, 'judging');
+        assert.equal(res.proofs[0].status, 'pending');
+        assert.match(res.lastTransition.message, /requires a non-empty.*caveat|note|statement/i);
+      }
+    });
+  });
 });

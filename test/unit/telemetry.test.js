@@ -1025,4 +1025,148 @@ describe('Unit: Observer Telemetry & Deterministic Snapshots (src/telemetry/)', 
       assert.deepEqual(cleanRec.forbiddenAccessDetails, []);
     });
   });
+
+  // ==========================================================================
+  // ISSUE #71: PARTIAL PROOF ADMISSION IN TELEMETRY LEDGER
+  // ==========================================================================
+  describe('Issue #71: Partial Proof Admission in Telemetry Ledger', () => {
+    it('TEL-1: tracks partiallyAdmitted count on seat records in buildRunTelemetryRecord', () => {
+      const state = {
+        phase: 'completed',
+        round: 1,
+        topic: 'Partial Proof Admission Telemetry',
+        judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'completed' },
+        seats: [
+          { id: 'seat-partial', harness: 'antigravity', model: 'gemini-4-argon (high)', status: 'accepted', retries: 0 },
+          { id: 'seat-admitted', harness: 'codex', model: 'gpt-6-astra (max)', status: 'accepted', retries: 0 },
+          { id: 'seat-rejected', harness: 'cursor', model: 'grok-4.7-xhigh', status: 'accepted', retries: 0 }
+        ],
+        proofs: [
+          { id: 'P-1', seatId: 'seat-partial', status: 'partially_admitted', admissionKind: 'partially_admitted' },
+          { id: 'P-2', seatId: 'seat-admitted', status: 'admitted', admissionKind: 'explicitly_admitted' },
+          { id: 'P-3', seatId: 'seat-rejected', status: 'rejected', admissionKind: 'judge_rejected' }
+        ],
+        verdict: {
+          kind: 'Unanimous Consensus',
+          candidate: {
+            summary: 'Consensus',
+            clauses: [{ id: 'C-1', context: 'All', conclusion: 'Agree', citedProofIds: ['P-1', 'P-2'] }]
+          }
+        }
+      };
+
+      const rec = buildRunTelemetryRecord({
+        runId: 'run-issue-71-telemetry',
+        completedAt: '2026-11-10T12:00:00.000Z',
+        state
+      });
+
+      const partialSeat = rec.seats.find((s) => s.seatId === 'seat-partial');
+      const admittedSeat = rec.seats.find((s) => s.seatId === 'seat-admitted');
+      const rejectedSeat = rec.seats.find((s) => s.seatId === 'seat-rejected');
+
+      assert.equal(partialSeat.partiallyAdmitted, 1, 'seat-partial must record 1 partiallyAdmitted proof');
+      assert.equal(partialSeat.explicitlyAdmitted, 0);
+      assert.equal(partialSeat.judgeRejected, 0, 'partially_admitted must not count as judgeRejected');
+      assert.equal(partialSeat.finalClauseCitations, 1);
+
+      assert.equal(admittedSeat.explicitlyAdmitted, 1);
+      assert.equal(admittedSeat.partiallyAdmitted, 0);
+      assert.equal(admittedSeat.judgeRejected, 0);
+
+      assert.equal(rejectedSeat.judgeRejected, 1);
+      assert.equal(rejectedSeat.partiallyAdmitted, 0);
+      assert.equal(rejectedSeat.explicitlyAdmitted, 0);
+    });
+
+    it('TEL-2: aggregates partiallyAdmitted counts across runs into byModel and bySeat without inflating judgeRejectionRate', () => {
+      const state = {
+        phase: 'completed',
+        round: 1,
+        topic: 'Partial Aggregation',
+        judge: { id: 'judge-1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'completed' },
+        seats: [
+          { id: 'argon-1', harness: 'antigravity', model: 'gemini-4-argon (high)', status: 'accepted', retries: 0 }
+        ],
+        proofs: [
+          { id: 'P-1', seatId: 'argon-1', status: 'partially_admitted', admissionKind: 'partially_admitted' },
+          { id: 'P-2', seatId: 'argon-1', status: 'admitted', admissionKind: 'explicitly_admitted' }
+        ],
+        verdict: {
+          kind: 'Unanimous Consensus',
+          candidate: {
+            summary: 'Consensus',
+            clauses: [{ id: 'C-1', context: 'All', conclusion: 'Agree', citedProofIds: ['P-1', 'P-2'] }]
+          }
+        }
+      };
+
+      const rec = buildRunTelemetryRecord({
+        runId: 'run-partial-agg',
+        completedAt: '2026-11-10T12:00:00.000Z',
+        state
+      });
+
+      const win = aggregateTelemetryWindow([rec], { days: null, now: '2026-11-10T13:00:00.000Z' });
+      const argonModel = win.byModel.find((m) => m.key === 'antigravity/gemini-4-argon (high)');
+      assert.ok(argonModel);
+      assert.equal(argonModel.proofsSubmitted, 2);
+      assert.equal(argonModel.explicitlyAdmitted, 1);
+      assert.equal(argonModel.partiallyAdmitted, 1);
+      assert.equal(argonModel.judgeRejected, 0);
+      assert.equal(argonModel.judgeRejectionRate, 0, 'judgeRejectionRate must remain 0% when 1 admitted and 1 partially admitted');
+
+      const argonSeat = win.bySeat.find((s) => s.key === 'argon-1');
+      assert.ok(argonSeat);
+      assert.equal(argonSeat.partiallyAdmitted, 1);
+    });
+
+    it('TEL-3: end-to-end integration: reduceCouncilState with partially_admitted flows cleanly into buildRunTelemetryRecord', () => {
+      let state = createInitialCouncilState({
+        topic: 'E2E State to Telemetry',
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Arch' },
+          { id: 's2', harness: 'antigravity', model: 'gemini-4-argon (high)', soul: 'QA' }
+        ]
+      });
+      state = reduceCouncilState(state, { type: 'BEGIN_ROUND' });
+      state = reduceCouncilState(state, {
+        type: 'SUBMIT_PROOF',
+        seatId: 's1',
+        id: 'P-1',
+        kind: 'citation',
+        source: 'ref.md',
+        scope: 'scope',
+        statement: 'Core statement with secondary overclaim.'
+      });
+      state = reduceCouncilState(state, { type: 'START_JUDGING' });
+      state = reduceCouncilState(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: {
+          'P-1': {
+            status: 'partially_admitted',
+            admittedStatement: 'Core statement.',
+            note: 'Excised secondary overclaim.'
+          }
+        },
+        summary: 'Candidate',
+        clauses: [{ id: 'C-1', context: 'All', conclusion: 'Verified', citedProofIds: ['P-1'] }]
+      });
+      state = reduceCouncilState(state, { type: 'CAST_VOTE', seatId: 's1', vote: 'accept' });
+      state = reduceCouncilState(state, { type: 'CAST_VOTE', seatId: 's2', vote: 'accept' });
+      state = reduceCouncilState(state, { type: 'EVALUATE_ROUND' });
+
+      assert.equal(state.phase, 'completed');
+      const rec = buildRunTelemetryRecord({
+        runId: 'run-e2e-partial-telemetry',
+        completedAt: '2026-11-10T12:00:00.000Z',
+        state
+      });
+
+      const s1 = rec.seats.find((s) => s.seatId === 's1');
+      assert.equal(s1.partiallyAdmitted, 1);
+      assert.equal(s1.explicitlyAdmitted, 0);
+      assert.equal(s1.judgeRejected, 0);
+    });
+  });
 });

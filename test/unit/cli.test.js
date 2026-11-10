@@ -1221,6 +1221,142 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
       }
     });
   });
+
+  describe('Milestone M6 / Issue #70, #71 & #73: CLI Flags (--timeout, --seat-budget), Proof Audit Tally & Partial Admission Rendering', () => {
+    it('HELP_TEXT documents --timeout <ms> and --seat-budget <ms>', () => {
+      assert.match(HELP_TEXT, /--timeout <ms>/);
+      assert.match(HELP_TEXT, /--seat-budget <ms>/);
+    });
+
+    it('accepts valid positive integer for --timeout and --seat-budget and forwards to config in JSON mode', async () => {
+      const mockIO = createMockIO();
+      const code = await runCli(
+        ['run', '--mock', '-t', 'Timeout Flag Test', '--timeout', '180000', '--seat-budget', '360000', '--json'],
+        mockIO.io
+      );
+      assert.equal(code, 0);
+      const parsed = JSON.parse(mockIO.getStdout());
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.state.timeoutMs, 180000);
+      assert.equal(parsed.state.totalSeatBudgetMs, 360000);
+    });
+
+    it('rejects invalid, zero, negative, or string values for --timeout with code 1', async () => {
+      const badValues = ['0', '-1000', 'fast', '12.5', '   '];
+      for (const val of badValues) {
+        const mockIO = createMockIO();
+        const args = val.startsWith('-')
+          ? ['run', '--mock', `--timeout=${val}`, '-t', 'Timeout Test']
+          : ['run', '--mock', '--timeout', val, '-t', 'Timeout Test'];
+        const code = await runCli(args, mockIO.io);
+        assert.equal(code, 1, `Expected exit 1 for --timeout "${val}"`);
+        assert.match(
+          mockIO.getStderr(),
+          new RegExp(`Configuration error: --timeout must be a positive integer \\(received "${val}"\\)`)
+        );
+      }
+    });
+
+    it('rejects invalid, zero, negative, or string values for --seat-budget with code 1', async () => {
+      const badValues = ['0', '-500', 'unlimited', '99.9', ''];
+      for (const val of badValues) {
+        const mockIO = createMockIO();
+        const args = val.startsWith('-')
+          ? ['run', '--mock', `--seat-budget=${val}`, '-t', 'Budget Test']
+          : ['run', '--mock', '--seat-budget', val, '-t', 'Budget Test'];
+        const code = await runCli(args, mockIO.io);
+        assert.equal(code, 1, `Expected exit 1 for --seat-budget "${val}"`);
+        assert.match(
+          mockIO.getStderr(),
+          new RegExp(`Configuration error: --seat-budget must be a positive integer \\(received "${val}"\\)`)
+        );
+      }
+    });
+
+    it('renders explicit Proof Audit tally (Admitted | Partially Admitted | Rejected) in human verdict output (#71, #73)', async () => {
+      const mockIO = createMockIO();
+      const code = await runCli(['run', '--mock', '-p', 'architecture', '-t', 'Tally Test'], mockIO.io);
+      assert.equal(code, 0);
+      const out = mockIO.getStdout();
+      assert.match(out, /Proof Audit: \d+ Admitted \| \d+ Partially Admitted \| \d+ Rejected/);
+    });
+
+    it('renders [PARTIALLY ADMITTED] badge, Judge Note, and Admitted Core in Submitted Proofs output (#71, #73)', async () => {
+      const { HarnessRegistry } = await import('../../src/harness/index.js');
+      const customAdapter = {
+        executeSeatProof: async () => ({
+          scope: 'Flight Telemetry',
+          kind: 'citation',
+          source: 'FAI Log 1903',
+          statement: '120 ft flight achieved in calm air.'
+        }),
+        executeJudgeAuditAndSynthesis: async () => ({
+          summary: 'Sustained powered flight criteria met.',
+          proofDecisions: {
+            P1: {
+              status: 'partially_admitted',
+              admittedStatement: '120 ft powered flight verified.',
+              note: 'Excised calm air secondary claim per wind measurements.'
+            },
+            P2: {
+              status: 'rejected',
+              note: 'Duplicate flight citation.'
+            }
+          },
+          clauses: [
+            {
+              id: 'C1',
+              context: 'Powered Flight',
+              conclusion: 'Verified flight distance.',
+              citedProofIds: ['P1']
+            }
+          ]
+        }),
+        executeSeatVote: async () => ({ vote: 'accept' })
+      };
+
+      const registry = new HarnessRegistry();
+      registry.register('codex', customAdapter);
+      registry.register('antigravity', customAdapter);
+
+      const tmpFile = path.join(os.tmpdir(), `cli-partial-proof-${Date.now()}.json`);
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          topic: 'Partial Proof CLI Test',
+          minQuorum: 2,
+          maxRounds: 1,
+          seats: [
+            { id: 'seat-1', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S1' },
+            { id: 'seat-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2' }
+          ],
+          judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge' }
+        })
+      );
+
+      try {
+        const mockIO = createMockIO();
+        mockIO.io.harnessRegistry = registry;
+        mockIO.io.liveWatcher = { attach: () => {}, stop: () => {} };
+
+        const code = await runCli(['run', '--live', '-c', tmpFile], mockIO.io);
+        assert.equal(code, 0);
+        const out = mockIO.getStdout();
+
+        // Verify tally shows 0 Admitted | 1 Partially Admitted | 1 Rejected
+        assert.match(out, /Proof Audit: 0 Admitted \| 1 Partially Admitted \| 1 Rejected/);
+
+        // Verify Submitted Proofs formatting
+        assert.match(out, /\[P1\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[citation\]/);
+        assert.match(out, /Judge Note: Excised calm air secondary claim per wind measurements\./);
+        assert.match(out, /Admitted Core: 120 ft powered flight verified\./);
+        assert.match(out, /\[P2\]\s+\(rejected\)\s+\[citation\]/);
+        assert.match(out, /Judge Note: Duplicate flight citation\./);
+      } finally {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      }
+    });
+  });
 });
 
 

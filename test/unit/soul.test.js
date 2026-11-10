@@ -9,7 +9,8 @@ import {
   formatClarificationPrompt,
   formatDeliberationPrompt,
   formatVotingPrompt,
-  formatJudgePrompt
+  formatJudgePrompt,
+  formatGroundingSection
 } from '../../src/seats/soul.js';
 
 describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () => {
@@ -349,7 +350,7 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
 
       for (const p of [delibWithEv, voteWithEv, judgeWithEv]) {
         assert.ok(p.includes(ANTI_CHEATING_RULE));
-        assert.match(p, /Pre-Gathered Grounding Evidence is provided above/);
+        assert.match(p, /Pre-Gathered Baseline Evidence \(Attributed & Challengeable\) is provided above/);
         assert.match(p, /avoid speculative local filesystem grepping unless the topic explicitly names local repository files/);
       }
 
@@ -416,6 +417,131 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
       assert.match(delibWithCwd, /verify claims against sources \(specifications, benchmarks, codebase, or documentation\)/);
       assert.match(voteWithCwd, /Verify disputed candidate clauses or cited proof sources using your read-only tools/);
       assert.match(judgeWithCwd, /Spot-check submitted proof sources and citations using your read-only tools/);
+    });
+  });
+
+  describe('Milestone M6 / Issue #70 & #73: Evidence Reframing, Host Path Probing Guard & Answer-First Synthesis', () => {
+    const seatContext = {
+      id: 'astra-systems',
+      harness: 'codex',
+      model: 'gpt-6-astra (max)'
+    };
+    const soul = STANDARD_SOULS.SYSTEMS_PURIST;
+    const testEvidence = [
+      {
+        id: 'E1',
+        label: 'Aviation Commission Record',
+        source: 'Aéro-Club de France 1906 Report',
+        text: '14-bis completed official 220-meter flight under commission observation.'
+      }
+    ];
+
+    it('M6-SOUL-1: formatGroundingSection reframes evidence header to Pre-Gathered Baseline Evidence (Attributed & Challengeable)', () => {
+      const section = formatGroundingSection(testEvidence, []);
+      assert.match(section, /Pre-Gathered Baseline Evidence \(Attributed & Challengeable\):/);
+      assert.doesNotMatch(section, /Pre-Gathered Grounding Evidence/);
+      assert.doesNotMatch(section, /immutable ground-truth/i);
+    });
+
+    it('M6-SOUL-2: formatDeliberationPrompt instructs voters that baseline evidence is challengeable against primary sources', () => {
+      const prompt = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'Who flew the first airplane?',
+        evidence: testEvidence
+      });
+      assert.match(prompt, /Pre-Gathered Baseline Evidence \(Attributed & Challengeable\) is provided above/);
+      assert.match(prompt, /shared baseline evidence so you do not need to re-fetch or re-read facts already excerpted/);
+      assert.match(prompt, /items are auditable: if you can prove from a primary source or exact line citation that an \[E#\] summary is incomplete or imprecise/);
+    });
+
+    it('M6-SOUL-3: formatDeliberationPrompt strictly forbids host filesystem probing when !hasWorkspaceCwd', () => {
+      const prompt = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'Examine /Users/aaat/projects/target/file.js for bugs'
+        // cwd is intentionally omitted
+      });
+      assert.match(prompt, /No local code workspace is attached \(running in an isolated sandbox directory\); do NOT run local filesystem search\/grep\/find commands \(rg, grep, find, ls\) to search a codebase\./);
+      assert.match(prompt, /do NOT run local filesystem tools \(cat, readToolCall, view_file\)/);
+      assert.match(prompt, /do NOT read or probe absolute host file paths mentioned in the topic or evidence packet/);
+      assert.match(prompt, /verify claims against sources \(Pre-Gathered Baseline Evidence packet, authoritative specifications, benchmarks, web search/);
+    });
+
+    it('M6-SOUL-4: formatDeliberationPrompt bounds repo reads to 3-5 targeted reads and forbids duplicate reads when hasWorkspaceCwd and evidence is present', () => {
+      const prompt = formatDeliberationPrompt({
+        soul,
+        seat: seatContext,
+        topic: 'Audit target repo',
+        cwd: '/Users/aaat/projects/target-repo',
+        evidence: testEvidence
+      });
+      assert.doesNotMatch(prompt, /No local code workspace is attached/);
+      assert.match(prompt, /Do NOT re-read or duplicate inspection of files already excerpted in \[E#\]/);
+      assert.match(prompt, /Cap any local file reads to targeted verification of claims not already covered by \[E1\]–\[E1\] \(at most 3–5 targeted reads\)/);
+    });
+
+    it('M6-SOUL-5: formatJudgePrompt enforces answer-first candidate.summary free of internal proof IDs or audit process commentary', () => {
+      const prompt = formatJudgePrompt({
+        judge: { id: 'judge-opus', model: 'claude-opus-5-5-high' },
+        topic: 'Who invented the airplane?',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Statement', source: 'Source' }]
+      });
+      assert.match(prompt, /candidate\.summary \("summary"\) MUST be a standalone, direct, user-facing executive synthesis/);
+      assert.match(prompt, /MUST NOT contain internal proof IDs \(e\.g\. P1, P2, \[P1\]\) or audit process commentary/);
+      assert.match(prompt, /All proof audit commentary belongs strictly in proofDecisions/);
+      assert.match(prompt, /"summary": "<Direct, standalone, user-facing executive answer to the user's topic in clear prose — MUST NOT contain internal proof IDs like P1, P2 or audit process commentary>"/);
+    });
+
+    it('M6-SOUL-6: formatJudgePrompt instructs Judge to prefer partially_admitted over binary rejected for secondary baseline imprecisions', () => {
+      const prompt = formatJudgePrompt({
+        judge: { id: 'judge-opus', model: 'claude-opus-5-5-high' },
+        topic: 'Who invented the airplane?',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Statement', source: 'Source' }],
+        evidence: testEvidence
+      });
+      assert.match(prompt, /When a seat relies on a supplied \[E#\] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted/);
+      assert.match(prompt, /excising or qualifying the imprecise phrase via admittedStatement \/ note.*rather than binary rejected if the proof's core argument remains valid/);
+    });
+
+    it('M6-SOUL-7: formatVotingPrompt strictly forbids host filesystem probing when !hasWorkspaceCwd', () => {
+      const prompt = formatVotingPrompt({
+        soul,
+        seat: { ...seatContext, votingTools: 'read-only' },
+        candidate: { round: 1, summary: 'Summary', clauses: [] },
+        admittedProofs: []
+        // cwd omitted
+      });
+      assert.match(prompt, /No local code workspace is attached \(running in an isolated sandbox directory\); do NOT run local filesystem search\/grep\/find commands \(rg, grep, find, ls\) to search a codebase\./);
+      assert.match(prompt, /do NOT run local filesystem tools \(cat, readToolCall, view_file\)/);
+      assert.match(prompt, /do NOT read or probe absolute host file paths mentioned in the topic or evidence packet/);
+    });
+
+    it('M6-SOUL-8: formatVotingPrompt surfaces partially_admitted proofs with [PARTIALLY ADMITTED], Admitted Core, and caveat note', () => {
+      const prompt = formatVotingPrompt({
+        soul,
+        seat: seatContext,
+        candidate: { round: 1, summary: 'Summary', clauses: [{ context: 'Flight', conclusion: '14-bis verified', citedProofIds: ['P1'] }] },
+        state: {
+          proofs: [
+            {
+              id: 'P1',
+              status: 'partially_admitted',
+              kind: 'citation',
+              scope: 'Aviation',
+              source: 'FAI Log 1906',
+              statement: '14-bis flew 220m in calm air with zero wind.',
+              judgeAdmittedStatement: '14-bis flew 220m under official commission observation.',
+              judgeNote: 'Excised calm air secondary claim due to anemometer readings.'
+            }
+          ]
+        }
+      });
+      assert.match(prompt, /\[P1\] \(citation\) \[Aviation\]: 14-bis flew 220m under official commission observation\./);
+      assert.match(prompt, /\[PARTIALLY ADMITTED: Excised calm air secondary claim due to anemometer readings\.\]/);
+      assert.match(prompt, /\(Admitted Core: 14-bis flew 220m under official commission observation\.\)/);
     });
   });
 });

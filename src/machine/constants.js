@@ -6,7 +6,7 @@
 /**
  * Canonical domain definitions re-exported from types.js as single source of truth
  */
-export { CANONICAL_PHASES, VALID_PROOF_KINDS } from '../types.js';
+export { CANONICAL_PHASES, VALID_PROOF_KINDS, PROOF_STATUSES } from '../types.js';
 
 /**
  * Canonical 9 Phases of The Council mapped to runtime phase identifiers

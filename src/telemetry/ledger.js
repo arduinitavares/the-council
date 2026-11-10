@@ -32,6 +32,63 @@ function roundRatio(value) {
 }
 
 /**
+ * Computes proof admission metrics and rates for a given collection of proofs.
+ *
+ * @param {Array<Object>} [seatProofs=[]]
+ * @returns {{
+ *   proofsSubmitted: number,
+ *   explicitlyAdmitted: number,
+ *   partiallyAdmitted: number,
+ *   defaultAdmitted: number,
+ *   judgeRejected: number,
+ *   explicitAdmissionRate: number,
+ *   partialAdmissionRate: number,
+ *   defaultAdmissionRate: number,
+ *   judgeRejectionRate: number
+ * }}
+ */
+export function getSeatProofMetrics(seatProofs = []) {
+  const proofs = Array.isArray(seatProofs) ? seatProofs : [];
+  let explicitlyAdmitted = 0;
+  let partiallyAdmitted = 0;
+  let defaultAdmitted = 0;
+  let judgeRejected = 0;
+
+  for (const p of proofs) {
+    if (!p || typeof p !== 'object') continue;
+    if (p.admissionKind === 'partially_admitted' || p.status === 'partially_admitted') {
+      partiallyAdmitted += 1;
+    } else if (p.admissionKind === 'explicitly_admitted') {
+      explicitlyAdmitted += 1;
+    } else if (p.admissionKind === 'default_admitted') {
+      defaultAdmitted += 1;
+    } else if (p.admissionKind === 'judge_rejected' || p.status === 'rejected') {
+      judgeRejected += 1;
+    } else if (p.status === 'admitted') {
+      defaultAdmitted += 1;
+    }
+  }
+
+  const proofsSubmitted = proofs.length;
+  const explicitAdmissionRate = proofsSubmitted > 0 ? roundPct((explicitlyAdmitted / proofsSubmitted) * 100) : 0;
+  const partialAdmissionRate = proofsSubmitted > 0 ? roundPct((partiallyAdmitted / proofsSubmitted) * 100) : 0;
+  const defaultAdmissionRate = proofsSubmitted > 0 ? roundPct((defaultAdmitted / proofsSubmitted) * 100) : 0;
+  const judgeRejectionRate = proofsSubmitted > 0 ? roundPct((judgeRejected / proofsSubmitted) * 100) : 0;
+
+  return {
+    proofsSubmitted,
+    explicitlyAdmitted,
+    partiallyAdmitted,
+    defaultAdmitted,
+    judgeRejected,
+    explicitAdmissionRate,
+    partialAdmissionRate,
+    defaultAdmissionRate,
+    judgeRejectionRate
+  };
+}
+
+/**
  * Normalizes provider and model string into a canonical model key `provider/model (effort)`.
  * Ensures forms like `gemini-4-argon-high` and `gemini-4-argon (high)` map to the same key
  * `antigravity/gemini-4-argon (high)`.
@@ -302,24 +359,13 @@ export function buildRunTelemetryRecord({
     const seatId = seat.id;
     const canonical = canonicalizeModelKey(seat.harness, seat.model);
     const seatProofs = proofsBySeat.get(seatId) || [];
+    const proofMetrics = getSeatProofMetrics(seatProofs);
 
-    let explicitlyAdmitted = 0;
-    let defaultAdmitted = 0;
-    let judgeRejected = 0;
-
-    for (const p of seatProofs) {
-      if (p.admissionKind === 'explicitly_admitted') {
-        explicitlyAdmitted += 1;
-      } else if (p.admissionKind === 'default_admitted') {
-        defaultAdmitted += 1;
-      } else if (p.admissionKind === 'judge_rejected' || p.status === 'rejected') {
-        judgeRejected += 1;
-      } else if (p.status === 'admitted') {
-        defaultAdmitted += 1;
-      }
-    }
-
-    const proofsSubmitted = seatProofs.length;
+    const proofsSubmitted = proofMetrics.proofsSubmitted;
+    const explicitlyAdmitted = proofMetrics.explicitlyAdmitted;
+    const partiallyAdmitted = proofMetrics.partiallyAdmitted;
+    const defaultAdmitted = proofMetrics.defaultAdmitted;
+    const judgeRejected = proofMetrics.judgeRejected;
     const guardRejectedProofs =
       (guardRejectedBySeat.get(seatId) || 0) +
       (typeof seat.guardRejectedProofs === 'number' ? seat.guardRejectedProofs : 0);
@@ -420,6 +466,8 @@ export function buildRunTelemetryRecord({
       proofsSubmitted,
       guardRejectedProofs,
       explicitlyAdmitted,
+      partiallyAdmitted,
+      partiallyAdmittedProofs: partiallyAdmitted,
       defaultAdmitted,
       judgeRejected,
       finalClauseCitations,
@@ -466,6 +514,7 @@ function createMutableBucket({ key, groupBy, provider, model, effort }) {
     proofsSubmitted: 0,
     guardRejectedProofs: 0,
     explicitlyAdmitted: 0,
+    partiallyAdmitted: 0,
     defaultAdmitted: 0,
     judgeRejected: 0,
     finalClauseCitations: 0,
@@ -497,6 +546,7 @@ function accumulateIntoBucket(bucket, seatEntry) {
   bucket.proofsSubmitted += seatEntry.proofsSubmitted || 0;
   bucket.guardRejectedProofs += seatEntry.guardRejectedProofs || 0;
   bucket.explicitlyAdmitted += seatEntry.explicitlyAdmitted || 0;
+  bucket.partiallyAdmitted += seatEntry.partiallyAdmitted || seatEntry.partiallyAdmittedProofs || 0;
   bucket.defaultAdmitted += seatEntry.defaultAdmitted || 0;
   bucket.judgeRejected += seatEntry.judgeRejected || 0;
   bucket.finalClauseCitations += seatEntry.finalClauseCitations || 0;
@@ -541,6 +591,7 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
   let proofsSubmitted = 0;
   let guardRejectedProofs = 0;
   let explicitlyAdmitted = 0;
+  let partiallyAdmitted = 0;
   let defaultAdmitted = 0;
   let judgeRejected = 0;
   let finalClauseCitations = 0;
@@ -560,6 +611,7 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
     proofsSubmitted += s.proofsSubmitted || 0;
     guardRejectedProofs += s.guardRejectedProofs || 0;
     explicitlyAdmitted += s.explicitlyAdmitted || 0;
+    partiallyAdmitted += s.partiallyAdmitted || s.partiallyAdmittedProofs || 0;
     defaultAdmitted += s.defaultAdmitted || 0;
     judgeRejected += s.judgeRejected || 0;
     finalClauseCitations += s.finalClauseCitations || 0;
@@ -606,6 +658,8 @@ function mergeModelSeatsForRun(seatsForModel, canonicalKey) {
     proofsSubmitted,
     guardRejectedProofs,
     explicitlyAdmitted,
+    partiallyAdmitted,
+    partiallyAdmittedProofs: partiallyAdmitted,
     defaultAdmitted,
     judgeRejected,
     finalClauseCitations,
@@ -626,6 +680,7 @@ function finalizeBucket(bucket) {
   const tracedRuns = bucket.fullRuns + bucket.partialRuns;
 
   const explicitAdmissionRate = submitted > 0 ? roundPct((bucket.explicitlyAdmitted / submitted) * 100) : 0;
+  const partialAdmissionRate = submitted > 0 ? roundPct((bucket.partiallyAdmitted / submitted) * 100) : 0;
   const defaultAdmissionRate = submitted > 0 ? roundPct((bucket.defaultAdmitted / submitted) * 100) : 0;
   const judgeRejectionRate = submitted > 0 ? roundPct((bucket.judgeRejected / submitted) * 100) : 0;
   const finalClauseCitationRate =
@@ -654,6 +709,8 @@ function finalizeBucket(bucket) {
     proofsSubmitted: submitted,
     guardRejectedProofs: bucket.guardRejectedProofs,
     explicitlyAdmitted: bucket.explicitlyAdmitted,
+    partiallyAdmitted: bucket.partiallyAdmitted,
+    partialAdmissionRate,
     defaultAdmitted: bucket.defaultAdmitted,
     judgeRejected: bucket.judgeRejected,
     explicitAdmissionRate,
@@ -1049,6 +1106,7 @@ export function formatTelemetryTable(
     padL('Runs', 5),
     padL('Proofs(Rej)', 12),
     padL('Expl.Admit%', 11),
+    padL('Part.Admit%', 11),
     padL('Def.Admit', 9),
     padL('JudgeRej%', 9),
     padL('FinalCite%', 10),
@@ -1065,6 +1123,7 @@ export function formatTelemetryTable(
         ? `${r.proofsSubmitted} (+${r.guardRejectedProofs} guard)`
         : `${r.proofsSubmitted}`;
     const explAdmitCell = `${r.explicitAdmissionRate}% (${r.explicitlyAdmitted})`;
+    const partAdmitCell = `${r.partialAdmissionRate}% (${r.partiallyAdmitted})`;
     const defAdmitCell = `${r.defaultAdmitted}`;
     const judgeRejCell = `${r.judgeRejectionRate}% (${r.judgeRejected})`;
     const citeCell = `${r.finalClauseCitationRate}% (${r.finalClauseCitations})`;
@@ -1086,6 +1145,7 @@ export function formatTelemetryTable(
         padL(r.runs, 5),
         padL(proofsCell, 12),
         padL(explAdmitCell, 11),
+        padL(partAdmitCell, 11),
         padL(defAdmitCell, 9),
         padL(judgeRejCell, 9),
         padL(citeCell, 10),

@@ -18,9 +18,9 @@ export const VALID_TOOL_POLICIES = Object.freeze(['none', 'read-only']);
 
 /**
  * Valid proof status values.
- * @type {readonly ['pending', 'admitted', 'rejected']}
+ * @type {readonly ['pending', 'admitted', 'partially_admitted', 'rejected']}
  */
-export const PROOF_STATUSES = Object.freeze(['pending', 'admitted', 'rejected']);
+export const PROOF_STATUSES = Object.freeze(['pending', 'admitted', 'partially_admitted', 'rejected']);
 
 /**
  * Valid objection status values.
@@ -155,7 +155,7 @@ export const DEFAULT_CONFIG = Object.freeze({
  */
 
 /**
- * @typedef {'pending' | 'admitted' | 'rejected'} ProofStatus
+ * @typedef {'pending' | 'admitted' | 'partially_admitted' | 'rejected'} ProofStatus
  */
 
 /**
@@ -210,6 +210,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {string} statement - Falsifiable assertion.
  * @property {ProofStatus} status - Admission status determined by Judge.
  * @property {string | null} judgeNote - Note from Judge explaining admission/rejection.
+ * @property {string | null} [judgeAdmittedStatement] - Narrowed statement of verified citable core when status is partially_admitted.
+ * @property {'explicitly_admitted' | 'default_admitted' | 'partially_admitted' | 'judge_rejected'} [admissionKind]
  */
 
 /**

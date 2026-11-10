@@ -432,13 +432,15 @@
     if (state.candidate && state.candidate.clauses) {
       state.candidate.clauses.forEach(function (cl) {
         (cl.citedProofIds || []).forEach(function (pid) {
+          const citedProof = (state.proofs || []).find(function (p) { return p.id === pid; });
+          const linkStatus = citedProof ? citedProof.status : 'admitted';
           causalLinks.push({
             id: 'dep-proof-clause-' + pid + '-' + cl.id,
             fromKind: 'proof',
             fromId: pid,
             toKind: 'clause',
             toId: cl.id,
-            status: 'admitted',
+            status: linkStatus,
             label: 'cites ' + pid
           });
         });
@@ -564,8 +566,13 @@
       let marker = 'url(#dep-arrow-cyan)';
       let dash = '';
       if (lnk.toKind === 'clause') {
-        stroke = '#34d399';
-        marker = 'url(#dep-arrow-green)';
+        if (lnk.status === 'partially_admitted') {
+          stroke = '#fbbf24';
+          marker = 'url(#dep-arrow-amber)';
+        } else {
+          stroke = '#34d399';
+          marker = 'url(#dep-arrow-green)';
+        }
       } else if (lnk.toKind === 'objection') {
         stroke = lnk.status === 'preserved_excused' ? '#f87171' : '#fbbf24';
         marker = lnk.status === 'preserved_excused' ? 'url(#dep-arrow-red)' : 'url(#dep-arrow-amber)';
@@ -608,12 +615,18 @@
       ? '<text x="' + colProofX + '" y="95" text-anchor="middle" fill="#64748b" font-size="11">No Proofs submitted yet</text>'
       : proofs.map(function (p) {
           const b = pos['proof:' + p.id];
-          const stroke = p.status === 'admitted' ? '#34d399' : (p.status === 'rejected' ? '#f87171' : '#38bdf8');
+          const stroke = p.status === 'admitted'
+            ? '#34d399'
+            : (p.status === 'partially_admitted'
+              ? '#f59e0b'
+              : (p.status === 'rejected' ? '#f87171' : '#38bdf8'));
           const proofTitle = 'Proof ' + p.id + ' [' + (p.kind || 'evidence').toUpperCase() + '] · ' + p.status +
             '\nSeat: ' + p.seatId +
             '\nScope: ' + (p.scope || 'unspecified') +
             '\nSource: ' + (p.source || 'unspecified') +
-            '\nStatement: ' + (p.statement || '');
+            '\nStatement: ' + (p.statement || '') +
+            (p.judgeAdmittedStatement ? '\nAdmitted Core: ' + p.judgeAdmittedStatement : '') +
+            (p.judgeNote ? '\nJudge Note: ' + p.judgeNote : '');
 
           return (
             '<g transform="translate(' + (b.x - b.w / 2) + ',' + (b.y - b.h / 2) + ')" class="proof-node" tabindex="0">' +

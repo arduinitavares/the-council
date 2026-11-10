@@ -23,6 +23,54 @@ import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
 import { HarnessError, InvalidResponseError } from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
+import { downshiftModel } from '../harness/cli-runner.js';
+
+/**
+ * Resolves the effective seat configuration for the VOTING phase.
+ * Defaults tools to 'none' unless votingTools is explicitly set.
+ * Downshifts high/max reasoning effort models unless preserveVotingEffort is true or votingModel is set.
+ * Caps voting timeout to Math.min(seat.timeoutMs || config.timeoutMs || 240000, seat.votingTimeoutMs || config.votingTimeoutMs || 90000).
+ *
+ * @param {Object} seat
+ * @param {Object} [engineConfig={}]
+ * @returns {Object}
+ */
+export function resolveVotingSeatConfig(seat, engineConfig = {}) {
+  const tools =
+    seat.votingTools !== undefined
+      ? seat.votingTools
+      : (engineConfig.votingTools !== undefined ? engineConfig.votingTools : 'none');
+
+  let model = seat.model;
+  const preserveEffort =
+    typeof seat.preserveVotingEffort === 'boolean'
+      ? seat.preserveVotingEffort
+      : (typeof engineConfig.preserveVotingEffort === 'boolean' ? engineConfig.preserveVotingEffort : false);
+
+  if (seat.votingModel) {
+    model = seat.votingModel;
+  } else if (!preserveEffort) {
+    const targetEffort = seat.votingReasoningEffort || engineConfig.votingReasoningEffort || 'low';
+    model = downshiftModel(seat.model, targetEffort);
+  }
+
+  const baseTimeoutMs =
+    seat.timeoutMs ||
+    engineConfig.timeoutMs ||
+    240000;
+  const configuredVotingTimeoutMs =
+    seat.votingTimeoutMs ||
+    engineConfig.votingTimeoutMs ||
+    90000;
+  const votingTimeoutMs = Math.min(baseTimeoutMs, configuredVotingTimeoutMs);
+
+  return {
+    ...seat,
+    model,
+    tools,
+    votingTimeoutMs
+  };
+}
 
 /**
  * Concurrently maps an array of items with a worker pool limit.
@@ -146,6 +194,24 @@ export class CouncilEngine {
         const seatTimeoutMs = typeof seat.timeoutMs === 'number' && seat.timeoutMs > 0
           ? seat.timeoutMs
           : (typeof this.config.timeoutMs === 'number' && this.config.timeoutMs > 0 ? this.config.timeoutMs : undefined);
+        const seatTotalBudgetMs = typeof seat.totalSeatBudgetMs === 'number' && seat.totalSeatBudgetMs > 0
+          ? seat.totalSeatBudgetMs
+          : (typeof seat.seatBudget === 'number' && seat.seatBudget > 0
+              ? seat.seatBudget
+              : (typeof this.config.totalSeatBudgetMs === 'number' && this.config.totalSeatBudgetMs > 0
+                  ? this.config.totalSeatBudgetMs
+                  : (typeof this.config.seatBudget === 'number' && this.config.seatBudget > 0
+                      ? this.config.seatBudget
+                      : (seatTimeoutMs ? seatTimeoutMs * 2 : undefined))));
+        const seatVotingTimeoutMs = typeof seat.votingTimeoutMs === 'number' && seat.votingTimeoutMs > 0
+          ? seat.votingTimeoutMs
+          : (typeof this.config.votingTimeoutMs === 'number' && this.config.votingTimeoutMs > 0 ? this.config.votingTimeoutMs : undefined);
+        const seatVotingTools = seat.votingTools !== undefined ? seat.votingTools : this.config.votingTools;
+        const seatPreserveVotingEffort = typeof seat.preserveVotingEffort === 'boolean'
+          ? seat.preserveVotingEffort
+          : this.config.preserveVotingEffort;
+        const seatVotingReasoningEffort = seat.votingReasoningEffort || this.config.votingReasoningEffort;
+        const seatVotingModel = seat.votingModel;
         const seatDisableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.config.disableHooks;
         const seatIgnoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.config.ignoreUserConfig;
         const seatCwd = seat.cwd !== undefined ? seat.cwd : this.config.cwd;
@@ -158,6 +224,12 @@ export class CouncilEngine {
             soul: typeof seat.soul === 'object' && seat.soul !== null && seat.soul.toJSON ? seat.soul.toJSON() : seat.soul,
             tools: seatTools,
             ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
+            ...(seatTotalBudgetMs !== undefined ? { totalSeatBudgetMs: seatTotalBudgetMs } : {}),
+            ...(seatVotingTimeoutMs !== undefined ? { votingTimeoutMs: seatVotingTimeoutMs } : {}),
+            ...(seatVotingTools !== undefined ? { votingTools: seatVotingTools } : {}),
+            ...(seatPreserveVotingEffort ? { preserveVotingEffort: true } : {}),
+            ...(seatVotingReasoningEffort ? { votingReasoningEffort: seatVotingReasoningEffort } : {}),
+            ...(seatVotingModel ? { votingModel: seatVotingModel } : {}),
             ...(typeof seatDisableHooks === 'boolean' ? { disableHooks: seatDisableHooks } : {}),
             ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {}),
             ...(typeof seatCwd === 'string' && seatCwd.trim() ? { cwd: seatCwd.trim() } : {})
@@ -354,28 +426,38 @@ export class CouncilEngine {
    * Preserves completed turns and locks open objections as preserved_excused.
    * @param {string} seatId
    * @param {Error|string} error
+   * @param {Object} [options={}]
+   * @param {number} [options.remainingBudget] - Remaining budget in ms
+   * @param {number} [options.seatElapsedMs] - Total time elapsed for seat in phase
+   * @param {number} [options.totalSeatBudgetMs] - Total seat budget allocated
    * @returns {{ action: string, retries?: number, lockedObjections?: number }}
    */
-  handleSeatFault(seatId, error) {
+  handleSeatFault(seatId, error, options = {}) {
     const errorClass = this._classifyErrorClass(error);
     const reason = this._formatFaultReason(error);
     const faultStatus = this._classifyFaultStatus(error);
     const seat = (this.state.seats || []).find((s) => s.id === seatId);
     const retries = seat ? seat.retries : 0;
     const isRetryable = this._isRetryableError(error);
+    const remainingBudget = options.remainingBudget;
+    const budgetExhausted = typeof remainingBudget === 'number' && remainingBudget <= 0;
 
     this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
     this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass });
 
-    if (seat && isRetryable && retries < this.config.maxRetriesPerSeat) {
+    if (seat && isRetryable && retries < this.config.maxRetriesPerSeat && !budgetExhausted) {
       this._step({ type: 'RETRY_SEAT', seatId });
       return { action: 'retried', retries: seat.retries + 1 };
     } else {
-      const excuseReason =
-        isRetryable && retries > 0
-          ? `Exhausted retries (${retries}/${this.config.maxRetriesPerSeat}): ${reason}`
-          : reason;
+      let excuseReason;
+      if (budgetExhausted) {
+        excuseReason = `Exhausted total seat phase time budget (${options.seatElapsedMs ?? 0}ms >= ${options.totalSeatBudgetMs ?? 0}ms): ${reason}`;
+      } else if (isRetryable && retries > 0) {
+        excuseReason = `Exhausted retries (${retries}/${this.config.maxRetriesPerSeat}): ${reason}`;
+      } else {
+        excuseReason = reason;
+      }
       this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason, errorClass });
       const locked = (this.state.objections || []).filter((o) => o.seatId === seatId && o.status === 'preserved_excused').length;
       this.telemetry.emitSeatExcused(seatId, excuseReason, locked);
@@ -414,13 +496,14 @@ export class CouncilEngine {
 
     const turnResults = await mapConcurrent(active, concurrencyLimit, async (seat) => {
       if (this.aborted || this.isCompleted() || seat.status === 'excused') {
-        return { seat, proofInput: null, error: null, skipped: true };
+        return { seat, proofInput: null, error: null, skipped: true, elapsedMs: 0 };
       }
 
       this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
       const harness = this.harnessResolver(seat.harness);
       const turnTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
 
+      const t0 = Date.now();
       try {
         let proofInput;
         if (typeof harness.executeSeatProof === 'function') {
@@ -432,6 +515,7 @@ export class CouncilEngine {
             state: this.state,
             topic: this.state.topic,
             timeoutMs: turnTimeoutMs,
+            tools: seat.tools,
             telemetry: this.telemetry
           });
         } else if (typeof harness.executeSeat === 'function') {
@@ -443,14 +527,22 @@ export class CouncilEngine {
             state: this.state,
             topic: this.state.topic,
             timeoutMs: turnTimeoutMs,
+            tools: seat.tools,
             telemetry: this.telemetry
           });
         } else {
           throw new Error(`Harness for "${seat.harness}" does not implement executeSeatProof or executeSeat`);
         }
-        return { seat, proofInput, error: null };
+        const elapsedMs = Date.now() - t0;
+        return { seat, proofInput, error: null, elapsedMs };
       } catch (err) {
-        return { seat, proofInput: null, error: err };
+        const elapsedMs =
+          typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
+            ? err.timeoutMs
+            : (typeof err?.trace?.durationMs === 'number' && err.trace.durationMs > 0
+                ? err.trace.durationMs
+                : Date.now() - t0);
+        return { seat, proofInput: null, error: err, elapsedMs };
       }
     });
 
@@ -462,44 +554,85 @@ export class CouncilEngine {
       if (res?.skipped || seat.status === 'excused') continue;
 
       const harness = this.harnessResolver(seat.harness);
-      const turnTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
+      const mergedSeat = { ...configSeat, ...seat };
+      const baseTimeoutMs =
+        mergedSeat.timeoutMs ||
+        this.config.timeoutMs ||
+        (typeof harness.resolveTimeoutMs === 'function' ? harness.resolveTimeoutMs(mergedSeat.model) : 60000);
+      const totalSeatBudgetMs =
+        mergedSeat.totalSeatBudgetMs ||
+        mergedSeat.seatBudget ||
+        this.config.totalSeatBudgetMs ||
+        this.config.seatBudget ||
+        baseTimeoutMs * 2;
+
+      let seatElapsedMs = res?.elapsedMs || 0;
+      let currentSeatConfig = { ...mergedSeat };
 
       while (!this.isCompleted() && !this.aborted) {
         if (res.error) {
-          const faultRes = this.handleSeatFault(seat.id, res.error);
+          const remainingBudget = totalSeatBudgetMs - seatElapsedMs;
+          const isTimeout =
+            this._classifyFaultStatus(res.error) === 'fault_timeout' ||
+            this._classifyErrorClass(res.error) === 'TimeoutError';
+
+          const faultRes = this.handleSeatFault(seat.id, res.error, {
+            remainingBudget,
+            seatElapsedMs,
+            totalSeatBudgetMs
+          });
           if (faultRes.action === 'excused' || this.isCompleted()) {
             break;
           }
+
+          const retryTimeoutMs = Math.min(baseTimeoutMs, 90000, remainingBudget);
+          if (isTimeout) {
+            currentSeatConfig = { ...currentSeatConfig, tools: 'none' };
+          }
+
           // Retry the faulted seat
           this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+          const retryT0 = Date.now();
           try {
             let proofInput;
             if (typeof harness.executeSeatProof === 'function') {
               proofInput = await harness.executeSeatProof({
-                seat,
-                soul: seat.soul,
+                seat: currentSeatConfig,
+                soul: currentSeatConfig.soul,
                 round: currentRound,
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: turnTimeoutMs,
+                timeoutMs: retryTimeoutMs,
+                tools: currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             } else if (typeof harness.executeSeat === 'function') {
               proofInput = await harness.executeSeat({
-                seat,
-                soul: seat.soul,
+                seat: currentSeatConfig,
+                soul: currentSeatConfig.soul,
                 round: currentRound,
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: turnTimeoutMs,
+                timeoutMs: retryTimeoutMs,
+                tools: currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             }
-            res = { seat, proofInput, error: null };
+            const retryDuration = Date.now() - retryT0;
+            seatElapsedMs += retryDuration;
+            res = { seat: currentSeatConfig, proofInput, error: null, elapsedMs: seatElapsedMs };
           } catch (retryErr) {
-            res = { seat, proofInput: null, error: retryErr };
+            const retryDuration =
+              typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
+                ? retryErr.timeoutMs
+                : (typeof retryErr?.trace?.durationMs === 'number' && retryErr.trace.durationMs > 0
+                    ? retryErr.trace.durationMs
+                    : Date.now() - retryT0);
+            seatElapsedMs += retryDuration;
+            res = { seat: currentSeatConfig, proofInput: null, error: retryErr, elapsedMs: seatElapsedMs };
             continue;
           }
         }
@@ -646,43 +779,63 @@ export class CouncilEngine {
 
     const voteResults = await mapConcurrent(voters, voteConcurrencyLimit, async (seat) => {
       if (this.aborted || this.isCompleted() || seat.status === 'excused') {
-        return { seat, voteResult: null, error: null, skipped: true };
+        return { seat, voteResult: null, error: null, skipped: true, elapsedMs: 0 };
       }
 
       this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
       const seatHarness = this.harnessResolver(seat.harness);
-      const voteTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
+      const mergedSeat = { ...configSeat, ...seat };
+      const votingSeat = resolveVotingSeatConfig(mergedSeat, this.config);
+      const voteTimeoutMs = votingSeat.votingTimeoutMs;
+      const effectiveVotingSeat = {
+        ...seat,
+        model: votingSeat.model,
+        votingTools: votingSeat.tools,
+        votingTimeoutMs: votingSeat.votingTimeoutMs,
+        ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
+      };
 
+      const t0 = Date.now();
       try {
         let voteResult;
         if (typeof seatHarness.executeSeatVote === 'function') {
           voteResult = await seatHarness.executeSeatVote({
-            seat,
+            seat: effectiveVotingSeat,
             soul: seat.soul,
             candidate: this.state.candidate,
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
             timeoutMs: voteTimeoutMs,
+            tools: votingSeat.tools,
             telemetry: this.telemetry
           });
         } else if (typeof seatHarness.executeSeat === 'function') {
           voteResult = await seatHarness.executeSeat({
-            seat,
+            seat: effectiveVotingSeat,
             soul: seat.soul,
             candidate: this.state.candidate,
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
             timeoutMs: voteTimeoutMs,
+            tools: votingSeat.tools,
             telemetry: this.telemetry
           });
         } else {
           throw new Error(`Harness for "${seat.harness}" does not implement executeSeatVote or executeSeat`);
         }
-        return { seat, voteResult, error: null };
+        const elapsedMs = Date.now() - t0;
+        return { seat: effectiveVotingSeat, voteResult, error: null, elapsedMs };
       } catch (err) {
-        return { seat, voteResult: null, error: err };
+        const elapsedMs =
+          typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
+            ? err.timeoutMs
+            : (typeof err?.trace?.durationMs === 'number' && err.trace.durationMs > 0
+                ? err.trace.durationMs
+                : Date.now() - t0);
+        return { seat: votingSeat, voteResult: null, error: err, elapsedMs };
       }
     });
 
@@ -694,44 +847,95 @@ export class CouncilEngine {
       if (res?.skipped || seat.status === 'excused') continue;
 
       const seatHarness = this.harnessResolver(seat.harness);
-      const voteTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
+      const mergedSeat = { ...configSeat, ...seat };
+      const votingSeat = resolveVotingSeatConfig(mergedSeat, this.config);
+      const voteTimeoutMs = votingSeat.votingTimeoutMs;
+      const totalSeatBudgetMs =
+        mergedSeat.totalSeatBudgetMs ||
+        mergedSeat.seatBudget ||
+        this.config.totalSeatBudgetMs ||
+        this.config.seatBudget ||
+        voteTimeoutMs * 2;
+
+      let seatElapsedMs = res?.elapsedMs || 0;
+      let currentSeatConfig = {
+        ...seat,
+        model: votingSeat.model,
+        tools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
+        votingTools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
+        votingTimeoutMs: votingSeat.votingTimeoutMs,
+        ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
+      };
 
       while (!this.isCompleted() && !this.aborted) {
         if (res.error) {
-          const faultRes = this.handleSeatFault(seat.id, res.error);
+          const remainingBudget = totalSeatBudgetMs - seatElapsedMs;
+          const isTimeout =
+            this._classifyFaultStatus(res.error) === 'fault_timeout' ||
+            this._classifyErrorClass(res.error) === 'TimeoutError';
+
+          const faultRes = this.handleSeatFault(seat.id, res.error, {
+            remainingBudget,
+            seatElapsedMs,
+            totalSeatBudgetMs
+          });
           if (faultRes.action === 'excused' || this.isCompleted()) {
             break;
           }
+
+          const retryTimeoutMs = Math.min(voteTimeoutMs, 90000, remainingBudget);
+          const effectiveRetryTools = isTimeout
+            ? 'none'
+            : (votingSeat.tools !== undefined ? votingSeat.tools : 'none');
+          currentSeatConfig = {
+            ...currentSeatConfig,
+            tools: effectiveRetryTools,
+            votingTools: effectiveRetryTools
+          };
+
           // Retry the faulted seat
           this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+          const retryT0 = Date.now();
           try {
             let voteResult;
             if (typeof seatHarness.executeSeatVote === 'function') {
               voteResult = await seatHarness.executeSeatVote({
-                seat,
+                seat: currentSeatConfig,
                 soul: seat.soul,
                 candidate: this.state.candidate,
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: voteTimeoutMs,
+                timeoutMs: retryTimeoutMs,
+                tools: currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             } else if (typeof seatHarness.executeSeat === 'function') {
               voteResult = await seatHarness.executeSeat({
-                seat,
+                seat: currentSeatConfig,
                 soul: seat.soul,
                 candidate: this.state.candidate,
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: voteTimeoutMs,
+                timeoutMs: retryTimeoutMs,
+                tools: currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             }
-            res = { seat, voteResult, error: null };
+            const retryDuration = Date.now() - retryT0;
+            seatElapsedMs += retryDuration;
+            res = { seat: currentSeatConfig, voteResult, error: null, elapsedMs: seatElapsedMs };
           } catch (retryErr) {
-            res = { seat, voteResult: null, error: retryErr };
+            const retryDuration =
+              typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
+                ? retryErr.timeoutMs
+                : (typeof retryErr?.trace?.durationMs === 'number' && retryErr.trace.durationMs > 0
+                    ? retryErr.trace.durationMs
+                    : Date.now() - retryT0);
+            seatElapsedMs += retryDuration;
+            res = { seat: currentSeatConfig, voteResult: null, error: retryErr, elapsedMs: seatElapsedMs };
             continue;
           }
         }

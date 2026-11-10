@@ -4,3 +4,4 @@ src/visualizer/live-run-latest.js
 .DS_Store
 node_modules/
 *.local.json
+.agents/teamwork/

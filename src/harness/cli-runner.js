@@ -131,6 +131,68 @@ export function extractCanonicalBaseModel(modelString, defaultEffort = 'high') {
   return baseModel;
 }
 
+const EFFORT_RANK = Object.freeze({
+  low: 1,
+  medium: 2,
+  high: 3,
+  xhigh: 4,
+  max: 5
+});
+
+/**
+ * Downshifts an effort level to a target level if current effort exceeds target.
+ * Never upshifts an effort that is already at or below target.
+ *
+ * @param {string} effort
+ * @param {string} [target='low']
+ * @returns {string}
+ */
+export function downshiftEffort(effort, target = 'low') {
+  const cur = String(effort || '').toLowerCase().trim();
+  const tgt = String(target || 'low').toLowerCase().trim();
+  if (EFFORT_RANK[tgt] === undefined) {
+    return cur || 'low';
+  }
+  if (EFFORT_RANK[cur] === undefined) {
+    return tgt;
+  }
+  return EFFORT_RANK[cur] > EFFORT_RANK[tgt] ? tgt : cur;
+}
+
+/**
+ * Downshifts model reasoning effort for voting or lightweight tasks.
+ * Handles parenthesized models (e.g. "gpt-6-astra (max)" -> "gpt-6-astra (low)")
+ * and hyphenated suffix models (e.g. "grok-4.7-xhigh" -> "grok-4.7-low").
+ * Preserves models without recognized effort tiers (e.g. "composer-2.5").
+ *
+ * @param {string} model
+ * @param {string} [target='low']
+ * @returns {string}
+ */
+export function downshiftModel(model, target = 'low') {
+  if (typeof model !== 'string' || !model.trim()) {
+    return model;
+  }
+  const trimmed = model.trim();
+  const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
+  if (parenMatch) {
+    const baseModel = parenMatch[1].trim();
+    const rawEffort = parenMatch[2].trim();
+    const newEffort = downshiftEffort(rawEffort, target);
+    return `${baseModel} (${newEffort})`;
+  }
+
+  for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
+    if (trimmed.toLowerCase().endsWith(suffix)) {
+      const rawEffort = suffix.slice(1);
+      const newEffort = downshiftEffort(rawEffort, target);
+      return `${trimmed.slice(0, -suffix.length)}-${newEffort}`;
+    }
+  }
+
+  return trimmed;
+}
+
 const NON_PROMPT_VALUE_FLAGS = new Set([
   '-e',
   '--eval',

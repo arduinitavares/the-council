@@ -2944,6 +2944,7 @@ export async function runAntigravityCli({
   prompt,
   signal,
   timeoutMs,
+  tools,
   cwd,
   env,
   exec = execCli,
@@ -2951,12 +2952,15 @@ export async function runAntigravityCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const effectiveTools = tools ?? context?.tools ?? 'read-only';
   const explicitCwd =
-    typeof cwd === 'string' && cwd.trim()
-      ? cwd.trim()
-      : typeof context?.cwd === 'string' && context.cwd.trim()
-        ? context.cwd.trim()
-        : null;
+    effectiveTools === 'none'
+      ? null
+      : typeof cwd === 'string' && cwd.trim()
+        ? cwd.trim()
+        : typeof context?.cwd === 'string' && context.cwd.trim()
+          ? context.cwd.trim()
+          : null;
   const tempCwdDir = explicitCwd
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
@@ -3008,6 +3012,7 @@ export async function runAntigravityCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'antigravity',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
@@ -3065,6 +3070,7 @@ export async function runAntigravityCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'antigravity',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs: errorTrace.durationMs,
@@ -3109,6 +3115,7 @@ export async function runCodexCli({
   prompt,
   signal,
   timeoutMs,
+  tools,
   cwd,
   env,
   exec = execCli,
@@ -3118,12 +3125,15 @@ export async function runCodexCli({
   disableHooks
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const effectiveTools = tools ?? context?.tools ?? 'read-only';
   const explicitCwd =
-    typeof cwd === 'string' && cwd.trim()
-      ? cwd.trim()
-      : typeof context?.cwd === 'string' && context.cwd.trim()
-        ? context.cwd.trim()
-        : null;
+    effectiveTools === 'none'
+      ? null
+      : typeof cwd === 'string' && cwd.trim()
+        ? cwd.trim()
+        : typeof context?.cwd === 'string' && context.cwd.trim()
+          ? context.cwd.trim()
+          : null;
   const tempCwdDir = explicitCwd
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
@@ -3184,6 +3194,7 @@ export async function runCodexCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'codex',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
@@ -3229,6 +3240,7 @@ export async function runCodexCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'codex',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs: errorTrace.durationMs,
@@ -3272,6 +3284,7 @@ export async function runCursorCli({
   prompt,
   signal,
   timeoutMs,
+  tools,
   cwd,
   env,
   exec = execCli,
@@ -3279,12 +3292,15 @@ export async function runCursorCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
+  const effectiveTools = tools ?? context?.tools ?? 'read-only';
   const explicitCwd =
-    typeof cwd === 'string' && cwd.trim()
-      ? cwd.trim()
-      : typeof context?.cwd === 'string' && context.cwd.trim()
-        ? context.cwd.trim()
-        : null;
+    effectiveTools === 'none'
+      ? null
+      : typeof cwd === 'string' && cwd.trim()
+        ? cwd.trim()
+        : typeof context?.cwd === 'string' && context.cwd.trim()
+          ? context.cwd.trim()
+          : null;
   const tempCwdDir = explicitCwd
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
@@ -3335,6 +3351,7 @@ export async function runCursorCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'cursor',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs,
@@ -3381,6 +3398,7 @@ export async function runCursorCli({
             participantId: context?.seatId || context?.participantId || 'unknown',
             provider: 'cursor',
             model,
+            tools: effectiveTools,
             argv: redactArgv(args, prompt),
             exitCode,
             durationMs,
@@ -3433,6 +3451,7 @@ export async function runCursorCli({
             participantId: context?.seatId || context?.participantId || 'unknown',
             provider: 'cursor',
             model,
+            tools: effectiveTools,
             argv: redactArgv(args, prompt),
             exitCode,
             durationMs: fallbackErrorTrace.durationMs,
@@ -3480,6 +3499,7 @@ export async function runCursorCli({
         participantId: context?.seatId || context?.participantId || 'unknown',
         provider: 'cursor',
         model,
+        tools: effectiveTools,
         argv: redactArgv(args, prompt),
         exitCode,
         durationMs: errorTrace.durationMs,

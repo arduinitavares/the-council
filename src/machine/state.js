@@ -236,6 +236,17 @@ export function findProof(state, proofId) {
 }
 
 /**
+ * Resolves the status of a cited proof for causal link rendering.
+ * @param {Object} state
+ * @param {string} proofId
+ * @returns {string}
+ */
+export function resolveCitedProofStatus(state, proofId) {
+  const citedProof = findProof(state, proofId);
+  return citedProof && citedProof.status ? citedProof.status : 'admitted';
+}
+
+/**
  * Finds an objection by id.
  * @param {Object} state
  * @param {string} objectionId

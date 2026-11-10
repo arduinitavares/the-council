@@ -1131,6 +1131,176 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       // Tool-loop guard on retry: forced to 'none'
       assert.equal(voterTimeoutAttempts[1].tools, 'none');
     });
+
+    it('clamps initial deliberation, initial voting, and initial Judge timeoutMs by budget and enforces Judge retry budget clamping + tools: "none" on timeout (#70, #72)', async () => {
+      const deliberationCalls = [];
+      const judgeCalls = [];
+      const voteCalls = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatProof = async (ctx) => {
+        deliberationCalls.push({ seatId: ctx.seat.id, timeoutMs: ctx.timeoutMs, tools: ctx.tools });
+        return {
+          scope: 'Arch',
+          kind: 'check',
+          source: 'Spec',
+          statement: `Proof by ${ctx.seat.id}`
+        };
+      };
+
+      mockHarness.executeJudgeAuditAndSynthesis = async (ctx) => {
+        judgeCalls.push({ timeoutMs: ctx.timeoutMs, tools: ctx.tools, judgeTools: ctx.judge.tools });
+        if (judgeCalls.length === 1) {
+          throw new TimeoutError('Judge timed out after 100000ms', {
+            seatId: ctx.judge.id,
+            harness: 'mock',
+            timeoutMs: 100000
+          });
+        }
+        return {
+          summary: 'Synthesized after Judge retry',
+          clauses: [{ id: 'C1', context: 'Arch', conclusion: 'Verified', citedProofIds: ['P1'] }],
+          proofDecisions: { P1: { status: 'admitted', note: 'OK' } }
+        };
+      };
+
+      mockHarness.executeSeatVote = async (ctx) => {
+        voteCalls.push({
+          seatId: ctx.seat.id,
+          timeoutMs: ctx.timeoutMs,
+          tools: ctx.tools,
+          seatTools: ctx.seat.tools
+        });
+        return { vote: 'accept' };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Initial clamping & Judge bounded retry check',
+          maxRounds: 1,
+          minQuorum: 2,
+          timeoutMs: 120000,
+          votingTimeoutMs: 90000,
+          totalSeatBudgetMs: 80000, // Smaller than 120000 and 90000 -> must clamp initial attempts to 80000!
+          judge: {
+            id: 'judge-1',
+            harness: 'mock',
+            model: 'gpt-6-astra (max)',
+            soul: 'Judge',
+            timeoutMs: 100000,
+            totalSeatBudgetMs: 150000,
+            tools: 'read-only'
+          },
+          seats: [
+            { id: 's1', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'S1' },
+            { id: 's2', harness: 'mock', model: 'grok-4.7-high', soul: 'S2' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // 1. Initial deliberation attempt clamped by totalSeatBudgetMs (80000 < 120000)
+      assert.equal(deliberationCalls.length, 2);
+      assert.equal(deliberationCalls[0].timeoutMs, 80000);
+      assert.equal(deliberationCalls[1].timeoutMs, 80000);
+
+      // 2. Judge attempt 1 uses 100000ms (clamped by 150000ms budget) with tools: 'read-only';
+      //    Judge attempt 2 (after TimeoutError) clamps to min(100000, 90000, 150000 - 100000 = 50000) = 50000ms and switches tools to 'none'
+      assert.equal(judgeCalls.length, 2);
+      assert.equal(judgeCalls[0].timeoutMs, 100000);
+      assert.equal(judgeCalls[0].tools, 'read-only');
+      assert.equal(judgeCalls[1].timeoutMs, 50000);
+      assert.equal(judgeCalls[1].tools, 'none');
+      assert.equal(judgeCalls[1].judgeTools, 'none');
+
+      // 3. Initial voting attempt clamped by totalSeatBudgetMs (80000 < 90000) and effectiveVotingSeat.tools === 'none'
+      assert.equal(voteCalls.length, 2);
+      assert.equal(voteCalls[0].timeoutMs, 80000);
+      assert.equal(voteCalls[0].tools, 'none');
+      assert.equal(voteCalls[0].seatTools, 'none');
+    });
+
+    it('enforces minViableBudgetMs (Math.min(5000, Math.floor(budget * 0.1))) on both seat and Judge retries (#70)', async () => {
+      let seatAttempts = 0;
+      let judgeAttempts = 0;
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's-subviable') {
+          seatAttempts++;
+          // Simulate timeout of 237000ms out of 240000ms budget -> 3000ms remaining (< 5000ms minViableBudgetMs)
+          throw new TimeoutError('Seat timed out after 237000ms', {
+            seatId: ctx.seat.id,
+            harness: 'mock',
+            timeoutMs: 237000
+          });
+        }
+        return {
+          scope: 'Arch',
+          kind: 'check',
+          source: 'Spec',
+          statement: `Proof by ${ctx.seat.id}`
+        };
+      };
+
+      mockHarness.executeJudgeAuditAndSynthesis = async (ctx) => {
+        judgeAttempts++;
+        // Simulate timeout of 238000ms out of 240000ms Judge budget -> 2000ms remaining (< 5000ms minViableJudgeBudgetMs)
+        throw new TimeoutError('Judge timed out after 238000ms', {
+          seatId: ctx.judge.id,
+          harness: 'mock',
+          timeoutMs: 238000
+        });
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Min viable budget check',
+          maxRounds: 1,
+          minQuorum: 2,
+          judge: {
+            id: 'judge-subviable',
+            harness: 'mock',
+            model: 'gpt-6-astra (max)',
+            soul: 'Judge',
+            timeoutMs: 238000,
+            totalSeatBudgetMs: 240000
+          },
+          seats: [
+            {
+              id: 's-subviable',
+              harness: 'mock',
+              model: 'grok-4.7-high',
+              soul: 'S1',
+              timeoutMs: 237000,
+              totalSeatBudgetMs: 240000
+            },
+            { id: 's-ok-1', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'S2' },
+            { id: 's-ok-2', harness: 'mock', model: 'gemini-4-argon-high', soul: 'S3' }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+
+      // Seat s-subviable had 3000ms left (< 5000ms minViableBudgetMs) -> excused without retry
+      assert.equal(seatAttempts, 1);
+      const subviableSeat = result.state.seats.find((s) => s.id === 's-subviable');
+      assert.equal(subviableSeat.status, 'excused');
+      assert.match(subviableSeat.excusedReason, /Exhausted total seat phase time budget/);
+
+      // Judge had 2000ms left (< 5000ms minViableJudgeBudgetMs) -> terminated without retry
+      assert.equal(judgeAttempts, 1);
+      assert.equal(result.ok, false);
+      assert.equal(result.state.phase, 'completed');
+      assert.match(result.state.verdict.kind, /Terminated|Fault|Dissent/i);
+    });
   });
 });
 

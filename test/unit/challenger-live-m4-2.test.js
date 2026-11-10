@@ -295,8 +295,8 @@ describe('Adversarial Challenger Suite: Milestone 4 (CLI & E2E Output Stress)', 
         const stdout = mockIO.getStdout();
         assert.match(stdout, /Submitted Proofs:/);
         assert.match(stdout, /Candidate Clauses:/);
-        // Verified each proof format: - [P1] (admitted) [kind] scope — "source": statement
-        assert.match(stdout, /\s+-\s+\[P\d+\]\s+\(admitted\)/);
+        // Verified each proof format: - [P1] [ADMITTED] [kind] scope — "source": statement
+        assert.match(stdout, /\s+-\s+\[P\d+\]\s+\[ADMITTED\]/);
       } finally {
         fs.unlinkSync(tmpFile);
       }

@@ -80,15 +80,29 @@ export class CursorAdapter extends HarnessAdapter {
     return super.classifyError(error, context);
   }
 
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(seat.model);
-    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
+    const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const effectiveTools =
+      tools ??
+      callerContext?.tools ??
+      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+      'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveSeat = {
+      ...seat,
+      tools: effectiveTools,
+      ...(effectiveTools === 'none' ? { cwd: undefined } : {})
+    };
     const context = {
       seatId: seat.id,
       model: seat.model,
-      tools: seat.tools || 'read-only',
+      tools: effectiveTools,
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {})
@@ -97,16 +111,26 @@ export class CursorAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatSeatPrompt({ seat, soul, round, phase, state, cwd: effectiveCwd });
+          const prompt = this.formatSeatPrompt({
+            seat: effectiveSeat,
+            soul,
+            round,
+            phase,
+            state,
+            tools: effectiveTools,
+            cwd: effectiveCwd,
+            context
+          });
           const rawOutput = await this._dispatchCli({
             model: seat.model,
             prompt,
             signal,
             context,
+            tools: effectiveTools,
             ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
-          const schemaType = phase === 'VOTING' || phase === 'confirming' ? 'vote' : 'proof';
+          const schemaType = isVoting ? 'vote' : 'proof';
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
           if (err?.trace && !err._providerCallRecorded) {
@@ -117,6 +141,7 @@ export class CursorAdapter extends HarnessAdapter {
                 participantId: context.seatId,
                 provider: 'cursor',
                 model: context.model,
+                tools: effectiveTools,
                 exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
                 durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
                 trace: { ...err.trace, outcome: 'error' }
@@ -132,15 +157,24 @@ export class CursorAdapter extends HarnessAdapter {
     );
   }
 
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, telemetry, onCallRecord, cwd, context: callerContext }) {
+  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(judge.model);
-    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
+    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveJudge = {
+      ...judge,
+      tools: effectiveTools,
+      ...(effectiveTools === 'none' ? { cwd: undefined } : {})
+    };
     const context = {
       seatId: judge.id,
       model: judge.model,
-      tools: judge.tools || 'read-only',
+      tools: effectiveTools,
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {})
@@ -149,12 +183,22 @@ export class CursorAdapter extends HarnessAdapter {
     return this.executeWithTimeout(
       async (signal) => {
         try {
-          const prompt = this.formatJudgePrompt({ judge, round, phase, proofs, state, cwd: effectiveCwd });
+          const prompt = this.formatJudgePrompt({
+            judge: effectiveJudge,
+            round,
+            phase,
+            proofs,
+            state,
+            tools: effectiveTools,
+            cwd: effectiveCwd,
+            context
+          });
           const rawOutput = await this._dispatchCli({
             model: judge.model,
             prompt,
             signal,
             context,
+            tools: effectiveTools,
             ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
@@ -168,6 +212,7 @@ export class CursorAdapter extends HarnessAdapter {
                 participantId: context.seatId,
                 provider: 'cursor',
                 model: context.model,
+                tools: effectiveTools,
                 exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
                 durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
                 trace: { ...err.trace, outcome: 'error' }
@@ -183,22 +228,37 @@ export class CursorAdapter extends HarnessAdapter {
     );
   }
 
-  formatSeatPrompt({ seat, soul, round, phase, state, cwd, context: callerContext }) {
-    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
-    if (phase === 'VOTING' || phase === 'confirming') {
-      const admittedProofs = (state?.proofs || []).filter((p) => p.status === 'admitted');
+  formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
+    const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const effectiveTools =
+      tools ??
+      callerContext?.tools ??
+      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+      'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveSeat = seat
+      ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
+      : seat;
+    if (isVoting) {
+      const admittedProofs = (state?.proofs || []).filter(
+        (p) => p.status === 'admitted' || p.status === 'partially_admitted'
+      );
       const myOpenObjections = (state?.objections || []).filter(
         (o) => o.seatId === seat.id && o.status === 'open'
       );
       return formatVotingPrompt({
         soul,
-        seat,
+        seat: effectiveSeat,
         candidate: state?.candidate,
         admittedProofs,
         myOpenObjections,
         state,
+        tools: effectiveTools,
         cwd: effectiveCwd
       });
     }
@@ -206,7 +266,7 @@ export class CursorAdapter extends HarnessAdapter {
     const openObjections = (state?.objections || []).filter((o) => o.status === 'open');
     return formatDeliberationPrompt({
       soul,
-      seat,
+      seat: effectiveSeat,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
@@ -214,36 +274,50 @@ export class CursorAdapter extends HarnessAdapter {
       previousCandidate: state?.candidate,
       openObjections,
       state,
+      tools: effectiveTools,
       cwd: effectiveCwd
     });
   }
 
-  formatJudgePrompt({ judge, round, phase, proofs, state, cwd, context: callerContext }) {
-    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
+  formatJudgePrompt({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
+    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveJudge = judge
+      ? { ...judge, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
+      : judge;
     return formatJudgeSoulPrompt({
-      judge,
+      judge: effectiveJudge,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
       proofs,
       state,
+      tools: effectiveTools,
       cwd: effectiveCwd
     });
   }
 
-  async _dispatchCli({ model, prompt, signal, context, cwd }) {
+  async _dispatchCli({ model, prompt, signal, context, tools, cwd }) {
     if (this.spawnRunner) {
-      const effectiveCwd = [cwd, context?.cwd, this.cwd, this.config?.cwd]
-        .find((c) => typeof c === 'string' && c.trim())
-        ?.trim();
+      const effectiveTools = tools ?? context?.tools ?? 'read-only';
+      const effectiveCwd =
+        effectiveTools === 'none'
+          ? undefined
+          : [cwd, context?.cwd, this.cwd, this.config?.cwd]
+              .find((c) => typeof c === 'string' && c.trim())
+              ?.trim();
       return this.spawnRunner({
         executable: this.executable,
         model,
         prompt,
         signal,
         context,
+        tools: effectiveTools,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {})
       });
     }

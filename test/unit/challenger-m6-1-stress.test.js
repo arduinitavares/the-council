@@ -458,11 +458,11 @@ describe('Challenger M6-1 Stress Suite: Empirical Prompt & Evidence Guard Valida
       assert.ok(prompt.includes('- [P1] (citation) [Aviation]: 14-bis achieved unassisted takeoff. (source: Aéro-Club de France 1906)'));
       assert.ok(!prompt.includes('[P1] (citation) [Aviation]: 14-bis achieved unassisted takeoff. [PARTIALLY ADMITTED'));
 
-      // Partially admitted proof P2 must be rendered with badge, caveat note, and admitted core
-      assert.ok(prompt.includes('- [P2] (check) [Aviation]: 14-bis flew 220m under official commission observation. [PARTIALLY ADMITTED: Excised calm air secondary claim due to anemometer readings.] (Admitted Core: 14-bis flew 220m under official commission observation.) (source: FAI Log 1906)'));
+      // Partially admitted proof P2 must be rendered with original statement, badge, caveat note, and admitted core
+      assert.ok(prompt.includes('- [P2] (check) [Aviation]: 14-bis flew 220m in calm air with zero wind. [PARTIALLY ADMITTED: Excised calm air secondary claim due to anemometer readings.] (Admitted Core: 14-bis flew 220m under official commission observation.) (source: FAI Log 1906)'));
 
       // Partially admitted proof P4 with no judgeNote renders [PARTIALLY ADMITTED] without colon note
-      assert.ok(prompt.includes('- [P4] (benchmark) [Aviation]: Engine produced 50 HP during initial climb. [PARTIALLY ADMITTED] (Admitted Core: Engine produced 50 HP during initial climb.) (source: Antoinette Engine Spec)'));
+      assert.ok(prompt.includes('- [P4] (benchmark) [Aviation]: Engine produced 50 HP continuously. [PARTIALLY ADMITTED] (Admitted Core: Engine produced 50 HP during initial climb.) (source: Antoinette Engine Spec)'));
 
       // Rejected proof P3, unknown P5, and pending P6 must NOT appear in the voting list
       assert.ok(!prompt.includes('[P3]'));
@@ -525,8 +525,8 @@ describe('Challenger M6-1 Stress Suite: Empirical Prompt & Evidence Guard Valida
       assert.ok(prompt.includes('- [P1] (check) [general]: Full statement (source: RFC-100)'));
       assert.ok(!prompt.includes('[P1] (check) [general]: Full statement [PARTIALLY ADMITTED'));
 
-      // P2: has PARTIALLY ADMITTED, caveat, and Admitted Core
-      assert.ok(prompt.includes('- [P2] (check) [general]: Narrowed core claim [PARTIALLY ADMITTED: Caveat: only applies on POSIX systems; see bug #42] (Admitted Core: Narrowed core claim) (source: POSIX-2008)'));
+      // P2: has original statement, PARTIALLY ADMITTED, caveat, and Admitted Core
+      assert.ok(prompt.includes('- [P2] (check) [general]: Original broad claim [PARTIALLY ADMITTED: Caveat: only applies on POSIX systems; see bug #42] (Admitted Core: Narrowed core claim) (source: POSIX-2008)'));
 
       // P3: uses original statement as fallback when judgeAdmittedStatement is absent
       const p3Line = prompt.split('\n').find(l => l.includes('[P3]'));

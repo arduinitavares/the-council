@@ -539,9 +539,13 @@ describe('Unit: Soul Temperaments & Prompt Injections (src/seats/soul.js)', () =
           ]
         }
       });
-      assert.match(prompt, /\[P1\] \(citation\) \[Aviation\]: 14-bis flew 220m under official commission observation\./);
+      assert.match(prompt, /\[P1\] \(citation\) \[Aviation\]: 14-bis flew 220m in calm air with zero wind\./);
       assert.match(prompt, /\[PARTIALLY ADMITTED: Excised calm air secondary claim due to anemometer readings\.\]/);
       assert.match(prompt, /\(Admitted Core: 14-bis flew 220m under official commission observation\.\)/);
+      assert.match(
+        prompt,
+        /Proofs with status "partially_admitted" are valid citations for their narrowed Admitted Core and may be cited in "proofId"/
+      );
     });
   });
 });

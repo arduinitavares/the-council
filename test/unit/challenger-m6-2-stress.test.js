@@ -653,7 +653,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         const out = mockIO.getStdout();
 
         assert.match(out, /Submitted Proofs:/);
-        assert.match(out, /\[P1\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[citation\]\s+Architecture/);
+        assert.match(out, /\[P1\]\s+\[PARTIALLY ADMITTED\]\s+\[citation\]\s+Architecture/);
         assert.match(out, /Seat : seat-alpha \| Judge Note: Narrowed claim: latency bounded to 50ms only under steady state\./);
         assert.match(out, /Admitted Core: Steady-state latency is bounded under 50ms\./);
       } finally {
@@ -682,7 +682,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         assert.equal(code, 0);
         const out = mockIO.getStdout();
 
-        assert.match(out, /\[P2\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[benchmark\]/);
+        assert.match(out, /\[P2\]\s+\[PARTIALLY ADMITTED\]\s+\[benchmark\]/);
         assert.match(out, /Seat : seat-beta \| Judge Note: Audit caveat: warm cache only\./);
         assert.match(out, /Admitted Core: Warm-cache throughput measured at 10000 rps\./);
       } finally {
@@ -710,7 +710,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         assert.equal(code, 0);
         const out = mockIO.getStdout();
 
-        assert.match(out, /\[P3\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[check\]/);
+        assert.match(out, /\[P3\]\s+\[PARTIALLY ADMITTED\]\s+\[check\]/);
         assert.match(out, /Judge Note: Caveat: \/health endpoint bypasses validation by design\./);
         assert.doesNotMatch(out, /Admitted Core:/);
       } finally {
@@ -737,7 +737,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         assert.equal(code, 0);
         const out = mockIO.getStdout();
 
-        assert.match(out, /\[P4\]\s+\(admitted\)\s+\[derivation\]/);
+        assert.match(out, /\[P4\]\s+\[ADMITTED\]\s+\[derivation\]/);
         assert.doesNotMatch(out, /\[PARTIALLY ADMITTED\]/);
         assert.doesNotMatch(out, /Admitted Core:/);
       } finally {
@@ -765,7 +765,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         assert.equal(code, 0);
         const out = mockIO.getStdout();
 
-        assert.match(out, /\[P5\]\s+\(rejected\)\s+\[check\]/);
+        assert.match(out, /\[P5\]\s+\[REJECTED\]\s+\[check\]/);
         assert.doesNotMatch(out, /\[PARTIALLY ADMITTED\]/);
         assert.match(out, /Judge Note: Rejected: Unbounded retries cause exponential latency explosion\./);
         assert.doesNotMatch(out, /Admitted Core:/);
@@ -818,16 +818,16 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         assert.match(out, /Proof Audit: 1 Admitted \| 1 Partially Admitted \| 1 Rejected/);
 
         // Check P1
-        assert.match(out, /\[P1\]\s+\(admitted\)\s+\[check\] Core Engine/);
+        assert.match(out, /\[P1\]\s+\[ADMITTED\]\s+\[check\] Core Engine/);
         assert.match(out, /Seat : seat-1/);
 
         // Check P2
-        assert.match(out, /\[P2\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[citation\] Retry Policy/);
+        assert.match(out, /\[P2\]\s+\[PARTIALLY ADMITTED\]\s+\[citation\] Retry Policy/);
         assert.match(out, /Seat : seat-2 \| Judge Note: Caveat: applies when turnTimeoutMs exceeds 90000ms\./);
         assert.match(out, /Admitted Core: Retry attempts are capped at min\(turnTimeoutMs, 90000ms\)\./);
 
         // Check P3
-        assert.match(out, /\[P3\]\s+\(rejected\)\s+\[derivation\] Voting Policy/);
+        assert.match(out, /\[P3\]\s+\[REJECTED\]\s+\[derivation\] Voting Policy/);
         assert.match(out, /Seat : seat-3 \| Judge Note: Rejected: Voting is strictly closed-context JSON voting\./);
       } finally {
         restoreEngine();
@@ -920,7 +920,7 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         // 2. Verify Partially Admitted Proof rendering
         assert.match(
           out,
-          /\[P1\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[citation\] Engine Budget/,
+          /\[P1\]\s+\[PARTIALLY ADMITTED\]\s+\[citation\] Engine Budget/,
           'P1 must be rendered with [PARTIALLY ADMITTED] badge'
         );
         assert.match(
@@ -937,8 +937,8 @@ describe('Challenger M6-2 Adversarial Stress Suite: CLI Ergonomics & Proof Audit
         // 3. Verify Fully Admitted Proof rendering
         assert.match(
           out,
-          /\[P2\]\s+\(admitted\)\s+\[derivation\] Voting Efficiency/,
-          'P2 must be rendered with (admitted)'
+          /\[P2\]\s+\[ADMITTED\]\s+\[derivation\] Voting Efficiency/,
+          'P2 must be rendered with [ADMITTED]'
         );
         assert.doesNotMatch(
           out,

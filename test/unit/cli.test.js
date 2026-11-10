@@ -295,16 +295,18 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
 
       const finalAnswerIndex = out.indexOf('Final Answer:');
       const clausesIndex = out.indexOf('Candidate Clauses:');
+      const proofAuditIndex = out.indexOf('Proof Audit:');
       const rollCallIndex = out.indexOf('Seat Roll Call:');
       const proofsIndex = out.indexOf('Submitted Proofs:');
 
       assert.ok(finalAnswerIndex > 0, 'Final Answer must be present');
       assert.ok(clausesIndex > finalAnswerIndex, 'Candidate Clauses must appear after Final Answer');
-      assert.ok(rollCallIndex > clausesIndex, 'Seat Roll Call must appear after Candidate Clauses');
+      assert.ok(proofAuditIndex > clausesIndex, 'Proof Audit must appear after Candidate Clauses');
+      assert.ok(rollCallIndex > proofAuditIndex, 'Seat Roll Call must appear after Proof Audit');
       assert.ok(proofsIndex > rollCallIndex, 'Submitted Proofs must appear after Seat Roll Call');
 
       assert.match(out, /-\s+\[ACCEPTED\]\s+astra-systems \(codex \/ gpt-6-astra \(max\)\) — Proofs: P1 \(admitted\)/);
-      assert.match(out, /\s+-\s+\[P\d+\]\s+\(admitted\)\s+\[check\]/);
+      assert.match(out, /\s+-\s+\[P\d+\]\s+\[ADMITTED\]\s+\[check\]/);
       assert.match(out, /Seat : astra-systems \| Judge Note:/);
     });
 
@@ -1347,10 +1349,10 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         assert.match(out, /Proof Audit: 0 Admitted \| 1 Partially Admitted \| 1 Rejected/);
 
         // Verify Submitted Proofs formatting
-        assert.match(out, /\[P1\]\s+\(partially_admitted\)\s+\[PARTIALLY ADMITTED\]\s+\[citation\]/);
+        assert.match(out, /\[P1\]\s+\[PARTIALLY ADMITTED\]\s+\[citation\]/);
         assert.match(out, /Judge Note: Excised calm air secondary claim per wind measurements\./);
         assert.match(out, /Admitted Core: 120 ft powered flight verified\./);
-        assert.match(out, /\[P2\]\s+\(rejected\)\s+\[citation\]/);
+        assert.match(out, /\[P2\]\s+\[REJECTED\]\s+\[citation\]/);
         assert.match(out, /Judge Note: Duplicate flight citation\./);
       } finally {
         if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);

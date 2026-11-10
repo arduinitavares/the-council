@@ -150,17 +150,28 @@ export class MockAdapter extends HarnessAdapter {
   /**
    * Execute seat turn deterministically.
    */
-  async executeSeat({ seat, soul, round, phase, state, cwd, context: callerContext }) {
+  async executeSeat({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
     this.callCount.seats += 1;
 
     const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const effectiveTools =
+      tools ??
+      callerContext?.tools ??
+      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+      'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveSeat = seat
+      ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
+      : seat;
     const resolvedSoul = soul || seat?.soul || 'General Seat: Evaluates claims empirically';
-    const effectiveCwd = [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
     const renderedPrompt = isVoting
-      ? formatVotingPrompt({ soul: resolvedSoul, seat, candidate: state?.candidate, state, cwd: effectiveCwd })
-      : formatDeliberationPrompt({ soul: resolvedSoul, seat, topic: state?.topic, round, maxRounds: state?.maxRounds, state, cwd: effectiveCwd });
+      ? formatVotingPrompt({ soul: resolvedSoul, seat: effectiveSeat, candidate: state?.candidate, state, tools: effectiveTools, cwd: effectiveCwd })
+      : formatDeliberationPrompt({ soul: resolvedSoul, seat: effectiveSeat, topic: state?.topic, round, maxRounds: state?.maxRounds, state, tools: effectiveTools, cwd: effectiveCwd });
 
     // Record prompt for soul adherence and evidence/clarifications verification
     const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]\n${renderedPrompt}`;
@@ -221,19 +232,27 @@ export class MockAdapter extends HarnessAdapter {
   /**
    * Execute judge turn deterministically.
    */
-  async executeJudge({ judge, round, phase, proofs, state, cwd, context: callerContext }) {
+  async executeJudge({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
     this.callCount.judge += 1;
 
-    const effectiveCwd = [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-      .find((c) => typeof c === 'string' && c.trim())
-      ?.trim();
+    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveCwd =
+      effectiveTools === 'none'
+        ? undefined
+        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
+            .find((c) => typeof c === 'string' && c.trim())
+            ?.trim();
+    const effectiveJudge = judge
+      ? { ...judge, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
+      : judge;
     const judgePrompt = formatJudgePrompt({
-      judge,
+      judge: effectiveJudge,
       topic: state?.topic,
       round,
       maxRounds: state?.maxRounds,
       proofs,
       state,
+      tools: effectiveTools,
       cwd: effectiveCwd
     });
     this.recordedPrompts.push({

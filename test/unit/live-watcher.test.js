@@ -1370,9 +1370,11 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         assert.ok(c.argv.includes('hooks'));
         assert.equal(c.exitCode, 0);
         assert.equal(typeof c.durationMs, 'number');
-        assert.equal(c.tools, 'read-only');
         assert.ok(c.argv.some((a) => a.startsWith('[REDACTED prompt:')));
       }
+      assert.equal(codexCalls[0].tools, 'read-only');
+      assert.equal(codexCalls[1].tools, 'read-only');
+      assert.equal(codexCalls[2].tools, 'none');
 
       const agyCalls = calls.filter((c) => c.provider === 'antigravity');
       assert.equal(agyCalls.length, 2);
@@ -1380,8 +1382,9 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         assert.equal(c.participantId, 'argon-voter');
         assert.equal(c.exitCode, 0);
         assert.equal(typeof c.durationMs, 'number');
-        assert.equal(c.tools, 'read-only');
       }
+      assert.equal(agyCalls[0].tools, 'read-only');
+      assert.equal(agyCalls[1].tools, 'none');
     });
 
     it('wires CursorAdapter into CouncilEngine providerCalls and preserves disableHooks / ignoreUserConfig across state (#37)', async () => {

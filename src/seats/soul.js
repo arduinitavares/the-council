@@ -313,7 +313,7 @@ export function formatDeliberationPrompt({
 }) {
   const s = createSoul(soul);
   const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
-  const hasWorkspaceCwd = Boolean(
+  const hasWorkspaceCwd = resolvedTools !== 'none' && Boolean(
     (typeof cwd === 'string' && cwd.trim()) ||
     (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
     (typeof state?.cwd === 'string' && state.cwd.trim())
@@ -410,7 +410,7 @@ export function formatVotingPrompt({
     tools !== undefined
       ? tools
       : (seat?.votingTools !== undefined ? seat.votingTools : (seat?.tools || 'read-only'));
-  const hasWorkspaceCwd = Boolean(
+  const hasWorkspaceCwd = resolvedTools !== 'none' && Boolean(
     (typeof cwd === 'string' && cwd.trim()) ||
     (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
     (typeof state?.cwd === 'string' && state.cwd.trim())
@@ -431,14 +431,15 @@ export function formatVotingPrompt({
         const pid = p.id || `P${idx + 1}`;
         const kind = p.kind || 'check';
         const scope = p.scope || 'general';
-        const stmt = p.judgeAdmittedStatement || p.statement || '';
+        const stmt = p.statement || p.judgeAdmittedStatement || '';
         const src = p.source || 'unspecified';
         let line = `- [${pid}] (${kind}) [${scope}]: ${stmt}`;
         if (p.status === 'partially_admitted') {
           const noteStr = p.judgeNote ? `: ${p.judgeNote}` : '';
           line += ` [PARTIALLY ADMITTED${noteStr}]`;
-          if (p.judgeAdmittedStatement) {
-            line += ` (Admitted Core: ${p.judgeAdmittedStatement})`;
+          const admittedCore = typeof p.judgeAdmittedStatement === 'string' ? p.judgeAdmittedStatement.trim() : '';
+          if (admittedCore && admittedCore !== stmt.trim()) {
+            line += ` (Admitted Core: ${admittedCore})`;
           }
         }
         line += ` (source: ${src})`;
@@ -487,7 +488,7 @@ ${proofList}
 
 As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), evaluate if this Candidate satisfies your criteria.
 - If you accept: voting "accept" will automatically withdraw any open objections you previously raised.
-- If you object: you MUST provide a concrete "reason" and cite an admitted "proofId" substantiating your dissent.
+- If you object: you MUST provide a concrete "reason" and cite an admitted "proofId" substantiating your dissent. Proofs with status "partially_admitted" are valid citations for their narrowed Admitted Core and may be cited in "proofId" if that narrowed core refutes a Candidate Clause.
 ${votingVerificationBlock}
 OUTPUT CONTRACT (strict JSON):
 If accepting:
@@ -529,7 +530,7 @@ export function formatJudgePrompt({
     ? judge.soul
     : createSoul(judge?.soul || 'Impartial Proof Auditor');
   const resolvedTools = tools !== undefined ? tools : (judge?.tools || 'read-only');
-  const hasWorkspaceCwd = Boolean(
+  const hasWorkspaceCwd = resolvedTools !== 'none' && Boolean(
     (typeof cwd === 'string' && cwd.trim()) ||
     (typeof judge?.cwd === 'string' && judge.cwd.trim()) ||
     (typeof state?.cwd === 'string' && state.cwd.trim())

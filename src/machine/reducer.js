@@ -33,9 +33,10 @@ import {
   isQuorumSatisfied,
   findSeat,
   findProof,
+  resolveCitedProofStatus
 } from './state.js';
 
-import { guardJudgeAuditAndSynthesize } from './guards.js';
+import { guardJudgeAuditAndSynthesize, normalizeProofDecision } from './guards.js';
 
 /**
  * Rejection helper: returns cloned state with lastTransition = { ok: false, message },
@@ -315,59 +316,18 @@ export function transitionCouncil(state, event) {
       next.proofs.forEach((p) => {
         const hasExplicitDecision = Object.prototype.hasOwnProperty.call(decisions, p.id);
         if (hasExplicitDecision) {
-          const decision = decisions[p.id];
-          if (
-            decision === true ||
-            decision === 'admitted' ||
-            (typeof decision === 'object' && (decision.admitted === true || decision.status === 'admitted'))
-          ) {
-            p.status = 'admitted';
-            p.admissionKind = 'explicitly_admitted';
-            delete p.judgeAdmittedStatement;
-            p.judgeNote =
-              typeof decision === 'object' && (decision.note || decision.reason)
-                ? String(decision.note || decision.reason).trim()
-                : '';
-          } else if (
-            decision === false ||
-            decision === 'rejected' ||
-            (typeof decision === 'object' && (decision.admitted === false || decision.status === 'rejected'))
-          ) {
-            p.status = 'rejected';
-            p.admissionKind = 'judge_rejected';
-            delete p.judgeAdmittedStatement;
-            p.judgeNote =
-              typeof decision === 'object' && (decision.note || decision.reason)
-                ? String(decision.note || decision.reason).trim()
-                : '';
-          } else if (
-            typeof decision === 'object' &&
-            (decision.status === 'partially_admitted' || decision.status === 'admitted_with_caveat')
-          ) {
-            p.status = 'partially_admitted';
-            p.admissionKind = 'partially_admitted';
-            const stmt =
-              typeof decision.admittedStatement === 'string' && decision.admittedStatement.trim().length > 0
-                ? decision.admittedStatement.trim()
-                : null;
-            p.judgeAdmittedStatement = stmt;
-            const noteText =
-              typeof decision.note === 'string'
-                ? decision.note
-                : typeof decision.reason === 'string'
-                ? decision.reason
-                : '';
-            p.judgeNote = noteText.trim();
-          } else if (typeof decision === 'object' && (decision.note || decision.reason)) {
-            // Note-only decision object (Issue #56)
-            if (p.status === 'pending') {
-              p.status = 'admitted';
-              p.admissionKind = 'default_admitted';
+          const normalized = normalizeProofDecision(decisions[p.id], p, p.id);
+          if (normalized.ok) {
+            p.status = normalized.status;
+            if (normalized.admissionKind !== undefined) {
+              p.admissionKind = normalized.admissionKind;
             }
-            if (p.status !== 'partially_admitted') {
+            if (normalized.status === 'partially_admitted') {
+              p.judgeAdmittedStatement = normalized.judgeAdmittedStatement;
+            } else {
               delete p.judgeAdmittedStatement;
             }
-            p.judgeNote = String(decision.note || decision.reason).trim();
+            p.judgeNote = normalized.judgeNote;
           }
         } else if (p.status === 'pending') {
           p.status = 'admitted';
@@ -966,14 +926,13 @@ export function getDependencyAndStateGraph(state, options = {}) {
   if (state.candidate && state.candidate.clauses) {
     state.candidate.clauses.forEach((cl) => {
       (cl.citedProofIds || []).forEach((pid) => {
-        const citedProof = (state.proofs || []).find((p) => p.id === pid);
         causalLinks.push({
           id: 'dep-proof-clause-' + pid + '-' + cl.id,
           fromKind: 'proof',
           fromId: pid,
           toKind: 'clause',
           toId: cl.id,
-          status: citedProof ? citedProof.status : 'admitted',
+          status: resolveCitedProofStatus(state, pid),
           label: 'cites ' + pid
         });
       });

@@ -308,7 +308,7 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
       );
     });
 
-    it('2.3 caps retry timeout to 1ms when remainingBudget is 1ms', async () => {
+    it('2.3 excuses immediately without doomed 1ms retry when remainingBudget (1ms) is below minViableBudgetMs (5000ms)', async () => {
       const attempts = [];
       const mockHarness = new MockAdapter();
       mockHarness.executeSeatProof = async (ctx) => {
@@ -338,9 +338,10 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
             model: 'grok-4.7-high',
             soul: 'S1',
             timeoutMs: 240000,
-            totalSeatBudgetMs: 240001 // remaining budget: 240001 - 240000 = 1ms
+            totalSeatBudgetMs: 240001 // remaining budget: 240001 - 240000 = 1ms < minViableBudgetMs (5000ms)
           },
-          { id: 's2', harness: 'mock', model: 'm', soul: 'S2' }
+          { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
+          { id: 's3', harness: 'mock', model: 'm', soul: 'S3' }
         ]
       }, { harnessResolver: () => mockHarness });
 
@@ -348,10 +349,11 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
       const res = await engine.run();
       assert.equal(res.ok, true);
 
-      assert.equal(attempts.length, 2);
+      assert.equal(attempts.length, 1);
       assert.equal(attempts[0].timeoutMs, 240000);
-      // Math.min(240000, 90000, 1) === 1
-      assert.equal(attempts[1].timeoutMs, 1, 'Retry timeout must be strictly capped to 1ms');
+      const excusedSeat = engine.state.seats.find((s) => s.id === 's-boundary-1ms');
+      assert.equal(excusedSeat.status, 'excused');
+      assert.match(excusedSeat.excusedReason, /Exhausted total seat phase time budget/);
     });
 
     it('2.4 caps retry timeout to 90000ms when turnTimeoutMs is 240000ms and remaining budget is 120000ms', async () => {

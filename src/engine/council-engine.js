@@ -62,7 +62,16 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     seat.votingTimeoutMs ||
     engineConfig.votingTimeoutMs ||
     90000;
-  const votingTimeoutMs = Math.min(baseTimeoutMs, configuredVotingTimeoutMs);
+  const totalSeatBudgetMs =
+    seat.totalSeatBudgetMs ||
+    seat.seatBudget ||
+    engineConfig.totalSeatBudgetMs ||
+    engineConfig.seatBudget;
+  const rawVotingTimeoutMs = Math.min(baseTimeoutMs, configuredVotingTimeoutMs);
+  const votingTimeoutMs =
+    typeof totalSeatBudgetMs === 'number' && totalSeatBudgetMs > 0
+      ? Math.min(rawVotingTimeoutMs, totalSeatBudgetMs)
+      : rawVotingTimeoutMs;
 
   return {
     ...seat,
@@ -440,7 +449,14 @@ export class CouncilEngine {
     const retries = seat ? seat.retries : 0;
     const isRetryable = this._isRetryableError(error);
     const remainingBudget = options.remainingBudget;
-    const budgetExhausted = typeof remainingBudget === 'number' && remainingBudget <= 0;
+    const totalSeatBudgetMs = options.totalSeatBudgetMs;
+    const minViableBudgetMs =
+      typeof totalSeatBudgetMs === 'number' && totalSeatBudgetMs > 0
+        ? Math.min(5000, Math.floor(totalSeatBudgetMs * 0.1))
+        : 0;
+    const budgetExhausted =
+      typeof remainingBudget === 'number' &&
+      (remainingBudget <= 0 || remainingBudget < minViableBudgetMs);
 
     this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
@@ -501,7 +517,20 @@ export class CouncilEngine {
 
       this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
       const harness = this.harnessResolver(seat.harness);
-      const turnTimeoutMs = seat.timeoutMs || this.config.timeoutMs;
+      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
+      const mergedSeat = { ...configSeat, ...seat };
+      const rawTurnTimeoutMs = mergedSeat.timeoutMs || this.config.timeoutMs;
+      const seatBudgetMs =
+        mergedSeat.totalSeatBudgetMs ||
+        mergedSeat.seatBudget ||
+        this.config.totalSeatBudgetMs ||
+        this.config.seatBudget;
+      const turnTimeoutMs =
+        typeof rawTurnTimeoutMs === 'number' && typeof seatBudgetMs === 'number'
+          ? Math.min(rawTurnTimeoutMs, seatBudgetMs)
+          : (typeof rawTurnTimeoutMs === 'number'
+              ? rawTurnTimeoutMs
+              : (typeof seatBudgetMs === 'number' && seatBudgetMs < 480000 ? Math.min(240000, seatBudgetMs) : undefined));
 
       const t0 = Date.now();
       try {
@@ -690,35 +719,57 @@ export class CouncilEngine {
     const judge = this.state.judge;
     this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
     const judgeHarness = this.harnessResolver(judge.harness);
-    const judgeTimeoutMs = judge.timeoutMs || this.config.timeoutMs;
+    const configJudge = this.config.judge || {};
+    const mergedJudge = { ...configJudge, ...judge };
+    const rawJudgeTimeoutMs = mergedJudge.timeoutMs || this.config.timeoutMs;
+    const baseJudgeTimeoutMs =
+      rawJudgeTimeoutMs ||
+      (typeof judgeHarness.resolveTimeoutMs === 'function' ? judgeHarness.resolveTimeoutMs(mergedJudge.model) : 240000);
+    const explicitGlobalSeatBudget = Boolean(this.config._explicitGlobalSeatBudget);
+    const judgeBudgetMs =
+      mergedJudge.totalSeatBudgetMs ||
+      mergedJudge.seatBudget ||
+      (explicitGlobalSeatBudget ? this.config.totalSeatBudgetMs : undefined) ||
+      (rawJudgeTimeoutMs ? rawJudgeTimeoutMs * 2 : (this.config.totalSeatBudgetMs || 480000));
+    const minViableJudgeBudgetMs = Math.min(5000, Math.floor(judgeBudgetMs * 0.1));
+    const initialJudgeTimeoutMs =
+      typeof rawJudgeTimeoutMs === 'number'
+        ? Math.min(rawJudgeTimeoutMs, judgeBudgetMs)
+        : (judgeBudgetMs < 480000 ? Math.min(baseJudgeTimeoutMs, judgeBudgetMs) : undefined);
 
     const roundProofs = this.state.proofs.filter((p) => p.round === currentRound || p.status === 'pending');
     const maxJudgeRetries = this.config.maxRetriesPerJudge ?? this.config.maxRetriesPerSeat ?? 1;
     let judgeExecuted = false;
+    let judgeElapsedMs = 0;
+    let currentJudgeConfig = { ...mergedJudge };
+    let currentJudgeTimeoutMs = initialJudgeTimeoutMs;
 
     while (!judgeExecuted && !this.isCompleted() && !this.aborted) {
+      const judgeT0 = Date.now();
       try {
         let synthesisResult;
         if (typeof judgeHarness.executeJudgeAuditAndSynthesis === 'function') {
           synthesisResult = await judgeHarness.executeJudgeAuditAndSynthesis({
-            judge,
+            judge: currentJudgeConfig,
             round: currentRound,
             phase: 'JUDGE_AUDIT_SYNTHESIS',
             proofs: roundProofs,
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: judgeTimeoutMs,
+            timeoutMs: currentJudgeTimeoutMs,
+            tools: currentJudgeConfig.tools,
             telemetry: this.telemetry
           });
         } else if (typeof judgeHarness.executeJudge === 'function') {
           synthesisResult = await judgeHarness.executeJudge({
-            judge,
+            judge: currentJudgeConfig,
             round: currentRound,
             phase: 'JUDGE_AUDIT_SYNTHESIS',
             proofs: roundProofs,
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: judgeTimeoutMs,
+            timeoutMs: currentJudgeTimeoutMs,
+            tools: currentJudgeConfig.tools,
             telemetry: this.telemetry
           });
         } else {
@@ -740,23 +791,45 @@ export class CouncilEngine {
           });
         }
 
+        judgeElapsedMs += Date.now() - judgeT0;
         judgeExecuted = true;
       } catch (err) {
+        const attemptDuration =
+          typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
+            ? err.timeoutMs
+            : (typeof err?.trace?.durationMs === 'number' && err.trace.durationMs > 0
+                ? err.trace.durationMs
+                : Date.now() - judgeT0);
+        judgeElapsedMs += attemptDuration;
+        const remainingJudgeBudget = judgeBudgetMs - judgeElapsedMs;
+        const judgeBudgetExhausted =
+          remainingJudgeBudget <= 0 || remainingJudgeBudget < minViableJudgeBudgetMs;
+
         const errorClass = this._classifyErrorClass(err);
         const errorMsg = this._formatFaultReason(err);
         const faultStatus = this._classifyFaultStatus(err);
+        const isTimeout = faultStatus === 'fault_timeout' || errorClass === 'TimeoutError';
         const isRetryable = this._isRetryableError(err);
         this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg, errorClass });
         this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass });
 
-        if (isRetryable && this.state.judge.retries < maxJudgeRetries) {
+        if (isRetryable && this.state.judge.retries < maxJudgeRetries && !judgeBudgetExhausted) {
           this._step({ type: 'RETRY_JUDGE' });
+          currentJudgeConfig = {
+            ...currentJudgeConfig,
+            ...this.state.judge,
+            ...(isTimeout ? { tools: 'none' } : { tools: currentJudgeConfig.tools })
+          };
+          currentJudgeTimeoutMs = Math.min(baseJudgeTimeoutMs, 90000, remainingJudgeBudget);
           this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
         } else {
+          const terminalReason = judgeBudgetExhausted
+            ? `Exhausted total judge phase time budget (${judgeElapsedMs}ms >= ${judgeBudgetMs}ms): ${errorMsg}`
+            : errorMsg;
           this._step({
             type: 'JUDGE_FAULT',
-            error: errorMsg,
-            reason: errorMsg,
+            error: terminalReason,
+            reason: terminalReason,
             status: faultStatus,
             errorClass,
             terminal: true
@@ -787,12 +860,19 @@ export class CouncilEngine {
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
       const mergedSeat = { ...configSeat, ...seat };
       const votingSeat = resolveVotingSeatConfig(mergedSeat, this.config);
-      const voteTimeoutMs = votingSeat.votingTimeoutMs;
+      const totalSeatBudgetMs =
+        mergedSeat.totalSeatBudgetMs ||
+        mergedSeat.seatBudget ||
+        this.config.totalSeatBudgetMs ||
+        this.config.seatBudget ||
+        votingSeat.votingTimeoutMs * 2;
+      const voteTimeoutMs = Math.min(votingSeat.votingTimeoutMs, totalSeatBudgetMs);
       const effectiveVotingSeat = {
         ...seat,
         model: votingSeat.model,
+        tools: votingSeat.tools,
         votingTools: votingSeat.tools,
-        votingTimeoutMs: votingSeat.votingTimeoutMs,
+        votingTimeoutMs: voteTimeoutMs,
         ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
       };
 

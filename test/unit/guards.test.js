@@ -14,8 +14,11 @@ import {
   validateSeatActive,
   getActiveSeats,
   matchesPhase,
+  normalizeProofDecision,
   guardJudgeAuditAndSynthesize
 } from '../../src/machine/guards.js';
+import { resolveCitedProofStatus } from '../../src/machine/state.js';
+import { transitionCouncil } from '../../src/machine/reducer.js';
 
 describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', () => {
   describe('Candidate Synthesis Proof-Binding Guard (validateCandidateClauses)', () => {
@@ -380,6 +383,13 @@ describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', (
       return {
         phase: 'judging',
         round: 1,
+        judge: { id: 'j1', status: 'thinking' },
+        seats: [
+          { id: 's1', status: 'proof_submitted' },
+          { id: 's2', status: 'proof_submitted' }
+        ],
+        objections: [],
+        history: [],
         proofs: [
           { id: 'P1', round: 1, seatId: 's1', status: 'pending' },
           { id: 'P2', round: 1, seatId: 's2', status: 'pending' }
@@ -517,6 +527,65 @@ describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', (
       });
       assert.equal(rejectedRes.ok, false);
       assert.match(rejectedRes.message, /cites unverified Proof "P2"/);
+    });
+
+    it('GRD-8: fails closed on conflicting status and admitted fields or non-boolean admitted (#71)', () => {
+      const state = createJudgingState();
+      const conflictingCases = [
+        { status: 'partially_admitted', admitted: true, admittedStatement: 'Core', note: 'Caveat' },
+        { status: 'partially_admitted', admitted: false, admittedStatement: 'Core', note: 'Caveat' },
+        { status: 'admitted_with_caveat', admitted: true, note: 'Caveat' },
+        { status: 'admitted_with_caveat', admitted: false, note: 'Caveat' },
+        { status: 'admitted', admitted: false, note: 'Contradiction' },
+        { status: 'rejected', admitted: true, note: 'Contradiction' },
+        { admitted: 'yes', note: 'Non-boolean admitted' },
+        { admitted: 1, note: 'Numeric admitted' }
+      ];
+
+      for (const badDec of conflictingCases) {
+        const norm = normalizeProofDecision(badDec, state.proofs[0], 'P1');
+        assert.equal(norm.ok, false, `Expected normalizeProofDecision to reject: ${JSON.stringify(badDec)}`);
+
+        const guardRes = guardJudgeAuditAndSynthesize(state, {
+          proofDecisions: { P1: badDec },
+          clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P2'] }]
+        });
+        assert.equal(guardRes.ok, false, `Expected guardJudgeAuditAndSynthesize to reject: ${JSON.stringify(badDec)}`);
+
+        const nextState = transitionCouncil(state, {
+          type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+          proofDecisions: { P1: badDec },
+          clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P2'] }],
+          synthesis: 'Synth'
+        });
+        assert.equal(nextState.lastTransition.ok, false);
+        assert.equal(nextState.phase, 'judging');
+      }
+    });
+
+    it('GRD-9: trims whitespace-only note before falling back to trimmed reason in normalizeProofDecision and reducer (#71)', () => {
+      const state = createJudgingState();
+      const dec = { status: 'partially_admitted', note: '   ', reason: '  Scoped to single node  ' };
+
+      const norm = normalizeProofDecision(dec, state.proofs[0], 'P1');
+      assert.equal(norm.ok, true);
+      assert.equal(norm.status, 'partially_admitted');
+      assert.equal(norm.judgeNote, 'Scoped to single node');
+      assert.equal(norm.judgeAdmittedStatement, null);
+
+      const nextState = transitionCouncil(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        proofDecisions: { P1: dec },
+        clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }],
+        synthesis: 'Synth'
+      });
+      assert.equal(nextState.lastTransition.ok, true);
+      const p1 = nextState.proofs.find((p) => p.id === 'P1');
+      assert.equal(p1.status, 'partially_admitted');
+      assert.equal(p1.judgeNote, 'Scoped to single node');
+      assert.equal(p1.judgeAdmittedStatement, null);
+      assert.equal(resolveCitedProofStatus(nextState, 'P1'), 'partially_admitted');
+      assert.equal(resolveCitedProofStatus(nextState, 'P2'), 'admitted');
     });
   });
 });

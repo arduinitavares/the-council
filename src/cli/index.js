@@ -535,7 +535,6 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         }
       }
       const tallyText = `Proof Audit: ${admittedCount} Admitted | ${partiallyAdmittedCount} Partially Admitted | ${rejectedCount} Rejected`;
-      log(cyanBold(tallyText));
 
       const candidate = result.verdict?.candidate || result.state?.candidate || null;
       const candidateSummary = typeof candidate?.summary === 'string' ? candidate.summary.trim() : '';
@@ -559,6 +558,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           log(`  - [${c.id || c.context}] ${c.context}: ${c.conclusion} (Cited: ${(c.citedProofIds || []).join(', ')})`);
         });
       }
+
+      log(`\n${cyanBold(tallyText)}`);
 
       if (result.state?.seats?.length > 0) {
         log('\nSeat Roll Call:');
@@ -602,8 +603,23 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         log('\nSubmitted Proofs:');
         result.state.proofs.forEach((p) => {
           const isPartial = p.status === 'partially_admitted' || p.admissionKind === 'partially_admitted';
-          const partialBadge = isPartial ? `${amber('[PARTIALLY ADMITTED]')} ` : '';
-          log(`  - [${p.id}] (${p.status}) ${partialBadge}[${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
+          const isAdmitted =
+            !isPartial &&
+            (p.status === 'admitted' ||
+              p.admissionKind === 'explicitly_admitted' ||
+              p.admissionKind === 'default_admitted');
+          const isRejected =
+            !isPartial &&
+            !isAdmitted &&
+            (p.status === 'rejected' || p.admissionKind === 'judge_rejected');
+          const statusBadge = isPartial
+            ? amber('[PARTIALLY ADMITTED]')
+            : isAdmitted
+            ? '[ADMITTED]'
+            : isRejected
+            ? '[REJECTED]'
+            : `[${String(p.status || 'PENDING').toUpperCase()}]`;
+          log(`  - [${p.id}] ${statusBadge} [${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
           const seatIdStr = typeof p.seatId === 'string' && p.seatId.trim() ? p.seatId.trim() : '';
           const rawNote =
             typeof p.judgeNote === 'string'

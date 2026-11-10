@@ -269,5 +269,32 @@ describe('Unit: Config Validation & Resolution (Milestone M5 / Issues #70, #72)'
       assert.equal(cfg.judge.timeoutMs, 60000);
       assert.equal(cfg.judge.timeout, 60000);
     });
+
+    it('preserves explicit global totalSeatBudgetMs / seatBudget on seats even when global timeoutMs is also set (#70)', () => {
+      const cfg = resolveConfig({
+        topic: 'Explicit global seat-budget + timeout check',
+        timeout: 120000,
+        seatBudget: 180000,
+        judge: { id: 'j', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+        seats: [
+          { id: 's-inherit', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Soul' },
+          { id: 's-seat-timeout', harness: 'cursor', model: 'grok-4.7-high', soul: 'Soul', timeoutMs: 50000 },
+          { id: 's-seat-budget', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Soul', seatBudget: 95000 }
+        ]
+      });
+      assert.equal(cfg.timeoutMs, 120000);
+      assert.equal(cfg.totalSeatBudgetMs, 180000);
+      assert.equal(cfg.seats[0].timeoutMs, 120000);
+      assert.equal(cfg.seats[0].totalSeatBudgetMs, 180000, 'Seat without seat-level timeout/budget must inherit explicit global seatBudget (180000), not timeoutMs * 2 (240000)');
+      assert.equal(cfg.seats[1].timeoutMs, 50000);
+      assert.equal(cfg.seats[1].totalSeatBudgetMs, 100000, 'Seat with explicit seat-level timeoutMs and no seat-level budget derives 2 * seatSpecificTimeout');
+      assert.equal(cfg.seats[2].totalSeatBudgetMs, 95000);
+
+      // Re-invoking resolveConfig on an already resolved config (as CouncilEngine constructor does) must preserve 180000
+      const reResolved = resolveConfig(cfg);
+      assert.equal(reResolved.seats[0].totalSeatBudgetMs, 180000);
+      assert.equal(reResolved.seats[1].totalSeatBudgetMs, 100000);
+      assert.equal(reResolved.seats[2].totalSeatBudgetMs, 95000);
+    });
   });
 });

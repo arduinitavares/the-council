@@ -249,10 +249,10 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
       const result = await engine.run();
 
       // Check captured retry timeouts:
-      // Initial call: ctx.timeoutMs was 120000
+      // Initial call: ctx.timeoutMs is clamped to Math.min(120000, 100000) = 100000
       // Retry 1: remainingBudget = 100000 - 35000 = 65000. Math.min(120000, 90000, 65000) = 65000
       // Retry 2: remainingBudget = 100000 - 80000 = 20000. Math.min(120000, 90000, 20000) = 20000
-      assert.deepEqual(capturedRetryTimeouts, [120000, 65000, 20000]);
+      assert.deepEqual(capturedRetryTimeouts, [100000, 65000, 20000]);
 
       const excusedSeat = engine.state.seats.find((s) => s.id === 'multi-retry-seat');
       assert.ok(excusedSeat);

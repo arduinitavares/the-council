@@ -666,4 +666,240 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
       assert.equal(registry.instances.size, 0);
     });
   });
+
+  describe('Round 1 Review Regressions: Live Adapter Partial Proofs & Tool-Free Isolation (#70, #71, #72)', () => {
+    it('AntigravityAdapter, CodexAdapter, and CursorAdapter include partially_admitted proofs and caveats in VOTING prompts (#71, #72)', () => {
+      const stateWithPartialProof = {
+        topic: 'Distributed lock safety',
+        candidate: 'Use leased locks with fencing tokens',
+        clauses: [
+          {
+            id: 'C1',
+            context: 'Fencing',
+            conclusion: 'Attach monotonic fencing tokens to every write',
+            citedProofIds: ['P1', 'P2']
+          }
+        ],
+        proofs: [
+          {
+            id: 'P1',
+            seatId: 's1',
+            status: 'admitted',
+            scope: 'Storage layer',
+            kind: 'check',
+            source: 'storage.js:42',
+            statement: 'Storage rejects stale tokens'
+          },
+          {
+            id: 'P2',
+            seatId: 's2',
+            status: 'partially_admitted',
+            scope: 'Network partition',
+            kind: 'trace',
+            source: 'lease.js:88',
+            statement: 'Original broad claim about lock expiry',
+            judgeAdmittedStatement: 'Narrowed core: lease expiry requires fencing token validation',
+            judgeNote: 'Admitted only for single-region deployments'
+          },
+          {
+            id: 'P3',
+            seatId: 's3',
+            status: 'rejected',
+            scope: 'Speculative',
+            kind: 'counterexample',
+            source: 'none',
+            statement: 'Rejected proof statement must not appear'
+          }
+        ]
+      };
+
+      const adapters = [
+        new AntigravityAdapter(),
+        new CodexAdapter(),
+        new CursorAdapter()
+      ];
+
+      for (const adapter of adapters) {
+        const prompt = adapter.formatSeatPrompt({
+          seat: { id: 'voter-1', model: 'gpt-6-astra (max)', votingTools: 'none' },
+          soul: 'Strict Voter',
+          round: 1,
+          phase: 'VOTING',
+          state: stateWithPartialProof,
+          tools: 'none',
+          cwd: '/should/be/omitted/when/tools/none'
+        });
+
+        assert.match(prompt, /\[P1\].*Storage rejects stale tokens/, `${adapter.name} must include admitted P1`);
+        assert.match(
+          prompt,
+          /\[P2\].*\[PARTIALLY ADMITTED: Admitted only for single-region deployments\]/,
+          `${adapter.name} must include partially_admitted P2 badge and caveat`
+        );
+        assert.match(prompt, /Original broad claim about lock expiry/, `${adapter.name} must preserve original P2 statement`);
+        assert.match(
+          prompt,
+          /\(Admitted Core: Narrowed core: lease expiry requires fencing token validation\)/,
+          `${adapter.name} must include P2 judgeAdmittedStatement`
+        );
+        assert.doesNotMatch(prompt, /Rejected proof statement must not appear/, `${adapter.name} must exclude rejected P3`);
+        assert.match(prompt, /Do not invoke any tools during confirmation voting/, `${adapter.name} must emit tool-free voting directive when tools is none`);
+      }
+    });
+
+    it('AntigravityAdapter, CodexAdapter, and CursorAdapter honor tools: "none" in executeSeat and executeJudge, stripping cwd and forwarding tools: "none" (#70, #72)', async () => {
+      const adapterConfigs = [
+        { Ctor: AntigravityAdapter, model: 'gemini-4-argon-high' },
+        { Ctor: CodexAdapter, model: 'gpt-6-astra (max)' },
+        { Ctor: CursorAdapter, model: 'grok-4.7-high' }
+      ];
+
+      for (const { Ctor, model } of adapterConfigs) {
+        const dispatchedCalls = [];
+        const adapter = new Ctor({
+          cwd: '/live/repo/workspace',
+          spawnRunner: async (req) => {
+            dispatchedCalls.push(req);
+            return JSON.stringify({
+              vote: 'accept',
+              summary: 'Synthesized',
+              clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }],
+              proofDecisions: { P1: { status: 'admitted', note: 'OK' } }
+            });
+          }
+        });
+
+        await adapter.executeSeat({
+          seat: { id: 's1', model, tools: 'read-only', votingTools: 'none' },
+          soul: 'Voter',
+          round: 1,
+          phase: 'VOTING',
+          state: { topic: 'T', candidate: 'C', clauses: [], proofs: [] },
+          tools: 'none',
+          cwd: '/live/repo/workspace'
+        });
+
+        assert.equal(dispatchedCalls.length, 1);
+        assert.equal(dispatchedCalls[0].tools, 'none', `${adapter.name} executeSeat must pass tools: 'none'`);
+        assert.equal(dispatchedCalls[0].cwd, undefined, `${adapter.name} executeSeat must strip cwd when tools === 'none'`);
+        assert.equal(dispatchedCalls[0].context.tools, 'none');
+        assert.equal(dispatchedCalls[0].context.cwd, undefined);
+        assert.match(dispatchedCalls[0].prompt, /Do not invoke any tools during confirmation voting/);
+
+        await adapter.executeJudge({
+          judge: { id: 'j1', model, tools: 'read-only' },
+          soul: 'Judge',
+          round: 1,
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          proofs: [{ id: 'P1', seatId: 's1', status: 'pending', scope: 'S', kind: 'k', source: 'src', statement: 'stmt' }],
+          state: { topic: 'T' },
+          tools: 'none',
+          cwd: '/live/repo/workspace'
+        });
+
+        assert.equal(dispatchedCalls.length, 2);
+        assert.equal(dispatchedCalls[1].tools, 'none', `${adapter.name} executeJudge must pass tools: 'none'`);
+        assert.equal(dispatchedCalls[1].cwd, undefined, `${adapter.name} executeJudge must strip cwd when tools === 'none'`);
+        assert.equal(dispatchedCalls[1].context.tools, 'none');
+        assert.equal(dispatchedCalls[1].context.cwd, undefined);
+        assert.doesNotMatch(dispatchedCalls[1].prompt, /You have read-only inspection tools enabled/);
+      }
+    });
+
+    it('runCodexCli, runAntigravityCli, and runCursorCli isolate subprocesses to an empty tempCwdDir and record tools: "none" when tools === "none" (#70, #72)', async () => {
+      const { runCodexCli, runAntigravityCli, runCursorCli } = await import('../../src/harness/cli-runner.js');
+      const { createTelemetryEmitter } = await import('../../src/telemetry/emitter.js');
+      const repoCwd = process.cwd();
+      const emitter = createTelemetryEmitter();
+
+      let agySpawnCwd = null;
+      let agySpawnArgs = null;
+      await runAntigravityCli({
+        model: 'gemini-4-argon-high',
+        prompt: 'vote prompt',
+        timeoutMs: 5000,
+        cwd: repoCwd,
+        tools: 'none',
+        exec: async (_bin, args, opts) => {
+          agySpawnCwd = opts.cwd;
+          agySpawnArgs = args;
+          return { stdout: JSON.stringify({ response: JSON.stringify({ vote: 'accept' }) }), stderr: '', exitCode: 0 };
+        },
+        context: {
+          seatId: 's-agy',
+          phase: 'VOTING',
+          round: 1,
+          cwd: repoCwd,
+          tools: 'none',
+          telemetry: emitter
+        }
+      });
+
+      assert.notEqual(agySpawnCwd, repoCwd, 'runAntigravityCli must not run in repoCwd when tools is none');
+      assert.match(agySpawnCwd, /council-seat-cwd-/, 'runAntigravityCli must run in isolated council-seat-cwd- temp dir');
+      assert.equal(agySpawnArgs.includes(repoCwd), false);
+
+      let cursorSpawnCwd = null;
+      let cursorSpawnArgs = null;
+      await runCursorCli({
+        model: 'grok-4.7-high',
+        prompt: 'vote prompt',
+        timeoutMs: 5000,
+        cwd: repoCwd,
+        tools: 'none',
+        exec: async (_bin, args, opts) => {
+          cursorSpawnCwd = opts.cwd;
+          cursorSpawnArgs = args;
+          return { stdout: JSON.stringify({ result: JSON.stringify({ vote: 'accept' }) }), stderr: '', exitCode: 0 };
+        },
+        context: {
+          seatId: 's-cursor',
+          phase: 'VOTING',
+          round: 1,
+          cwd: repoCwd,
+          tools: 'none',
+          telemetry: emitter
+        }
+      });
+
+      assert.notEqual(cursorSpawnCwd, repoCwd, 'runCursorCli must not run in repoCwd when tools is none');
+      assert.match(cursorSpawnCwd, /council-seat-cwd-/, 'runCursorCli must run in isolated council-seat-cwd- temp dir');
+      assert.equal(cursorSpawnArgs.includes('--workspace'), false, 'runCursorCli must not pass --workspace when tools is none');
+      assert.equal(cursorSpawnArgs.includes(repoCwd), false);
+
+      let codexSpawnCwd = null;
+      let codexSpawnArgs = null;
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'vote prompt',
+        timeoutMs: 5000,
+        cwd: repoCwd,
+        tools: 'none',
+        exec: async (_bin, args, opts) => {
+          codexSpawnCwd = opts.cwd;
+          codexSpawnArgs = args;
+          return { stdout: JSON.stringify({ vote: 'accept' }), stderr: '', exitCode: 0 };
+        },
+        context: {
+          seatId: 's-codex',
+          phase: 'VOTING',
+          round: 1,
+          cwd: repoCwd,
+          tools: 'none',
+          telemetry: emitter
+        }
+      });
+
+      assert.notEqual(codexSpawnCwd, repoCwd, 'runCodexCli must not run in repoCwd when tools is none');
+      assert.match(codexSpawnCwd, /council-seat-cwd-/, 'runCodexCli must run in isolated council-seat-cwd- temp dir');
+      assert.equal(codexSpawnArgs.includes('-C'), false, 'runCodexCli must not pass -C <cwd> when tools is none');
+      assert.equal(codexSpawnArgs.includes(repoCwd), false);
+
+      const providerCalls = emitter.getProviderCalls();
+      assert.equal(providerCalls.length, 3);
+      for (const call of providerCalls) {
+        assert.equal(call.tools, 'none', `Telemetry provider_call for ${call.provider} must record tools: "none"`);
+      }
+    });
+  });
 });

@@ -144,6 +144,225 @@ export function validateCandidateClauses(clauses, admittedProofIds) {
 }
 
 /**
+ * Normalizes a single explicit Judge proof decision fail-closed.
+ * Shared by guardJudgeAuditAndSynthesize and reducer JUDGE_AUDIT_AND_SYNTHESIZE.
+ *
+ * @param {*} decision - Explicit decision entry from proofDecisions[proofId]
+ * @param {string|Object} [priorProof='pending'] - Prior proof status string or proof object
+ * @param {string} [proofIdArg='unknown'] - Proof ID for error messages
+ * @returns {{
+ *   ok: boolean,
+ *   message?: string,
+ *   status?: string,
+ *   admissionKind?: string,
+ *   judgeNote?: string,
+ *   judgeAdmittedStatement?: string|null,
+ *   admittedForCitation?: boolean
+ * }}
+ */
+export function normalizeProofDecision(decision, priorProof = 'pending', proofIdArg = 'unknown') {
+  const isProofObj = typeof priorProof === 'object' && priorProof !== null;
+  const priorStatus = isProofObj
+    ? priorProof.status || 'pending'
+    : typeof priorProof === 'string'
+    ? priorProof
+    : 'pending';
+  const priorAdmissionKind = isProofObj ? priorProof.admissionKind : undefined;
+  const priorAdmittedStatement = isProofObj ? priorProof.judgeAdmittedStatement : undefined;
+  const proofId = isProofObj && priorProof.id ? priorProof.id : proofIdArg;
+
+  if (typeof decision === 'boolean') {
+    if (decision === true) {
+      return {
+        ok: true,
+        status: 'admitted',
+        admissionKind: 'explicitly_admitted',
+        judgeNote: '',
+        judgeAdmittedStatement: undefined,
+        admittedForCitation: true
+      };
+    }
+    return {
+      ok: true,
+      status: 'rejected',
+      admissionKind: 'judge_rejected',
+      judgeNote: '',
+      judgeAdmittedStatement: undefined,
+      admittedForCitation: false
+    };
+  }
+
+  if (typeof decision === 'string') {
+    if (decision === 'admitted') {
+      return {
+        ok: true,
+        status: 'admitted',
+        admissionKind: 'explicitly_admitted',
+        judgeNote: '',
+        judgeAdmittedStatement: undefined,
+        admittedForCitation: true
+      };
+    }
+    if (decision === 'rejected') {
+      return {
+        ok: true,
+        status: 'rejected',
+        admissionKind: 'judge_rejected',
+        judgeNote: '',
+        judgeAdmittedStatement: undefined,
+        admittedForCitation: false
+      };
+    }
+    if (decision === 'partially_admitted' || decision === 'admitted_with_caveat') {
+      return {
+        ok: false,
+        message: `Judge Candidate Guard: Proof "${proofId}" was partially admitted without a required caveat; requires a non-empty note or admittedStatement.`
+      };
+    }
+    return {
+      ok: false,
+      message: `Judge Candidate Guard: Proof "${proofId}" has unrecognized decision status "${decision}".`
+    };
+  }
+
+  if (typeof decision === 'object' && decision !== null && !Array.isArray(decision)) {
+    const hasStatus = decision.status !== undefined;
+    const hasAdmitted = decision.admitted !== undefined;
+
+    if (hasStatus && typeof decision.status !== 'string') {
+      return {
+        ok: false,
+        message: `Judge Candidate Guard: Proof "${proofId}" has invalid decision status type.`
+      };
+    }
+
+    if (hasAdmitted && typeof decision.admitted !== 'boolean') {
+      return {
+        ok: false,
+        message: `Judge Candidate Guard: Proof "${proofId}" has invalid admitted property.`
+      };
+    }
+
+    const noteText =
+      typeof decision.note === 'string' && decision.note.trim()
+        ? decision.note.trim()
+        : typeof decision.reason === 'string' && decision.reason.trim()
+        ? decision.reason.trim()
+        : '';
+
+    if (hasStatus) {
+      const st = decision.status;
+      if (st === 'admitted') {
+        if (hasAdmitted && decision.admitted === false) {
+          return {
+            ok: false,
+            message: `Judge Candidate Guard: Proof "${proofId}" has conflicting decision status "admitted" and admitted: false.`
+          };
+        }
+        return {
+          ok: true,
+          status: 'admitted',
+          admissionKind: 'explicitly_admitted',
+          judgeNote: noteText,
+          judgeAdmittedStatement: undefined,
+          admittedForCitation: true
+        };
+      }
+      if (st === 'rejected') {
+        if (hasAdmitted && decision.admitted === true) {
+          return {
+            ok: false,
+            message: `Judge Candidate Guard: Proof "${proofId}" has conflicting decision status "rejected" and admitted: true.`
+          };
+        }
+        return {
+          ok: true,
+          status: 'rejected',
+          admissionKind: 'judge_rejected',
+          judgeNote: noteText,
+          judgeAdmittedStatement: undefined,
+          admittedForCitation: false
+        };
+      }
+      if (st === 'partially_admitted' || st === 'admitted_with_caveat') {
+        if (hasAdmitted) {
+          return {
+            ok: false,
+            message: `Judge Candidate Guard: Proof "${proofId}" has conflicting decision status "${st}" and admitted: ${decision.admitted}.`
+          };
+        }
+        const admittedStmt =
+          typeof decision.admittedStatement === 'string' && decision.admittedStatement.trim().length > 0
+            ? decision.admittedStatement.trim()
+            : null;
+        if (!admittedStmt && !noteText) {
+          return {
+            ok: false,
+            message: `Judge Candidate Guard: Proof "${proofId}" was partially admitted without a required caveat; requires a non-empty note or admittedStatement.`
+          };
+        }
+        return {
+          ok: true,
+          status: 'partially_admitted',
+          admissionKind: 'partially_admitted',
+          judgeNote: noteText,
+          judgeAdmittedStatement: admittedStmt,
+          admittedForCitation: true
+        };
+      }
+      return {
+        ok: false,
+        message: `Judge Candidate Guard: Proof "${proofId}" has unrecognized decision status "${st}".`
+      };
+    }
+
+    if (hasAdmitted) {
+      if (decision.admitted === true) {
+        return {
+          ok: true,
+          status: 'admitted',
+          admissionKind: 'explicitly_admitted',
+          judgeNote: noteText,
+          judgeAdmittedStatement: undefined,
+          admittedForCitation: true
+        };
+      }
+      return {
+        ok: true,
+        status: 'rejected',
+        admissionKind: 'judge_rejected',
+        judgeNote: noteText,
+        judgeAdmittedStatement: undefined,
+        admittedForCitation: false
+      };
+    }
+
+    if (noteText) {
+      const nextStatus = priorStatus === 'pending' ? 'admitted' : priorStatus;
+      const nextAdmissionKind = priorStatus === 'pending' ? 'default_admitted' : priorAdmissionKind;
+      return {
+        ok: true,
+        status: nextStatus,
+        admissionKind: nextAdmissionKind,
+        judgeNote: noteText,
+        judgeAdmittedStatement: nextStatus === 'partially_admitted' ? priorAdmittedStatement : undefined,
+        admittedForCitation: nextStatus === 'admitted' || nextStatus === 'partially_admitted'
+      };
+    }
+
+    return {
+      ok: false,
+      message: `Judge Candidate Guard: Proof "${proofId}" decision object is empty or missing recognized status (invalid status).`
+    };
+  }
+
+  return {
+    ok: false,
+    message: `Judge Candidate Guard: Proof "${proofId}" has invalid decision type.`
+  };
+}
+
+/**
  * Guards the JUDGE_AUDIT_AND_SYNTHESIZE event.
  * @param {import('../types.js').CouncilState} state
  * @param {any} event
@@ -166,87 +385,12 @@ export function guardJudgeAuditAndSynthesize(state, event) {
   for (const p of (state.proofs || [])) {
     const hasExplicitDecision = Object.prototype.hasOwnProperty.call(decisions, p.id);
     if (hasExplicitDecision) {
-      const dec = decisions[p.id];
-      if (typeof dec === 'boolean') {
-        if (dec === true) {
-          admittedIds.add(p.id);
-        }
-        // false: explicitly rejected, not added to admittedIds
-      } else if (typeof dec === 'string') {
-        if (dec === 'admitted') {
-          admittedIds.add(p.id);
-        } else if (dec === 'rejected') {
-          // explicitly rejected, not added to admittedIds
-        } else if (dec === 'partially_admitted' || dec === 'admitted_with_caveat') {
-          return {
-            ok: false,
-            message: `Judge Candidate Guard: Proof "${p.id}" was partially admitted without a required caveat; requires a non-empty note or admittedStatement.`
-          };
-        } else {
-          return {
-            ok: false,
-            message: `Judge Candidate Guard: Proof "${p.id}" has unrecognized decision status "${dec}".`
-          };
-        }
-      } else if (typeof dec === 'object' && dec !== null && !Array.isArray(dec)) {
-        if (dec.status !== undefined) {
-          if (typeof dec.status !== 'string') {
-            return {
-              ok: false,
-              message: `Judge Candidate Guard: Proof "${p.id}" has invalid decision status type.`
-            };
-          }
-          if (dec.status === 'admitted') {
-            admittedIds.add(p.id);
-          } else if (dec.status === 'rejected') {
-            // explicitly rejected, not added to admittedIds
-          } else if (dec.status === 'partially_admitted' || dec.status === 'admitted_with_caveat') {
-            const hasStmt = typeof dec.admittedStatement === 'string' && dec.admittedStatement.trim().length > 0;
-            const hasNote = typeof dec.note === 'string' && dec.note.trim().length > 0;
-            const hasReason = typeof dec.reason === 'string' && dec.reason.trim().length > 0;
-            if (!hasStmt && !hasNote && !hasReason) {
-              return {
-                ok: false,
-                message: `Judge Candidate Guard: Proof "${p.id}" was partially admitted without a required caveat; requires a non-empty note or admittedStatement.`
-              };
-            }
-            admittedIds.add(p.id);
-          } else {
-            return {
-              ok: false,
-              message: `Judge Candidate Guard: Proof "${p.id}" has unrecognized decision status "${dec.status}".`
-            };
-          }
-        } else if (dec.admitted !== undefined) {
-          if (typeof dec.admitted !== 'boolean') {
-            return {
-              ok: false,
-              message: `Judge Candidate Guard: Proof "${p.id}" has invalid admitted property.`
-            };
-          }
-          if (dec.admitted === true) {
-            admittedIds.add(p.id);
-          }
-          // false: explicitly rejected, not added to admittedIds
-        } else {
-          const hasNote = typeof dec.note === 'string' && dec.note.trim().length > 0;
-          const hasReason = typeof dec.reason === 'string' && dec.reason.trim().length > 0;
-          if (hasNote || hasReason) {
-            if (p.status === 'pending' || p.status === 'admitted' || p.status === 'partially_admitted') {
-              admittedIds.add(p.id);
-            }
-          } else {
-            return {
-              ok: false,
-              message: `Judge Candidate Guard: Proof "${p.id}" decision object is empty or missing recognized status (invalid status).`
-            };
-          }
-        }
-      } else {
-        return {
-          ok: false,
-          message: `Judge Candidate Guard: Proof "${p.id}" has invalid decision type.`
-        };
+      const normalized = normalizeProofDecision(decisions[p.id], p, p.id);
+      if (!normalized.ok) {
+        return { ok: false, message: normalized.message };
+      }
+      if (normalized.admittedForCitation) {
+        admittedIds.add(p.id);
       }
     } else {
       // Omitted key: preserve default admission for pending or previously admitted proofs

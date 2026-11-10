@@ -520,6 +520,9 @@ export class CouncilEngine {
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
       const mergedSeat = { ...configSeat, ...seat };
       const rawTurnTimeoutMs = mergedSeat.timeoutMs || this.config.timeoutMs;
+      const baseTurnTimeoutMs =
+        rawTurnTimeoutMs ||
+        (typeof harness.resolveTimeoutMs === 'function' ? harness.resolveTimeoutMs(mergedSeat.model) : 240000);
       const seatBudgetMs =
         mergedSeat.totalSeatBudgetMs ||
         mergedSeat.seatBudget ||
@@ -530,7 +533,9 @@ export class CouncilEngine {
           ? Math.min(rawTurnTimeoutMs, seatBudgetMs)
           : (typeof rawTurnTimeoutMs === 'number'
               ? rawTurnTimeoutMs
-              : (typeof seatBudgetMs === 'number' && seatBudgetMs < 480000 ? Math.min(240000, seatBudgetMs) : undefined));
+              : (typeof seatBudgetMs === 'number' && seatBudgetMs < baseTurnTimeoutMs
+                  ? seatBudgetMs
+                  : undefined));
 
       const t0 = Date.now();
       try {
@@ -725,7 +730,13 @@ export class CouncilEngine {
     const baseJudgeTimeoutMs =
       rawJudgeTimeoutMs ||
       (typeof judgeHarness.resolveTimeoutMs === 'function' ? judgeHarness.resolveTimeoutMs(mergedJudge.model) : 240000);
-    const explicitGlobalSeatBudget = Boolean(this.config._explicitGlobalSeatBudget);
+    const explicitGlobalSeatBudget =
+      typeof this.config._explicitGlobalSeatBudget === 'boolean'
+        ? this.config._explicitGlobalSeatBudget
+        : Boolean(
+            this.config.totalSeatBudgetMs &&
+              (!this.config.timeoutMs || this.config.totalSeatBudgetMs !== this.config.timeoutMs * 2)
+          );
     const judgeBudgetMs =
       mergedJudge.totalSeatBudgetMs ||
       mergedJudge.seatBudget ||
@@ -735,7 +746,7 @@ export class CouncilEngine {
     const initialJudgeTimeoutMs =
       typeof rawJudgeTimeoutMs === 'number'
         ? Math.min(rawJudgeTimeoutMs, judgeBudgetMs)
-        : (judgeBudgetMs < 480000 ? Math.min(baseJudgeTimeoutMs, judgeBudgetMs) : undefined);
+        : (judgeBudgetMs < baseJudgeTimeoutMs ? judgeBudgetMs : undefined);
 
     const roundProofs = this.state.proofs.filter((p) => p.round === currentRound || p.status === 'pending');
     const maxJudgeRetries = this.config.maxRetriesPerJudge ?? this.config.maxRetriesPerSeat ?? 1;

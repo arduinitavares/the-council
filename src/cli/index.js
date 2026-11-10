@@ -522,7 +522,11 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       let rejectedCount = 0;
       for (const p of allProofs) {
         if (!p) continue;
-        if (p.status === 'partially_admitted' || p.admissionKind === 'partially_admitted') {
+        if (
+          p.status === 'partially_admitted' ||
+          p.status === 'admitted_with_caveat' ||
+          p.admissionKind === 'partially_admitted'
+        ) {
           partiallyAdmittedCount += 1;
         } else if (
           p.status === 'admitted' ||
@@ -563,7 +567,6 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
       if (result.state?.seats?.length > 0) {
         log('\nSeat Roll Call:');
-        const allProofs = result.state?.proofs || [];
         const allObjections = result.state?.objections || [];
         result.state.seats.forEach((s) => {
           const statusUpper = String(s.status || 'idle').toUpperCase();
@@ -602,7 +605,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       if (result.state?.proofs?.length > 0) {
         log('\nSubmitted Proofs:');
         result.state.proofs.forEach((p) => {
-          const isPartial = p.status === 'partially_admitted' || p.admissionKind === 'partially_admitted';
+          const isPartial =
+            p.status === 'partially_admitted' ||
+            p.status === 'admitted_with_caveat' ||
+            p.admissionKind === 'partially_admitted';
           const isAdmitted =
             !isPartial &&
             (p.status === 'admitted' ||

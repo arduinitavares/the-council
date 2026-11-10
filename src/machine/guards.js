@@ -168,7 +168,10 @@ export function normalizeProofDecision(decision, priorProof = 'pending', proofId
     ? priorProof
     : 'pending';
   const priorAdmissionKind = isProofObj ? priorProof.admissionKind : undefined;
-  const priorAdmittedStatement = isProofObj ? priorProof.judgeAdmittedStatement : undefined;
+  const priorAdmittedStatement =
+    isProofObj && priorProof.judgeAdmittedStatement !== undefined
+      ? priorProof.judgeAdmittedStatement
+      : null;
   const proofId = isProofObj && priorProof.id ? priorProof.id : proofIdArg;
 
   if (typeof decision === 'boolean') {

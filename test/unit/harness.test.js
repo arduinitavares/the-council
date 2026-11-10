@@ -900,6 +900,31 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
       for (const call of providerCalls) {
         assert.equal(call.tools, 'none', `Telemetry provider_call for ${call.provider} must record tools: "none"`);
       }
+
+      // Also verify that context.tools === 'none' isolates cwd and records tools: 'none' even when top-level tools is 'read-only'
+      let codexContextOnlyCwd = null;
+      await runCodexCli({
+        model: 'gpt-6-astra (max)',
+        prompt: 'vote prompt',
+        timeoutMs: 5000,
+        cwd: repoCwd,
+        tools: 'read-only',
+        exec: async (_bin, _args, opts) => {
+          codexContextOnlyCwd = opts.cwd;
+          return { stdout: JSON.stringify({ vote: 'accept' }), stderr: '', exitCode: 0 };
+        },
+        context: {
+          seatId: 's-codex-ctx',
+          phase: 'VOTING',
+          round: 1,
+          cwd: repoCwd,
+          tools: 'none',
+          telemetry: emitter
+        }
+      });
+      assert.notEqual(codexContextOnlyCwd, repoCwd);
+      assert.match(codexContextOnlyCwd, /council-seat-cwd-/);
+      assert.equal(emitter.getProviderCalls()[3].tools, 'none');
     });
   });
 });

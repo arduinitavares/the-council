@@ -84,10 +84,12 @@ export class CursorAdapter extends HarnessAdapter {
     this.validateModel(seat.model);
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const effectiveTools =
-      tools ??
-      callerContext?.tools ??
-      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-      'read-only';
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ??
+            callerContext?.tools ??
+            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+            'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -159,7 +161,10 @@ export class CursorAdapter extends HarnessAdapter {
 
   async executeJudge({ judge, round, phase, proofs, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
     this.validateModel(judge.model);
-    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveTools =
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -231,10 +236,12 @@ export class CursorAdapter extends HarnessAdapter {
   formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const effectiveTools =
-      tools ??
-      callerContext?.tools ??
-      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-      'read-only';
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ??
+            callerContext?.tools ??
+            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+            'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -280,7 +287,10 @@ export class CursorAdapter extends HarnessAdapter {
   }
 
   formatJudgePrompt({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
-    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveTools =
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -304,7 +314,10 @@ export class CursorAdapter extends HarnessAdapter {
 
   async _dispatchCli({ model, prompt, signal, context, tools, cwd }) {
     if (this.spawnRunner) {
-      const effectiveTools = tools ?? context?.tools ?? 'read-only';
+      const effectiveTools =
+        tools === 'none' || context?.tools === 'none'
+          ? 'none'
+          : (tools ?? context?.tools ?? 'read-only');
       const effectiveCwd =
         effectiveTools === 'none'
           ? undefined

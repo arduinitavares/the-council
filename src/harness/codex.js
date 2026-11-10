@@ -100,10 +100,12 @@ export class CodexAdapter extends HarnessAdapter {
     const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const effectiveTools =
-      tools ??
-      callerContext?.tools ??
-      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-      'read-only';
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ??
+            callerContext?.tools ??
+            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+            'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -182,7 +184,10 @@ export class CodexAdapter extends HarnessAdapter {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
-    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveTools =
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -259,10 +264,12 @@ export class CodexAdapter extends HarnessAdapter {
   formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const effectiveTools =
-      tools ??
-      callerContext?.tools ??
-      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-      'read-only';
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ??
+            callerContext?.tools ??
+            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+            'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -311,7 +318,10 @@ export class CodexAdapter extends HarnessAdapter {
    * Formats judge prompt for auditing and candidate synthesis.
    */
   formatJudgePrompt({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
-    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveTools =
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -339,7 +349,10 @@ export class CodexAdapter extends HarnessAdapter {
    */
   async _dispatchCli({ model, prompt, signal, context, tools, cwd }) {
     if (this.spawnRunner) {
-      const effectiveTools = tools ?? context?.tools ?? 'read-only';
+      const effectiveTools =
+        tools === 'none' || context?.tools === 'none'
+          ? 'none'
+          : (tools ?? context?.tools ?? 'read-only');
       const effectiveCwd =
         effectiveTools === 'none'
           ? undefined

@@ -155,10 +155,12 @@ export class MockAdapter extends HarnessAdapter {
 
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const effectiveTools =
-      tools ??
-      callerContext?.tools ??
-      (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-      'read-only';
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ??
+            callerContext?.tools ??
+            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
+            'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined
@@ -235,7 +237,10 @@ export class MockAdapter extends HarnessAdapter {
   async executeJudge({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
     this.callCount.judge += 1;
 
-    const effectiveTools = tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only';
+    const effectiveTools =
+      tools === 'none' || callerContext?.tools === 'none'
+        ? 'none'
+        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
     const effectiveCwd =
       effectiveTools === 'none'
         ? undefined

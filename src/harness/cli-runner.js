@@ -2746,7 +2746,10 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
     enrichedRecord = {
       ...record,
       ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
-      tools: record.tools || context?.tools || 'read-only',
+      tools:
+        record.tools === 'none' || context?.tools === 'none'
+          ? 'none'
+          : (record.tools || context?.tools || 'read-only'),
       trace: normalizedTrace
     };
   } catch {
@@ -2952,7 +2955,10 @@ export async function runAntigravityCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
-  const effectiveTools = tools ?? context?.tools ?? 'read-only';
+  const effectiveTools =
+    tools === 'none' || context?.tools === 'none'
+      ? 'none'
+      : (tools ?? context?.tools ?? 'read-only');
   const explicitCwd =
     effectiveTools === 'none'
       ? null
@@ -3125,7 +3131,10 @@ export async function runCodexCli({
   disableHooks
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
-  const effectiveTools = tools ?? context?.tools ?? 'read-only';
+  const effectiveTools =
+    tools === 'none' || context?.tools === 'none'
+      ? 'none'
+      : (tools ?? context?.tools ?? 'read-only');
   const explicitCwd =
     effectiveTools === 'none'
       ? null
@@ -3292,7 +3301,10 @@ export async function runCursorCli({
   onCallRecord
 } = {}) {
   const parsed = parseModelAndEffort(model, 'high');
-  const effectiveTools = tools ?? context?.tools ?? 'read-only';
+  const effectiveTools =
+    tools === 'none' || context?.tools === 'none'
+      ? 'none'
+      : (tools ?? context?.tools ?? 'read-only');
   const explicitCwd =
     effectiveTools === 'none'
       ? null

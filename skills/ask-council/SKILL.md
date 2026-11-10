@@ -109,7 +109,11 @@ The Council includes a real-time, browser-based Observer Visualizer at `/Users/a
 ## 4. Execution Workflow
 
 ### Step 0: Evidence Gathering & Grounding (`--evidence` / `evidence` config key)
-Before launching a Council deliberation on time-sensitive, retail, pricing, benchmark, or empirical questions, gather verified facts first (using web search, official documentation, or repository inspection) and pass them into The Council so every Seat and the Judge deliberate over a shared, immutable ground-truth packet rather than relying on stale training weights or redundant per-seat web searches.
+Before launching a Council deliberation on time-sensitive, retail, pricing, benchmark, or empirical questions, gather verified facts first (using web search, official documentation, or repository inspection) and pass them into The Council so every Seat and the Judge deliberate over a shared, attributed, and challengeable baseline evidence packet rather than relying on stale training weights or redundant per-seat web searches. Prefer primary-source excerpts and exact `file:line` citations over unverified secondary prose.
+
+**Workspace `--cwd` Scoping Rule**:
+- **Omit `--cwd` when `--evidence` already contains the required repository excerpts.** When `--evidence` is self-contained, omitting `--cwd` isolates seats in clean sandbox directories and forbids host filesystem probing, preventing 25–30 redundant file reads across voter seats.
+- **Pass `--cwd <dir>` only when seats must actively explore or inspect repository files not covered by `--evidence`.**
 
 1. **Via `--evidence <file>` (`-e`, repeatable)**:
    - Pass a JSON file containing an array of `{ "label", "source", "text" }` objects (or `{ "evidence": [...] }`), or pass a plain Markdown/text file (`--evidence notes.md`), which is automatically wrapped as a labeled evidence item:
@@ -155,11 +159,13 @@ Using a custom configuration file:
 ### CLI Flag Reference
 - `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`, or `best-of-families`).
 - `-e, --evidence <path>`: Path to a JSON or Markdown/text evidence file (repeatable). Merges with any `evidence` array in `-c <config.json>` and injects `[E1] <label> (Source: <source>): <text>` into all Seat and Judge prompts.
+- `--timeout <ms>`: Explicit per-turn timeout override in milliseconds (positive integer). Overrides effort-scaled defaults for all seat and judge turns.
+- `--seat-budget <ms>`: Total phase time budget per seat in milliseconds (positive integer, defaults to 2 × timeoutMs or 480,000 ms). Bounds cumulative execution time across initial turn and any retries.
 - `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `/Users/aaat/projects/the-council/.council/runs/`. Sets `"mode": "live"` in `--json` output.
 - `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.
 - `-c, --config <path>`: Path to custom JSON configuration file (resolved against current working directory first, then `<packageRoot>/` and `<packageRoot>/configs/`).
-- `--cwd <dir>` / `--workspace <dir>`: Explicit working directory for seat and judge CLI execution when deliberating on a local repository. When omitted, each CLI invocation runs inside a fresh, empty temporary sandbox directory (`council-seat-cwd-*`) so seats do not accidentally inspect The Council's own repository or `.council/` run state.
+- `--cwd <dir>` / `--workspace <dir>`: Explicit working directory for seat and judge CLI execution when deliberating on a local repository. **Omit `--cwd` when `--evidence` already contains the required repository excerpts** to prevent voter seats from running unneeded 25–30 call tool loops. When omitted, each CLI invocation runs inside a fresh, empty temporary sandbox directory (`council-seat-cwd-*`) with strict no-host-path-probing rules so seats do not inspect host files or `.council/` run state.
 - `-r, --rounds <number>`: Maximum deliberation rounds (default: 3).
 - `-q, --quorum <number>`: Minimum quorum of active seats (default: 2).
 - `-v, --verbose`: Stream real-time transition and seat telemetry to stderr.
@@ -189,17 +195,20 @@ Candidate Clauses:
   - [C1] Internal Services: Adopt gRPC with Protobuf for internal, high-throughput microservices behind the API Gateway. (Cited: P1, P3, P4)
   - [C2] Public Ingress: Retain REST / OpenAPI 3.1 at the public edge gateway for external partners and web clients. (Cited: P2)
 
+Proof Audit: 3 Admitted | 1 Partially Admitted | 0 Rejected
+
 Seat Roll Call:
   - [ACCEPTED] astra-systems (codex / gpt-6-astra (max)) — Proofs: P1 (admitted)
-  - [ACCEPTED] sol-pragmatic (codex / gpt-6.1-sol (high)) — Proofs: P2 (admitted)
+  - [ACCEPTED] sol-pragmatic (codex / gpt-6.1-sol (high)) — Proofs: P2 (partially_admitted)
   - [ACCEPTED] argon-staff (antigravity / gemini-4-argon-high) — Proofs: P3 (admitted)
   - [ACCEPTED] opus-domain (antigravity / claude-opus-5-5-high) — Proofs: P4 (admitted)
 
 Submitted Proofs:
   - [P1] (admitted) [benchmark] High-throughput RPC — "Netty vs HTTP/1.1 JSON benchmark": Protobuf serialization reduces CPU overhead by 68% and payload size by 42%.
     Seat : astra-systems | Judge Note: Admitted — verified benchmark methodology.
-  - [P2] (admitted) [citation] Developer Tooling — "OpenAPI 3.1 tooling survey": REST ecosystems maintain broader client generator and public gateway support.
-    Seat : sol-pragmatic | Judge Note: Admitted — supports edge gateway boundary.
+  - [P2] (partially_admitted) [PARTIALLY ADMITTED] [citation] Developer Tooling — "OpenAPI 3.1 tooling survey": REST ecosystems maintain broader client generator and public gateway support.
+    Seat : sol-pragmatic | Judge Note: Partially Admitted — secondary gateway claim narrowed.
+    Admitted Core: REST ecosystems maintain broader public client generator support.
   - [P3] (admitted) [check] Boundary Isolation — "Architecture seam audit": Internal service boundaries benefit from strict .proto contract compilation.
     Seat : argon-staff | Judge Note: Admitted — verified schema contract checks.
   - [P4] (admitted) [citation] Blast Radius — "Envoy gRPC load balancing RFC": HTTP/2 connection reuse requires L7 client-side load balancing to prevent backend hotspotting.
@@ -258,8 +267,11 @@ Council seat models on the Codex harness support explicit reasoning effort tiers
 
 ### Tool Access Policies (`tools: 'none' | 'read-only'`)
 The Council enforces strict tool boundary policies across all seats and the Judge:
-- `'read-only'` (Default): Seats are provided with read-only inspection capabilities and prompt verification directives. When `Pre-Gathered Grounding Evidence` (`--evidence`) is supplied, seats and the Judge are instructed to audit and cite the provided evidence packet first and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.
-- `'none'`: Pure reasoning mode with zero tool invocations. Verification prompt directives are omitted.
+- `'read-only'` (Default for Deliberation): Seats are provided with read-only inspection capabilities and prompt verification directives.
+  - When `--evidence` is supplied without `--cwd`, filesystem search and host path probing are strictly forbidden.
+  - When `--cwd` is attached alongside `--evidence`, file reads are capped to targeted verification of claims not already covered by `[E#]` (at most 3–5 targeted reads).
+- `'none'` (Default for Confirmation Voting): Confirmation voting automatically defaults to `'none'`, instructing seats to evaluate candidate clauses against audited proofs and return JSON votes immediately without tool invocations.
+- **Retry Tool-Loop Guard**: Retries triggered by `TimeoutError` automatically enforce `tools: 'none'` to prevent repeating 240s tool loops.
 - **Write Capabilities Strictly Forbidden**: Specifying `write`, `read-write`, or unapproved tools immediately fails configuration validation naming the allowed values (`none`, `read-only`). For `cursor-agent`, CLI executions automatically enforce `--trust`, `--output-format stream-json`, `--mode plan`, and `--sandbox enabled`.
 
 ### Parallel Deliberation & Voting Concurrency (`maxConcurrentSeats`)
@@ -277,6 +289,16 @@ Per-turn time budgets can be configured at the top level or overridden on indivi
 | Fallback | Models without explicit effort tier | 60,000 ms (1.0 min) |
 
 *Resilient Output Parsing*: Model outputs preceded by tool execution logs or multiple markdown code blocks are parsed using reverse evaluation and balanced-brace JSON tracking, ensuring robust extraction even during extensive investigation chatter.
+
+### Long-Run Timeout & Orchestrator Ceiling Guidance
+When orchestrators run `bin/council run --live` inside an agentic harness with a hard wall-clock timeout (e.g. 600s / 10 min):
+1. **Shared Total Seat Budget (`--seat-budget <ms>`)**: Tracks cumulative runtime per seat per phase. If a seat consumes its initial turn timeout, any retry is bounded by `remainingBudget = totalSeatBudgetMs - elapsedMs`.
+2. **Bounded Retry Timeout**: Retries receive `Math.min(turnTimeoutMs, 90000, remainingBudget)` and exploratory tools are disabled (`tools: 'none'`).
+3. **Tuning for 600s Ceilings**:
+   ```bash
+   /Users/aaat/projects/the-council/bin/council run --live -p best-of-families \
+     --timeout 120000 --seat-budget 180000 -t "<question>" -v
+   ```
 
 ### Recommended Configuration for Deep Research Questions
 For empirical or codebase-heavy questions, configure `tools: 'read-only'` with generous timeouts:

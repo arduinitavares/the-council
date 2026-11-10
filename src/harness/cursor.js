@@ -6,7 +6,7 @@
  */
 
 import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
-import { runCursorCli, extractCanonicalBaseModel } from './cli-runner.js';
+import { runCursorCli, extractCanonicalBaseModel, parseModelAndEffort } from './cli-runner.js';
 import {
   formatDeliberationPrompt,
   formatVotingPrompt,
@@ -23,19 +23,22 @@ export class CursorAdapter extends HarnessAdapter {
 
   validateModel(model) {
     let baseModel;
+    let parsed;
     try {
+      parsed = parseModelAndEffort(model, 'high');
       baseModel = extractCanonicalBaseModel(model, 'high');
     } catch (err) {
       throw new HarnessExecutionError(err.message, { harness: this.name, model, cause: err });
     }
 
     const rawTrimmedLower = String(model || '').trim().toLowerCase();
-    const isGrok = baseModel === 'grok-4.7';
+    const ALLOWED_GROK_EFFORTS = new Set(['high', 'xhigh', 'medium', 'low']);
+    const isGrok = baseModel === 'grok-4.7' && ALLOWED_GROK_EFFORTS.has(parsed.effort);
     const isComposer = baseModel === 'composer-2.5' && rawTrimmedLower === 'composer-2.5';
 
     if (!isGrok && !isComposer) {
       throw new HarnessExecutionError(
-        `Model "${model}" is not permitted under Cursor route. Allowed: grok-4.7-high, grok-4.7-xhigh, composer-2.5.`,
+        `Model "${model}" is not permitted under Cursor route. Allowed: grok-4.7-high, grok-4.7-xhigh, grok-4.7-medium, grok-4.7-low, composer-2.5.`,
         { harness: this.name, model }
       );
     }

@@ -444,6 +444,8 @@ export class VisualizerLiveWatcher {
               status: dp.status,
               judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
             });
+            if (dp.judgeAdmittedStatement !== undefined) mergedProof.judgeAdmittedStatement = dp.judgeAdmittedStatement;
+            else delete mergedProof.judgeAdmittedStatement;
             if (dp.admissionKind !== undefined) mergedProof.admissionKind = dp.admissionKind;
             else delete mergedProof.admissionKind;
             if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote;
@@ -480,13 +482,14 @@ export class VisualizerLiveWatcher {
           if (d.candidate && Array.isArray(d.candidate.clauses)) {
             d.candidate.clauses.forEach((cl) => {
               (cl.citedProofIds || []).forEach((pid) => {
+                const citedProof = proofs.find((p) => p.id === pid);
                 causalLinks.push({
                   id: 'dep-proof-clause-' + pid + '-' + cl.id,
                   fromKind: 'proof',
                   fromId: pid,
                   toKind: 'clause',
                   toId: cl.id,
-                  status: 'admitted',
+                  status: citedProof ? citedProof.status : 'admitted',
                   label: 'cites ' + pid
                 });
               });
@@ -634,6 +637,7 @@ export class VisualizerLiveWatcher {
           id: p.id,
           status: p.status,
           judgeNote: p.judgeNote ?? null,
+          ...(p.judgeAdmittedStatement !== undefined ? { judgeAdmittedStatement: p.judgeAdmittedStatement } : {}),
           ...(p.admissionKind !== undefined ? { admissionKind: p.admissionKind } : {}),
           ...(p.auditNote !== undefined ? { auditNote: p.auditNote } : {})
         };
@@ -643,6 +647,7 @@ export class VisualizerLiveWatcher {
           !prev ||
           prev.status !== entry.status ||
           prev.judgeNote !== entry.judgeNote ||
+          prev.judgeAdmittedStatement !== entry.judgeAdmittedStatement ||
           prev.admissionKind !== entry.admissionKind ||
           prev.auditNote !== entry.auditNote
         ) {
@@ -958,6 +963,7 @@ export class VisualizerLiveWatcher {
               status: dp.status,
               judgeNote: dp.judgeNote !== undefined ? dp.judgeNote : null
             });
+            if (dp.judgeAdmittedStatement !== undefined) mergedProof.judgeAdmittedStatement = dp.judgeAdmittedStatement; else delete mergedProof.judgeAdmittedStatement;
             if (dp.admissionKind !== undefined) mergedProof.admissionKind = dp.admissionKind; else delete mergedProof.admissionKind;
             if (dp.auditNote !== undefined) mergedProof.auditNote = dp.auditNote; else delete mergedProof.auditNote;
             return mergedProof;
@@ -996,13 +1002,14 @@ export class VisualizerLiveWatcher {
           if (d.candidate && Array.isArray(d.candidate.clauses)) {
             d.candidate.clauses.forEach(function (cl) {
               (cl.citedProofIds || []).forEach(function (pid) {
+                const citedProof = proofs.find(function (p) { return p.id === pid; });
                 causalLinks.push({
                   id: 'dep-proof-clause-' + pid + '-' + cl.id,
                   fromKind: 'proof',
                   fromId: pid,
                   toKind: 'clause',
                   toId: cl.id,
-                  status: 'admitted',
+                  status: citedProof ? citedProof.status : 'admitted',
                   label: 'cites ' + pid
                 });
               });

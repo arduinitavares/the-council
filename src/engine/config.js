@@ -6,11 +6,35 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
+import { ALLOWED_EFFORTS } from '../harness/cli-runner.js';
 
 export const MAX_EVIDENCE_ITEMS = 20;
 export const MAX_EVIDENCE_ID_CHARS = 64;
 export const MAX_EVIDENCE_ITEM_CHARS = 32768;
 export const MAX_TOTAL_EVIDENCE_CHARS = 131072;
+
+/**
+ * Validates that a value is an integer > 0.
+ * If errors array is provided, pushes an error message if invalid.
+ *
+ * @param {unknown} val
+ * @param {string} fieldName
+ * @param {string[]} [errors]
+ * @returns {{ valid: boolean, error?: string }}
+ */
+export function validatePositiveInteger(val, fieldName, errors) {
+  if (val === undefined) {
+    return { valid: true };
+  }
+  if (typeof val !== 'number' || !Number.isInteger(val) || val <= 0 || !Number.isFinite(val)) {
+    const error = `${fieldName} must be a positive integer.`;
+    if (Array.isArray(errors)) {
+      errors.push(error);
+    }
+    return { valid: false, error };
+  }
+  return { valid: true };
+}
 
 /**
  * Validates a Council configuration object.
@@ -46,6 +70,32 @@ export function validateConfig(config) {
   if (config.timeoutMs !== undefined) {
     if (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs)) {
       errors.push('timeoutMs must be a positive number.');
+    }
+  }
+
+  validatePositiveInteger(config.timeout, 'timeout', errors);
+  validatePositiveInteger(config.seatBudget, 'seatBudget', errors);
+  validatePositiveInteger(config.totalSeatBudgetMs, 'totalSeatBudgetMs', errors);
+  validatePositiveInteger(config.votingTimeoutMs, 'votingTimeoutMs', errors);
+
+  if (config.votingReasoningEffort !== undefined) {
+    if (
+      typeof config.votingReasoningEffort !== 'string' ||
+      !ALLOWED_EFFORTS.includes(config.votingReasoningEffort.toLowerCase())
+    ) {
+      errors.push(`votingReasoningEffort must be one of: ${ALLOWED_EFFORTS.join(', ')}.`);
+    }
+  }
+
+  if (config.preserveVotingEffort !== undefined && typeof config.preserveVotingEffort !== 'boolean') {
+    errors.push('preserveVotingEffort must be a boolean.');
+  }
+
+  if (config.votingTools !== undefined) {
+    if (typeof config.votingTools !== 'string' || !VALID_TOOL_POLICIES.includes(config.votingTools)) {
+      errors.push(
+        `"votingTools" policy must be 'none' or 'read-only' (got "${config.votingTools}").`
+      );
     }
   }
 
@@ -242,6 +292,9 @@ export function validateConfig(config) {
         );
       }
     }
+    if (config.judge.timeout !== undefined) {
+      validatePositiveInteger(config.judge.timeout, 'Judge timeout', errors);
+    }
     if (config.judge.disableHooks !== undefined && typeof config.judge.disableHooks !== 'boolean') {
       errors.push('Judge requires "disableHooks" to be a boolean.');
     }
@@ -285,6 +338,43 @@ export function validateConfig(config) {
         if (s.timeoutMs !== undefined) {
           if (typeof s.timeoutMs !== 'number' || s.timeoutMs <= 0 || !Number.isFinite(s.timeoutMs)) {
             errors.push(`Seat "${s.id || idx}" requires "timeoutMs" to be a positive number.`);
+          }
+        }
+        if (s.timeout !== undefined) {
+          validatePositiveInteger(s.timeout, `Seat "${s.id || idx}" timeout`, errors);
+        }
+        if (s.seatBudget !== undefined) {
+          validatePositiveInteger(s.seatBudget, `Seat "${s.id || idx}" seatBudget`, errors);
+        }
+        if (s.totalSeatBudgetMs !== undefined) {
+          validatePositiveInteger(s.totalSeatBudgetMs, `Seat "${s.id || idx}" totalSeatBudgetMs`, errors);
+        }
+        if (s.votingTimeoutMs !== undefined) {
+          validatePositiveInteger(s.votingTimeoutMs, `Seat "${s.id || idx}" votingTimeoutMs`, errors);
+        }
+        if (s.votingTools !== undefined) {
+          if (typeof s.votingTools !== 'string' || !VALID_TOOL_POLICIES.includes(s.votingTools)) {
+            errors.push(
+              `Seat "${s.id || idx}" "votingTools" policy must be 'none' or 'read-only' (got "${s.votingTools}").`
+            );
+          }
+        }
+        if (s.preserveVotingEffort !== undefined && typeof s.preserveVotingEffort !== 'boolean') {
+          errors.push(`Seat "${s.id || idx}" requires "preserveVotingEffort" to be a boolean.`);
+        }
+        if (s.votingReasoningEffort !== undefined) {
+          if (
+            typeof s.votingReasoningEffort !== 'string' ||
+            !ALLOWED_EFFORTS.includes(s.votingReasoningEffort.toLowerCase())
+          ) {
+            errors.push(
+              `Seat "${s.id || idx}" requires "votingReasoningEffort" to be one of: ${ALLOWED_EFFORTS.join(', ')}.`
+            );
+          }
+        }
+        if (s.votingModel !== undefined) {
+          if (typeof s.votingModel !== 'string' || !s.votingModel.trim()) {
+            errors.push(`Seat "${s.id || idx}" requires "votingModel" to be a non-empty string.`);
           }
         }
         if (s.tools !== undefined) {
@@ -544,10 +634,52 @@ export function resolveConfig(userConfig = {}) {
     if (presetDefinition.minQuorum !== undefined) presetScalarDefaults.minQuorum = presetDefinition.minQuorum;
   }
 
+  const resolvedTimeoutMs =
+    userConfig.timeoutMs !== undefined
+      ? userConfig.timeoutMs
+      : (userConfig.timeout !== undefined ? userConfig.timeout : undefined);
+
+  const resolvedSeatBudget =
+    userConfig.totalSeatBudgetMs !== undefined
+      ? userConfig.totalSeatBudgetMs
+      : (userConfig.seatBudget !== undefined
+          ? userConfig.seatBudget
+          : (userConfig['seat-budget'] !== undefined ? userConfig['seat-budget'] : undefined));
+
+  const resolvedVotingTimeoutMs =
+    userConfig.votingTimeoutMs !== undefined
+      ? userConfig.votingTimeoutMs
+      : (userConfig.votingTimeout !== undefined
+          ? userConfig.votingTimeout
+          : (userConfig['voting-timeout'] !== undefined ? userConfig['voting-timeout'] : 90000));
+
+  const resolvedPreserveVotingEffort =
+    typeof userConfig.preserveVotingEffort === 'boolean' ? userConfig.preserveVotingEffort : false;
+
+  const resolvedVotingTools =
+    userConfig.votingTools !== undefined
+      ? userConfig.votingTools
+      : (userConfig['voting-tools'] !== undefined ? userConfig['voting-tools'] : undefined);
+
+  const resolvedVotingReasoningEffort =
+    userConfig.votingReasoningEffort !== undefined
+      ? userConfig.votingReasoningEffort
+      : (userConfig['voting-reasoning-effort'] !== undefined ? userConfig['voting-reasoning-effort'] : 'low');
+
+  const defaultTotalBudget = resolvedTimeoutMs !== undefined ? resolvedTimeoutMs * 2 : 480000;
+  const resolvedTotalSeatBudgetMs = resolvedSeatBudget !== undefined ? resolvedSeatBudget : defaultTotalBudget;
+
   const merged = {
     ...DEFAULT_CONFIG,
     ...presetScalarDefaults,
     ...userConfig,
+    ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs, timeout: resolvedTimeoutMs } : {}),
+    totalSeatBudgetMs: resolvedTotalSeatBudgetMs,
+    seatBudget: resolvedTotalSeatBudgetMs,
+    votingTimeoutMs: resolvedVotingTimeoutMs,
+    preserveVotingEffort: resolvedPreserveVotingEffort,
+    ...(resolvedVotingTools !== undefined ? { votingTools: resolvedVotingTools } : {}),
+    votingReasoningEffort: resolvedVotingReasoningEffort,
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
       ...defaultJudge,
@@ -555,6 +687,12 @@ export function resolveConfig(userConfig = {}) {
       tools: userConfig.judge?.tools !== undefined
         ? userConfig.judge.tools
         : (defaultJudge.tools || defaultTools),
+      ...((userConfig.judge?.timeoutMs !== undefined || userConfig.judge?.timeout !== undefined)
+        ? {
+            timeoutMs: userConfig.judge.timeoutMs ?? userConfig.judge.timeout,
+            timeout: userConfig.judge.timeoutMs ?? userConfig.judge.timeout
+          }
+        : {}),
       ...(userConfig.judge?.disableHooks !== undefined
         ? { disableHooks: userConfig.judge.disableHooks }
         : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
@@ -565,23 +703,58 @@ export function resolveConfig(userConfig = {}) {
         ? { cwd: userConfig.judge.cwd }
         : (userConfig.cwd !== undefined ? { cwd: userConfig.cwd } : {}))
     },
-    seats: rawSeats.map((s) =>
-      s && typeof s === 'object'
-        ? {
-            ...s,
-            tools: s.tools !== undefined ? s.tools : defaultTools,
-            ...(s.disableHooks !== undefined
-              ? { disableHooks: s.disableHooks }
-              : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
-            ...(s.ignoreUserConfig !== undefined
-              ? { ignoreUserConfig: s.ignoreUserConfig }
-              : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {})),
-            ...(s.cwd !== undefined
-              ? { cwd: s.cwd }
-              : (userConfig.cwd !== undefined ? { cwd: userConfig.cwd } : {}))
-          }
-        : s
-    )
+    seats: rawSeats.map((s) => {
+      if (!s || typeof s !== 'object') return s;
+      const seatTimeout =
+        s.timeoutMs !== undefined ? s.timeoutMs : (s.timeout !== undefined ? s.timeout : resolvedTimeoutMs);
+      const seatBudget =
+        s.totalSeatBudgetMs !== undefined
+          ? s.totalSeatBudgetMs
+          : (s.seatBudget !== undefined
+              ? s.seatBudget
+              : (s['seat-budget'] !== undefined
+                  ? s['seat-budget']
+                  : (seatTimeout !== undefined ? seatTimeout * 2 : resolvedTotalSeatBudgetMs)));
+      const seatVotingTimeout =
+        s.votingTimeoutMs !== undefined
+          ? s.votingTimeoutMs
+          : (s.votingTimeout !== undefined
+              ? s.votingTimeout
+              : (s['voting-timeout'] !== undefined ? s['voting-timeout'] : resolvedVotingTimeoutMs));
+      const seatPreserveVotingEffort =
+        typeof s.preserveVotingEffort === 'boolean' ? s.preserveVotingEffort : resolvedPreserveVotingEffort;
+      const seatVotingTools =
+        s.votingTools !== undefined
+          ? s.votingTools
+          : (s['voting-tools'] !== undefined ? s['voting-tools'] : resolvedVotingTools);
+      const seatVotingReasoningEffort =
+        s.votingReasoningEffort !== undefined
+          ? s.votingReasoningEffort
+          : (s['voting-reasoning-effort'] !== undefined ? s['voting-reasoning-effort'] : resolvedVotingReasoningEffort);
+      const seatVotingModel =
+        s.votingModel !== undefined ? s.votingModel : (s['voting-model'] !== undefined ? s['voting-model'] : undefined);
+
+      return {
+        ...s,
+        tools: s.tools !== undefined ? s.tools : defaultTools,
+        ...(seatTimeout !== undefined ? { timeoutMs: seatTimeout, timeout: seatTimeout } : {}),
+        ...(seatBudget !== undefined ? { totalSeatBudgetMs: seatBudget, seatBudget } : {}),
+        ...(seatVotingTimeout !== undefined ? { votingTimeoutMs: seatVotingTimeout } : {}),
+        ...(seatPreserveVotingEffort ? { preserveVotingEffort: true } : {}),
+        ...(seatVotingTools !== undefined ? { votingTools: seatVotingTools } : {}),
+        ...(seatVotingReasoningEffort !== undefined ? { votingReasoningEffort: seatVotingReasoningEffort } : {}),
+        ...(seatVotingModel !== undefined ? { votingModel: seatVotingModel } : {}),
+        ...(s.disableHooks !== undefined
+          ? { disableHooks: s.disableHooks }
+          : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
+        ...(s.ignoreUserConfig !== undefined
+          ? { ignoreUserConfig: s.ignoreUserConfig }
+          : (userConfig.ignoreUserConfig !== undefined ? { ignoreUserConfig: userConfig.ignoreUserConfig } : {})),
+        ...(s.cwd !== undefined
+          ? { cwd: s.cwd }
+          : (userConfig.cwd !== undefined ? { cwd: userConfig.cwd } : {}))
+      };
+    })
   };
 
   const validation = validateConfig(merged);

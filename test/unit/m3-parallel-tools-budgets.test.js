@@ -946,6 +946,7 @@ Final thought: candidate satisfies all constraints.`;
               model: 'gemini-4-argon-high',
               soul: 'Read-Only Lens',
               tools: 'read-only', // Explicit read-only
+              votingTools: 'read-only',
               timeoutMs: 25000
             }
           ]

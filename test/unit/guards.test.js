@@ -13,7 +13,8 @@ import {
   guardCastVote,
   validateSeatActive,
   getActiveSeats,
-  matchesPhase
+  matchesPhase,
+  guardJudgeAuditAndSynthesize
 } from '../../src/machine/guards.js';
 
 describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', () => {
@@ -368,6 +369,154 @@ describe('Unit: Pure Functional State Machine Guards (src/machine/guards.js)', (
       assert.equal(matchesPhase('reviewing', ['DELIBERATION']), true);
       assert.equal(matchesPhase('DELIBERATION', ['reviewing']), true);
       assert.equal(matchesPhase('confirming', ['judging']), false);
+    });
+  });
+
+  // ==========================================================================
+  // ISSUE #71: JUDGE AUDIT PROOF DECISIONS & FAIL-CLOSED GUARD
+  // ==========================================================================
+  describe('Judge Audit Proof Decisions & Fail-Closed Guard (guardJudgeAuditAndSynthesize)', () => {
+    function createJudgingState() {
+      return {
+        phase: 'judging',
+        round: 1,
+        proofs: [
+          { id: 'P1', round: 1, seatId: 's1', status: 'pending' },
+          { id: 'P2', round: 1, seatId: 's2', status: 'pending' }
+        ]
+      };
+    }
+
+    it('GRD-1: rejects synthesis outside judging phase', () => {
+      const state = { phase: 'reviewing', proofs: [{ id: 'P1', status: 'pending' }] };
+      const res = guardJudgeAuditAndSynthesize(state, {
+        clauses: [{ context: 'C', conclusion: 'V', citedProofIds: ['P1'] }]
+      });
+      assert.equal(res.ok, false);
+      assert.match(res.message, /judging phase/i);
+    });
+
+    it('GRD-2: fails closed when explicit decision contains an unrecognized status string', () => {
+      const state = createJudgingState();
+      const invalidStatusDecisions = [
+        { P1: { status: 'unknown' } },
+        { P1: { status: 'pending' } },
+        { P1: { status: 'needs_work' } },
+        { P1: { status: 'invalid' } },
+        { P1: { status: '' } },
+        { P1: 'unknown' },
+        { P1: 'pending' },
+        { P1: 'foo' }
+      ];
+
+      for (const proofDecisions of invalidStatusDecisions) {
+        const res = guardJudgeAuditAndSynthesize(state, {
+          proofDecisions,
+          clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }]
+        });
+        assert.equal(res.ok, false, `Expected guard rejection for decision: ${JSON.stringify(proofDecisions)}`);
+        assert.match(res.message, /Unrecognized|invalid.*status/i);
+      }
+    });
+
+    it('GRD-3: fails closed when partially_admitted or admitted_with_caveat lacks non-empty caveat note or statement', () => {
+      const state = createJudgingState();
+      const emptyCaveats = [
+        { P1: { status: 'partially_admitted' } },
+        { P1: { status: 'partially_admitted', note: '' } },
+        { P1: { status: 'partially_admitted', note: '   ' } },
+        { P1: { status: 'partially_admitted', note: '', admittedStatement: '' } },
+        { P1: { status: 'partially_admitted', note: '  ', admittedStatement: '  ' } },
+        { P1: { status: 'admitted_with_caveat' } },
+        { P1: { status: 'admitted_with_caveat', note: '' } },
+        { P1: { status: 'admitted_with_caveat', note: '   ' } }
+      ];
+
+      for (const proofDecisions of emptyCaveats) {
+        const res = guardJudgeAuditAndSynthesize(state, {
+          proofDecisions,
+          clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }]
+        });
+        assert.equal(res.ok, false, `Expected caveat guard rejection for: ${JSON.stringify(proofDecisions)}`);
+        assert.match(res.message, /requires a non-empty.*caveat|note|statement/i);
+      }
+    });
+
+    it('GRD-4: accepts valid explicit decisions across status strings, boolean flags, and caveats', () => {
+      const state = createJudgingState();
+      const validCases = [
+        { dec: { status: 'admitted' }, expectAdmitted: true },
+        { dec: { status: 'admitted', note: 'Verified' }, expectAdmitted: true },
+        { dec: { admitted: true }, expectAdmitted: true },
+        { dec: true, expectAdmitted: true },
+        { dec: 'admitted', expectAdmitted: true },
+        { dec: { status: 'partially_admitted', note: 'Caveat noted' }, expectAdmitted: true },
+        { dec: { status: 'partially_admitted', admittedStatement: 'Core verified' }, expectAdmitted: true },
+        { dec: { status: 'partially_admitted', reason: 'Reason provided' }, expectAdmitted: true },
+        { dec: { status: 'admitted_with_caveat', note: 'Caveat noted' }, expectAdmitted: true },
+        { dec: { status: 'rejected', note: 'Disproven' }, expectAdmitted: false },
+        { dec: { admitted: false }, expectAdmitted: false },
+        { dec: false, expectAdmitted: false },
+        { dec: 'rejected', expectAdmitted: false }
+      ];
+
+      for (const tc of validCases) {
+        const res = guardJudgeAuditAndSynthesize(state, {
+          proofDecisions: { P1: tc.dec },
+          clauses: tc.expectAdmitted
+            ? [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }]
+            : [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P2'] }] // P2 omitted -> default admitted
+        });
+        assert.equal(res.ok, true, `Expected success for decision: ${JSON.stringify(tc.dec)}, message: ${res.message}`);
+        assert.equal(res.admittedIds.has('P1'), tc.expectAdmitted);
+      }
+    });
+
+    it('GRD-5 & GRD-6: preserves default admission when proof ID is omitted or decision object is note-only', () => {
+      const state = createJudgingState();
+
+      // Empty proofDecisions -> both P1 and P2 default admitted
+      const emptyRes = guardJudgeAuditAndSynthesize(state, {
+        proofDecisions: {},
+        clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1', 'P2'] }]
+      });
+      assert.equal(emptyRes.ok, true);
+      assert.equal(emptyRes.admittedIds.has('P1'), true);
+      assert.equal(emptyRes.admittedIds.has('P2'), true);
+
+      // Note-only decision -> default admitted with note
+      const noteOnlyRes = guardJudgeAuditAndSynthesize(state, {
+        proofDecisions: { P1: { note: 'Review note without status' } },
+        clauses: [{ context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P1'] }]
+      });
+      assert.equal(noteOnlyRes.ok, true);
+      assert.equal(noteOnlyRes.admittedIds.has('P1'), true);
+    });
+
+    it('GRD-7: integrates admittedIds directly with validateCandidateClauses', () => {
+      const state = createJudgingState();
+      // P1 is partially admitted with caveat, P2 is rejected
+      const res = guardJudgeAuditAndSynthesize(state, {
+        proofDecisions: {
+          P1: { status: 'partially_admitted', admittedStatement: 'Core claim' },
+          P2: { status: 'rejected', note: 'Disproven' }
+        },
+        clauses: [{ context: 'Valid Clause', conclusion: 'Conc', citedProofIds: ['P1'] }]
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.admittedIds.has('P1'), true);
+      assert.equal(res.admittedIds.has('P2'), false);
+
+      // Same decisions but clause cites rejected P2
+      const rejectedRes = guardJudgeAuditAndSynthesize(state, {
+        proofDecisions: {
+          P1: { status: 'partially_admitted', admittedStatement: 'Core claim' },
+          P2: { status: 'rejected', note: 'Disproven' }
+        },
+        clauses: [{ context: 'Invalid Clause', conclusion: 'Conc', citedProofIds: ['P2'] }]
+      });
+      assert.equal(rejectedRes.ok, false);
+      assert.match(rejectedRes.message, /cites unverified Proof "P2"/);
     });
   });
 });

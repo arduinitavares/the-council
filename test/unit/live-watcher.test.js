@@ -2931,7 +2931,134 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(elements['telemetry-leaderboard-body'].innerHTML, /ask-council \(1 · skill_instructions_read\)/);
     });
   });
+
+  // ==========================================================================
+  // ISSUE #71: LIVE WATCHER & VISUALIZER PARTIAL PROOF ADMISSION
+  // ==========================================================================
+  describe('Issue #71: Partial Proof Admission in Visualizer & Live Watcher', () => {
+    it('records judgeAdmittedStatement and status: partially_admitted in step delta and reconstructed snapshots without leaking backwards', () => {
+      const em = createTelemetryEmitter();
+      const runDir = path.join(tmpDir, 'partial-live-watcher');
+      const watcher = new VisualizerLiveWatcher({
+        telemetry: em,
+        outputDir: runDir,
+        runId: 'run-partial-watcher',
+        initialConfig: { topic: 'Partial Proof Watcher' }
+      });
+
+      const s0 = {
+        phase: 'reviewing',
+        canonicalPhase: 'DELIBERATION',
+        round: 1,
+        topic: 'Partial Proof Watcher',
+        seats: [{ id: 's1', status: 'idle', harness: 'mock', model: 'm1' }],
+        proofs: [
+          {
+            id: 'P-1',
+            seatId: 's1',
+            status: 'pending',
+            kind: 'citation',
+            source: 'src.md',
+            scope: 'scope',
+            statement: 'Full statement'
+          }
+        ],
+        objections: [],
+        clarifications: [],
+        faultSeatId: null,
+        returnPhase: null,
+        candidate: null,
+        verdict: null
+      };
+
+      em.emitStateTransition({ type: 'SUBMIT_PROOF', id: 'P-1' }, s0);
+
+      const s1 = {
+        ...s0,
+        phase: 'confirming',
+        canonicalPhase: 'VOTING',
+        proofs: [
+          {
+            id: 'P-1',
+            seatId: 's1',
+            status: 'partially_admitted',
+            admissionKind: 'partially_admitted',
+            kind: 'citation',
+            source: 'src.md',
+            scope: 'scope',
+            statement: 'Full statement',
+            judgeAdmittedStatement: 'Core part only',
+            judgeNote: 'Secondary part excluded'
+          }
+        ],
+        candidate: {
+          summary: 'Candidate',
+          clauses: [{ id: 'C-1', context: 'Ctx', conclusion: 'Conc', citedProofIds: ['P-1'] }]
+        }
+      };
+
+      em.emitStateTransition({ type: 'JUDGE_AUDIT_AND_SYNTHESIZE' }, s1);
+
+      watcher.stop();
+
+      // Check in-memory run steps
+      const steps = watcher.liveRun.steps;
+      assert.equal(steps.length, 2);
+
+      // Step 0 must NOT have judgeAdmittedStatement
+      assert.equal(steps[0].stateSnapshot.proofs[0].status, 'pending');
+      assert.equal(steps[0].stateSnapshot.proofs[0].judgeAdmittedStatement, undefined);
+
+      // Step 1 delta must record judgeAdmittedStatement and status: partially_admitted
+      const p1Delta = steps[1].stateDelta.proofChanges.find((p) => p.id === 'P-1');
+      assert.ok(p1Delta, 'Proof delta must exist for P-1 in Step 1');
+      assert.equal(p1Delta.status, 'partially_admitted');
+      assert.equal(p1Delta.judgeAdmittedStatement, 'Core part only');
+
+      // Step 1 stateSnapshot must have judgeAdmittedStatement
+      assert.equal(steps[1].stateSnapshot.proofs[0].status, 'partially_admitted');
+      assert.equal(steps[1].stateSnapshot.proofs[0].judgeAdmittedStatement, 'Core part only');
+
+      // Rehydrate from disk bundle to verify browser replay logic
+      const win = {};
+      const bundleCode = fs.readFileSync(path.join(runDir, 'run-partial-watcher.js'), 'utf8');
+      new Function('window', 'globalThis', bundleCode)(win, win);
+      const rehydrated = win.CouncilRuns['run-partial-watcher'];
+      assert.equal(rehydrated.steps[0].stateSnapshot.proofs[0].judgeAdmittedStatement, undefined);
+      assert.equal(rehydrated.steps[1].stateSnapshot.proofs[0].status, 'partially_admitted');
+      assert.equal(rehydrated.steps[1].stateSnapshot.proofs[0].judgeAdmittedStatement, 'Core part only');
+
+      // Check causal links in step 1 dependency graph (both in-memory and rehydrated from disk)
+      const proofClauseLink = steps[1].graph.causalLinks.find((l) => l.id === 'dep-proof-clause-P-1-C-1');
+      assert.ok(proofClauseLink);
+      assert.equal(proofClauseLink.status, 'partially_admitted');
+
+      const rehydratedLink = rehydrated.steps[1].graph.causalLinks.find((l) => l.id === 'dep-proof-clause-P-1-C-1');
+      assert.ok(rehydratedLink);
+      assert.equal(rehydratedLink.status, 'partially_admitted');
+    });
+
+    it('renders amber badge and admitted core styling in visualizer index.html and council-visualizer.js', () => {
+      const htmlPath = path.resolve(import.meta.dirname, '../../src/visualizer/index.html');
+      const html = fs.readFileSync(htmlPath, 'utf8');
+
+      // Badge styling for partially_admitted
+      assert.match(html, /partially_admitted|admitted_with_caveat/);
+      assert.match(html, /Partial Admission %/);
+      assert.match(html, /Admitted Core:/);
+
+      const visJsPath = path.resolve(import.meta.dirname, '../../src/visualizer/council-visualizer.js');
+      const visJs = fs.readFileSync(visJsPath, 'utf8');
+
+      // Amber arrow marker and stroke for partially_admitted causal links
+      assert.match(visJs, /#fbbf24/);
+      assert.match(visJs, /dep-arrow-amber/);
+      assert.match(visJs, /#f59e0b/);
+      assert.match(visJs, /Admitted Core:/);
+    });
+  });
 });
+
 
 
 

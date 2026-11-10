@@ -43,6 +43,8 @@ Options:
   -q, --quorum <number>       Minimum quorum of active seats (default: 2)
   -l, --live                  Run with live CLI harnesses and visualizer stream (required unless --mock)
   -m, --mock                  Run in hermetic deterministic simulated mock mode (required unless --live)
+      --timeout <ms>          Turn timeout in milliseconds (positive integer)
+      --seat-budget <ms>      Total seat phase budget in milliseconds (positive integer)
       --cwd <dir>             Explicit working directory for seat/judge CLI inspection (alias: --workspace)
       --workspace <dir>       Alias for --cwd <dir>
       --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
@@ -148,6 +150,9 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         quorum: { type: 'string', short: 'q' },
         live: { type: 'boolean', short: 'l', default: false },
         mock: { type: 'boolean', short: 'm', default: false },
+        timeout: { type: 'string' },
+        'seat-budget': { type: 'string' },
+        seatBudget: { type: 'string' },
         cwd: { type: 'string' },
         workspace: { type: 'string' },
         days: { type: 'string' },
@@ -319,6 +324,29 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     const explicitCwd = values.cwd !== undefined ? values.cwd : values.workspace;
     if (explicitCwd !== undefined) overrides.cwd = explicitCwd;
 
+    if (values.timeout !== undefined) {
+      const rawTimeout = String(values.timeout).trim();
+      const numTimeout = Number(rawTimeout);
+      if (!rawTimeout || !Number.isInteger(numTimeout) || numTimeout <= 0 || !Number.isFinite(numTimeout)) {
+        logErr(`Configuration error: --timeout must be a positive integer (received "${values.timeout}").`);
+        return await safeExit(1);
+      }
+      overrides.timeout = numTimeout;
+      overrides.timeoutMs = numTimeout;
+    }
+
+    const rawSeatBudgetVal = values['seat-budget'] !== undefined ? values['seat-budget'] : values.seatBudget;
+    if (rawSeatBudgetVal !== undefined) {
+      const rawSeatBudget = String(rawSeatBudgetVal).trim();
+      const numSeatBudget = Number(rawSeatBudget);
+      if (!rawSeatBudget || !Number.isInteger(numSeatBudget) || numSeatBudget <= 0 || !Number.isFinite(numSeatBudget)) {
+        logErr(`Configuration error: --seat-budget must be a positive integer (received "${rawSeatBudgetVal}").`);
+        return await safeExit(1);
+      }
+      overrides.seatBudget = numSeatBudget;
+      overrides.totalSeatBudgetMs = numSeatBudget;
+    }
+
     let resolved;
     try {
       if (Array.isArray(values.evidence) && values.evidence.length > 0) {
@@ -454,7 +482,15 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       }
     }
 
-    const outputPayload = { mode, ...result };
+    const outputPayload = {
+      mode,
+      ...result,
+      state: {
+        ...result.state,
+        ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
+        ...(resolved.totalSeatBudgetMs !== undefined ? { totalSeatBudgetMs: resolved.totalSeatBudgetMs } : {})
+      }
+    };
 
     if (values.json) {
       log(JSON.stringify(outputPayload, null, 2));
@@ -475,6 +511,31 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         log(`Judge   : ${result.state.judge.id} (${result.state.judge.harness} / ${result.state.judge.model})`);
       }
       log(`Seats   : ${result.state.seats.length} total (${result.verdict?.activeSeatCount || 0} active, ${result.verdict?.excusedSeatCount || 0} excused)`);
+
+      const isColor = !process.env.NO_COLOR && Boolean(stdout.isTTY || process.env.FORCE_COLOR);
+      const cyanBold = (str) => (isColor ? `\x1b[1m\x1b[36m${str}\x1b[0m` : str);
+      const amber = (str) => (isColor ? `\x1b[33m${str}\x1b[0m` : str);
+
+      const allProofs = result.state?.proofs || [];
+      let admittedCount = 0;
+      let partiallyAdmittedCount = 0;
+      let rejectedCount = 0;
+      for (const p of allProofs) {
+        if (!p) continue;
+        if (p.status === 'partially_admitted' || p.admissionKind === 'partially_admitted') {
+          partiallyAdmittedCount += 1;
+        } else if (
+          p.status === 'admitted' ||
+          p.admissionKind === 'explicitly_admitted' ||
+          p.admissionKind === 'default_admitted'
+        ) {
+          admittedCount += 1;
+        } else if (p.status === 'rejected' || p.admissionKind === 'judge_rejected') {
+          rejectedCount += 1;
+        }
+      }
+      const tallyText = `Proof Audit: ${admittedCount} Admitted | ${partiallyAdmittedCount} Partially Admitted | ${rejectedCount} Rejected`;
+      log(cyanBold(tallyText));
 
       const candidate = result.verdict?.candidate || result.state?.candidate || null;
       const candidateSummary = typeof candidate?.summary === 'string' ? candidate.summary.trim() : '';
@@ -540,13 +601,21 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       if (result.state?.proofs?.length > 0) {
         log('\nSubmitted Proofs:');
         result.state.proofs.forEach((p) => {
-          log(`  - [${p.id}] (${p.status}) [${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
+          const isPartial = p.status === 'partially_admitted' || p.admissionKind === 'partially_admitted';
+          const partialBadge = isPartial ? `${amber('[PARTIALLY ADMITTED]')} ` : '';
+          log(`  - [${p.id}] (${p.status}) ${partialBadge}[${p.kind}] ${p.scope} — "${p.source}": ${p.statement}`);
           const seatIdStr = typeof p.seatId === 'string' && p.seatId.trim() ? p.seatId.trim() : '';
           const rawNote =
             typeof p.judgeNote === 'string'
               ? p.judgeNote.trim()
               : typeof p.auditNote === 'string'
               ? p.auditNote.trim()
+              : '';
+          const rawAdmittedStatement =
+            typeof p.judgeAdmittedStatement === 'string' && p.judgeAdmittedStatement.trim()
+              ? p.judgeAdmittedStatement.trim()
+              : typeof p.admittedStatement === 'string' && p.admittedStatement.trim()
+              ? p.admittedStatement.trim()
               : '';
           const metaParts = [];
           if (seatIdStr) {
@@ -557,6 +626,9 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           }
           if (metaParts.length > 0) {
             log(`    ${metaParts.join(' | ')}`);
+          }
+          if (rawAdmittedStatement) {
+            log(`    Admitted Core: ${rawAdmittedStatement}`);
           }
         });
       }

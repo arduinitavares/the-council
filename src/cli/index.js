@@ -492,6 +492,19 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
               );
             }
             if (role === 'seat') {
+              const rawVotingModel =
+                typeof participant.votingModel === 'string' && participant.votingModel.trim()
+                  ? participant.votingModel.trim()
+                  : undefined;
+              if (rawVotingModel) {
+                try {
+                  adapter.validateModel(rawVotingModel);
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid votingModel for seat "${participant.id}" (harness "${participant.harness}", votingModel "${rawVotingModel}"): ${modelErr.message}`
+                  );
+                }
+              }
               const votingCfg = resolveVotingSeatConfig(participant, resolved, { harness: adapter });
               if (votingCfg && votingCfg.model) {
                 try {
@@ -499,6 +512,20 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
                 } catch (modelErr) {
                   throw new Error(
                     `Invalid votingModel for seat "${participant.id}" (harness "${participant.harness}", votingModel "${votingCfg.model}"): ${modelErr.message}`
+                  );
+                }
+              }
+              const rawRebuttalModel =
+                participant.rebuttalModel ??
+                participant['rebuttal-model'] ??
+                resolved.rebuttalModel ??
+                resolved['rebuttal-model'];
+              if (typeof rawRebuttalModel === 'string' && rawRebuttalModel.trim()) {
+                try {
+                  adapter.validateModel(rawRebuttalModel.trim());
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid rebuttalModel for seat "${participant.id}" (harness "${participant.harness}", rebuttalModel "${rawRebuttalModel.trim()}"): ${modelErr.message}`
                   );
                 }
               }

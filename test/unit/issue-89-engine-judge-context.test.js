@@ -1295,6 +1295,77 @@ describe('Issue #89: Engine Judge Context, Cancellation Forwarding, Phase Timeou
         'high'
       );
 
+      // 2c. Invalid embedded effort in explicit rebuttalModel (e.g. 'gpt-6-astra (bogus)') is NOT rewritten to '(medium)' and fails --live preflight
+      const invalidExplicitCfg = resolveConfig({
+        topic: 'Invalid explicit rebuttalModel effort must not be masked',
+        rebuttalModel: 'gpt-6-astra (bogus)',
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+          { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+        ]
+      });
+      const invalidResolvedRebuttal = resolveRebuttalSeatConfig(
+        invalidExplicitCfg.seats[0],
+        invalidExplicitCfg
+      );
+      assert.equal(
+        invalidResolvedRebuttal.model,
+        'gpt-6-astra (bogus)',
+        'resolveRebuttalSeatConfig must preserve invalid explicit rebuttalModel string so validation catches it'
+      );
+
+      const tmpPreflightDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue89-bogus-rebuttal-'));
+      try {
+        const cfgFile = path.join(tmpPreflightDir, 'config.json');
+        fs.writeFileSync(
+          cfgFile,
+          JSON.stringify({
+            topic: 'Bogus rebuttal effort preflight',
+            maxRounds: 1,
+            minQuorum: 2,
+            rebuttalModel: 'gpt-6-astra (bogus)',
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+              { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+            ]
+          })
+        );
+        const io = createTestIo();
+        const exitCode = await cliModule.runCli(
+          ['run', '--live', '--config', cfgFile, '--output-dir', path.join(tmpPreflightDir, 'out')],
+          io
+        );
+        assert.equal(exitCode, 1, 'Expected --live preflight to fail on invalid rebuttalModel effort');
+        assert.match(io.getStderr(), /Invalid rebuttalModel/i);
+
+        // Also rejects Cursor grok-4.7-max in rebuttalModel even though downshiftModel would turn -max into -medium
+        const cursorCfgFile = path.join(tmpPreflightDir, 'cursor-config.json');
+        fs.writeFileSync(
+          cursorCfgFile,
+          JSON.stringify({
+            topic: 'Bogus cursor max rebuttal effort preflight',
+            maxRounds: 1,
+            minQuorum: 2,
+            rebuttalModel: 'grok-4.7-max',
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+            seats: [
+              { id: 's1', harness: 'cursor', model: 'grok-4.7-high', soul: 'S1' },
+              { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+            ]
+          })
+        );
+        const cursorIo = createTestIo();
+        const cursorExit = await cliModule.runCli(
+          ['run', '--live', '--config', cursorCfgFile, '--output-dir', path.join(tmpPreflightDir, 'out2')],
+          cursorIo
+        );
+        assert.equal(cursorExit, 1, 'Expected --live preflight to fail on grok-4.7-max rebuttalModel');
+        assert.match(cursorIo.getStderr(), /Invalid rebuttalModel/i);
+      } finally {
+        fs.rmSync(tmpPreflightDir, { recursive: true, force: true });
+      }
+
       // 3. Falsy proofId (null and "") falls back to valid backingProof during voting
       const harness = {
         async executeSeatProof(params) {

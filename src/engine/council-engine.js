@@ -295,12 +295,14 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
       parsedEffort = 'high';
     }
     if (!preserveEffort) {
-      model = downshiftModel(explicitRebuttalModel, targetEffort);
+      model = baseModel
+        ? downshiftModel(explicitRebuttalModel, targetEffort)
+        : explicitRebuttalModel;
       if (baseModel && baseModel !== 'composer-2.5') {
         reasoningEffort = downshiftEffort(parsedEffort, targetEffort);
       }
     } else {
-      model = hasExplicitRebuttalEffort
+      model = baseModel && hasExplicitRebuttalEffort
         ? downshiftModel(explicitRebuttalModel, targetEffort)
         : explicitRebuttalModel;
       if (baseModel && baseModel !== 'composer-2.5') {

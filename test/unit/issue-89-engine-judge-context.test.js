@@ -1112,5 +1112,197 @@ describe('Issue #89: Engine Judge Context, Cancellation Forwarding, Phase Timeou
       assert.equal(engine.state.objections[0].proofId, 'P1');
       assert.equal(engine.state.objections[0].status, 'open');
     });
+
+    it('propagates adapter-local AbortError in proof, Judge, and vote phases to terminate the run cleanly without consensus, voting, or EVALUATE_ROUND throws', async () => {
+      const makeAbortErr = () => {
+        const err = new Error('Adapter cancelled');
+        err.name = 'AbortError';
+        err.code = 'ABORT_ERR';
+        return err;
+      };
+
+      for (const cancelPhase of ['proof', 'judge', 'vote']) {
+        let judgeInvoked = false;
+        let voteInvoked = false;
+        const parentCtrl = new AbortController(); // remains un-aborted!
+        const harness = {
+          async executeSeatProof(params) {
+            if (cancelPhase === 'proof' && params.seat.id === 's1') {
+              throw makeAbortErr();
+            }
+            return { scope: 'Core', kind: 'check', source: 'Spec', statement: `Proof ${params.seat.id}` };
+          },
+          async executeJudgeAuditAndSynthesis(params) {
+            judgeInvoked = true;
+            if (cancelPhase === 'judge') {
+              throw makeAbortErr();
+            }
+            const decisions = Object.fromEntries(params.proofs.map((p) => [p.id, { status: 'admitted', note: 'ok' }]));
+            return {
+              summary: 'Summary',
+              proofDecisions: decisions,
+              clauses: [{ context: 'Core', conclusion: 'Done', citedProofIds: [params.proofs[0].id] }]
+            };
+          },
+          async executeSeatVote(params) {
+            voteInvoked = true;
+            if (cancelPhase === 'vote' && params.seat.id === 's1') {
+              throw makeAbortErr();
+            }
+            return { vote: 'accept' };
+          }
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic: `Adapter-local cancellation in ${cancelPhase}`,
+            maxRounds: 1,
+            minQuorum: 2,
+            maxRetriesPerSeat: 1,
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+              { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' },
+              { id: 's3', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S3' }
+            ]
+          },
+          { signal: parentCtrl.signal, harnessResolver: () => harness }
+        );
+
+        const res = await engine.run();
+        assert.equal(res.ok, false, `Expected ok=false on ${cancelPhase} cancellation`);
+        assert.equal(res.aborted, true, `Expected aborted=true on ${cancelPhase} cancellation`);
+        assert.equal(res.verdict, null, `Expected null verdict on ${cancelPhase} cancellation`);
+        if (cancelPhase === 'proof') {
+          assert.equal(judgeInvoked, false, 'Judge must not run after proof cancellation');
+          assert.equal(voteInvoked, false, 'Voting must not run after proof cancellation');
+        }
+        if (cancelPhase === 'judge') {
+          assert.equal(voteInvoked, false, 'Voting must not run after Judge cancellation');
+        }
+      }
+    });
+
+    it('materializes default maxRetriesPerJudge=1 in resolveConfig (independent of maxRetriesPerSeat: 0) and honors judge.maxRetries alias', async () => {
+      const defaultResolved = resolveConfig({
+        topic: 'Judge default retries',
+        maxRetriesPerSeat: 0
+      });
+      assert.equal(defaultResolved.maxRetriesPerJudge, 1);
+
+      const aliasResolved = resolveConfig({
+        topic: 'Judge alias retries',
+        maxRetriesPerSeat: 0,
+        judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge', maxRetries: 3 }
+      });
+      assert.equal(aliasResolved.maxRetriesPerJudge, 3);
+
+      let judgeAttempts = 0;
+      const harness = {
+        async executeSeatProof(params) {
+          return { scope: 'S', kind: 'check', source: 'Src', statement: `P-${params.seat.id}` };
+        },
+        async executeJudgeAuditAndSynthesis(params) {
+          judgeAttempts += 1;
+          if (judgeAttempts === 1) {
+            const err = new Error('Transient Judge failure');
+            err.isRetryable = true;
+            throw err;
+          }
+          const decisions = Object.fromEntries(params.proofs.map((p) => [p.id, { status: 'admitted', note: 'ok' }]));
+          return {
+            summary: 'Recovered',
+            proofDecisions: decisions,
+            clauses: [{ context: 'S', conclusion: 'OK', citedProofIds: [params.proofs[0].id] }]
+          };
+        },
+        async executeSeatVote() {
+          return { vote: 'accept' };
+        }
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Judge default retry independence',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+            { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+          ]
+        },
+        { harnessResolver: () => harness }
+      );
+      const res = await engine.run();
+      assert.equal(res.ok, true);
+      assert.equal(judgeAttempts, 2, 'Judge must get default 1 retry even when maxRetriesPerSeat is 0');
+    });
+
+    it('applies preserveRebuttalEffort and downshift rules consistently to explicit rebuttalModel overrides and falls back to backingProof on null/empty proofId', async () => {
+      // 1. Explicit parenthesized/high rebuttalModel with preserveRebuttalEffort=false downshifts effort to medium
+      const downshiftedExplicit = resolveRebuttalSeatConfig({
+        id: 's1',
+        harness: 'codex',
+        model: 'gpt-6.1-sol (high)',
+        rebuttalModel: 'gpt-6-astra (max)'
+      });
+      assert.equal(downshiftedExplicit.reasoningEffort, 'medium');
+
+      // 2. Bare explicit rebuttalModel with preserveRebuttalEffort=true preserves high effort (not downshifted to medium)
+      const preservedBareExplicit = resolveRebuttalSeatConfig({
+        id: 's1',
+        harness: 'codex',
+        model: 'gpt-6.1-sol (high)',
+        rebuttalModel: 'gpt-6-astra',
+        preserveRebuttalEffort: true
+      });
+      assert.equal(preservedBareExplicit.reasoningEffort, 'high');
+
+      // 3. Falsy proofId (null and "") falls back to valid backingProof during voting
+      const harness = {
+        async executeSeatProof(params) {
+          return { scope: 'S', kind: 'check', source: 'Src', statement: `Proof ${params.seat.id}` };
+        },
+        async executeJudgeAuditAndSynthesis(params) {
+          const decisions = Object.fromEntries(params.proofs.map((p) => [p.id, { status: 'admitted', note: 'ok' }]));
+          return {
+            summary: 'Candidate',
+            proofDecisions: decisions,
+            clauses: [{ context: 'S', conclusion: 'C', citedProofIds: [params.proofs[0].id] }]
+          };
+        },
+        async executeSeatVote(params) {
+          if (params.seat.id === 's1') {
+            return { vote: 'object', proofId: null, backingProof: 'P1', reason: 'Null proofId fallback' };
+          }
+          if (params.seat.id === 's2') {
+            return { vote: 'object', proofId: '', backingProof: 'P2', reason: 'Empty proofId fallback' };
+          }
+          return { vote: 'accept' };
+        }
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Falsy proofId backingProof fallback',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 0,
+          judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'S1' },
+            { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+          ]
+        },
+        { harnessResolver: () => harness }
+      );
+      const res = await engine.run();
+      assert.equal(res.verdict?.kind, 'Dissent Report (Round Limit Reached)');
+      assert.equal(res.state.objections.length, 2);
+      assert.equal(res.state.objections[0].proofId, 'P1');
+      assert.equal(res.state.objections[1].proofId, 'P2');
+    });
   });
 });

@@ -63,16 +63,20 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
   if (seat.votingModel) {
     model = seat.votingModel;
     let baseModel = '';
-    let parsedEffort = targetEffort;
+    let parsedEffort = 'high';
     try {
-      baseModel = extractCanonicalBaseModel(model, targetEffort);
-      parsedEffort = parseModelAndEffort(model, targetEffort).effort || targetEffort;
+      baseModel = extractCanonicalBaseModel(model, 'high');
+      parsedEffort = parseModelAndEffort(model, 'high').effort || 'high';
     } catch {
       baseModel = '';
-      parsedEffort = targetEffort;
+      parsedEffort = 'high';
     }
-    if (baseModel && baseModel !== 'composer-2.5' && (!preserveEffort || seat.votingReasoningEffort)) {
-      reasoningEffort = parsedEffort;
+    if (baseModel && baseModel !== 'composer-2.5') {
+      reasoningEffort = !preserveEffort
+        ? downshiftEffort(parsedEffort, targetEffort)
+        : (seat.votingReasoningEffort
+            ? String(seat.votingReasoningEffort).trim().toLowerCase()
+            : parsedEffort);
     }
   } else if (!preserveEffort) {
     let baseModel = '';
@@ -228,30 +232,30 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
     'medium';
   const targetEffort = String(rawTargetEffort).trim().toLowerCase() || 'medium';
 
+  const seatExplicitRebuttalEffort =
+    seat.rebuttalReasoningEffort ??
+    seat.rebuttalEffort ??
+    seat['rebuttal-reasoning-effort'];
+
   let model = seat.model;
   let reasoningEffort;
   if (explicitRebuttalModel) {
     model = explicitRebuttalModel;
     let baseModel = '';
-    let parsedEffort = targetEffort;
+    let parsedEffort = 'high';
     try {
-      baseModel = extractCanonicalBaseModel(explicitRebuttalModel, targetEffort);
-      parsedEffort = parseModelAndEffort(explicitRebuttalModel, targetEffort).effort || targetEffort;
+      baseModel = extractCanonicalBaseModel(explicitRebuttalModel, 'high');
+      parsedEffort = parseModelAndEffort(explicitRebuttalModel, 'high').effort || 'high';
     } catch {
       baseModel = '';
-      parsedEffort = targetEffort;
+      parsedEffort = 'high';
     }
     if (baseModel && baseModel !== 'composer-2.5') {
-      const hasExplicitRebuttalEffort =
-        seat.rebuttalReasoningEffort !== undefined ||
-        seat.rebuttalEffort !== undefined ||
-        seat['rebuttal-reasoning-effort'] !== undefined ||
-        engineConfig.rebuttalReasoningEffort !== undefined ||
-        engineConfig.rebuttalEffort !== undefined ||
-        engineConfig['rebuttal-reasoning-effort'] !== undefined;
-      reasoningEffort = hasExplicitRebuttalEffort
+      reasoningEffort = !preserveEffort
         ? downshiftEffort(parsedEffort, targetEffort)
-        : parsedEffort;
+        : (seatExplicitRebuttalEffort !== undefined
+            ? String(seatExplicitRebuttalEffort).trim().toLowerCase()
+            : parsedEffort);
     }
   } else if (!preserveEffort) {
     let baseModel = '';
@@ -266,6 +270,16 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
     model = downshiftModel(seat.model, targetEffort);
     if (baseModel !== 'composer-2.5') {
       reasoningEffort = downshiftEffort(currentEffort, targetEffort);
+    }
+  } else if (seatExplicitRebuttalEffort !== undefined) {
+    let baseModel = '';
+    try {
+      baseModel = extractCanonicalBaseModel(seat.model, 'high');
+    } catch {
+      baseModel = '';
+    }
+    if (baseModel !== 'composer-2.5') {
+      reasoningEffort = String(seatExplicitRebuttalEffort).trim().toLowerCase();
     }
   }
 
@@ -1004,6 +1018,7 @@ export class CouncilEngine {
     const { controller: delibWaveController, signal: delibWaveSignal } = this._createWaveController();
     const activeCountAtDelibWaveStart = activeSeats(this.state).length;
     let unrecoverableDelibFaults = 0;
+    let delibQuorumAborted = false;
 
     await mapConcurrent(delibSlots, concurrencyLimit, async (slot) => {
       if (
@@ -1085,6 +1100,9 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this.aborted || delibWaveSignal.aborted) {
+          if (this.signal?.aborted || !delibQuorumAborted) {
+            this.aborted = true;
+          }
           slot.aborted = true;
           slot.skipped = true;
           slot.proofInput = null;
@@ -1101,6 +1119,12 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this._isAbortError(err, delibWaveSignal)) {
+          if (this.signal?.aborted || !delibQuorumAborted) {
+            this.aborted = true;
+            if (!delibWaveController.signal.aborted) {
+              delibWaveController.abort(err);
+            }
+          }
           slot.aborted = true;
           slot.skipped = true;
           slot.proofInput = null;
@@ -1135,6 +1159,7 @@ export class CouncilEngine {
             !delibWaveController.signal.aborted &&
             activeCountAtDelibWaveStart - unrecoverableDelibFaults < this.state.minQuorum
           ) {
+            delibQuorumAborted = true;
             delibWaveController.abort(new Error('Active seats dropped below minimum quorum'));
           }
         }
@@ -1202,6 +1227,7 @@ export class CouncilEngine {
         const { controller: delibRetryController, signal: delibRetrySignal } = this._createWaveController();
         const activeCountAtRetryStart = activeSeats(this.state).length;
         let unrecoverableRetryFaults = 0;
+        let delibRetryQuorumAborted = false;
 
         await mapConcurrent(retryBatch, concurrencyLimit, async (slot) => {
           if (
@@ -1277,6 +1303,9 @@ export class CouncilEngine {
               this.aborted = true;
             }
             if (this.aborted || delibRetrySignal.aborted) {
+              if (this.signal?.aborted || !delibRetryQuorumAborted) {
+                this.aborted = true;
+              }
               slot.aborted = true;
               slot.skipped = true;
               slot.proofInput = null;
@@ -1293,6 +1322,12 @@ export class CouncilEngine {
               this.aborted = true;
             }
             if (this._isAbortError(retryErr, delibRetrySignal)) {
+              if (this.signal?.aborted || !delibRetryQuorumAborted) {
+                this.aborted = true;
+                if (!delibRetryController.signal.aborted) {
+                  delibRetryController.abort(retryErr);
+                }
+              }
               slot.aborted = true;
               slot.skipped = true;
               slot.proofInput = null;
@@ -1328,6 +1363,7 @@ export class CouncilEngine {
                 !delibRetryController.signal.aborted &&
                 activeCountAtRetryStart - unrecoverableRetryFaults < this.state.minQuorum
               ) {
+                delibRetryQuorumAborted = true;
                 delibRetryController.abort(new Error('Active seats dropped below minimum quorum'));
               }
             }
@@ -1438,7 +1474,6 @@ export class CouncilEngine {
     const maxJudgeRetries =
       this.config.maxRetriesPerJudge ??
       this.config.judge?.maxRetries ??
-      this.config.maxRetriesPerSeat ??
       1;
     let judgeRoundRetries = 0;
     let judgeExecuted = false;
@@ -1495,6 +1530,9 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this.aborted || judgeSignal.aborted || this.isCompleted()) {
+          if (!this.isCompleted()) {
+            this.aborted = true;
+          }
           break;
         }
 
@@ -1519,7 +1557,11 @@ export class CouncilEngine {
         if (this.signal?.aborted) {
           this.aborted = true;
         }
-        if (this._isAbortError(err, judgeSignal) || this.isCompleted()) {
+        if (this._isAbortError(err, judgeSignal)) {
+          this.aborted = true;
+          break;
+        }
+        if (this.isCompleted()) {
           break;
         }
         const attemptDuration =
@@ -1659,10 +1701,12 @@ export class CouncilEngine {
         }
 
         const resolvedProofId =
-          slot.voteResult?.proofId !== undefined
-            ? slot.voteResult.proofId
-            : slot.voteResult?.backingProof;
-        if (voteOutcome === 'object' && resolvedProofId !== undefined && slot.voteResult.proofId === undefined) {
+          typeof slot.voteResult?.proofId === 'string' && slot.voteResult.proofId.trim()
+            ? slot.voteResult.proofId.trim()
+            : (typeof slot.voteResult?.backingProof === 'string' && slot.voteResult.backingProof.trim()
+                ? slot.voteResult.backingProof.trim()
+                : (slot.voteResult?.proofId || slot.voteResult?.backingProof));
+        if (voteOutcome === 'object' && slot.voteResult) {
           slot.voteResult = {
             ...slot.voteResult,
             proofId: resolvedProofId
@@ -1698,6 +1742,7 @@ export class CouncilEngine {
     const { controller: voteWaveController, signal: voteWaveSignal } = this._createWaveController();
     const activeCountAtVoteWaveStart = activeSeats(this.state).length;
     let unrecoverableVoteFaults = 0;
+    let voteQuorumAborted = false;
 
     await mapConcurrent(voteSlots, voteConcurrencyLimit, async (slot) => {
       if (
@@ -1761,6 +1806,9 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this.aborted || voteWaveSignal.aborted) {
+          if (this.signal?.aborted || !voteQuorumAborted) {
+            this.aborted = true;
+          }
           slot.aborted = true;
           slot.skipped = true;
           slot.voteResult = null;
@@ -1777,6 +1825,12 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this._isAbortError(err, voteWaveSignal)) {
+          if (this.signal?.aborted || !voteQuorumAborted) {
+            this.aborted = true;
+            if (!voteWaveController.signal.aborted) {
+              voteWaveController.abort(err);
+            }
+          }
           slot.aborted = true;
           slot.skipped = true;
           slot.voteResult = null;
@@ -1813,6 +1867,7 @@ export class CouncilEngine {
             !voteWaveController.signal.aborted &&
             activeCountAtVoteWaveStart - unrecoverableVoteFaults < this.state.minQuorum
           ) {
+            voteQuorumAborted = true;
             voteWaveController.abort(new Error('Active seats dropped below minimum quorum'));
           }
         }
@@ -1879,6 +1934,7 @@ export class CouncilEngine {
         const { controller: voteRetryController, signal: voteRetrySignal } = this._createWaveController();
         const activeCountAtVoteRetryStart = activeSeats(this.state).length;
         let unrecoverableVoteRetryFaults = 0;
+        let voteRetryQuorumAborted = false;
 
         await mapConcurrent(retryBatch, voteConcurrencyLimit, async (slot) => {
           if (
@@ -1938,6 +1994,9 @@ export class CouncilEngine {
               this.aborted = true;
             }
             if (this.aborted || voteRetrySignal.aborted) {
+              if (this.signal?.aborted || !voteRetryQuorumAborted) {
+                this.aborted = true;
+              }
               slot.aborted = true;
               slot.skipped = true;
               slot.voteResult = null;
@@ -1954,6 +2013,12 @@ export class CouncilEngine {
               this.aborted = true;
             }
             if (this._isAbortError(retryErr, voteRetrySignal)) {
+              if (this.signal?.aborted || !voteRetryQuorumAborted) {
+                this.aborted = true;
+                if (!voteRetryController.signal.aborted) {
+                  voteRetryController.abort(retryErr);
+                }
+              }
               slot.aborted = true;
               slot.skipped = true;
               slot.voteResult = null;
@@ -1989,6 +2054,7 @@ export class CouncilEngine {
                 !voteRetryController.signal.aborted &&
                 activeCountAtVoteRetryStart - unrecoverableVoteRetryFaults < this.state.minQuorum
               ) {
+                voteRetryQuorumAborted = true;
                 voteRetryController.abort(new Error('Active seats dropped below minimum quorum'));
               }
             }
@@ -2034,9 +2100,11 @@ export class CouncilEngine {
           this.telemetry.emitVoteCast(slot.seat.id, 'accept');
         } else if (slot.voteResult.vote === 'object') {
           const resolvedProofId =
-            slot.voteResult.proofId !== undefined
-              ? slot.voteResult.proofId
-              : slot.voteResult.backingProof;
+            typeof slot.voteResult.proofId === 'string' && slot.voteResult.proofId.trim()
+              ? slot.voteResult.proofId.trim()
+              : (typeof slot.voteResult.backingProof === 'string' && slot.voteResult.backingProof.trim()
+                  ? slot.voteResult.backingProof.trim()
+                  : (slot.voteResult.proofId || slot.voteResult.backingProof));
           this._step({
             type: 'CAST_VOTE',
             seatId: slot.seat.id,
@@ -2101,7 +2169,8 @@ export class CouncilEngine {
     }
 
     return {
-      ok: Boolean(this.state.verdict && this.state.verdict.kind === 'Unanimous Consensus'),
+      ok: Boolean(!this.aborted && this.state.verdict && this.state.verdict.kind === 'Unanimous Consensus'),
+      ...(this.aborted ? { aborted: true } : {}),
       verdict: this.state.verdict,
       state: this.state,
       snapshots: this.telemetry.getSnapshots(),

@@ -810,7 +810,9 @@ export function resolveConfig(userConfig = {}) {
           ? userConfig.judge.maxRetries
           : (presetDefinition?.maxRetriesPerJudge !== undefined
               ? presetDefinition.maxRetriesPerJudge
-              : presetDefinition?.judge?.maxRetries));
+              : (presetDefinition?.judge?.maxRetries !== undefined
+                  ? presetDefinition.judge.maxRetries
+                  : 1)));
 
   const resolvedPreserveVotingEffort =
     typeof userConfig.preserveVotingEffort === 'boolean' ? userConfig.preserveVotingEffort : false;
@@ -939,7 +941,7 @@ export function resolveConfig(userConfig = {}) {
     ...(resolvedRebuttalTools !== undefined ? { rebuttalTools: resolvedRebuttalTools } : {}),
     rebuttalReasoningEffort: resolvedRebuttalReasoningEffort,
     ...(resolvedRebuttalModel !== undefined ? { rebuttalModel: resolvedRebuttalModel } : {}),
-    ...(resolvedMaxRetriesPerJudge !== undefined ? { maxRetriesPerJudge: resolvedMaxRetriesPerJudge } : {}),
+    maxRetriesPerJudge: resolvedMaxRetriesPerJudge,
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
       ...defaultJudge,

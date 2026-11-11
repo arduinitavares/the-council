@@ -77,6 +77,9 @@ export function validateConfig(config) {
   validatePositiveInteger(config.seatBudget, 'seatBudget', errors);
   validatePositiveInteger(config.totalSeatBudgetMs, 'totalSeatBudgetMs', errors);
   validatePositiveInteger(config.votingTimeoutMs, 'votingTimeoutMs', errors);
+  validatePositiveInteger(config.rebuttalTimeoutMs, 'rebuttalTimeoutMs', errors);
+  validatePositiveInteger(config.rebuttalTimeout, 'rebuttalTimeout', errors);
+  validatePositiveInteger(config['rebuttal-timeout'], 'rebuttal-timeout', errors);
 
   if (config.votingReasoningEffort !== undefined) {
     if (
@@ -96,6 +99,55 @@ export function validateConfig(config) {
       errors.push(
         `"votingTools" policy must be 'none' or 'read-only' (got "${config.votingTools}").`
       );
+    }
+  }
+
+  const topRebuttalEffortFields = [
+    ['rebuttalReasoningEffort', config.rebuttalReasoningEffort],
+    ['rebuttalEffort', config.rebuttalEffort],
+    ['rebuttal-reasoning-effort', config['rebuttal-reasoning-effort']]
+  ];
+  for (const [fieldName, fieldVal] of topRebuttalEffortFields) {
+    if (fieldVal !== undefined) {
+      if (typeof fieldVal !== 'string' || !ALLOWED_EFFORTS.includes(fieldVal.toLowerCase())) {
+        errors.push(`${fieldName} must be one of: ${ALLOWED_EFFORTS.join(', ')}.`);
+      }
+    }
+  }
+
+  if (config.preserveRebuttalEffort !== undefined && typeof config.preserveRebuttalEffort !== 'boolean') {
+    errors.push('preserveRebuttalEffort must be a boolean.');
+  }
+  if (config['preserve-rebuttal-effort'] !== undefined && typeof config['preserve-rebuttal-effort'] !== 'boolean') {
+    errors.push('preserve-rebuttal-effort must be a boolean.');
+  }
+
+  if (config.rebuttalTools !== undefined) {
+    if (typeof config.rebuttalTools !== 'string' || !VALID_TOOL_POLICIES.includes(config.rebuttalTools)) {
+      errors.push(
+        `"rebuttalTools" policy must be 'none' or 'read-only' (got "${config.rebuttalTools}").`
+      );
+    }
+  }
+  if (config['rebuttal-tools'] !== undefined) {
+    if (
+      typeof config['rebuttal-tools'] !== 'string' ||
+      !VALID_TOOL_POLICIES.includes(config['rebuttal-tools'])
+    ) {
+      errors.push(
+        `"rebuttal-tools" policy must be 'none' or 'read-only' (got "${config['rebuttal-tools']}").`
+      );
+    }
+  }
+
+  if (config.rebuttalModel !== undefined) {
+    if (typeof config.rebuttalModel !== 'string' || !config.rebuttalModel.trim()) {
+      errors.push('rebuttalModel must be a non-empty string.');
+    }
+  }
+  if (config['rebuttal-model'] !== undefined) {
+    if (typeof config['rebuttal-model'] !== 'string' || !config['rebuttal-model'].trim()) {
+      errors.push('rebuttal-model must be a non-empty string.');
     }
   }
 
@@ -381,6 +433,59 @@ export function validateConfig(config) {
         if (s.votingModel !== undefined) {
           if (typeof s.votingModel !== 'string' || !s.votingModel.trim()) {
             errors.push(`Seat "${s.id || idx}" requires "votingModel" to be a non-empty string.`);
+          }
+        }
+        if (s.rebuttalTimeoutMs !== undefined) {
+          validatePositiveInteger(s.rebuttalTimeoutMs, `Seat "${s.id || idx}" rebuttalTimeoutMs`, errors);
+        }
+        if (s.rebuttalTimeout !== undefined) {
+          validatePositiveInteger(s.rebuttalTimeout, `Seat "${s.id || idx}" rebuttalTimeout`, errors);
+        }
+        if (s['rebuttal-timeout'] !== undefined) {
+          validatePositiveInteger(s['rebuttal-timeout'], `Seat "${s.id || idx}" rebuttal-timeout`, errors);
+        }
+        if (s.rebuttalTools !== undefined) {
+          if (typeof s.rebuttalTools !== 'string' || !VALID_TOOL_POLICIES.includes(s.rebuttalTools)) {
+            errors.push(
+              `Seat "${s.id || idx}" "rebuttalTools" policy must be 'none' or 'read-only' (got "${s.rebuttalTools}").`
+            );
+          }
+        }
+        if (s['rebuttal-tools'] !== undefined) {
+          if (typeof s['rebuttal-tools'] !== 'string' || !VALID_TOOL_POLICIES.includes(s['rebuttal-tools'])) {
+            errors.push(
+              `Seat "${s.id || idx}" "rebuttal-tools" policy must be 'none' or 'read-only' (got "${s['rebuttal-tools']}").`
+            );
+          }
+        }
+        if (s.preserveRebuttalEffort !== undefined && typeof s.preserveRebuttalEffort !== 'boolean') {
+          errors.push(`Seat "${s.id || idx}" requires "preserveRebuttalEffort" to be a boolean.`);
+        }
+        if (s['preserve-rebuttal-effort'] !== undefined && typeof s['preserve-rebuttal-effort'] !== 'boolean') {
+          errors.push(`Seat "${s.id || idx}" requires "preserve-rebuttal-effort" to be a boolean.`);
+        }
+        const seatRebuttalEffortFields = [
+          ['rebuttalReasoningEffort', s.rebuttalReasoningEffort],
+          ['rebuttalEffort', s.rebuttalEffort],
+          ['rebuttal-reasoning-effort', s['rebuttal-reasoning-effort']]
+        ];
+        for (const [fieldName, fieldVal] of seatRebuttalEffortFields) {
+          if (fieldVal !== undefined) {
+            if (typeof fieldVal !== 'string' || !ALLOWED_EFFORTS.includes(fieldVal.toLowerCase())) {
+              errors.push(
+                `Seat "${s.id || idx}" requires "${fieldName}" to be one of: ${ALLOWED_EFFORTS.join(', ')}.`
+              );
+            }
+          }
+        }
+        if (s.rebuttalModel !== undefined) {
+          if (typeof s.rebuttalModel !== 'string' || !s.rebuttalModel.trim()) {
+            errors.push(`Seat "${s.id || idx}" requires "rebuttalModel" to be a non-empty string.`);
+          }
+        }
+        if (s['rebuttal-model'] !== undefined) {
+          if (typeof s['rebuttal-model'] !== 'string' || !s['rebuttal-model'].trim()) {
+            errors.push(`Seat "${s.id || idx}" requires "rebuttal-model" to be a non-empty string.`);
           }
         }
         if (s.tools !== undefined) {
@@ -679,6 +784,51 @@ export function resolveConfig(userConfig = {}) {
       ? userConfig.votingReasoningEffort
       : (userConfig['voting-reasoning-effort'] !== undefined ? userConfig['voting-reasoning-effort'] : 'low');
 
+  const resolvedRebuttalTimeoutMs =
+    userConfig.rebuttalTimeoutMs !== undefined
+      ? userConfig.rebuttalTimeoutMs
+      : (userConfig.rebuttalTimeout !== undefined
+          ? userConfig.rebuttalTimeout
+          : (userConfig['rebuttal-timeout'] !== undefined
+              ? userConfig['rebuttal-timeout']
+              : (presetDefinition?.rebuttalTimeoutMs !== undefined
+                  ? presetDefinition.rebuttalTimeoutMs
+                  : presetDefinition?.rebuttalTimeout)));
+
+  const resolvedPreserveRebuttalEffort =
+    userConfig.preserveRebuttalEffort !== undefined
+      ? userConfig.preserveRebuttalEffort
+      : (userConfig['preserve-rebuttal-effort'] !== undefined
+          ? userConfig['preserve-rebuttal-effort']
+          : (presetDefinition?.preserveRebuttalEffort !== undefined
+              ? presetDefinition.preserveRebuttalEffort
+              : false));
+
+  const resolvedRebuttalTools =
+    userConfig.rebuttalTools !== undefined
+      ? userConfig.rebuttalTools
+      : (userConfig['rebuttal-tools'] !== undefined
+          ? userConfig['rebuttal-tools']
+          : presetDefinition?.rebuttalTools);
+
+  const resolvedRebuttalReasoningEffort =
+    userConfig.rebuttalReasoningEffort !== undefined
+      ? userConfig.rebuttalReasoningEffort
+      : (userConfig.rebuttalEffort !== undefined
+          ? userConfig.rebuttalEffort
+          : (userConfig['rebuttal-reasoning-effort'] !== undefined
+              ? userConfig['rebuttal-reasoning-effort']
+              : (presetDefinition?.rebuttalReasoningEffort !== undefined
+                  ? presetDefinition.rebuttalReasoningEffort
+                  : 'medium')));
+
+  const resolvedRebuttalModel =
+    userConfig.rebuttalModel !== undefined
+      ? userConfig.rebuttalModel
+      : (userConfig['rebuttal-model'] !== undefined
+          ? userConfig['rebuttal-model']
+          : presetDefinition?.rebuttalModel);
+
   const defaultTotalBudget = resolvedTimeoutMs !== undefined ? resolvedTimeoutMs * 2 : 480000;
   const resolvedTotalSeatBudgetMs = resolvedSeatBudget !== undefined ? resolvedSeatBudget : defaultTotalBudget;
 
@@ -743,6 +893,11 @@ export function resolveConfig(userConfig = {}) {
     preserveVotingEffort: resolvedPreserveVotingEffort,
     ...(resolvedVotingTools !== undefined ? { votingTools: resolvedVotingTools } : {}),
     votingReasoningEffort: resolvedVotingReasoningEffort,
+    ...(resolvedRebuttalTimeoutMs !== undefined ? { rebuttalTimeoutMs: resolvedRebuttalTimeoutMs } : {}),
+    preserveRebuttalEffort: resolvedPreserveRebuttalEffort,
+    ...(resolvedRebuttalTools !== undefined ? { rebuttalTools: resolvedRebuttalTools } : {}),
+    rebuttalReasoningEffort: resolvedRebuttalReasoningEffort,
+    ...(resolvedRebuttalModel !== undefined ? { rebuttalModel: resolvedRebuttalModel } : {}),
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
       ...defaultJudge,
@@ -810,6 +965,34 @@ export function resolveConfig(userConfig = {}) {
           : (s['voting-reasoning-effort'] !== undefined ? s['voting-reasoning-effort'] : resolvedVotingReasoningEffort);
       const seatVotingModel =
         s.votingModel !== undefined ? s.votingModel : (s['voting-model'] !== undefined ? s['voting-model'] : undefined);
+      const seatRebuttalTimeout =
+        s.rebuttalTimeoutMs !== undefined
+          ? s.rebuttalTimeoutMs
+          : (s.rebuttalTimeout !== undefined
+              ? s.rebuttalTimeout
+              : (s['rebuttal-timeout'] !== undefined ? s['rebuttal-timeout'] : resolvedRebuttalTimeoutMs));
+      const seatPreserveRebuttalEffort =
+        s.preserveRebuttalEffort !== undefined
+          ? s.preserveRebuttalEffort
+          : (s['preserve-rebuttal-effort'] !== undefined
+              ? s['preserve-rebuttal-effort']
+              : resolvedPreserveRebuttalEffort);
+      const seatRebuttalTools =
+        s.rebuttalTools !== undefined
+          ? s.rebuttalTools
+          : (s['rebuttal-tools'] !== undefined ? s['rebuttal-tools'] : resolvedRebuttalTools);
+      const seatRebuttalReasoningEffort =
+        s.rebuttalReasoningEffort !== undefined
+          ? s.rebuttalReasoningEffort
+          : (s.rebuttalEffort !== undefined
+              ? s.rebuttalEffort
+              : (s['rebuttal-reasoning-effort'] !== undefined
+                  ? s['rebuttal-reasoning-effort']
+                  : resolvedRebuttalReasoningEffort));
+      const seatRebuttalModel =
+        s.rebuttalModel !== undefined
+          ? s.rebuttalModel
+          : (s['rebuttal-model'] !== undefined ? s['rebuttal-model'] : resolvedRebuttalModel);
 
       return {
         ...s,
@@ -821,6 +1004,11 @@ export function resolveConfig(userConfig = {}) {
         ...(seatVotingTools !== undefined ? { votingTools: seatVotingTools } : {}),
         ...(seatVotingReasoningEffort !== undefined ? { votingReasoningEffort: seatVotingReasoningEffort } : {}),
         ...(seatVotingModel !== undefined ? { votingModel: seatVotingModel } : {}),
+        ...(seatRebuttalTimeout !== undefined ? { rebuttalTimeoutMs: seatRebuttalTimeout } : {}),
+        ...(seatPreserveRebuttalEffort !== undefined ? { preserveRebuttalEffort: seatPreserveRebuttalEffort } : {}),
+        ...(seatRebuttalTools !== undefined ? { rebuttalTools: seatRebuttalTools } : {}),
+        ...(seatRebuttalReasoningEffort !== undefined ? { rebuttalReasoningEffort: seatRebuttalReasoningEffort } : {}),
+        ...(seatRebuttalModel !== undefined ? { rebuttalModel: seatRebuttalModel } : {}),
         ...(s.disableHooks !== undefined
           ? { disableHooks: s.disableHooks }
           : (userConfig.disableHooks !== undefined ? { disableHooks: userConfig.disableHooks } : {})),
@@ -873,7 +1061,11 @@ export function resolveConfig(userConfig = {}) {
         s && typeof s === 'object'
           ? {
               ...s,
-              ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {})
+              ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {}),
+              ...(typeof s.rebuttalModel === 'string' ? { rebuttalModel: s.rebuttalModel.trim() } : {}),
+              ...(typeof s.rebuttalReasoningEffort === 'string'
+                ? { rebuttalReasoningEffort: s.rebuttalReasoningEffort.toLowerCase() }
+                : {})
             }
           : s
       )
@@ -884,6 +1076,10 @@ export function resolveConfig(userConfig = {}) {
     judge: normalizedJudge,
     seats: normalizedSeats,
     ...(typeof merged.cwd === 'string' ? { cwd: merged.cwd.trim() } : {}),
+    ...(typeof merged.rebuttalModel === 'string' ? { rebuttalModel: merged.rebuttalModel.trim() } : {}),
+    ...(typeof merged.rebuttalReasoningEffort === 'string'
+      ? { rebuttalReasoningEffort: merged.rebuttalReasoningEffort.toLowerCase() }
+      : {}),
     maxClarificationBatches: resolvedMaxClarificationBatches,
     evidence: normalizedEvidence,
     ...(normalizedClarifications !== undefined ? { clarifications: normalizedClarifications } : {})

@@ -84,9 +84,34 @@ export class AntigravityAdapter extends HarnessAdapter {
     return super.classifyError(error, context);
   }
 
-  async executeSeat({ seat, soul, round, phase, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
+  async executeSeat({
+    seat,
+    soul,
+    round,
+    phase,
+    state,
+    timeoutMs,
+    tools,
+    telemetry,
+    onCallRecord,
+    cwd,
+    rebuttalMode,
+    mode,
+    context: callerContext
+  }) {
     this.validateModel(seat.model);
     const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const isRebuttal =
+      !isVoting &&
+      Boolean(
+        rebuttalMode ||
+          mode === 'rebuttal' ||
+          callerContext?.rebuttalMode ||
+          callerContext?.mode === 'rebuttal' ||
+          seat?.rebuttalMode ||
+          seat?.mode === 'rebuttal'
+      );
+    const effectiveReasoningEffort = callerContext?.reasoningEffort ?? seat?.reasoningEffort;
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -109,6 +134,8 @@ export class AntigravityAdapter extends HarnessAdapter {
       seatId: seat.id,
       model: seat.model,
       tools: effectiveTools,
+      ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
+      ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {})
@@ -125,6 +152,8 @@ export class AntigravityAdapter extends HarnessAdapter {
             state,
             tools: effectiveTools,
             cwd: effectiveCwd,
+            rebuttalMode: isRebuttal,
+            mode: isRebuttal ? 'rebuttal' : mode,
             context
           });
           const rawOutput = await this._dispatchCli({
@@ -237,8 +266,18 @@ export class AntigravityAdapter extends HarnessAdapter {
     );
   }
 
-  formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
+  formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, rebuttalMode, mode, context: callerContext }) {
     const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const isRebuttal =
+      !isVoting &&
+      Boolean(
+        rebuttalMode ||
+          mode === 'rebuttal' ||
+          callerContext?.rebuttalMode ||
+          callerContext?.mode === 'rebuttal' ||
+          seat?.rebuttalMode ||
+          seat?.mode === 'rebuttal'
+      );
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -286,7 +325,8 @@ export class AntigravityAdapter extends HarnessAdapter {
       openObjections,
       state,
       tools: effectiveTools,
-      cwd: effectiveCwd
+      cwd: effectiveCwd,
+      ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {})
     });
   }
 

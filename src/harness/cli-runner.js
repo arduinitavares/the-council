@@ -2954,7 +2954,7 @@ export async function runAntigravityCli({
   context,
   onCallRecord
 } = {}) {
-  const parsed = parseModelAndEffort(model, 'high');
+  const parsed = parseModelAndEffort(model, context?.reasoningEffort || 'high');
   const effectiveTools =
     tools === 'none' || context?.tools === 'none'
       ? 'none'
@@ -3130,7 +3130,7 @@ export async function runCodexCli({
   ignoreUserConfig,
   disableHooks
 } = {}) {
-  const parsed = parseModelAndEffort(model, 'high');
+  const parsed = parseModelAndEffort(model, context?.reasoningEffort || 'high');
   const effectiveTools =
     tools === 'none' || context?.tools === 'none'
       ? 'none'

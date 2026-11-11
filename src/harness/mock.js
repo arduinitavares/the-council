@@ -150,10 +150,20 @@ export class MockAdapter extends HarnessAdapter {
   /**
    * Execute seat turn deterministically.
    */
-  async executeSeat({ seat, soul, round, phase, state, tools, cwd, context: callerContext }) {
+  async executeSeat({ seat, soul, round, phase, state, timeoutMs, tools, cwd, rebuttalMode, mode, context: callerContext }) {
     this.callCount.seats += 1;
 
     const isVoting = phase === 'VOTING' || phase === 'confirming';
+    const isRebuttal =
+      !isVoting &&
+      Boolean(
+        rebuttalMode ||
+          mode === 'rebuttal' ||
+          callerContext?.rebuttalMode ||
+          callerContext?.mode === 'rebuttal' ||
+          seat?.rebuttalMode ||
+          seat?.mode === 'rebuttal'
+      );
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -173,7 +183,17 @@ export class MockAdapter extends HarnessAdapter {
     const resolvedSoul = soul || seat?.soul || 'General Seat: Evaluates claims empirically';
     const renderedPrompt = isVoting
       ? formatVotingPrompt({ soul: resolvedSoul, seat: effectiveSeat, candidate: state?.candidate, state, tools: effectiveTools, cwd: effectiveCwd })
-      : formatDeliberationPrompt({ soul: resolvedSoul, seat: effectiveSeat, topic: state?.topic, round, maxRounds: state?.maxRounds, state, tools: effectiveTools, cwd: effectiveCwd });
+      : formatDeliberationPrompt({
+          soul: resolvedSoul,
+          seat: effectiveSeat,
+          topic: state?.topic,
+          round,
+          maxRounds: state?.maxRounds,
+          state,
+          tools: effectiveTools,
+          cwd: effectiveCwd,
+          ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {})
+        });
 
     // Record prompt for soul adherence and evidence/clarifications verification
     const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]\n${renderedPrompt}`;
@@ -183,6 +203,10 @@ export class MockAdapter extends HarnessAdapter {
       soul,
       round,
       phase,
+      model: seat.model,
+      tools: effectiveTools,
+      timeoutMs,
+      rebuttalMode: isRebuttal,
       prompt: formattedPrompt,
       timestamp: new Date().toISOString()
     });
@@ -213,7 +237,21 @@ export class MockAdapter extends HarnessAdapter {
       this.scriptedSeatResponses.get(fullWildcard);
 
     if (scripted) {
-      return typeof scripted === 'function' ? scripted({ seat, soul, round, phase, state }) : scripted;
+      return typeof scripted === 'function'
+        ? scripted({
+            seat,
+            soul,
+            round,
+            phase,
+            state,
+            timeoutMs,
+            tools: effectiveTools,
+            cwd: effectiveCwd,
+            rebuttalMode: isRebuttal,
+            mode: isRebuttal ? 'rebuttal' : mode,
+            context: callerContext
+          })
+        : scripted;
     }
 
     // Default deterministic fallback

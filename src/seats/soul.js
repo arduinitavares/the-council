@@ -295,6 +295,8 @@ export function formatGroundingSection(evidence = [], clarifications = []) {
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
  * @param {string} [params.cwd]
+ * @param {boolean} [params.rebuttalMode=false]
+ * @param {'rebuttal' | 'deliberation' | string} [params.mode]
  * @returns {string}
  */
 export function formatDeliberationPrompt({
@@ -309,10 +311,18 @@ export function formatDeliberationPrompt({
   openObjections = [],
   state = null,
   tools,
-  cwd
+  cwd,
+  rebuttalMode = false,
+  mode
 }) {
   const s = createSoul(soul);
   const resolvedTools = tools !== undefined ? tools : (seat?.tools || 'read-only');
+  const isRebuttal = Boolean(
+    rebuttalMode ||
+      mode === 'rebuttal' ||
+      seat?.rebuttalMode ||
+      seat?.mode === 'rebuttal'
+  );
   const hasWorkspaceCwd = resolvedTools !== 'none' && Boolean(
     (typeof cwd === 'string' && cwd.trim()) ||
     (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
@@ -369,9 +379,17 @@ ${ANTI_CHEATING_RULE}\n`
     : `\n${toolFreeDeliberationDirective}
 ${ANTI_CHEATING_RULE}\n`;
 
+  const priorRound = resolvedPrevCandidate?.round ?? Math.max(1, resolvedRound - 1);
+  const rebuttalBlock = isRebuttal
+    ? `\nTARGETED REBUTTAL & INVARIANT GUARD:
+- You already voted ACCEPT on the Round ${priorRound} Candidate.
+- Do NOT re-litigate settled clauses from scratch. Evaluate the listed Unresolved Objections strictly through your "${s.name}" (${s.lens}) Soul lens—substantiating whether each objection is valid, overstated, or requires an explicit scope boundary—and state the falsifiable invariant that Round ${resolvedRound} synthesis must preserve so resolving the objection does not regress accepted Round ${priorRound} clauses.
+- Still return 1 strict JSON Proof ("scope", "kind", "source", "statement") below to preserve proof-bound synthesis and voting invariants.\n`
+    : '';
+
   return `### Deliberation Round ${resolvedRound}/${resolvedMaxRounds} — Proof Submission
 ${contextBlock}
-As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), submit a structured Proof substantiating your position.
+As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), submit a structured Proof substantiating your position.${rebuttalBlock}
 ${verificationBlock}
 OUTPUT CONTRACT (strict JSON):
 {

@@ -21,9 +21,9 @@ import { transitionCouncil } from '../machine/reducer.js';
 import { validateProof } from '../proofs/validator.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
-import { HarnessError, InvalidResponseError } from '../harness/adapter.js';
+import { EFFORT_TIMEOUT_MAP, HarnessError, InvalidResponseError } from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
-import { downshiftModel } from '../harness/cli-runner.js';
+import { downshiftEffort, downshiftModel, parseModelAndEffort } from '../harness/cli-runner.js';
 
 /**
  * Resolves the effective seat configuration for the VOTING phase.
@@ -79,6 +79,213 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     tools,
     votingTimeoutMs
   };
+}
+
+/**
+ * Infers effort-scaled default deliberation timeout for a model identifier.
+ * Falls back to 240000ms when no recognized effort tier is encoded in the model name.
+ *
+ * @param {string} [model]
+ * @returns {number}
+ */
+function inferEffortTimeoutMs(model) {
+  if (typeof model === 'string' && model.trim()) {
+    const trimmed = model.trim().toLowerCase();
+    const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
+    if (parenMatch) {
+      const effort = parenMatch[2].trim();
+      if (EFFORT_TIMEOUT_MAP[effort]) {
+        return EFFORT_TIMEOUT_MAP[effort];
+      }
+    }
+    for (const suffix of ['-xhigh', '-max', '-high', '-medium', '-low']) {
+      if (trimmed.endsWith(suffix)) {
+        const effort = suffix.slice(1);
+        if (EFFORT_TIMEOUT_MAP[effort]) {
+          return EFFORT_TIMEOUT_MAP[effort];
+        }
+      }
+    }
+  }
+  return 240000;
+}
+
+/**
+ * Resolves the effective transient seat configuration for Round 2+ targeted rebuttals
+ * executed by active seats that accepted the prior round's Candidate and hold zero open objections.
+ *
+ * Defaults:
+ * - Downshifts reasoning effort to `rebuttalReasoningEffort` ('medium') unless `preserveRebuttalEffort: true`
+ *   or an explicit `rebuttalModel` override is provided.
+ * - Resolves `tools` to `rebuttalTools ?? (hasSeatOrGlobalCwd ? 'read-only' : 'none')` unless
+ *   `preserveRebuttalEffort: true` (which preserves deliberation `tools` unless `rebuttalTools` is set).
+ * - Caps initial rebuttal turn timeout to `rebuttalTimeoutMs ?? 90000` (clamped by `totalSeatBudgetMs`),
+ *   unless `preserveRebuttalEffort: true` and no explicit `rebuttalTimeoutMs` was configured.
+ *
+ * @param {Object} seat
+ * @param {Object} [engineConfig={}]
+ * @returns {Object}
+ */
+export function resolveRebuttalSeatConfig(seat, engineConfig = {}) {
+  const preserveEffort =
+    typeof seat.preserveRebuttalEffort === 'boolean'
+      ? seat.preserveRebuttalEffort
+      : (typeof seat['preserve-rebuttal-effort'] === 'boolean'
+          ? seat['preserve-rebuttal-effort']
+          : (typeof engineConfig.preserveRebuttalEffort === 'boolean'
+              ? engineConfig.preserveRebuttalEffort
+              : (typeof engineConfig['preserve-rebuttal-effort'] === 'boolean'
+                  ? engineConfig['preserve-rebuttal-effort']
+                  : false)));
+
+  const baseTools =
+    seat.tools !== undefined
+      ? seat.tools
+      : (engineConfig.tools !== undefined ? engineConfig.tools : 'read-only');
+  const explicitRebuttalTools =
+    seat.rebuttalTools !== undefined
+      ? seat.rebuttalTools
+      : (seat['rebuttal-tools'] !== undefined
+          ? seat['rebuttal-tools']
+          : (engineConfig.rebuttalTools !== undefined
+              ? engineConfig.rebuttalTools
+              : engineConfig['rebuttal-tools']));
+  const hasSeatOrGlobalCwd = Boolean(
+    (typeof seat.cwd === 'string' && seat.cwd.trim()) ||
+      (typeof engineConfig.cwd === 'string' && engineConfig.cwd.trim())
+  );
+  const tools =
+    explicitRebuttalTools !== undefined
+      ? explicitRebuttalTools
+      : (preserveEffort
+          ? baseTools
+          : (hasSeatOrGlobalCwd && baseTools !== 'none' ? 'read-only' : 'none'));
+
+  const explicitRebuttalModelRaw =
+    seat.rebuttalModel !== undefined
+      ? seat.rebuttalModel
+      : (seat['rebuttal-model'] !== undefined
+          ? seat['rebuttal-model']
+          : (engineConfig.rebuttalModel !== undefined
+              ? engineConfig.rebuttalModel
+              : engineConfig['rebuttal-model']));
+  const explicitRebuttalModel =
+    typeof explicitRebuttalModelRaw === 'string' && explicitRebuttalModelRaw.trim()
+      ? explicitRebuttalModelRaw.trim()
+      : undefined;
+
+  const rawTargetEffort =
+    seat.rebuttalReasoningEffort ??
+    seat.rebuttalEffort ??
+    seat['rebuttal-reasoning-effort'] ??
+    engineConfig.rebuttalReasoningEffort ??
+    engineConfig.rebuttalEffort ??
+    engineConfig['rebuttal-reasoning-effort'] ??
+    'medium';
+  const targetEffort = String(rawTargetEffort).trim().toLowerCase() || 'medium';
+
+  let model = seat.model;
+  let reasoningEffort;
+  if (explicitRebuttalModel) {
+    model = explicitRebuttalModel;
+  } else if (!preserveEffort) {
+    let currentEffort = 'high';
+    try {
+      currentEffort = parseModelAndEffort(seat.model, 'high').effort || 'high';
+    } catch {
+      currentEffort = 'high';
+    }
+    model = downshiftModel(seat.model, targetEffort);
+    reasoningEffort = downshiftEffort(currentEffort, targetEffort);
+  }
+
+  const explicitRebuttalTimeout =
+    seat.rebuttalTimeoutMs !== undefined
+      ? seat.rebuttalTimeoutMs
+      : (seat.rebuttalTimeout !== undefined
+          ? seat.rebuttalTimeout
+          : (seat['rebuttal-timeout'] !== undefined
+              ? seat['rebuttal-timeout']
+              : (engineConfig.rebuttalTimeoutMs !== undefined
+                  ? engineConfig.rebuttalTimeoutMs
+                  : (engineConfig.rebuttalTimeout !== undefined
+                      ? engineConfig.rebuttalTimeout
+                      : engineConfig['rebuttal-timeout']))));
+
+  const explicitBaseTimeout = seat.timeoutMs || engineConfig.timeoutMs;
+  const totalSeatBudgetMs =
+    seat.totalSeatBudgetMs ||
+    seat.seatBudget ||
+    seat['seat-budget'] ||
+    engineConfig.totalSeatBudgetMs ||
+    engineConfig.seatBudget ||
+    engineConfig['seat-budget'];
+
+  let rawRebuttalTimeoutMs;
+  if (preserveEffort && explicitRebuttalTimeout === undefined) {
+    rawRebuttalTimeoutMs = explicitBaseTimeout || inferEffortTimeoutMs(seat.model);
+  } else if (preserveEffort) {
+    rawRebuttalTimeoutMs = explicitBaseTimeout
+      ? Math.min(explicitBaseTimeout, explicitRebuttalTimeout)
+      : explicitRebuttalTimeout;
+  } else {
+    const capBaseTimeoutMs = explicitBaseTimeout || 240000;
+    const configuredRebuttalTimeoutMs = explicitRebuttalTimeout ?? 90000;
+    rawRebuttalTimeoutMs = Math.min(capBaseTimeoutMs, configuredRebuttalTimeoutMs);
+  }
+
+  const rebuttalTimeoutMs =
+    typeof totalSeatBudgetMs === 'number' && totalSeatBudgetMs > 0
+      ? Math.min(rawRebuttalTimeoutMs, totalSeatBudgetMs)
+      : rawRebuttalTimeoutMs;
+
+  return {
+    ...seat,
+    model,
+    tools,
+    rebuttalTimeoutMs,
+    preserveRebuttalEffort: preserveEffort,
+    ...(tools === 'none' && seat.cwd !== undefined ? { cwd: undefined } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {})
+  };
+}
+
+/**
+ * Infers the set of active seats whose final vote on `priorRound` was `accept`
+ * directly from `state.history` and `state.objections` when `engine.state` was
+ * hydrated via pure `transitionCouncil(...)` calls outside `CouncilEngine._step`.
+ *
+ * `state.history` prepends newest entries at index 0 (`[OK] ...`).
+ *
+ * @param {Object} state
+ * @param {number} priorRound
+ * @returns {Set<string>}
+ */
+function inferPriorRoundAcceptedSeatsFromState(state, priorRound) {
+  const accepted = new Set();
+  if (!state || priorRound < 1) return accepted;
+  const history = Array.isArray(state.history) ? state.history : [];
+  const objections = Array.isArray(state.objections) ? state.objections : [];
+
+  for (const seat of state.seats || []) {
+    if (!seat?.id || seat.status === 'excused') continue;
+    const acceptEntry = `[OK] Seat "${seat.id}" voted ACCEPT on Round ${priorRound} Candidate.`;
+    const acceptIdx = history.indexOf(acceptEntry);
+    if (acceptIdx === -1) continue;
+
+    const priorSeatObjs = objections.filter((o) => o.seatId === seat.id && o.round === priorRound);
+    if (priorSeatObjs.some((o) => o.status === 'open')) continue;
+
+    const objectedAfterAccept = priorSeatObjs.some((o) => {
+      const prefix = `[OK] Seat "${seat.id}" raised Objection ${o.id} `;
+      const objIdx = history.findIndex((h) => typeof h === 'string' && h.startsWith(prefix));
+      return objIdx !== -1 && objIdx < acceptIdx;
+    });
+    if (!objectedAfterAccept) {
+      accepted.add(seat.id);
+    }
+  }
+  return accepted;
 }
 
 /**
@@ -138,6 +345,8 @@ export class CouncilEngine {
     });
     this._configClarificationsPublished = false;
     this._publishedConfigClarificationCount = 0;
+    this._acceptedSeatsByRound = new Map();
+    this._dynamicSeatConfigs = new Map();
     this.aborted = Boolean(this.signal?.aborted);
     this._defaultMockAdapter = null;
 
@@ -166,8 +375,45 @@ export class CouncilEngine {
    */
   _step(event, throwOnError = false) {
     const prevState = this.state;
+    const prevRound = prevState?.round || 0;
+    const prevAcceptedIds = (prevState?.seats || [])
+      .filter((s) => s.status === 'accepted')
+      .map((s) => s.id);
     const nextState = transitionCouncil(prevState, event);
     this.state = nextState;
+
+    if (nextState.lastTransition?.ok) {
+      if (event?.type === 'RESET') {
+        this._acceptedSeatsByRound.clear();
+        this._dynamicSeatConfigs.clear();
+      } else {
+        if (event?.type === 'ADD_SEAT' && event.seat?.id) {
+          this._dynamicSeatConfigs.set(event.seat.id, { ...event.seat });
+        }
+        if (event?.type === 'CAST_VOTE' && event.seatId && prevRound >= 1) {
+          if (!this._acceptedSeatsByRound.has(prevRound)) {
+            this._acceptedSeatsByRound.set(prevRound, new Set());
+          }
+          const roundSet = this._acceptedSeatsByRound.get(prevRound);
+          if (event.vote === 'accept') {
+            roundSet.add(event.seatId);
+          } else if (event.vote === 'object') {
+            roundSet.delete(event.seatId);
+          }
+        }
+        if (event?.type === 'EXCUSE_SEAT') {
+          const targetId = event.seatId || event.id;
+          if (targetId) {
+            for (const roundSet of this._acceptedSeatsByRound.values()) {
+              roundSet.delete(targetId);
+            }
+          }
+        }
+        if (nextState.round > prevRound && prevRound >= 1) {
+          this._acceptedSeatsByRound.set(prevRound, new Set(prevAcceptedIds));
+        }
+      }
+    }
 
     // Emit deterministic transition snapshot
     this.telemetry.emitStateTransition(event, nextState);
@@ -506,15 +752,22 @@ export class CouncilEngine {
     const currentRound = this.state.round;
     this.telemetry.emitRoundStart(currentRound, activeSeats(this.state).map((s) => s.id));
 
-    // 2. PROOF COLLECTION (Active seats submit proofs concurrently)
     // 2. PROOF COLLECTION (Active seats submit proofs concurrently across Attempt 0 and retry waves)
     const active = activeSeats(this.state);
     const concurrencyLimit = this.config.maxConcurrentSeats || active.length;
+    const openObjections = (this.state.objections || []).filter((o) => o.status === 'open');
+    const priorRoundAcceptedIds =
+      currentRound >= 2
+        ? (this._acceptedSeatsByRound.has(currentRound - 1)
+            ? this._acceptedSeatsByRound.get(currentRound - 1)
+            : inferPriorRoundAcceptedSeatsFromState(this.state, currentRound - 1))
+        : new Set();
 
     const delibSlots = active.map((seat, index) => {
       const harness = this.harnessResolver(seat.harness);
+      const dynamicSeat = this._dynamicSeatConfigs.get(seat.id) || {};
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
-      const mergedSeat = { ...configSeat, ...seat };
+      const mergedSeat = { ...dynamicSeat, ...configSeat, ...seat };
       const rawTurnTimeoutMs = mergedSeat.timeoutMs || this.config.timeoutMs;
       const initialBaseTimeoutMs =
         rawTurnTimeoutMs ||
@@ -537,15 +790,57 @@ export class CouncilEngine {
                   ? seatBudgetMs
                   : undefined));
 
+      const isRebuttal =
+        currentRound >= 2 &&
+        openObjections.length > 0 &&
+        !openObjections.some((o) => o.seatId === seat.id) &&
+        priorRoundAcceptedIds.has(seat.id);
+
+      let rebuttalSeat = null;
+      let currentSeatConfig = { ...mergedSeat };
+      let effectiveBaseTimeoutMs = retryBaseTimeoutMs;
+      let effectiveTurnTimeoutMs = initialTurnTimeoutMs;
+
+      if (isRebuttal) {
+        rebuttalSeat = resolveRebuttalSeatConfig(mergedSeat, this.config);
+        const hasExplicitRebuttalTimeout =
+          mergedSeat.rebuttalTimeoutMs !== undefined ||
+          mergedSeat.rebuttalTimeout !== undefined ||
+          mergedSeat['rebuttal-timeout'] !== undefined ||
+          this.config.rebuttalTimeoutMs !== undefined ||
+          this.config.rebuttalTimeout !== undefined ||
+          this.config['rebuttal-timeout'] !== undefined;
+
+        effectiveTurnTimeoutMs =
+          rebuttalSeat.preserveRebuttalEffort && !hasExplicitRebuttalTimeout
+            ? initialTurnTimeoutMs
+            : Math.min(rebuttalSeat.rebuttalTimeoutMs, totalSeatBudgetMs);
+        effectiveBaseTimeoutMs =
+          rebuttalSeat.preserveRebuttalEffort && !hasExplicitRebuttalTimeout
+            ? retryBaseTimeoutMs
+            : Math.min(retryBaseTimeoutMs, rebuttalSeat.rebuttalTimeoutMs);
+        currentSeatConfig = {
+          ...seat,
+          model: rebuttalSeat.model,
+          tools: rebuttalSeat.tools,
+          rebuttalTimeoutMs: rebuttalSeat.rebuttalTimeoutMs,
+          preserveRebuttalEffort: rebuttalSeat.preserveRebuttalEffort,
+          ...(rebuttalSeat.tools === 'none' && seat.cwd !== undefined ? { cwd: undefined } : {}),
+          ...(rebuttalSeat.reasoningEffort ? { reasoningEffort: rebuttalSeat.reasoningEffort } : {})
+        };
+      }
+
       return {
         index,
         seat,
         harness,
         mergedSeat,
-        currentSeatConfig: { ...mergedSeat },
-        baseTimeoutMs: retryBaseTimeoutMs,
+        isRebuttal,
+        rebuttalSeat,
+        currentSeatConfig,
+        baseTimeoutMs: effectiveBaseTimeoutMs,
         totalSeatBudgetMs,
-        turnTimeoutMs: initialTurnTimeoutMs,
+        turnTimeoutMs: effectiveTurnTimeoutMs,
         seatElapsedMs: 0,
         proofInput: null,
         error: null,
@@ -570,7 +865,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.seat.model,
+              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model,
               validationErrors: validation.errors
             }
           );
@@ -595,7 +890,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.seat.model
+              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model
             }
           );
           slot.proofInput = null;
@@ -612,30 +907,48 @@ export class CouncilEngine {
       this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
       try {
+        const callSeat = slot.isRebuttal ? slot.currentSeatConfig : slot.seat;
+        const callTools = slot.isRebuttal ? slot.currentSeatConfig.tools : slot.seat.tools;
+        const rebuttalCallExtras = slot.isRebuttal
+          ? {
+              rebuttalMode: true,
+              mode: 'rebuttal',
+              context: {
+                rebuttalMode: true,
+                mode: 'rebuttal',
+                tools: callTools,
+                ...(slot.currentSeatConfig.reasoningEffort
+                  ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                  : {})
+              }
+            }
+          : {};
         let proofInput;
         if (typeof slot.harness.executeSeatProof === 'function') {
           proofInput = await slot.harness.executeSeatProof({
-            seat: slot.seat,
+            seat: callSeat,
             soul: slot.seat.soul,
             round: currentRound,
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
             timeoutMs: slot.turnTimeoutMs,
-            tools: slot.seat.tools,
-            telemetry: this.telemetry
+            tools: callTools,
+            telemetry: this.telemetry,
+            ...rebuttalCallExtras
           });
         } else if (typeof slot.harness.executeSeat === 'function') {
           proofInput = await slot.harness.executeSeat({
-            seat: slot.seat,
+            seat: callSeat,
             soul: slot.seat.soul,
             round: currentRound,
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
             timeoutMs: slot.turnTimeoutMs,
-            tools: slot.seat.tools,
-            telemetry: this.telemetry
+            tools: callTools,
+            telemetry: this.telemetry,
+            ...rebuttalCallExtras
           });
         } else {
           throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatProof or executeSeat`);
@@ -698,10 +1011,16 @@ export class CouncilEngine {
           }
 
           slot.turnTimeoutMs = Math.min(slot.baseTimeoutMs, 90000, Math.max(1, remainingBudget));
+          const effectiveRetryTools = isTimeout
+            ? 'none'
+            : (slot.currentSeatConfig.tools !== undefined ? slot.currentSeatConfig.tools : 'read-only');
           slot.currentSeatConfig = {
             ...slot.currentSeatConfig,
             retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
-            ...(isTimeout ? { tools: 'none' } : {})
+            tools: effectiveRetryTools,
+            ...(effectiveRetryTools === 'none' && slot.currentSeatConfig.cwd !== undefined
+              ? { cwd: undefined }
+              : {})
           };
           retryBatch.push(slot);
         }
@@ -718,6 +1037,20 @@ export class CouncilEngine {
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
           const retryT0 = Date.now();
           try {
+            const rebuttalRetryExtras = slot.isRebuttal
+              ? {
+                  rebuttalMode: true,
+                  mode: 'rebuttal',
+                  context: {
+                    rebuttalMode: true,
+                    mode: 'rebuttal',
+                    tools: slot.currentSeatConfig.tools,
+                    ...(slot.currentSeatConfig.reasoningEffort
+                      ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                      : {})
+                  }
+                }
+              : {};
             let proofInput;
             if (typeof slot.harness.executeSeatProof === 'function') {
               proofInput = await slot.harness.executeSeatProof({
@@ -729,7 +1062,8 @@ export class CouncilEngine {
                 topic: this.state.topic,
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry
+                telemetry: this.telemetry,
+                ...rebuttalRetryExtras
               });
             } else if (typeof slot.harness.executeSeat === 'function') {
               proofInput = await slot.harness.executeSeat({
@@ -741,7 +1075,8 @@ export class CouncilEngine {
                 topic: this.state.topic,
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry
+                telemetry: this.telemetry,
+                ...rebuttalRetryExtras
               });
             }
             slot.seatElapsedMs += Date.now() - retryT0;
@@ -796,7 +1131,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.seat.model
+              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model
             }
           );
           slot.proofInput = null;

@@ -1259,37 +1259,104 @@ export class VisualizerLiveWatcher {
 
   /**
    * Parses the embedded liveRun JSON object from either `_buildBundleScript` (`const data = {...}`)
-   * or legacy `window.COUNCIL_LIVE_RUN = {...}` JS bundle files.
+   * or legacy `window.COUNCIL_LIVE_RUN = {...}` JS bundle files without matching inside comments or strings.
    * @param {string} rawJs
+   * @param {string} [expectedRunId]
    * @returns {{ parsedRun: Object, isLegacy: boolean }|null}
    * @private
    */
-  _parseRunBundleJs(rawJs) {
+  _parseRunBundleJs(rawJs, expectedRunId) {
     if (typeof rawJs !== 'string' || !rawJs) {
       return null;
     }
-    const bundleMatch = /\bconst\s+data\s*=\s*\{/.exec(rawJs);
-    if (bundleMatch) {
-      const braceIdx = bundleMatch.index + bundleMatch[0].length - 1;
-      const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
-      if (jsonSlice) {
-        const parsedRun = JSON.parse(jsonSlice);
-        if (parsedRun && typeof parsedRun === 'object') {
+
+    const len = rawJs.length;
+    let i = 0;
+    while (i < len) {
+      const ch = rawJs[i];
+      const next = i + 1 < len ? rawJs[i + 1] : '';
+
+      // Skip line comments
+      if (ch === '/' && next === '/') {
+        i += 2;
+        while (i < len && rawJs[i] !== '\n') i += 1;
+        continue;
+      }
+      // Skip block comments
+      if (ch === '/' && next === '*') {
+        const endComment = rawJs.indexOf('*/', i + 2);
+        if (endComment === -1) return null;
+        i = endComment + 2;
+        continue;
+      }
+      // Skip JS string / template literals outside the target assignment
+      if (ch === "'" || ch === '"' || ch === '`') {
+        const quote = ch;
+        i += 1;
+        while (i < len) {
+          if (rawJs[i] === '\\') {
+            i += 2;
+            continue;
+          }
+          if (rawJs[i] === quote) {
+            i += 1;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+
+      const slice = rawJs.slice(i);
+      const bundleMatch = /^const\s+data\s*=\s*\{/.exec(slice);
+      if (bundleMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+        const braceIdx = i + bundleMatch[0].length - 1;
+        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+        if (!jsonSlice) return null;
+        let parsedRun;
+        try {
+          parsedRun = JSON.parse(jsonSlice);
+        } catch {
+          return null;
+        }
+        if (
+          parsedRun &&
+          typeof parsedRun === 'object' &&
+          !Array.isArray(parsedRun) &&
+          typeof parsedRun.runId === 'string' &&
+          parsedRun.runId.length > 0 &&
+          (!expectedRunId || parsedRun.runId === expectedRunId)
+        ) {
           return { parsedRun, isLegacy: false };
         }
+        return null;
       }
-    }
 
-    const legacyMatch = /(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(rawJs);
-    if (legacyMatch) {
-      const braceIdx = legacyMatch.index + legacyMatch[0].length - 1;
-      const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
-      if (jsonSlice) {
-        const parsedRun = JSON.parse(jsonSlice);
-        if (parsedRun && typeof parsedRun === 'object') {
+      const legacyMatch = /^(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(slice);
+      if (legacyMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+        const braceIdx = i + legacyMatch[0].length - 1;
+        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+        if (!jsonSlice) return null;
+        let parsedRun;
+        try {
+          parsedRun = JSON.parse(jsonSlice);
+        } catch {
+          return null;
+        }
+        if (
+          parsedRun &&
+          typeof parsedRun === 'object' &&
+          !Array.isArray(parsedRun) &&
+          typeof parsedRun.runId === 'string' &&
+          parsedRun.runId.length > 0 &&
+          (!expectedRunId || parsedRun.runId === expectedRunId)
+        ) {
           return { parsedRun, isLegacy: true };
         }
+        return null;
       }
+
+      i += 1;
     }
 
     return null;
@@ -1319,7 +1386,7 @@ export class VisualizerLiveWatcher {
       if (fs.existsSync(runJsPath)) {
         bundleOk = false;
         const rawJs = fs.readFileSync(runJsPath, 'utf8');
-        const extracted = this._parseRunBundleJs(rawJs);
+        const extracted = this._parseRunBundleJs(rawJs, safeRunId);
         if (extracted && extracted.parsedRun) {
           const { parsedRun, isLegacy } = extracted;
           parsedRun.isRunning = false;
@@ -1343,7 +1410,7 @@ export class VisualizerLiveWatcher {
       try {
         if (fs.existsSync(defaultLatestPath)) {
           const rawLatest = fs.readFileSync(defaultLatestPath, 'utf8');
-          const extractedLatest = this._parseRunBundleJs(rawLatest);
+          const extractedLatest = this._parseRunBundleJs(rawLatest, safeRunId);
           if (
             extractedLatest &&
             extractedLatest.parsedRun &&

@@ -803,7 +803,7 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
     try {
       const oldIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
-      // 1) Legacy bundle whose step text contains BOTH `};` AND `CouncilRuns`
+      // 1) Legacy bundle whose step text contains `const data = {}`, `};`, AND `CouncilRuns`
       fs.writeFileSync(
         path.join(outDir, 'run-tricky-legacy.meta.json'),
         JSON.stringify(
@@ -824,7 +824,7 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
       );
       fs.writeFileSync(
         path.join(outDir, 'run-tricky-legacy.js'),
-        `window.COUNCIL_LIVE_RUN = ${JSON.stringify({
+        `/* header: const data = {} */\nwindow.COUNCIL_LIVE_RUN = ${JSON.stringify({
           runId: 'run-tricky-legacy',
           isRunning: true,
           verdictKind: null,
@@ -832,7 +832,7 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
           updatedAt: oldIso,
           steps: [
             {
-              summary: 'Code snippet: const fn = () => { return window.CouncilRuns; }; statement'
+              summary: 'const data = {}; const fn = () => { return window.CouncilRuns; }; statement'
             }
           ]
         })};\n`
@@ -897,6 +897,8 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
       assert.ok(trickyEval.runs['run-tricky-legacy'], 'CouncilRuns[runId] must be registered even when payload mentions CouncilRuns');
       assert.equal(trickyEval.runs['run-tricky-legacy'].isRunning, false);
       assert.equal(trickyEval.runs['run-tricky-legacy'].verdictKind, 'Aborted');
+      assert.equal(trickyEval.runs['run-tricky-legacy'].runId, 'run-tricky-legacy');
+      assert.match(trickyEval.runs['run-tricky-legacy'].steps[0].summary, /const data = \{\}/);
       assert.match(trickyEval.runs['run-tricky-legacy'].steps[0].summary, /};\s*statement/);
 
       // Verify default latest.js pointing to dead `run-orphan-latest` was reconciled even under custom outputPath!

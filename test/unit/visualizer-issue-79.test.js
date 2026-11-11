@@ -986,9 +986,11 @@ describe('Issue #79: Visualizer XSS Hardening, Validated runId Loading, and Diff
       assert.match(getEl('telemetry-leaderboard-body').innerHTML, /seat-alpha/);
 
       // Live Follow toggle button programmatic click listener
+      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: ON (Idle)');
+      getEl('btn-live-follow').dispatchEvent('click');
       assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: OFF');
       getEl('btn-live-follow').dispatchEvent('click');
-      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: ON (1s)');
+      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: ON (Idle)');
     });
   });
 
@@ -1229,15 +1231,22 @@ describe('Issue #79: Visualizer XSS Hardening, Validated runId Loading, and Diff
       };
       for (const s of appendedScripts.slice(0, 3)) s.onload();
 
-      assert.equal(timeouts.size, 0, 'Background polling must stop once isRunning === false');
-      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: OFF');
+      assert.equal(timeouts.size, 1, 'Background polling throttles to 2500ms Idle Watch Mode once isRunning === false');
+      assert.equal(Array.from(timeouts.values())[0].ms, 2500);
+      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: ON (Idle)');
       assert.equal(getEl('lbl-elapsed').textContent, '00:42');
+
+      // Manual toggleLiveFollow() stops Idle Watch Mode completely
+      controller.toggleLiveFollow();
+      assert.equal(timeouts.size, 0, 'Manual toggle OFF stops background polling');
+      assert.equal(getEl('btn-live-follow-label').textContent, 'Live Follow: OFF');
 
       // Re-triggering via toggleLiveFollow() starts a fresh check
       controller.toggleLiveFollow();
       assert.equal(appendedScripts.length, 6, 'toggleLiveFollow() must re-trigger pollLiveRun');
       for (const s of appendedScripts.slice(3, 6)) s.onload();
-      assert.equal(timeouts.size, 0, 'Idles again when latest run is still isRunning === false');
+      assert.equal(timeouts.size, 1, 'Idles at 2500ms when latest run is still isRunning === false');
+      assert.equal(Array.from(timeouts.values())[0].ms, 2500);
 
       // Selecting 'latest' also re-triggers a fresh check
       controller.selectRun('latest');

@@ -722,6 +722,20 @@ describe('Issue #91: Monotonic Run-State Reconciliation, Historical Step Inspect
           'run-mono-2',
           'Older finished latest.js must not overwrite a newer run in CouncilLatestLiveRun'
         );
+
+        // Delayed older RUNNING latest.js for already-finalized run-mono-1 (startedAt 10:00 < 11:00) MUST NOT overwrite run-mono-2 or resurrect run-mono-1!
+        vm.runInNewContext(staleRunningScript, sandbox);
+        assert.equal(
+          sandbox.CouncilRuns['run-mono-1'].isRunning,
+          false,
+          'Delayed running payload for finalized run-mono-1 must remain rejected in CouncilRuns'
+        );
+        assert.equal(
+          sandbox.CouncilLatestLiveRun.runId,
+          'run-mono-2',
+          'Delayed running payload for finalized older run-mono-1 must never resurrect in CouncilLatestLiveRun'
+        );
+        assert.equal(sandbox.CouncilLatestLiveRun.isRunning, true);
       } finally {
         fs.rmSync(outDir, { recursive: true, force: true });
       }
@@ -872,6 +886,69 @@ describe('Issue #91: Monotonic Run-State Reconciliation, Historical Step Inspect
       assert.equal(controller.getInternalState().selectedRunId, 'run-cached-stale');
       assert.equal(getEl('heading-topic').textContent, 'Previously Cached Running Run');
       assert.equal(getEl('status-pill-text').textContent, 'ABORTED: REVIEWING');
+
+      // Also verify that when a run is ALREADY selected and updateRunSelector() sees a newer manifest entry, it immediately re-fetches <runId>.js!
+      domWin.CouncilRuns['run-already-selected'] = {
+        runId: 'run-already-selected',
+        isRunning: true,
+        updatedAt: '2026-11-11T10:10:00.000Z',
+        currentState: { topic: 'Already Selected Running', phase: 'proving', round: 1, verdict: null, seats: [] },
+        steps: []
+      };
+      domWin.COUNCIL_RUNS_INDEX.push({
+        runId: 'run-already-selected',
+        topic: 'Already Selected Running',
+        isRunning: true,
+        updatedAt: '2026-11-11T10:10:00.000Z'
+      });
+      controller.selectRun('run-already-selected');
+      assert.equal(getEl('status-pill-text').textContent, 'RUNNING: PROVING');
+
+      // Manifest now reconciles 'run-already-selected' to Aborted WHILE it is already selected!
+      const scriptsBeforeManifestRefresh = appendedScripts.length;
+      domWin.COUNCIL_RUNS_INDEX = domWin.COUNCIL_RUNS_INDEX.map((e) =>
+        e.runId === 'run-already-selected'
+          ? { ...e, isRunning: false, verdictKind: 'Aborted', updatedAt: '2026-11-11T10:12:00.000Z' }
+          : e
+      );
+      controller.updateRunSelector();
+      assert.equal(
+        appendedScripts.length,
+        scriptsBeforeManifestRefresh + 1,
+        'updateRunSelector must automatically re-fetch the currently selected run when invalidated by manifest'
+      );
+      const reloadSelectedScript = appendedScripts[appendedScripts.length - 1];
+      assert.match(reloadSelectedScript.src, /run-already-selected\.js\?t=/);
+      domWin.CouncilRuns['run-already-selected'] = {
+        runId: 'run-already-selected',
+        isRunning: false,
+        verdictKind: 'Aborted',
+        updatedAt: '2026-11-11T10:12:00.000Z',
+        currentState: { topic: 'Already Selected Running', phase: 'proving', round: 1, verdict: null, seats: [] },
+        steps: []
+      };
+      reloadSelectedScript.onload();
+      assert.equal(getEl('status-pill-text').textContent, 'ABORTED: PROVING');
+
+      // Isolate pollEpoch guard while selectedRunId === 'latest' (toggle OFF -> ON -> fire stale epoch onload!)
+      controller.selectRun('latest');
+      const epochOnLatestScript = appendedScripts.filter((s) => s.id === 'script-live-reload').pop();
+      assert.ok(epochOnLatestScript);
+      getEl('btn-live-follow').dispatchEvent('click'); // OFF (increments pollEpoch)
+      getEl('btn-live-follow').dispatchEvent('click'); // ON (new pollEpoch, still selectedRunId === 'latest'!)
+      domWin.CouncilLatestLiveRun = {
+        runId: 'run-stale-epoch-attempt',
+        isRunning: false,
+        verdictKind: 'Aborted',
+        currentState: { topic: 'STALE EPOCH SHOULD BE IGNORED', phase: 'reviewing', round: 1, verdict: null, seats: [] },
+        steps: []
+      };
+      epochOnLatestScript.onload();
+      assert.equal(
+        getEl('heading-topic').textContent,
+        'Latest Active',
+        'Stale pollEpoch onload while selectedRunId === "latest" must be ignored'
+      );
     });
   });
 

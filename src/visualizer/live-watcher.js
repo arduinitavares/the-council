@@ -1142,32 +1142,36 @@ export class VisualizerLiveWatcher {
     if (!isLatestPointer) return false;
     var inTs = String(incoming.startedAt || incoming.updatedAt || '');
     var exTs = String(existingLatest.startedAt || existingLatest.updatedAt || '');
+    if (existingLatest.isRunning === true && inTs && exTs && inTs < exTs) return false;
     return Boolean(incoming.isRunning === true || inTs >= exTs);
   }
   if (typeof window !== 'undefined') {
     window.CouncilRuns = window.CouncilRuns || {};
-    if (data.runId && isNotStale(window.CouncilRuns[data.runId], data)) {
+    var winAccepted = !data.runId || isNotStale(window.CouncilRuns[data.runId], data);
+    if (data.runId && winAccepted) {
       window.CouncilRuns[data.runId] = data;
     }
-    if (shouldReplaceLatest(window.CouncilLatestLiveRun, data, isLatestPointer)) {
+    if (winAccepted && shouldReplaceLatest(window.CouncilLatestLiveRun, data, isLatestPointer)) {
       window.CouncilLatestLiveRun = data;
     }
   }
   if (typeof globalThis !== 'undefined') {
     globalThis.CouncilRuns = globalThis.CouncilRuns || {};
-    if (data.runId && isNotStale(globalThis.CouncilRuns[data.runId], data)) {
+    var gtAccepted = !data.runId || isNotStale(globalThis.CouncilRuns[data.runId], data);
+    if (data.runId && gtAccepted) {
       globalThis.CouncilRuns[data.runId] = data;
     }
-    if (shouldReplaceLatest(globalThis.CouncilLatestLiveRun, data, isLatestPointer)) {
+    if (gtAccepted && shouldReplaceLatest(globalThis.CouncilLatestLiveRun, data, isLatestPointer)) {
       globalThis.CouncilLatestLiveRun = data;
     }
   }
   if (root) {
     root.CouncilRuns = root.CouncilRuns || {};
-    if (data.runId && isNotStale(root.CouncilRuns[data.runId], data)) {
+    var rootAccepted = !data.runId || isNotStale(root.CouncilRuns[data.runId], data);
+    if (data.runId && rootAccepted) {
       root.CouncilRuns[data.runId] = data;
     }
-    if (shouldReplaceLatest(root.CouncilLatestLiveRun, data, isLatestPointer)) {
+    if (rootAccepted && shouldReplaceLatest(root.CouncilLatestLiveRun, data, isLatestPointer)) {
       root.CouncilLatestLiveRun = data;
     }
   }

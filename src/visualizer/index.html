@@ -1118,12 +1118,15 @@
       return Array.from(byId.values());
     }
 
+    let reselectingInvalidatedRunId = null;
+
     function reconcileRunsCacheWithIndex() {
+      const invalidatedIds = [];
       const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
                    (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
-      if (!runs || typeof runs !== 'object') return;
+      if (!runs || typeof runs !== 'object') return invalidatedIds;
       const entries = getManifestEntries();
-      if (!Array.isArray(entries)) return;
+      if (!Array.isArray(entries)) return invalidatedIds;
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i];
         if (!entry || entry.runId == null || entry.runId === '') continue;
@@ -1143,8 +1146,10 @@
         const hasMoreSteps = entryStepCount > cachedStepCount;
         if (becameTerminal || hasNewerTimestamp || hasMoreSteps) {
           delete runs[id];
+          invalidatedIds.push(id);
         }
       }
+      return invalidatedIds;
     }
 
     function getLiveRun() {
@@ -1159,7 +1164,20 @@
     }
 
     function updateRunSelector() {
-      reconcileRunsCacheWithIndex();
+      const invalidatedIds = reconcileRunsCacheWithIndex();
+      if (
+        selectedRunId &&
+        selectedRunId !== 'latest' &&
+        reselectingInvalidatedRunId !== selectedRunId &&
+        invalidatedIds.indexOf(selectedRunId) !== -1
+      ) {
+        reselectingInvalidatedRunId = selectedRunId;
+        try {
+          selectRun(selectedRunId);
+        } finally {
+          reselectingInvalidatedRunId = null;
+        }
+      }
       const sel = document.getElementById('run-selector');
       if (!sel) return;
       const runIndex = getManifestEntries();

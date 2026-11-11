@@ -812,7 +812,7 @@ export class CouncilEngine {
       if (!commitFaulted) break;
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 
@@ -902,6 +902,10 @@ export class CouncilEngine {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
         }
 
+        if (this.aborted || this.isCompleted()) {
+          break;
+        }
+
         this._step({
           type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
           summary: synthesisResult ? synthesisResult.summary : undefined,
@@ -920,6 +924,9 @@ export class CouncilEngine {
         judgeElapsedMs += Date.now() - judgeT0;
         judgeExecuted = true;
       } catch (err) {
+        if (this.aborted || this.isCompleted()) {
+          break;
+        }
         const attemptDuration =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
             ? err.timeoutMs
@@ -966,7 +973,7 @@ export class CouncilEngine {
       }
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 
@@ -1296,7 +1303,7 @@ export class CouncilEngine {
       if (!commitFaulted) break;
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 

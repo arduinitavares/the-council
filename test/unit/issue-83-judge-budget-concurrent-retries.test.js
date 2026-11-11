@@ -680,16 +680,31 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
         { harnessResolver: () => mockHarness, signal: ac.signal }
       );
 
-      let rejectedCastVotes = 0;
+      let rejectedEvents = [];
+      let postAbortTransitions = [];
+      engine.getTelemetry().on('state_transition', (snap) => {
+        if (ac.signal.aborted) {
+          postAbortTransitions.push(snap.event?.type);
+        }
+      });
       engine.getTelemetry().on('guard_rejected', (evt) => {
-        if (evt.event?.type === 'CAST_VOTE') {
-          rejectedCastVotes += 1;
+        rejectedEvents.push(evt.event?.type);
+        if (!ac.signal.aborted) {
           ac.abort(new Error('Cancel on first guard_rejected'));
         }
       });
 
       await engine.run();
-      assert.equal(rejectedCastVotes, 1, 'Must stop dispatching further rejected CAST_VOTE transitions after abort');
+      assert.deepEqual(
+        rejectedEvents,
+        ['CAST_VOTE'],
+        'Must stop dispatching ANY further guard_rejected transitions (incl. EVALUATE_ROUND) after abort'
+      );
+      assert.deepEqual(
+        postAbortTransitions,
+        [],
+        'Must not dispatch any state_transition after abort'
+      );
     });
   });
 });

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'none';">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>The Council — Live Deliberation Visualizer</title>
@@ -583,7 +584,7 @@
       </div>
 
       <div class="status-cluster">
-        <select id="run-selector" aria-label="Select deliberation run" onchange="selectRun(this.value)" style="background:var(--surface-raised); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-family:var(--mono); font-size:11.5px;">
+        <select id="run-selector" aria-label="Select deliberation run" style="background:var(--surface-raised); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-family:var(--mono); font-size:11.5px;">
           <option value="latest">Latest Run (Live Follow)</option>
         </select>
 
@@ -597,7 +598,7 @@
           <span id="lbl-elapsed">00:00</span>
         </div>
 
-        <button id="btn-live-follow" onclick="toggleLiveFollow()" aria-pressed="true" class="active">
+        <button id="btn-live-follow" aria-pressed="true" class="active">
           <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
           <span id="btn-live-follow-label">Live Follow: ON (1s)</span>
         </button>
@@ -699,8 +700,8 @@
       <section class="surface-card" aria-labelledby="heading-graphs" style="margin-top:16px;">
         <h2 id="heading-graphs" class="sr-only">Deliberation Graphs</h2>
         <div class="tabs-header">
-          <button id="btn-tab-topology" class="active" onclick="switchGraphTab('topology')">State Machine Flow</button>
-          <button id="btn-tab-causal" onclick="switchGraphTab('causal')">Causal Dependency DAG</button>
+          <button id="btn-tab-topology" class="active">State Machine Flow</button>
+          <button id="btn-tab-causal">Causal Dependency DAG</button>
         </div>
 
         <div id="stage-topology" class="graph-stage">
@@ -716,7 +717,7 @@
       <section class="surface-card" aria-labelledby="heading-timeline" style="margin-top:16px;">
         <div class="panel-header">
           <h2 id="heading-timeline">Deliberation Activity Timeline</h2>
-          <button onclick="restoreLatestSnapshot()" style="font-size:11px; padding:3px 8px;">Jump to Latest</button>
+          <button id="btn-jump-latest" style="font-size:11px; padding:3px 8px;">Jump to Latest</button>
         </div>
         <div id="timeline-list" class="timeline-list"></div>
       </section>
@@ -730,12 +731,12 @@
           </div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <label for="telemetry-group-by" class="sr-only">Group telemetry by</label>
-            <select id="telemetry-group-by" aria-label="Group telemetry by" onchange="renderTelemetryLeaderboard()" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+            <select id="telemetry-group-by" aria-label="Group telemetry by" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
               <option value="model">By Model</option>
               <option value="seat">By Seat</option>
             </select>
             <label for="telemetry-window" class="sr-only">Telemetry time window</label>
-            <select id="telemetry-window" aria-label="Telemetry time window" onchange="renderTelemetryLeaderboard()" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+            <select id="telemetry-window" aria-label="Telemetry time window" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
               <option value="all">Window: All</option>
               <option value="30d">Window: 30d</option>
               <option value="7d">Window: 7d</option>
@@ -750,22 +751,80 @@
   </div>
 
   <!-- Load Portable Modules & Latest Live Run -->
-  <script src="./live-run-latest.js" onerror="/* optional legacy fallback */"></script>
-  <script src="../../.council/runs/index.js" onerror="/* optional: created on first live run */"></script>
-  <script src="../../.council/runs/latest.js" onerror="/* optional: created on first live run */"></script>
-  <script src="../../.council/runs/telemetry-summary.js" onerror="/* optional: created on run completion */"></script>
+  <script src="./live-run-latest.js"></script>
+  <script src="../../.council/runs/index.js"></script>
+  <script src="../../.council/runs/latest.js"></script>
+  <script src="../../.council/runs/telemetry-summary.js"></script>
   <script src="./council-visualizer.js"></script>
 
   <script>
     'use strict';
 
     let liveFollowTimer = null;
+    let liveFollowActive = false;
+    let pollInFlight = false;
+    let pollEpoch = 0;
     let elapsedTimer = null;
-    let startTime = Date.now();
     let currentStepIdx = -1;
     let activeGraphTab = 'topology';
     let selectedRunId = 'latest';
     let selectRunRequestId = 0;
+    let lastRenderStateSig = null;
+    let lastRenderedTopologySig = null;
+    let lastRenderedCausalSig = null;
+    let lastTimelineSig = null;
+
+    function localEscapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeHtml(str) {
+      if (
+        typeof CouncilVisualizer !== 'undefined' &&
+        CouncilVisualizer &&
+        typeof CouncilVisualizer.escapeHtml === 'function' &&
+        CouncilVisualizer.escapeHtml('&<>"\'') === '&amp;&lt;&gt;&quot;&#39;'
+      ) {
+        return CouncilVisualizer.escapeHtml(str);
+      }
+      return localEscapeHtml(str);
+    }
+
+    function sanitizeClassToken(val, fallback) {
+      const norm = String(val ?? '').trim().toLowerCase();
+      return /^[a-z0-9_-]+$/.test(norm) ? norm : (fallback || 'unknown');
+    }
+
+    function isValidRunId(runId) {
+      if (typeof runId !== 'string' || !runId) return false;
+      if (runId === 'latest') return true;
+      if (runId === '.' || runId.includes('..')) return false;
+      return /^[A-Za-z0-9._-]+$/.test(runId);
+    }
+
+    function safeJsonSig(val) {
+      try {
+        const seen = new WeakSet();
+        return JSON.stringify(val, function (_k, v) {
+          if (v && typeof v === 'object') {
+            if (seen.has(v)) return '[Circular]';
+            seen.add(v);
+          }
+          return v;
+        });
+      } catch {
+        return String(Date.now()) + ':' + String(Math.random());
+      }
+    }
+
+    function isDocumentHidden() {
+      return Boolean(typeof document !== 'undefined' && document && document.hidden === true);
+    }
 
     // Format structured soul cleanly delegating to CouncilVisualizer without [object Object]
     function formatSoul(soul) {
@@ -818,11 +877,22 @@
     }
 
     function renderSoulCardHtml(soul, esc) {
+      const escape = (typeof esc === 'function' && esc('&<>"\'') === '&amp;&lt;&gt;&quot;&#39;')
+        ? esc
+        : escapeHtml;
       if (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && typeof CouncilVisualizer.renderSoulCardHtml === 'function') {
-        return CouncilVisualizer.renderSoulCardHtml(soul, esc);
+        const probe = CouncilVisualizer.renderSoulCardHtml('<"\'&>', escape);
+        if (
+          typeof probe === 'string' &&
+          !probe.includes('<"\'&>') &&
+          probe.includes('&lt;') &&
+          probe.includes('&quot;') &&
+          probe.includes('&#39;')
+        ) {
+          return CouncilVisualizer.renderSoulCardHtml(soul, escape);
+        }
       }
       if (!soul) return '';
-      const escape = typeof esc === 'function' ? esc : function (s) { return String(s); };
       const text = formatSoul(soul);
       return text ? '<div class="soul-block">' + escape(text) + '</div>' : '';
     }
@@ -831,7 +901,9 @@
       const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
                    (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
       if (selectedRunId !== 'latest') {
-        return (runs && runs[selectedRunId]) ? runs[selectedRunId] : null;
+        return (runs && Object.prototype.hasOwnProperty.call(runs, selectedRunId) && runs[selectedRunId])
+          ? runs[selectedRunId]
+          : null;
       }
       return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
              (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
@@ -845,23 +917,58 @@
       if (!Array.isArray(runIndex)) return;
       const targetValue = selectedRunId || sel.value || 'latest';
       let hasTargetOption = (targetValue === 'latest');
-      let html = '<option value="latest">Latest Run (Live Follow)</option>';
+      const optionDefs = [{ value: 'latest', text: 'Latest Run (Live Follow)' }];
       for (let i = 0; i < runIndex.length; i++) {
         const entry = runIndex[i];
-        if (!entry || !entry.runId) continue;
-        if (entry.runId === targetValue) hasTargetOption = true;
-        const label = (entry.topic || entry.title || entry.runId).slice(0, 48);
-        const statusTag = entry.isRunning ? 'RUNNING' : (entry.verdictKind || 'DONE');
-        html += '<option value="' + String(entry.runId).replace(/"/g, '&quot;') + '">' +
-          String(entry.runId) + ' — ' + String(label).replace(/</g, '&lt;') + ' [' + String(statusTag).replace(/</g, '&lt;') + ']' +
-          '</option>';
+        if (!entry || entry.runId == null || entry.runId === '') continue;
+        const runIdStr = String(entry.runId);
+        if (runIdStr === targetValue) hasTargetOption = true;
+        const rawLabel = entry.topic || entry.title || runIdStr;
+        const label = String(rawLabel).slice(0, 48);
+        const statusTag = entry.isRunning ? 'RUNNING' : String(entry.verdictKind || 'DONE');
+        optionDefs.push({
+          value: runIdStr,
+          text: runIdStr + ' — ' + label + ' [' + statusTag + ']'
+        });
       }
-      sel.innerHTML = html;
-      sel.value = hasTargetOption ? targetValue : 'latest';
+      const optionsSig = safeJsonSig(optionDefs);
+      const hasExistingOptions = (sel.options && typeof sel.options.length === 'number')
+        ? sel.options.length > 0
+        : (Array.isArray(sel.children) ? sel.children.length > 0 : Boolean(sel._hasPopulatedOptions));
+      if (sel._lastOptionsSig !== optionsSig || !hasExistingOptions) {
+        if (typeof document !== 'undefined' && document && typeof document.createElement === 'function') {
+          const nodes = [];
+          for (let j = 0; j < optionDefs.length; j++) {
+            const opt = document.createElement('option');
+            opt.value = optionDefs[j].value;
+            opt.textContent = optionDefs[j].text;
+            nodes.push(opt);
+          }
+          if (typeof sel.replaceChildren === 'function') {
+            sel.replaceChildren.apply(sel, nodes);
+          } else if (typeof sel.appendChild === 'function') {
+            while (sel.firstChild && typeof sel.removeChild === 'function') {
+              sel.removeChild(sel.firstChild);
+            }
+            for (let k = 0; k < nodes.length; k++) {
+              sel.appendChild(nodes[k]);
+            }
+          }
+        }
+        sel._lastOptionsSig = optionsSig;
+        sel._hasPopulatedOptions = true;
+      }
+      const nextValue = hasTargetOption ? targetValue : 'latest';
+      if (sel.value !== nextValue) {
+        sel.value = nextValue;
+      }
     }
 
     function renderFailedRunLoad(failedRunId) {
-      document.getElementById('heading-topic').textContent = 'Failed to load run ' + failedRunId + '.';
+      lastRenderStateSig = null;
+      const safeId = String(failedRunId ?? '');
+      const topicEl = document.getElementById('heading-topic');
+      if (topicEl) topicEl.textContent = 'Failed to load run ' + safeId + '.';
       const statusPill = document.getElementById('status-pill');
       const statusPillText = document.getElementById('status-pill-text');
       const verdictStatusPill = document.getElementById('lbl-verdict-status');
@@ -875,15 +982,15 @@
       const vTitle = document.getElementById('verdict-title');
       const vBody = document.getElementById('verdict-body');
       if (vBox) vBox.className = 'verdict-banner fault';
-      if (vTitle) vTitle.textContent = 'Failed to load run ' + failedRunId;
+      if (vTitle) vTitle.textContent = 'Failed to load run ' + safeId;
       if (vBody) vBody.textContent = 'Run artifact could not be loaded from disk.';
     }
 
     function selectRun(runId) {
       const reqId = ++selectRunRequestId;
       const oldSelectScript = document.getElementById('script-run-select');
-      if (oldSelectScript) oldSelectScript.remove();
-      selectedRunId = runId || 'latest';
+      if (oldSelectScript && typeof oldSelectScript.remove === 'function') oldSelectScript.remove();
+      selectedRunId = (runId === undefined || runId === null || runId === '') ? 'latest' : String(runId);
       currentStepIdx = -1;
       const badgeTag = document.getElementById('badge-live-tag');
       if (selectedRunId === 'latest') {
@@ -896,8 +1003,20 @@
       }
       stopLiveFollow();
       if (badgeTag) badgeTag.textContent = 'Run: ' + selectedRunId;
-      const runs = (typeof window !== 'undefined' && window.CouncilRuns) || {};
-      if (runs[selectedRunId] && runs[selectedRunId].currentState) {
+      if (!isValidRunId(selectedRunId)) {
+        councilState = null;
+        renderAll();
+        renderFailedRunLoad(selectedRunId);
+        return;
+      }
+      const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
+                   (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || {};
+      if (
+        runs &&
+        Object.prototype.hasOwnProperty.call(runs, selectedRunId) &&
+        runs[selectedRunId] &&
+        runs[selectedRunId].currentState
+      ) {
         councilState = runs[selectedRunId].currentState;
         renderAll();
         return;
@@ -933,16 +1052,135 @@
       return (liveRun && liveRun.currentState) ? liveRun.currentState : null;
     })();
 
+    function getCurrentGraph(liveRun) {
+      if (!councilState) return null;
+      const stepGraph = (currentStepIdx >= 0 && liveRun && Array.isArray(liveRun.steps) && liveRun.steps[currentStepIdx])
+        ? liveRun.steps[currentStepIdx].graph
+        : null;
+      return stepGraph || councilState.graph || (liveRun && liveRun.currentGraph) || {
+        nodes: [],
+        edges: [],
+        activeNodeId: councilState.phase,
+        outgoingEdges: [],
+        causalLinks: []
+      };
+    }
+
+    function renderActiveGraph(liveRunArg) {
+      if (!councilState) return;
+      if (typeof CouncilVisualizer === 'undefined' || !CouncilVisualizer) return;
+      const liveRun = liveRunArg !== undefined ? liveRunArg : getLiveRun();
+      const graph = getCurrentGraph(liveRun);
+      const graphSig = safeJsonSig({
+        selectedRunId: selectedRunId,
+        currentStepIdx: currentStepIdx,
+        phase: councilState.phase,
+        round: councilState.round,
+        maxRounds: councilState.maxRounds,
+        verdict: councilState.verdict,
+        seats: councilState.seats,
+        proofs: councilState.proofs,
+        candidate: councilState.candidate,
+        objections: councilState.objections,
+        graph: graph
+      });
+
+      if (activeGraphTab === 'causal') {
+        if (lastRenderedCausalSig !== graphSig) {
+          if (typeof CouncilVisualizer.renderCausalDependencySVG === 'function') {
+            CouncilVisualizer.renderCausalDependencySVG(
+              document.getElementById('causal-dependency-svg'),
+              councilState,
+              graph
+            );
+          }
+          lastRenderedCausalSig = graphSig;
+        }
+      } else {
+        if (lastRenderedTopologySig !== graphSig) {
+          if (typeof CouncilVisualizer.renderStateMachineSVG === 'function') {
+            CouncilVisualizer.renderStateMachineSVG(
+              document.getElementById('state-machine-svg'),
+              councilState,
+              graph
+            );
+          }
+          lastRenderedTopologySig = graphSig;
+        }
+      }
+    }
+
     function switchGraphTab(tab) {
-      activeGraphTab = tab;
-      document.getElementById('btn-tab-topology').classList.toggle('active', tab === 'topology');
-      document.getElementById('btn-tab-causal').classList.toggle('active', tab === 'causal');
-      document.getElementById('stage-topology').style.display = tab === 'topology' ? 'block' : 'none';
-      document.getElementById('stage-causal').style.display = tab === 'causal' ? 'block' : 'none';
+      activeGraphTab = (tab === 'causal') ? 'causal' : 'topology';
+      const btnTopo = document.getElementById('btn-tab-topology');
+      const btnCausal = document.getElementById('btn-tab-causal');
+      const stageTopo = document.getElementById('stage-topology');
+      const stageCausal = document.getElementById('stage-causal');
+      if (btnTopo && btnTopo.classList) btnTopo.classList.toggle('active', activeGraphTab === 'topology');
+      if (btnCausal && btnCausal.classList) btnCausal.classList.toggle('active', activeGraphTab === 'causal');
+      if (stageTopo && stageTopo.style) stageTopo.style.display = activeGraphTab === 'topology' ? 'block' : 'none';
+      if (stageCausal && stageCausal.style) stageCausal.style.display = activeGraphTab === 'causal' ? 'block' : 'none';
+      renderActiveGraph();
+    }
+
+    function clearPollTimer() {
+      if (liveFollowTimer !== null) {
+        clearTimeout(liveFollowTimer);
+        liveFollowTimer = null;
+      }
+    }
+
+    function stopElapsedTimer() {
+      if (elapsedTimer !== null) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+    }
+
+    function syncElapsedTimer() {
+      const liveRun = getLiveRun();
+      const shouldTick = Boolean(liveRun && liveRun.isRunning === true && !isDocumentHidden());
+      if (shouldTick) {
+        if (elapsedTimer === null) {
+          elapsedTimer = setInterval(function () {
+            if (isDocumentHidden()) {
+              stopElapsedTimer();
+              return;
+            }
+            updateElapsedTimer();
+            const cur = getLiveRun();
+            if (!cur || cur.isRunning !== true) {
+              stopElapsedTimer();
+            }
+          }, 1000);
+          if (elapsedTimer && typeof elapsedTimer === 'object' && typeof elapsedTimer.unref === 'function') {
+            elapsedTimer.unref();
+          }
+        }
+      } else {
+        stopElapsedTimer();
+      }
+    }
+
+    function scheduleNextPoll() {
+      clearPollTimer();
+      if (!liveFollowActive || selectedRunId !== 'latest' || isDocumentHidden() || pollInFlight) {
+        return;
+      }
+      liveFollowTimer = setTimeout(function () {
+        liveFollowTimer = null;
+        if (!liveFollowActive || selectedRunId !== 'latest' || isDocumentHidden()) {
+          return;
+        }
+        pollLiveRun();
+      }, 1000);
+      if (liveFollowTimer && typeof liveFollowTimer === 'object' && typeof liveFollowTimer.unref === 'function') {
+        liveFollowTimer.unref();
+      }
     }
 
     function toggleLiveFollow() {
-      if (liveFollowTimer) {
+      if (liveFollowActive) {
         stopLiveFollow();
       } else {
         const sel = document.getElementById('run-selector');
@@ -952,48 +1190,71 @@
     }
 
     function startLiveFollow() {
+      liveFollowActive = true;
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
-      if (btn) btn.classList.add('active');
+      if (btn && btn.classList) btn.classList.add('active');
       if (lbl) lbl.textContent = 'Live Follow: ON (1s)';
-      document.getElementById('stream-badge').textContent = '⚡ LIVE SYNC';
-
-      pollLiveRun();
-      if (liveFollowTimer) clearInterval(liveFollowTimer);
-      liveFollowTimer = setInterval(pollLiveRun, 1000);
+      const streamBadge = document.getElementById('stream-badge');
+      if (streamBadge) streamBadge.textContent = '⚡ LIVE SYNC';
+      syncElapsedTimer();
+      if (!isDocumentHidden()) {
+        pollLiveRun();
+      }
     }
 
     function stopLiveFollow() {
-      if (liveFollowTimer) {
-        clearInterval(liveFollowTimer);
-        liveFollowTimer = null;
-      }
+      liveFollowActive = false;
+      pollInFlight = false;
+      pollEpoch += 1;
+      clearPollTimer();
+      stopElapsedTimer();
       const oldScript = document.getElementById('script-live-reload');
-      if (oldScript) oldScript.remove();
+      if (oldScript && typeof oldScript.remove === 'function') oldScript.remove();
+      const oldFallback = document.getElementById('script-live-fallback');
+      if (oldFallback && typeof oldFallback.remove === 'function') oldFallback.remove();
       const oldIndex = document.getElementById('script-index-reload');
-      if (oldIndex) oldIndex.remove();
+      if (oldIndex && typeof oldIndex.remove === 'function') oldIndex.remove();
       const oldTelemetry = document.getElementById('script-telemetry-reload');
-      if (oldTelemetry) oldTelemetry.remove();
+      if (oldTelemetry && typeof oldTelemetry.remove === 'function') oldTelemetry.remove();
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
-      if (btn) btn.classList.remove('active');
+      if (btn && btn.classList) btn.classList.remove('active');
       if (lbl) lbl.textContent = 'Live Follow: OFF';
-      document.getElementById('stream-badge').textContent = '';
+      const streamBadge = document.getElementById('stream-badge');
+      if (streamBadge) streamBadge.textContent = '';
     }
 
     function pollLiveRun() {
-      const oldScript = document.getElementById('script-live-reload');
-      if (oldScript) {
-        oldScript.remove();
+      if (isDocumentHidden()) {
+        clearPollTimer();
+        return;
       }
-      const oldIndex = document.getElementById('script-index-reload');
-      if (oldIndex) {
-        oldIndex.remove();
+      if (pollInFlight) {
+        return;
       }
-      const oldTelemetry = document.getElementById('script-telemetry-reload');
-      if (oldTelemetry) {
-        oldTelemetry.remove();
-      }
+      clearPollTimer();
+      pollInFlight = true;
+      const epoch = ++pollEpoch;
+      let pendingBranches = 3;
+
+      const onBranchSettled = function () {
+        if (epoch !== pollEpoch) return;
+        pendingBranches -= 1;
+        if (pendingBranches > 0) return;
+        pollInFlight = false;
+        if (!liveFollowActive || selectedRunId !== 'latest') {
+          return;
+        }
+        const latestRun = getLiveRun();
+        if (latestRun && latestRun.isRunning === false) {
+          stopLiveFollow();
+          return;
+        }
+        if (!isDocumentHidden()) {
+          scheduleNextPoll();
+        }
+      };
 
       const idxScript = document.createElement('script');
       idxScript.id = 'script-index-reload';
@@ -1001,9 +1262,11 @@
       idxScript.onload = function () {
         idxScript.remove();
         updateRunSelector();
+        onBranchSettled();
       };
       idxScript.onerror = function () {
         idxScript.remove();
+        onBranchSettled();
       };
       document.head.appendChild(idxScript);
 
@@ -1013,9 +1276,11 @@
       telScript.onload = function () {
         telScript.remove();
         renderTelemetryLeaderboard();
+        onBranchSettled();
       };
       telScript.onerror = function () {
         telScript.remove();
+        onBranchSettled();
       };
       document.head.appendChild(telScript);
 
@@ -1038,18 +1303,22 @@
       script.onload = function () {
         script.remove();
         onRunLoaded();
+        onBranchSettled();
       };
 
       script.onerror = function () {
         script.remove();
         const fallback = document.createElement('script');
+        fallback.id = 'script-live-fallback';
         fallback.src = './live-run-latest.js?t=' + Date.now();
         fallback.onload = function () {
           fallback.remove();
           onRunLoaded();
+          onBranchSettled();
         };
         fallback.onerror = function () {
           fallback.remove();
+          onBranchSettled();
         };
         document.head.appendChild(fallback);
       };
@@ -1078,14 +1347,27 @@
     function updateElapsedTimer() {
       const liveRun = getLiveRun();
       let elapsedMs = 0;
-      if (liveRun && liveRun.updatedAt) {
-        elapsedMs = Math.max(0, Date.now() - startTime);
+      let hasValidTime = false;
+      if (liveRun && liveRun.startedAt) {
+        const startedMs = Date.parse(liveRun.startedAt);
+        if (Number.isFinite(startedMs)) {
+          if (liveRun.isRunning === true) {
+            elapsedMs = Math.max(0, Date.now() - startedMs);
+            hasValidTime = true;
+          } else if (liveRun.updatedAt) {
+            const updatedMs = Date.parse(liveRun.updatedAt);
+            if (Number.isFinite(updatedMs)) {
+              elapsedMs = Math.max(0, updatedMs - startedMs);
+              hasValidTime = true;
+            }
+          }
+        }
       }
-      const sec = Math.floor(elapsedMs / 1000) % 60;
-      const min = Math.floor(elapsedMs / 60000);
-      const str = String(min).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+      const str = hasValidTime
+        ? String(Math.floor(elapsedMs / 60000)).padStart(2, '0') + ':' + String(Math.floor(elapsedMs / 1000) % 60).padStart(2, '0')
+        : '00:00';
       const el = document.getElementById('lbl-elapsed');
-      if (el) el.textContent = str;
+      if (el && el.textContent !== str) el.textContent = str;
     }
 
     function renderTelemetryLeaderboard() {
@@ -1106,22 +1388,42 @@
       const totalRuns = winData && typeof winData.totalRuns === 'number'
         ? winData.totalRuns
         : (summary && typeof summary.totalRuns === 'number' ? summary.totalRuns : 0);
-      if (runsLblEl) {
-        runsLblEl.textContent = totalRuns + ' run' + (totalRuns === 1 ? '' : 's') + ' (' + windowKey + ')';
+      const nextRunsText = totalRuns + ' run' + (totalRuns === 1 ? '' : 's') + ' (' + windowKey + ')';
+      if (runsLblEl && runsLblEl.textContent !== nextRunsText) {
+        runsLblEl.textContent = nextRunsText;
       }
 
       const rows = winData
         ? (groupBy === 'seat' ? (winData.bySeat || []) : (winData.byModel || []))
         : [];
-      const esc = (typeof CouncilVisualizer !== 'undefined' && CouncilVisualizer && CouncilVisualizer.escapeHtml)
-        || function (s) {
-          return String(s ?? '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-        };
+
+      let sig = groupBy + '|' + windowKey + '|' + totalRuns + '|';
+      try {
+        sig += JSON.stringify(rows);
+      } catch {
+        sig += String(Date.now()) + ':' + String(Math.random());
+      }
+      if (bodyEl._lastSig === sig && bodyEl.innerHTML !== '') {
+        return;
+      }
+      bodyEl._lastSig = sig;
+
+      const fallbackEsc = function (s) {
+        return String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      };
+      const esc = (
+        typeof CouncilVisualizer !== 'undefined' &&
+        CouncilVisualizer &&
+        typeof CouncilVisualizer.escapeHtml === 'function' &&
+        CouncilVisualizer.escapeHtml('&<>"\'') === '&amp;&lt;&gt;&quot;&#39;'
+      )
+        ? CouncilVisualizer.escapeHtml
+        : fallbackEsc;
 
       if (!Array.isArray(rows) || rows.length === 0) {
         bodyEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No completed run telemetry recorded for this window yet.</div>';
@@ -1149,8 +1451,8 @@
 
       for (let i = 0; i < rows.length; i++) {
         const b = rows[i] || {};
-        const submitted = Number(b.proofsSubmitted || 0);
-        const guardRejected = Number(b.guardRejectedProofs || 0);
+        const submitted = Number(b.proofsSubmitted) || 0;
+        const guardRejected = Number(b.guardRejectedProofs) || 0;
         const guardBadge = guardRejected > 0
           ? ' <span class="badge" style="background:var(--amber-soft); color:var(--amber); font-size:10px; padding:1px 5px;" title="Guard-rejected proof attempts">+' + guardRejected + ' guard-rejected</span>'
           : '';
@@ -1167,14 +1469,15 @@
           toolsHtml = '<span class="badge" style="background:var(--bg-elevated); color:var(--text-muted); font-size:10.5px; padding:1px 6px;" title="Provider CLI does not expose tool event telemetry">Trace N/A</span>';
         } else {
           const partialNote = tc.partialRuns > 0 ? ' (partial)' : '';
-          toolsHtml = '<span style="color:var(--text);">' + Number(b.observedToolCalls || 0) + ' tools' + esc(partialNote) + '</span>';
+          toolsHtml = '<span style="color:var(--text);">' + (Number(b.observedToolCalls) || 0) + ' tools' + esc(partialNote) + '</span>';
         }
 
         const skills = Array.isArray(b.skillsRead) ? b.skillsRead : [];
         const skillsHtml = skills.length > 0
           ? ' ' + skills.map(function (sk) {
-              return '<span class="badge" style="background:var(--accent-soft); color:var(--accent); font-size:10px; padding:1px 6px;" title="Verified via ' + esc(sk.evidence || 'skill_instructions_read') + '">' +
-                esc(sk.skill) + ' (' + Number(sk.count || 1) + ' · ' + esc(sk.evidence || 'skill_instructions_read') + ')' +
+              const skillObj = sk || {};
+              return '<span class="badge" style="background:var(--accent-soft); color:var(--accent); font-size:10px; padding:1px 6px;" title="Verified via ' + esc(skillObj.evidence || 'skill_instructions_read') + '">' +
+                esc(skillObj.skill || '') + ' (' + (Number(skillObj.count) || 1) + ' · ' + esc(skillObj.evidence || 'skill_instructions_read') + ')' +
               '</span>';
             }).join(' ')
           : '';
@@ -1184,17 +1487,20 @@
           ? '<div style="font-size:10.5px; color:var(--text-muted);">' + esc(subLabelList.join(', ')) + '</div>'
           : '';
 
+        const judgeRejectedCount = Number(b.judgeRejected) || 0;
+        const excusedRunsCount = Number(b.excusedRuns) || 0;
+
         html +=
           '<tr style="border-bottom:1px solid var(--border-subtle);">' +
             '<td style="padding:7px 8px; font-weight:600; color:var(--text);">' + esc(b.key || '') + subLabelHtml + '</td>' +
-            '<td style="padding:7px 8px;">' + Number(b.runs || 0) + '</td>' +
+            '<td style="padding:7px 8px;">' + (Number(b.runs) || 0) + '</td>' +
             '<td style="padding:7px 8px;">' + submitted + guardBadge + '</td>' +
-            '<td style="padding:7px 8px; color:var(--green);">' + Number(b.explicitlyAdmitted || 0) + ' (' + esc(explicitPct) + ')</td>' +
-            '<td style="padding:7px 8px; color:var(--amber);">' + Number(b.partiallyAdmitted || 0) + ' (' + esc(partialPct) + ')</td>' +
-            '<td style="padding:7px 8px; color:var(--text-secondary);">' + Number(b.defaultAdmitted || 0) + '</td>' +
-            '<td style="padding:7px 8px; color:' + (Number(b.judgeRejected || 0) > 0 ? 'var(--red)' : 'var(--text-secondary)') + ';">' + Number(b.judgeRejected || 0) + ' (' + esc(judgeRejPct) + ')</td>' +
-            '<td style="padding:7px 8px; color:var(--accent);">' + Number(b.finalClauseCitations || 0) + ' (' + esc(citePct) + ')</td>' +
-            '<td style="padding:7px 8px; color:' + (Number(b.excusedRuns || 0) > 0 ? 'var(--amber)' : 'var(--text-secondary)') + ';">' + Number(b.excusedRuns || 0) + ' (' + esc(excusedPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--green);">' + (Number(b.explicitlyAdmitted) || 0) + ' (' + esc(explicitPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--amber);">' + (Number(b.partiallyAdmitted) || 0) + ' (' + esc(partialPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--text-secondary);">' + (Number(b.defaultAdmitted) || 0) + '</td>' +
+            '<td style="padding:7px 8px; color:' + (judgeRejectedCount > 0 ? 'var(--red)' : 'var(--text-secondary)') + ';">' + judgeRejectedCount + ' (' + esc(judgeRejPct) + ')</td>' +
+            '<td style="padding:7px 8px; color:var(--accent);">' + (Number(b.finalClauseCitations) || 0) + ' (' + esc(citePct) + ')</td>' +
+            '<td style="padding:7px 8px; color:' + (excusedRunsCount > 0 ? 'var(--amber)' : 'var(--text-secondary)') + ';">' + excusedRunsCount + ' (' + esc(excusedPct) + ')</td>' +
             '<td style="padding:7px 8px;">' + toolsHtml + skillsHtml + '</td>' +
           '</tr>';
       }
@@ -1206,15 +1512,31 @@
     function renderAll() {
       updateRunSelector();
       renderTelemetryLeaderboard();
+      updateElapsedTimer();
+      syncElapsedTimer();
       const liveRun = getLiveRun();
-      const esc = (CouncilVisualizer && CouncilVisualizer.escapeHtml) || function (s) { return String(s || ''); };
+      const esc = escapeHtml;
 
       if (!councilState) {
-        document.getElementById('heading-topic').textContent = 'Waiting for live deliberation to start...';
-        document.getElementById('lbl-phase').textContent = 'preflight';
-        document.getElementById('lbl-round').textContent = 0;
-        document.getElementById('lbl-max-rounds').textContent = 3;
-        document.getElementById('lbl-quorum').textContent = 2;
+        const emptySig = 'EMPTY|' + selectedRunId;
+        if (lastRenderStateSig === emptySig) {
+          return;
+        }
+        lastRenderStateSig = emptySig;
+        lastRenderedTopologySig = null;
+        lastRenderedCausalSig = null;
+        lastTimelineSig = null;
+
+        const topicEl = document.getElementById('heading-topic');
+        if (topicEl) topicEl.textContent = 'Waiting for live deliberation to start...';
+        const phaseEl = document.getElementById('lbl-phase');
+        if (phaseEl) phaseEl.textContent = 'preflight';
+        const roundEl = document.getElementById('lbl-round');
+        if (roundEl) roundEl.textContent = 0;
+        const maxRoundsEl = document.getElementById('lbl-max-rounds');
+        if (maxRoundsEl) maxRoundsEl.textContent = 3;
+        const quorumEl = document.getElementById('lbl-quorum');
+        if (quorumEl) quorumEl.textContent = 2;
         const statusPill = document.getElementById('status-pill');
         const statusPillText = document.getElementById('status-pill-text');
         const verdictStatusPill = document.getElementById('lbl-verdict-status');
@@ -1259,266 +1581,433 @@
         return;
       }
 
-      // 1. Topic Header & Metadata
-      document.getElementById('heading-topic').textContent = councilState.topic || 'Deliberation Run';
-      document.getElementById('lbl-phase').textContent = councilState.phase || 'preflight';
-      document.getElementById('lbl-round').textContent = councilState.round ?? 0;
-      document.getElementById('lbl-max-rounds').textContent = councilState.maxRounds ?? 3;
-      document.getElementById('lbl-quorum').textContent = councilState.minQuorum ?? 2;
-
-      // 2. Status Badge & Timer
       const isRunning = liveRun ? Boolean(liveRun.isRunning) : (councilState.phase !== 'completed');
-      const statusPill = document.getElementById('status-pill');
-      const statusPillText = document.getElementById('status-pill-text');
-      const verdictStatusPill = document.getElementById('lbl-verdict-status');
+      const panelSig = safeJsonSig({
+        selectedRunId: selectedRunId,
+        currentStepIdx: currentStepIdx,
+        isRunning: isRunning,
+        topic: councilState.topic,
+        phase: councilState.phase,
+        round: councilState.round,
+        maxRounds: councilState.maxRounds,
+        minQuorum: councilState.minQuorum,
+        maxRetriesPerSeat: councilState.maxRetriesPerSeat,
+        verdict: councilState.verdict,
+        candidate: councilState.candidate,
+        lastTransition: councilState.lastTransition,
+        firstHistory: Array.isArray(councilState.history) && councilState.history.length > 0 ? councilState.history[0] : null,
+        objections: councilState.objections,
+        judge: councilState.judge,
+        seats: councilState.seats,
+        proofs: councilState.proofs
+      });
 
-      if (isRunning) {
-        statusPill.className = 'badge badge-running';
-        statusPillText.textContent = 'RUNNING: ' + String(councilState.phase || '').toUpperCase();
-        verdictStatusPill.className = 'badge badge-running';
-        verdictStatusPill.textContent = 'DELIBERATING';
-      } else {
-        const isConsensus = councilState.verdict && councilState.verdict.kind === 'Unanimous Consensus';
-        const badgeCls = isConsensus ? 'badge badge-completed' : 'badge badge-failed';
-        statusPill.className = badgeCls;
-        statusPillText.textContent = isConsensus ? 'COMPLETED: CONSENSUS' : 'COMPLETED: DISSENT';
-        verdictStatusPill.className = badgeCls;
-        verdictStatusPill.textContent = isConsensus ? 'CONSENSUS REACHED' : 'DISSENT REPORT';
-      }
+      if (panelSig !== lastRenderStateSig) {
+        lastRenderStateSig = panelSig;
 
-      // 3. Verdict Banner & Synthesis Card
-      const vBox = document.getElementById('verdict-box');
-      const vTitle = document.getElementById('verdict-title');
-      const vBody = document.getElementById('verdict-body');
+        // 1. Topic Header & Metadata
+        const topicEl = document.getElementById('heading-topic');
+        if (topicEl) topicEl.textContent = councilState.topic || 'Deliberation Run';
+        const phaseEl = document.getElementById('lbl-phase');
+        if (phaseEl) phaseEl.textContent = councilState.phase || 'preflight';
+        const roundEl = document.getElementById('lbl-round');
+        if (roundEl) roundEl.textContent = councilState.round ?? 0;
+        const maxRoundsEl = document.getElementById('lbl-max-rounds');
+        if (maxRoundsEl) maxRoundsEl.textContent = councilState.maxRounds ?? 3;
+        const quorumEl = document.getElementById('lbl-quorum');
+        if (quorumEl) quorumEl.textContent = councilState.minQuorum ?? 2;
 
-      if (councilState.verdict) {
-        const v = councilState.verdict;
-        const isConsensus = v.kind === 'Unanimous Consensus';
-        vBox.className = 'verdict-banner ' + (isConsensus ? 'consensus' : 'dissent');
-        vTitle.textContent = 'Verdict: ' + v.kind;
-        vBody.textContent = v.note || 'Deliberation reached conclusion.';
-      } else {
-        vBox.className = 'verdict-banner running';
-        vTitle.textContent = 'Deliberation in Progress (Round ' + councilState.round + ')';
-        vBody.textContent = 'Seats are submitting proofs and testing claims. Working synthesis will update below.';
-      }
+        // 2. Status Badge & Timer
+        const statusPill = document.getElementById('status-pill');
+        const statusPillText = document.getElementById('status-pill-text');
+        const verdictStatusPill = document.getElementById('lbl-verdict-status');
 
-      const synEl = document.getElementById('synthesis-text');
-      if (councilState.candidate && councilState.candidate.summary) {
-        synEl.textContent = councilState.candidate.summary;
-      } else {
-        synEl.textContent = 'No Candidate synthesized yet for Round ' + councilState.round + '.';
-      }
-
-      // Transition Status
-      const transText = document.getElementById('transition-text');
-      if (councilState.lastTransition && councilState.lastTransition.message) {
-        transText.textContent = councilState.lastTransition.message;
-      } else if (councilState.history && councilState.history.length > 0) {
-        transText.textContent = councilState.history[0];
-      }
-
-      // 4. Candidate Clauses
-      const clausesList = document.getElementById('clauses-list');
-      const clauses = (councilState.candidate && councilState.candidate.clauses) ? councilState.candidate.clauses : [];
-      document.getElementById('lbl-clauses-count').textContent = clauses.length + ' clause' + (clauses.length === 1 ? '' : 's');
-
-      if (clauses.length === 0) {
-        clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
-      } else {
-        clausesList.innerHTML = clauses.map(function (cl) {
-          const cites = (cl.citedProofIds && cl.citedProofIds.length > 0)
-            ? '<span class="badge" style="background:var(--green-soft); color:var(--green);">Cites: ' + esc(cl.citedProofIds.join(', ')) + '</span>'
-            : '';
-          return (
-            '<div class="clause-card">' +
-              '<div class="clause-head">' +
-                '<span class="clause-id">' + esc(cl.id) + '</span>' +
-                cites +
-              '</div>' +
-              '<div class="clause-body"><strong>WHEN [' + esc(cl.context) + ']:</strong> ' + esc(cl.conclusion) + '</div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      // Objections
-      const objsList = document.getElementById('objections-list');
-      const openObjs = (councilState.objections || []).filter(function (o) { return o.status !== 'withdrawn'; });
-      document.getElementById('lbl-objs-count').textContent = openObjs.length + ' open';
-
-      if (openObjs.length === 0) {
-        objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
-      } else {
-        objsList.innerHTML = openObjs.map(function (o) {
-          const isLocked = o.status === 'preserved_excused';
-          return (
-            '<div class="objection-card ' + (isLocked ? 'locked' : '') + '">' +
-              '<div style="display:flex; justify-content:space-between; font-weight:700;">' +
-                '<span>' + esc(o.id) + ' · ' + esc(o.seatId) + '</span>' +
-                '<span class="badge" style="color:' + (isLocked ? 'var(--red)' : 'var(--amber)') + ';">' + (isLocked ? 'LOCKED' : 'OPEN') + '</span>' +
-              '</div>' +
-              '<div style="margin-top:4px; color:var(--text);">' + esc(o.reason) + '</div>' +
-              '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Backed by Proof: ' + esc(o.proofId) + '</div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      // 5. Council Roster Cards
-      const seatsGrid = document.getElementById('seats-grid');
-      const seats = councilState.seats || [];
-      const judge = councilState.judge;
-      const allProofs = Array.isArray(councilState.proofs) ? councilState.proofs : [];
-      document.getElementById('lbl-roster-count').textContent = (seats.length + (judge ? 1 : 0)) + ' members';
-
-      let judgeHtml = '';
-      if (judge) {
-        judgeHtml =
-          '<div class="participant-card status-' + esc(judge.status) + '">' +
-            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-              '<strong>Judge: ' + esc(judge.id) + '</strong>' +
-              '<span class="harness-badge harness-' + esc(judge.harness) + '">' + esc(judge.harness) + '</span>' +
-            '</div>' +
-            '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(judge.model) + ' · non-voting</div>' +
-            renderSoulCardHtml(judge.soul, esc) +
-            '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
-              '<span style="color:var(--accent);">Status: ' + esc((judge.status || 'idle').toUpperCase()) + '</span>' +
-              (judge.faultReason ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(judge.faultReason) + '</span>' : '') +
-            '</div>' +
-          '</div>';
-      }
-
-      const seatsHtml = seats.map(function (s) {
-        const seatFault = s.excusedReason || s.faultReason;
-        const seatProofs = allProofs.filter(function (p) { return p && p.seatId === s.id; });
-        const seatProofsHtml = seatProofs.length > 0
-          ? seatProofs.map(function (p) {
-              const pStatus = p.status || 'pending';
-              let badgeStyle = 'background:var(--accent-soft); color:var(--accent);';
-              if (pStatus === 'admitted') {
-                badgeStyle = 'background:var(--green-soft); color:var(--green);';
-              } else if (pStatus === 'partially_admitted') {
-                badgeStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
-              } else if (pStatus === 'rejected') {
-                badgeStyle = 'background:var(--red-soft); color:var(--red);';
-              }
-              return '<span class="badge" style="font-size:10.5px; padding:1px 6px; ' + badgeStyle + '">' + esc(p.id) + ': ' + esc(pStatus) + '</span>';
-            }).join(' ')
-          : '<span style="color:var(--text-muted);">Proofs: none</span>';
-        return (
-          '<div class="participant-card status-' + esc(s.status) + '">' +
-            '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-              '<strong>' + esc(s.id) + '</strong>' +
-              '<span class="harness-badge harness-' + esc(s.harness) + '">' + esc(s.harness) + '</span>' +
-            '</div>' +
-            '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (s.retries || 0) + '/' + (councilState.maxRetriesPerSeat || 1) + '</div>' +
-            renderSoulCardHtml(s.soul, esc) +
-            '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; font-size:11px; font-family:var(--mono); margin-top:2px;">' +
-              seatProofsHtml +
-            '</div>' +
-            '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
-              '<span style="color:var(--accent);">Status: ' + esc((s.status || 'idle').toUpperCase()) + '</span>' +
-              (seatFault ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(seatFault) + '</span>' : '') +
-            '</div>' +
-          '</div>'
-        );
-      }).join('');
-
-      seatsGrid.innerHTML = judgeHtml + seatsHtml;
-
-      // 5b. Submitted Proofs & Judge Audit Trail
-      const proofsListEl = document.getElementById('proofs-list');
-      const proofsCountEl = document.getElementById('lbl-proofs-count');
-      if (proofsCountEl) {
-        proofsCountEl.textContent = allProofs.length + ' proof' + (allProofs.length === 1 ? '' : 's');
-      }
-      if (proofsListEl) {
-        if (allProofs.length === 0) {
-          proofsListEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+        if (isRunning) {
+          if (statusPill) statusPill.className = 'badge badge-running';
+          if (statusPillText) statusPillText.textContent = 'RUNNING: ' + String(councilState.phase || '').toUpperCase();
+          if (verdictStatusPill) {
+            verdictStatusPill.className = 'badge badge-running';
+            verdictStatusPill.textContent = 'DELIBERATING';
+          }
         } else {
-          proofsListEl.innerHTML = allProofs.map(function (p) {
-            const pStatus = p.status || 'pending';
-            let statusStyle = 'background:var(--accent-soft); color:var(--accent);';
-            if (pStatus === 'admitted') {
-              statusStyle = 'background:var(--green-soft); color:var(--green);';
-            } else if (pStatus === 'partially_admitted') {
-              statusStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
-            } else if (pStatus === 'rejected') {
-              statusStyle = 'background:var(--red-soft); color:var(--red);';
-            }
-            const noteText = p.judgeNote || p.auditNote || '';
-            return (
-              '<div class="clause-card">' +
-                '<div class="clause-head" style="flex-wrap:wrap;">' +
-                  '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">' +
-                    '<span class="clause-id">' + esc(p.id) + '</span>' +
-                    '<span class="badge" style="' + statusStyle + '">' + esc(pStatus) + '</span>' +
-                    '<span style="font-family:var(--mono); font-size:11px; color:var(--accent);">[' + esc(p.kind || 'proof') + ']</span>' +
-                    (p.seatId ? '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">Seat: ' + esc(p.seatId) + '</span>' : '') +
+          const isConsensus = councilState.verdict && councilState.verdict.kind === 'Unanimous Consensus';
+          const badgeCls = isConsensus ? 'badge badge-completed' : 'badge badge-failed';
+          if (statusPill) statusPill.className = badgeCls;
+          if (statusPillText) statusPillText.textContent = isConsensus ? 'COMPLETED: CONSENSUS' : 'COMPLETED: DISSENT';
+          if (verdictStatusPill) {
+            verdictStatusPill.className = badgeCls;
+            verdictStatusPill.textContent = isConsensus ? 'CONSENSUS REACHED' : 'DISSENT REPORT';
+          }
+        }
+
+        // 3. Verdict Banner & Synthesis Card
+        const vBox = document.getElementById('verdict-box');
+        const vTitle = document.getElementById('verdict-title');
+        const vBody = document.getElementById('verdict-body');
+
+        if (councilState.verdict) {
+          const v = councilState.verdict;
+          const isConsensus = v.kind === 'Unanimous Consensus';
+          if (vBox) vBox.className = 'verdict-banner ' + (isConsensus ? 'consensus' : 'dissent');
+          if (vTitle) vTitle.textContent = 'Verdict: ' + v.kind;
+          if (vBody) vBody.textContent = v.note || 'Deliberation reached conclusion.';
+        } else {
+          if (vBox) vBox.className = 'verdict-banner running';
+          if (vTitle) vTitle.textContent = 'Deliberation in Progress (Round ' + councilState.round + ')';
+          if (vBody) vBody.textContent = 'Seats are submitting proofs and testing claims. Working synthesis will update below.';
+        }
+
+        const synEl = document.getElementById('synthesis-text');
+        if (synEl) {
+          if (councilState.candidate && councilState.candidate.summary) {
+            synEl.textContent = councilState.candidate.summary;
+          } else {
+            synEl.textContent = 'No Candidate synthesized yet for Round ' + councilState.round + '.';
+          }
+        }
+
+        // Transition Status
+        const transText = document.getElementById('transition-text');
+        if (transText) {
+          if (councilState.lastTransition && councilState.lastTransition.message) {
+            transText.textContent = councilState.lastTransition.message;
+          } else if (councilState.history && councilState.history.length > 0) {
+            transText.textContent = councilState.history[0];
+          }
+        }
+
+        // 4. Candidate Clauses
+        const clausesList = document.getElementById('clauses-list');
+        const clauses = (councilState.candidate && Array.isArray(councilState.candidate.clauses)) ? councilState.candidate.clauses : [];
+        const lblClausesCount = document.getElementById('lbl-clauses-count');
+        if (lblClausesCount) {
+          lblClausesCount.textContent = clauses.length + ' clause' + (clauses.length === 1 ? '' : 's');
+        }
+
+        if (clausesList) {
+          if (clauses.length === 0) {
+            clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
+          } else {
+            clausesList.innerHTML = clauses.map(function (cl) {
+              const clause = cl || {};
+              const cites = (Array.isArray(clause.citedProofIds) && clause.citedProofIds.length > 0)
+                ? '<span class="badge" style="background:var(--green-soft); color:var(--green);">Cites: ' + esc(clause.citedProofIds.join(', ')) + '</span>'
+                : '';
+              return (
+                '<div class="clause-card">' +
+                  '<div class="clause-head">' +
+                    '<span class="clause-id">' + esc(clause.id) + '</span>' +
+                    cites +
                   '</div>' +
-                  '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">' + esc(p.scope || '') + '</span>' +
-                '</div>' +
-                '<div class="clause-body">' +
-                  (p.source ? '<strong>Source (' + esc(p.source) + '):</strong> ' : '') +
-                  esc(p.statement || '') +
-                '</div>' +
-                (p.judgeAdmittedStatement ? '<div style="font-size:11.5px; color:var(--amber); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Admitted Core:</strong> ' + esc(p.judgeAdmittedStatement) + '</div>' : '') +
-                (noteText ? '<div style="font-size:11.5px; color:var(--text-secondary); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Judge Note:</strong> ' + esc(noteText) + '</div>' : '') +
-              '</div>'
-            );
-          }).join('');
+                  '<div class="clause-body"><strong>WHEN [' + esc(clause.context) + ']:</strong> ' + esc(clause.conclusion) + '</div>' +
+                '</div>'
+              );
+            }).join('');
+          }
+        }
+
+        // Objections
+        const objsList = document.getElementById('objections-list');
+        const openObjs = (Array.isArray(councilState.objections) ? councilState.objections : []).filter(function (o) {
+          return o && o.status !== 'withdrawn';
+        });
+        const lblObjsCount = document.getElementById('lbl-objs-count');
+        if (lblObjsCount) lblObjsCount.textContent = openObjs.length + ' open';
+
+        if (objsList) {
+          if (openObjs.length === 0) {
+            objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
+          } else {
+            objsList.innerHTML = openObjs.map(function (o) {
+              const isLocked = o.status === 'preserved_excused';
+              return (
+                '<div class="objection-card ' + (isLocked ? 'locked' : '') + '">' +
+                  '<div style="display:flex; justify-content:space-between; font-weight:700;">' +
+                    '<span>' + esc(o.id) + ' · ' + esc(o.seatId) + '</span>' +
+                    '<span class="badge" style="color:' + (isLocked ? 'var(--red)' : 'var(--amber)') + ';">' + (isLocked ? 'LOCKED' : 'OPEN') + '</span>' +
+                  '</div>' +
+                  '<div style="margin-top:4px; color:var(--text);">' + esc(o.reason) + '</div>' +
+                  '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Backed by Proof: ' + esc(o.proofId) + '</div>' +
+                '</div>'
+              );
+            }).join('');
+          }
+        }
+
+        // 5. Council Roster Cards
+        const seatsGrid = document.getElementById('seats-grid');
+        const seats = Array.isArray(councilState.seats) ? councilState.seats : [];
+        const judge = councilState.judge;
+        const allProofs = Array.isArray(councilState.proofs) ? councilState.proofs : [];
+        const lblRosterCount = document.getElementById('lbl-roster-count');
+        if (lblRosterCount) lblRosterCount.textContent = (seats.length + (judge ? 1 : 0)) + ' members';
+
+        let judgeHtml = '';
+        if (judge) {
+          const judgeStatusToken = sanitizeClassToken(judge.status, 'idle');
+          const judgeHarnessToken = sanitizeClassToken(judge.harness, 'unknown');
+          judgeHtml =
+            '<div class="participant-card status-' + judgeStatusToken + '">' +
+              '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+                '<strong>Judge: ' + esc(judge.id) + '</strong>' +
+                '<span class="harness-badge harness-' + judgeHarnessToken + '">' + esc(judge.harness) + '</span>' +
+              '</div>' +
+              '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(judge.model) + ' · non-voting</div>' +
+              renderSoulCardHtml(judge.soul, esc) +
+              '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+                '<span style="color:var(--accent);">Status: ' + esc(String(judge.status || 'idle').toUpperCase()) + '</span>' +
+                (judge.faultReason ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(judge.faultReason) + '</span>' : '') +
+              '</div>' +
+            '</div>';
+        }
+
+        const maxRetries = Number(councilState.maxRetriesPerSeat) || 1;
+        const seatsHtml = seats.map(function (seatItem) {
+          const s = seatItem || {};
+          const seatStatusToken = sanitizeClassToken(s.status, 'idle');
+          const seatHarnessToken = sanitizeClassToken(s.harness, 'unknown');
+          const seatFault = s.excusedReason || s.faultReason;
+          const seatProofs = allProofs.filter(function (p) { return p && p.seatId === s.id; });
+          const seatProofsHtml = seatProofs.length > 0
+            ? seatProofs.map(function (p) {
+                const pStatus = p.status || 'pending';
+                let badgeStyle = 'background:var(--accent-soft); color:var(--accent);';
+                if (pStatus === 'admitted') {
+                  badgeStyle = 'background:var(--green-soft); color:var(--green);';
+                } else if (pStatus === 'partially_admitted') {
+                  badgeStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
+                } else if (pStatus === 'rejected') {
+                  badgeStyle = 'background:var(--red-soft); color:var(--red);';
+                }
+                return '<span class="badge" style="font-size:10.5px; padding:1px 6px; ' + badgeStyle + '">' + esc(p.id) + ': ' + esc(pStatus) + '</span>';
+              }).join(' ')
+            : '<span style="color:var(--text-muted);">Proofs: none</span>';
+          return (
+            '<div class="participant-card status-' + seatStatusToken + '">' +
+              '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+                '<strong>' + esc(s.id) + '</strong>' +
+                '<span class="harness-badge harness-' + seatHarnessToken + '">' + esc(s.harness) + '</span>' +
+              '</div>' +
+              '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (Number(s.retries) || 0) + '/' + maxRetries + '</div>' +
+              renderSoulCardHtml(s.soul, esc) +
+              '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; font-size:11px; font-family:var(--mono); margin-top:2px;">' +
+                seatProofsHtml +
+              '</div>' +
+              '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
+                '<span style="color:var(--accent);">Status: ' + esc(String(s.status || 'idle').toUpperCase()) + '</span>' +
+                (seatFault ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(seatFault) + '</span>' : '') +
+              '</div>' +
+            '</div>'
+          );
+        }).join('');
+
+        if (seatsGrid) seatsGrid.innerHTML = judgeHtml + seatsHtml;
+
+        // 5b. Submitted Proofs & Judge Audit Trail
+        const proofsListEl = document.getElementById('proofs-list');
+        const proofsCountEl = document.getElementById('lbl-proofs-count');
+        if (proofsCountEl) {
+          proofsCountEl.textContent = allProofs.length + ' proof' + (allProofs.length === 1 ? '' : 's');
+        }
+        if (proofsListEl) {
+          if (allProofs.length === 0) {
+            proofsListEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+          } else {
+            proofsListEl.innerHTML = allProofs.map(function (proofItem) {
+              const p = proofItem || {};
+              const pStatus = p.status || 'pending';
+              let statusStyle = 'background:var(--accent-soft); color:var(--accent);';
+              if (pStatus === 'admitted') {
+                statusStyle = 'background:var(--green-soft); color:var(--green);';
+              } else if (pStatus === 'partially_admitted') {
+                statusStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
+              } else if (pStatus === 'rejected') {
+                statusStyle = 'background:var(--red-soft); color:var(--red);';
+              }
+              const noteText = p.judgeNote || p.auditNote || '';
+              return (
+                '<div class="clause-card">' +
+                  '<div class="clause-head" style="flex-wrap:wrap;">' +
+                    '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">' +
+                      '<span class="clause-id">' + esc(p.id) + '</span>' +
+                      '<span class="badge" style="' + statusStyle + '">' + esc(pStatus) + '</span>' +
+                      '<span style="font-family:var(--mono); font-size:11px; color:var(--accent);">[' + esc(p.kind || 'proof') + ']</span>' +
+                      (p.seatId ? '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">Seat: ' + esc(p.seatId) + '</span>' : '') +
+                    '</div>' +
+                    '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">' + esc(p.scope || '') + '</span>' +
+                  '</div>' +
+                  '<div class="clause-body">' +
+                    (p.source ? '<strong>Source (' + esc(p.source) + '):</strong> ' : '') +
+                    esc(p.statement || '') +
+                  '</div>' +
+                  (p.judgeAdmittedStatement ? '<div style="font-size:11.5px; color:var(--amber); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Admitted Core:</strong> ' + esc(p.judgeAdmittedStatement) + '</div>' : '') +
+                  (noteText ? '<div style="font-size:11.5px; color:var(--text-secondary); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Judge Note:</strong> ' + esc(noteText) + '</div>' : '') +
+                '</div>'
+              );
+            }).join('');
+          }
         }
       }
 
-      // 6. Deliberation Graphs
-      const stepGraph = (currentStepIdx >= 0 && liveRun && Array.isArray(liveRun.steps) && liveRun.steps[currentStepIdx])
-        ? liveRun.steps[currentStepIdx].graph
-        : null;
-      const graph = stepGraph || councilState.graph || (liveRun && liveRun.currentGraph) || {
-        nodes: [],
-        edges: [],
-        activeNodeId: councilState.phase,
-        outgoingEdges: [],
-        causalLinks: []
-      };
-
-      if (CouncilVisualizer) {
-        CouncilVisualizer.renderStateMachineSVG(
-          document.getElementById('state-machine-svg'),
-          councilState,
-          graph
-        );
-        CouncilVisualizer.renderCausalDependencySVG(
-          document.getElementById('causal-dependency-svg'),
-          councilState,
-          graph
-        );
-      }
+      // 6. Deliberation Graphs (active tab only; hidden tab rendered lazily on switchGraphTab)
+      renderActiveGraph(liveRun);
 
       // 7. Chronological Timeline
       const timelineEl = document.getElementById('timeline-list');
-      const steps = (liveRun && liveRun.steps) ? liveRun.steps : [];
-      if (steps.length === 0 && councilState.history) {
-        timelineEl.innerHTML = councilState.history.map(function (h, i) {
-          return '<div class="timeline-row"><span class="timeline-action">' + esc(h) + '</span></div>';
-        }).join('');
-      } else {
-        timelineEl.innerHTML = steps.map(function (st, i) {
-          const isActive = (i === currentStepIdx);
-          return (
-            '<div class="timeline-row ' + (isActive ? 'active' : '') + '" role="button" tabindex="0" onclick="inspectStep(' + i + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();inspectStep(' + i + ');}">' +
-              '<span class="timeline-action">' + esc(st.label) + '</span>' +
-              '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
-            '</div>'
-          );
-        }).join('');
+      if (timelineEl) {
+        const steps = (liveRun && Array.isArray(liveRun.steps)) ? liveRun.steps : [];
+        const stepLabels = steps.map(function (st) { return st ? String(st.label ?? '') : ''; });
+        const historyItems = (steps.length === 0 && Array.isArray(councilState.history)) ? councilState.history : [];
+        const timelineSig = safeJsonSig({
+          selectedRunId: selectedRunId,
+          currentStepIdx: currentStepIdx,
+          stepLabels: stepLabels,
+          historyItems: historyItems
+        });
+
+        if (timelineSig !== lastTimelineSig) {
+          let focusedStepIdx = null;
+          if (typeof document !== 'undefined' && document && document.activeElement) {
+            const activeEl = document.activeElement;
+            if (activeEl && typeof activeEl.getAttribute === 'function') {
+              const rawAttr = activeEl.getAttribute('data-step-idx');
+              if (rawAttr !== null && rawAttr !== undefined && rawAttr !== '') {
+                const parsed = Number.parseInt(rawAttr, 10);
+                if (Number.isInteger(parsed) && parsed >= 0) {
+                  focusedStepIdx = parsed;
+                }
+              }
+            } else if (activeEl && activeEl.dataset && activeEl.dataset.stepIdx !== undefined) {
+              const parsed = Number.parseInt(activeEl.dataset.stepIdx, 10);
+              if (Number.isInteger(parsed) && parsed >= 0) {
+                focusedStepIdx = parsed;
+              }
+            }
+          }
+
+          if (steps.length === 0 && historyItems.length > 0) {
+            timelineEl.innerHTML = historyItems.map(function (h) {
+              return '<div class="timeline-row"><span class="timeline-action">' + esc(h) + '</span></div>';
+            }).join('');
+          } else {
+            timelineEl.innerHTML = steps.map(function (st, i) {
+              const isActive = (i === currentStepIdx);
+              return (
+                '<div class="timeline-row ' + (isActive ? 'active' : '') + '" role="button" tabindex="0" data-step-idx="' + i + '">' +
+                  '<span class="timeline-action">' + esc(st && st.label) + '</span>' +
+                  '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
+                '</div>'
+              );
+            }).join('');
+          }
+          lastTimelineSig = timelineSig;
+
+          if (focusedStepIdx !== null && typeof timelineEl.querySelector === 'function') {
+            const nextFocusEl = timelineEl.querySelector('[data-step-idx="' + focusedStepIdx + '"]');
+            if (nextFocusEl && typeof nextFocusEl.focus === 'function') {
+              nextFocusEl.focus();
+            }
+          }
+        }
       }
     }
 
-    // Auto-start Live Follow & Timer on load
-    startLiveFollow();
-    elapsedTimer = setInterval(updateElapsedTimer, 1000);
+    function resolveTimelineStepIdx(event, container) {
+      if (!event) return -1;
+      let node = event.target || null;
+      if (node && typeof node.closest === 'function') {
+        const matched = node.closest('[data-step-idx]');
+        if (matched) node = matched;
+      } else {
+        while (node && node !== container) {
+          if (
+            (typeof node.getAttribute === 'function' && node.getAttribute('data-step-idx') != null) ||
+            (node.dataset && node.dataset.stepIdx !== undefined)
+          ) {
+            break;
+          }
+          node = node.parentElement || node.parentNode || null;
+        }
+      }
+      if (!node) return -1;
+      const raw = (typeof node.getAttribute === 'function' && node.getAttribute('data-step-idx') != null)
+        ? node.getAttribute('data-step-idx')
+        : (node.dataset ? node.dataset.stepIdx : null);
+      if (raw === null || raw === undefined || raw === '') return -1;
+      const idx = Number.parseInt(String(raw), 10);
+      return Number.isInteger(idx) && idx >= 0 ? idx : -1;
+    }
+
+    function onEvent(el, type, handler) {
+      if (el && typeof el.addEventListener === 'function') {
+        el.addEventListener(type, handler);
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (isDocumentHidden()) {
+        clearPollTimer();
+        stopElapsedTimer();
+      } else {
+        updateElapsedTimer();
+        syncElapsedTimer();
+        if (liveFollowActive && selectedRunId === 'latest' && !pollInFlight) {
+          pollLiveRun();
+        }
+      }
+    }
+
+    function bindUiListeners() {
+      onEvent(document.getElementById('run-selector'), 'change', function (event) {
+        const nextVal = (event && event.target && event.target.value !== undefined) ? event.target.value : this.value;
+        selectRun(nextVal);
+      });
+      onEvent(document.getElementById('btn-live-follow'), 'click', function () {
+        toggleLiveFollow();
+      });
+      onEvent(document.getElementById('btn-tab-topology'), 'click', function () {
+        switchGraphTab('topology');
+      });
+      onEvent(document.getElementById('btn-tab-causal'), 'click', function () {
+        switchGraphTab('causal');
+      });
+      onEvent(document.getElementById('btn-jump-latest'), 'click', function () {
+        restoreLatestSnapshot();
+      });
+      onEvent(document.getElementById('telemetry-group-by'), 'change', function () {
+        renderTelemetryLeaderboard();
+      });
+      onEvent(document.getElementById('telemetry-window'), 'change', function () {
+        renderTelemetryLeaderboard();
+      });
+
+      const timelineEl = document.getElementById('timeline-list');
+      onEvent(timelineEl, 'click', function (event) {
+        const idx = resolveTimelineStepIdx(event, timelineEl);
+        if (idx >= 0) inspectStep(idx);
+      });
+      onEvent(timelineEl, 'keydown', function (event) {
+        if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+        const idx = resolveTimelineStepIdx(event, timelineEl);
+        if (idx >= 0) {
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+          inspectStep(idx);
+        }
+      });
+
+      if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+      }
+    }
+
+    // Bind programmatic listeners and initialize Live Follow & Elapsed Timer
+    bindUiListeners();
+    const initialLiveRun = getLiveRun();
+    if (initialLiveRun && initialLiveRun.isRunning === false) {
+      stopLiveFollow();
+    } else {
+      startLiveFollow();
+    }
     renderAll();
   </script>
 </body>

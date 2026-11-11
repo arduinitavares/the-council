@@ -43,7 +43,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   /**
@@ -201,32 +202,36 @@
     const to = allNodesMap[n2];
     if (!from || !to) return '';
 
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
+    const fx = Number(from.x) || 0;
+    const fy = Number(from.y) || 0;
+    const tx0 = Number(to.x) || 0;
+    const ty0 = Number(to.y) || 0;
+    const dx = tx0 - fx;
+    const dy = ty0 - fy;
 
     // Back-edge (e.g. confirming -> reviewing loop)
     if (dx < -40 && Math.abs(dy) < 40) {
-      const midX = (from.x + to.x) / 2;
-      const arcY = Math.min(from.y, to.y) - 72;
-      return 'M ' + from.x + ' ' + (from.y - 24) +
-             ' Q ' + midX + ' ' + arcY + ' ' + to.x + ' ' + (to.y - 24);
+      const midX = (fx + tx0) / 2;
+      const arcY = Math.min(fy, ty0) - 72;
+      return 'M ' + fx + ' ' + (fy - 24) +
+             ' Q ' + midX + ' ' + arcY + ' ' + tx0 + ' ' + (ty0 - 24);
     }
 
     // Vertical/diagonal fault transitions
     if (Math.abs(dy) > 50) {
-      const startY = dy > 0 ? from.y + 24 : from.y - 24;
-      const endY = dy > 0 ? to.y - 24 : to.y + 24;
+      const startY = dy > 0 ? fy + 24 : fy - 24;
+      const endY = dy > 0 ? ty0 - 24 : ty0 + 24;
       const cy1 = startY + dy * 0.45;
       const cy2 = endY - dy * 0.45;
-      return 'M ' + from.x + ' ' + startY +
-             ' C ' + from.x + ' ' + cy1 + ', ' + to.x + ' ' + cy2 + ', ' + to.x + ' ' + endY;
+      return 'M ' + fx + ' ' + startY +
+             ' C ' + fx + ' ' + cy1 + ', ' + tx0 + ' ' + cy2 + ', ' + tx0 + ' ' + endY;
     }
 
     // Standard left-to-right flow
-    const sx = from.x + 62;
-    const sy = from.y;
-    const tx = to.x - 62;
-    const ty = to.y;
+    const sx = fx + 62;
+    const sy = fy;
+    const tx = tx0 - 62;
+    const ty = ty0;
     const cx1 = sx + (tx - sx) * 0.45;
     const cx2 = tx - (tx - sx) * 0.45;
     return 'M ' + sx + ' ' + sy + ' C ' + cx1 + ' ' + sy + ', ' + cx2 + ' ' + ty + ', ' + tx + ' ' + ty;
@@ -242,11 +247,11 @@
     const edges = g.edges || [];
     const outgoingEdges = g.outgoingEdges || [];
 
-    const nodeMap = {};
-    nodes.forEach(function (n) { nodeMap[n.id] = n; });
+    const nodeMap = Object.create(null);
+    nodes.forEach(function (n) { if (n) nodeMap[n.id] = n; });
 
-    const outgoingMap = {};
-    outgoingEdges.forEach(function (e) { outgoingMap[e.id] = e; });
+    const outgoingMap = Object.create(null);
+    outgoingEdges.forEach(function (e) { if (e) outgoingMap[e.id] = e; });
 
     const defs =
       '<defs>' +
@@ -297,7 +302,7 @@
       }
 
       const pulseOverlay = isLastTraversed
-        ? '<path d="' + d + '" fill="none" stroke="#a7f3d0" stroke-width="3.2" stroke-dasharray="10 180" class="waapi-pulse-edge" />'
+        ? '<path d="' + escapeHtml(d) + '" fill="none" stroke="#a7f3d0" stroke-width="3.2" stroke-dasharray="10 180" class="waapi-pulse-edge" />'
         : '';
 
       const edgeTitle = e.id + ': ' + e.from + ' → ' + e.to + ' (' + e.event + ')' +
@@ -305,9 +310,9 @@
         (outInfo && outInfo.dynamicReason ? '\nStatus: ' + outInfo.dynamicReason : '');
 
       return (
-        '<g class="' + cls + '" data-edge-id="' + e.id + '" tabindex="0">' +
+        '<g class="' + cls + '" data-edge-id="' + escapeHtml(e.id) + '" tabindex="0">' +
           '<title>' + escapeHtml(edgeTitle) + '</title>' +
-          '<path d="' + d + '" fill="none" stroke="' + stroke + '" stroke-width="' + width + '" ' +
+          '<path d="' + escapeHtml(d) + '" fill="none" stroke="' + stroke + '" stroke-width="' + width + '" ' +
             (dash ? 'stroke-dasharray="' + dash + '" ' : '') +
             'marker-end="' + marker + '" />' +
           pulseOverlay +
@@ -315,9 +320,9 @@
       );
     }).join('');
 
-    const nextTargetSet = {};
+    const nextTargetSet = Object.create(null);
     outgoingEdges.forEach(function (e) {
-      nextTargetSet[e.to] = e.unlocked ? 'unlocked' : 'locked';
+      if (e) nextTargetSet[e.to] = e.unlocked ? 'unlocked' : 'locked';
     });
 
     const nodesSvg = nodes.map(function (n) {
@@ -349,13 +354,15 @@
         stroke = '#34d399';
       }
 
-      const rx = n.x - 62;
-      const ry = n.y - 25;
+      const nx = Number(n.x) || 0;
+      const ny = Number(n.y) || 0;
+      const rx = nx - 62;
+      const ry = ny - 25;
 
       const badgeSvg = badgeText
-        ? '<rect x="' + (n.x - 36) + '" y="' + (ry - 10) + '" width="72" height="15" rx="4" fill="' +
+        ? '<rect x="' + (nx - 36) + '" y="' + (ry - 10) + '" width="72" height="15" rx="4" fill="' +
             (isActive ? '#38bdf8' : (nextStatus === 'unlocked' ? '#0ea5e9' : '#f59e0b')) + '" />' +
-          '<text x="' + n.x + '" y="' + (ry + 1) + '" text-anchor="middle" fill="#091017" font-size="9" font-weight="700">' +
+          '<text x="' + nx + '" y="' + (ry + 1) + '" text-anchor="middle" fill="#091017" font-size="9" font-weight="700">' +
             badgeText +
           '</text>'
         : '';
@@ -365,14 +372,14 @@
         (isActive ? '\nStatus: CURRENT' : (nextStatus ? '\nStatus: ' + nextStatus.toUpperCase() : ''));
 
       return (
-        '<g class="sm-node ' + (isActive ? 'sm-node-active' : '') + '" data-node-id="' + n.id + '" tabindex="0">' +
+        '<g class="sm-node ' + (isActive ? 'sm-node-active' : '') + '" data-node-id="' + escapeHtml(n.id) + '" tabindex="0">' +
           '<title>' + escapeHtml(nodeTitle) + '</title>' +
           '<rect x="' + rx + '" y="' + ry + '" width="124" height="50" rx="10" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + strokeWidth + '" />' +
           badgeSvg +
-          '<text x="' + n.x + '" y="' + (n.y - 2) + '" text-anchor="middle" fill="#e6eef8" font-size="12.5" font-weight="700">' +
+          '<text x="' + nx + '" y="' + (ny - 2) + '" text-anchor="middle" fill="#e6eef8" font-size="12.5" font-weight="700">' +
             escapeHtml(n.label) +
           '</text>' +
-          '<text x="' + n.x + '" y="' + (n.y + 14) + '" text-anchor="middle" fill="#9cb0c9" font-size="10">' +
+          '<text x="' + nx + '" y="' + (ny + 14) + '" text-anchor="middle" fill="#9cb0c9" font-size="10">' +
             escapeHtml(n.subtitle) +
           '</text>' +
         '</g>'
@@ -493,7 +500,7 @@
     const height = Math.max(230, maxRows * 48 + 44);
     svgEl.setAttribute('viewBox', '0 0 1120 ' + height);
 
-    const pos = {}; // key: kind:id -> { x, y, w, h }
+    const pos = Object.create(null); // key: kind:id -> { x, y, w, h }
 
     // Column X coordinates
     const colSeatX = 110;

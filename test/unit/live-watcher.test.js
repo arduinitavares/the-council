@@ -1917,8 +1917,21 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.ok(inlineScriptMatch, 'index.html must contain main inline controller script');
 
       const elements = new Map();
+      const escapeMockAttr = (s) =>
+        String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      const syncSelectHtml = (el) => {
+        el.innerHTML = el.children
+          .map((c) => `<option value="${escapeMockAttr(c.value)}">${escapeMockAttr(c.textContent)}</option>`)
+          .join('');
+      };
       const getEl = (id) => {
         if (!elements.has(id)) {
+          const children = [];
           elements.set(id, {
             id,
             textContent: '',
@@ -1926,6 +1939,27 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
             value: id === 'run-selector' ? 'latest' : '',
             className: '',
             style: {},
+            children,
+            options: children,
+            get firstChild() {
+              return children[0] || null;
+            },
+            appendChild: function (child) {
+              children.push(child);
+              if (this.id === 'run-selector') syncSelectHtml(this);
+              return child;
+            },
+            removeChild: function (child) {
+              const idx = children.indexOf(child);
+              if (idx >= 0) children.splice(idx, 1);
+              if (this.id === 'run-selector') syncSelectHtml(this);
+              return child;
+            },
+            replaceChildren: function (...nextChildren) {
+              children.length = 0;
+              children.push(...nextChildren);
+              if (this.id === 'run-selector') syncSelectHtml(this);
+            },
             classList: {
               add: () => {},
               remove: () => {},
@@ -1946,6 +1980,8 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
           tagName: tag.toUpperCase(),
           id: '',
           src: '',
+          value: '',
+          textContent: '',
           onload: null,
           onerror: null,
           remove: function () {

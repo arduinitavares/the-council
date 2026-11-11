@@ -1241,24 +1241,59 @@ describe('Issue #89: Engine Judge Context, Cancellation Forwarding, Phase Timeou
     });
 
     it('applies preserveRebuttalEffort and downshift rules consistently to explicit rebuttalModel overrides and falls back to backingProof on null/empty proofId', async () => {
-      // 1. Explicit parenthesized/high rebuttalModel with preserveRebuttalEffort=false downshifts effort to medium
+      const { parseModelAndEffort } = await import('../../src/harness/cli-runner.js');
+
+      // 1. Explicit parenthesized/high rebuttalModel with preserveRebuttalEffort=false downshifts BOTH model and reasoningEffort so runner executes at medium
       const downshiftedExplicit = resolveRebuttalSeatConfig({
         id: 's1',
         harness: 'codex',
         model: 'gpt-6.1-sol (high)',
         rebuttalModel: 'gpt-6-astra (max)'
       });
+      assert.equal(downshiftedExplicit.model, 'gpt-6-astra (medium)');
       assert.equal(downshiftedExplicit.reasoningEffort, 'medium');
+      assert.equal(parseModelAndEffort(downshiftedExplicit.model, downshiftedExplicit.reasoningEffort || 'high').effort, 'medium');
 
-      // 2. Bare explicit rebuttalModel with preserveRebuttalEffort=true preserves high effort (not downshifted to medium)
-      const preservedBareExplicit = resolveRebuttalSeatConfig({
-        id: 's1',
-        harness: 'codex',
-        model: 'gpt-6.1-sol (high)',
+      // 2. Bare explicit rebuttalModel with preserveRebuttalEffort=true preserves high effort EVEN AFTER resolveConfig
+      const resolvedPreservedExplicitCfg = resolveConfig({
+        topic: 'Preserved bare rebuttalModel after resolveConfig',
+        preserveRebuttalEffort: true,
         rebuttalModel: 'gpt-6-astra',
-        preserveRebuttalEffort: true
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S1' },
+          { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S2' }
+        ]
       });
+      const preservedBareExplicit = resolveRebuttalSeatConfig(
+        resolvedPreservedExplicitCfg.seats[0],
+        resolvedPreservedExplicitCfg
+      );
+      assert.equal(preservedBareExplicit.model, 'gpt-6-astra');
       assert.equal(preservedBareExplicit.reasoningEffort, 'high');
+      assert.equal(
+        parseModelAndEffort(preservedBareExplicit.model, preservedBareExplicit.reasoningEffort || 'high').effort,
+        'high'
+      );
+
+      // 2b. Bare seat WITHOUT rebuttalModel and preserveRebuttalEffort=true preserves high effort (no medium downshift) after resolveConfig
+      const resolvedPreservedBareSeatCfg = resolveConfig({
+        topic: 'Preserved bare seat without rebuttalModel after resolveConfig',
+        preserveRebuttalEffort: true,
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra', soul: 'S1' },
+          { id: 's2', harness: 'codex', model: 'gpt-6.1-sol', soul: 'S2' }
+        ]
+      });
+      const preservedBareSeat = resolveRebuttalSeatConfig(
+        resolvedPreservedBareSeatCfg.seats[0],
+        resolvedPreservedBareSeatCfg
+      );
+      assert.equal(preservedBareSeat.model, 'gpt-6-astra');
+      assert.equal(preservedBareSeat.reasoningEffort, undefined);
+      assert.equal(
+        parseModelAndEffort(preservedBareSeat.model, preservedBareSeat.reasoningEffort || 'high').effort,
+        'high'
+      );
 
       // 3. Falsy proofId (null and "") falls back to valid backingProof during voting
       const harness = {

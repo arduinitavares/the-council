@@ -59,6 +59,31 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
       .trim()
       .toLowerCase() || 'low';
 
+  const configSeatMatch =
+    Array.isArray(engineConfig?.seats) && seat?.id
+      ? engineConfig.seats.find((s) => s && s.id === seat.id)
+      : undefined;
+  const hasExplicitVotingEffort =
+    typeof seat?._explicitVotingEffort === 'boolean'
+      ? seat._explicitVotingEffort
+      : (typeof configSeatMatch?._explicitVotingEffort === 'boolean'
+          ? Boolean(
+              configSeatMatch._explicitVotingEffort ||
+                (seat?.votingReasoningEffort !== undefined &&
+                  seat.votingReasoningEffort !== configSeatMatch.votingReasoningEffort) ||
+                seat?.['voting-reasoning-effort'] !== undefined
+            )
+          : (typeof engineConfig?._explicitVotingEffort === 'boolean'
+              ? Boolean(
+                  engineConfig._explicitVotingEffort ||
+                    seat?.votingReasoningEffort !== undefined ||
+                    seat?.['voting-reasoning-effort'] !== undefined
+                )
+              : Boolean(
+                  seat?.votingReasoningEffort !== undefined ||
+                    seat?.['voting-reasoning-effort'] !== undefined
+                )));
+
   let reasoningEffort;
   if (seat.votingModel) {
     model = seat.votingModel;
@@ -74,9 +99,7 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     if (baseModel && baseModel !== 'composer-2.5') {
       reasoningEffort = !preserveEffort
         ? downshiftEffort(parsedEffort, targetEffort)
-        : (seat.votingReasoningEffort
-            ? String(seat.votingReasoningEffort).trim().toLowerCase()
-            : parsedEffort);
+        : (hasExplicitVotingEffort ? targetEffort : parsedEffort);
     }
   } else if (!preserveEffort) {
     let baseModel = '';
@@ -92,8 +115,8 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     if (baseModel !== 'composer-2.5') {
       reasoningEffort = downshiftEffort(currentEffort, targetEffort);
     }
-  } else if (seat.votingReasoningEffort) {
-    reasoningEffort = String(seat.votingReasoningEffort).trim().toLowerCase();
+  } else if (hasExplicitVotingEffort) {
+    reasoningEffort = targetEffort;
   }
 
   const baseTimeoutMs =
@@ -114,10 +137,6 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     engineConfig.totalSeatBudgetMs ||
     engineConfig.seatBudget;
 
-  const configSeatMatch =
-    Array.isArray(engineConfig?.seats) && seat?.id
-      ? engineConfig.seats.find((s) => s && s.id === seat.id)
-      : undefined;
   const hasExplicitVotingTimeout =
     typeof seat?._explicitVotingTimeout === 'boolean'
       ? seat._explicitVotingTimeout
@@ -232,15 +251,40 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
     'medium';
   const targetEffort = String(rawTargetEffort).trim().toLowerCase() || 'medium';
 
-  const seatExplicitRebuttalEffort =
-    seat.rebuttalReasoningEffort ??
-    seat.rebuttalEffort ??
-    seat['rebuttal-reasoning-effort'];
+  const configSeatMatch =
+    Array.isArray(engineConfig?.seats) && seat?.id
+      ? engineConfig.seats.find((s) => s && s.id === seat.id)
+      : undefined;
+  const hasExplicitRebuttalEffort =
+    typeof seat?._explicitRebuttalEffort === 'boolean'
+      ? seat._explicitRebuttalEffort
+      : (typeof configSeatMatch?._explicitRebuttalEffort === 'boolean'
+          ? Boolean(
+              configSeatMatch._explicitRebuttalEffort ||
+                (seat?.rebuttalReasoningEffort !== undefined &&
+                  seat.rebuttalReasoningEffort !== configSeatMatch.rebuttalReasoningEffort) ||
+                seat?.rebuttalEffort !== undefined ||
+                seat?.['rebuttal-reasoning-effort'] !== undefined
+            )
+          : (typeof engineConfig?._explicitRebuttalEffort === 'boolean'
+              ? Boolean(
+                  engineConfig._explicitRebuttalEffort ||
+                    seat?.rebuttalReasoningEffort !== undefined ||
+                    seat?.rebuttalEffort !== undefined ||
+                    seat?.['rebuttal-reasoning-effort'] !== undefined
+                )
+              : Boolean(
+                  seat?.rebuttalReasoningEffort !== undefined ||
+                    seat?.rebuttalEffort !== undefined ||
+                    seat?.['rebuttal-reasoning-effort'] !== undefined ||
+                    engineConfig?.rebuttalReasoningEffort !== undefined ||
+                    engineConfig?.rebuttalEffort !== undefined ||
+                    engineConfig?.['rebuttal-reasoning-effort'] !== undefined
+                )));
 
   let model = seat.model;
   let reasoningEffort;
   if (explicitRebuttalModel) {
-    model = explicitRebuttalModel;
     let baseModel = '';
     let parsedEffort = 'high';
     try {
@@ -250,12 +294,18 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
       baseModel = '';
       parsedEffort = 'high';
     }
-    if (baseModel && baseModel !== 'composer-2.5') {
-      reasoningEffort = !preserveEffort
-        ? downshiftEffort(parsedEffort, targetEffort)
-        : (seatExplicitRebuttalEffort !== undefined
-            ? String(seatExplicitRebuttalEffort).trim().toLowerCase()
-            : parsedEffort);
+    if (!preserveEffort) {
+      model = downshiftModel(explicitRebuttalModel, targetEffort);
+      if (baseModel && baseModel !== 'composer-2.5') {
+        reasoningEffort = downshiftEffort(parsedEffort, targetEffort);
+      }
+    } else {
+      model = hasExplicitRebuttalEffort
+        ? downshiftModel(explicitRebuttalModel, targetEffort)
+        : explicitRebuttalModel;
+      if (baseModel && baseModel !== 'composer-2.5') {
+        reasoningEffort = hasExplicitRebuttalEffort ? targetEffort : parsedEffort;
+      }
     }
   } else if (!preserveEffort) {
     let baseModel = '';
@@ -271,15 +321,16 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
     if (baseModel !== 'composer-2.5') {
       reasoningEffort = downshiftEffort(currentEffort, targetEffort);
     }
-  } else if (seatExplicitRebuttalEffort !== undefined) {
+  } else if (hasExplicitRebuttalEffort) {
     let baseModel = '';
     try {
       baseModel = extractCanonicalBaseModel(seat.model, 'high');
     } catch {
       baseModel = '';
     }
-    if (baseModel !== 'composer-2.5') {
-      reasoningEffort = String(seatExplicitRebuttalEffort).trim().toLowerCase();
+    model = downshiftModel(seat.model, targetEffort);
+    if (baseModel && baseModel !== 'composer-2.5') {
+      reasoningEffort = targetEffort;
     }
   }
 

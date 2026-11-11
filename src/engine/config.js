@@ -822,6 +822,13 @@ export function resolveConfig(userConfig = {}) {
       ? userConfig.votingTools
       : (userConfig['voting-tools'] !== undefined ? userConfig['voting-tools'] : undefined);
 
+  const hasExplicitGlobalVotingEffort =
+    typeof userConfig._explicitVotingEffort === 'boolean'
+      ? userConfig._explicitVotingEffort
+      : (userConfig.votingReasoningEffort !== undefined ||
+          userConfig['voting-reasoning-effort'] !== undefined ||
+          presetDefinition?.votingReasoningEffort !== undefined);
+
   const resolvedVotingReasoningEffort =
     userConfig.votingReasoningEffort !== undefined
       ? userConfig.votingReasoningEffort
@@ -853,6 +860,14 @@ export function resolveConfig(userConfig = {}) {
       : (userConfig['rebuttal-tools'] !== undefined
           ? userConfig['rebuttal-tools']
           : presetDefinition?.rebuttalTools);
+
+  const hasExplicitGlobalRebuttalEffort =
+    typeof userConfig._explicitRebuttalEffort === 'boolean'
+      ? userConfig._explicitRebuttalEffort
+      : (userConfig.rebuttalReasoningEffort !== undefined ||
+          userConfig.rebuttalEffort !== undefined ||
+          userConfig['rebuttal-reasoning-effort'] !== undefined ||
+          presetDefinition?.rebuttalReasoningEffort !== undefined);
 
   const resolvedRebuttalReasoningEffort =
     userConfig.rebuttalReasoningEffort !== undefined
@@ -1113,6 +1128,23 @@ export function resolveConfig(userConfig = {}) {
                   rawSeat?.['voting-timeout'] !== undefined ||
                   hasExplicitGlobalVotingTimeout
               );
+        const hasExplicitSeatVotingEffort =
+          typeof rawSeat?._explicitVotingEffort === 'boolean'
+            ? rawSeat._explicitVotingEffort
+            : Boolean(
+                rawSeat?.votingReasoningEffort !== undefined ||
+                  rawSeat?.['voting-reasoning-effort'] !== undefined ||
+                  hasExplicitGlobalVotingEffort
+              );
+        const hasExplicitSeatRebuttalEffort =
+          typeof rawSeat?._explicitRebuttalEffort === 'boolean'
+            ? rawSeat._explicitRebuttalEffort
+            : Boolean(
+                rawSeat?.rebuttalReasoningEffort !== undefined ||
+                  rawSeat?.rebuttalEffort !== undefined ||
+                  rawSeat?.['rebuttal-reasoning-effort'] !== undefined ||
+                  hasExplicitGlobalRebuttalEffort
+              );
         const normSeat = {
           ...s,
           ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {}),
@@ -1121,11 +1153,25 @@ export function resolveConfig(userConfig = {}) {
             ? { rebuttalReasoningEffort: s.rebuttalReasoningEffort.toLowerCase() }
             : {})
         };
-        Object.defineProperty(normSeat, '_explicitVotingTimeout', {
-          value: hasExplicitSeatVotingTimeout,
-          enumerable: false,
-          configurable: false,
-          writable: false
+        Object.defineProperties(normSeat, {
+          _explicitVotingTimeout: {
+            value: hasExplicitSeatVotingTimeout,
+            enumerable: false,
+            configurable: false,
+            writable: false
+          },
+          _explicitVotingEffort: {
+            value: hasExplicitSeatVotingEffort,
+            enumerable: false,
+            configurable: false,
+            writable: false
+          },
+          _explicitRebuttalEffort: {
+            value: hasExplicitSeatRebuttalEffort,
+            enumerable: false,
+            configurable: false,
+            writable: false
+          }
         });
         return normSeat;
       })
@@ -1153,6 +1199,18 @@ export function resolveConfig(userConfig = {}) {
     },
     _explicitVotingTimeout: {
       value: Boolean(hasExplicitGlobalVotingTimeout),
+      enumerable: false,
+      configurable: false,
+      writable: false
+    },
+    _explicitVotingEffort: {
+      value: Boolean(hasExplicitGlobalVotingEffort),
+      enumerable: false,
+      configurable: false,
+      writable: false
+    },
+    _explicitRebuttalEffort: {
+      value: Boolean(hasExplicitGlobalRebuttalEffort),
       enumerable: false,
       configurable: false,
       writable: false

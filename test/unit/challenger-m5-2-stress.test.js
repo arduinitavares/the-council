@@ -268,13 +268,21 @@ describe('Adversarial Stress Test: Milestone M5 Voting Optimization & Effort Dow
       );
       assert.equal(cfg2.votingTimeoutMs, 45000);
 
-      // When custom votingTimeoutMs exceeds small base timeout, base timeout caps it
+      // Explicit per-seat votingTimeoutMs exceeds small base timeout and is clamped only by totalSeatBudgetMs (Issue #89)
       const cfg3 = resolveVotingSeatConfig({
         id: 's3',
         timeoutMs: 10000,
         votingTimeoutMs: 60000
       });
-      assert.equal(cfg3.votingTimeoutMs, 10000);
+      assert.equal(cfg3.votingTimeoutMs, 60000);
+
+      const cfg4 = resolveVotingSeatConfig({
+        id: 's4',
+        timeoutMs: 10000,
+        votingTimeoutMs: 60000,
+        totalSeatBudgetMs: 40000
+      });
+      assert.equal(cfg4.votingTimeoutMs, 40000);
     });
   });
 

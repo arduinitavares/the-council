@@ -54,11 +54,42 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
       ? seat.preserveVotingEffort
       : (typeof engineConfig.preserveVotingEffort === 'boolean' ? engineConfig.preserveVotingEffort : false);
 
+  const targetEffort =
+    String(seat.votingReasoningEffort || engineConfig.votingReasoningEffort || 'low')
+      .trim()
+      .toLowerCase() || 'low';
+
+  let reasoningEffort;
   if (seat.votingModel) {
     model = seat.votingModel;
+    let baseModel = '';
+    let parsedEffort = targetEffort;
+    try {
+      baseModel = extractCanonicalBaseModel(model, targetEffort);
+      parsedEffort = parseModelAndEffort(model, targetEffort).effort || targetEffort;
+    } catch {
+      baseModel = '';
+      parsedEffort = targetEffort;
+    }
+    if (baseModel && baseModel !== 'composer-2.5' && (!preserveEffort || seat.votingReasoningEffort)) {
+      reasoningEffort = parsedEffort;
+    }
   } else if (!preserveEffort) {
-    const targetEffort = seat.votingReasoningEffort || engineConfig.votingReasoningEffort || 'low';
+    let baseModel = '';
+    let currentEffort = 'high';
+    try {
+      baseModel = extractCanonicalBaseModel(seat.model, 'high');
+      currentEffort = parseModelAndEffort(seat.model, 'high').effort || 'high';
+    } catch {
+      baseModel = '';
+      currentEffort = 'high';
+    }
     model = downshiftModel(seat.model, targetEffort);
+    if (baseModel !== 'composer-2.5') {
+      reasoningEffort = downshiftEffort(currentEffort, targetEffort);
+    }
+  } else if (seat.votingReasoningEffort) {
+    reasoningEffort = String(seat.votingReasoningEffort).trim().toLowerCase();
   }
 
   const baseTimeoutMs =
@@ -67,14 +98,46 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     240000;
   const configuredVotingTimeoutMs =
     seat.votingTimeoutMs ||
+    seat.votingTimeout ||
+    seat['voting-timeout'] ||
     engineConfig.votingTimeoutMs ||
+    engineConfig.votingTimeout ||
+    engineConfig['voting-timeout'] ||
     90000;
   const totalSeatBudgetMs =
     seat.totalSeatBudgetMs ||
     seat.seatBudget ||
     engineConfig.totalSeatBudgetMs ||
     engineConfig.seatBudget;
-  const rawVotingTimeoutMs = Math.min(baseTimeoutMs, configuredVotingTimeoutMs);
+
+  const configSeatMatch =
+    Array.isArray(engineConfig?.seats) && seat?.id
+      ? engineConfig.seats.find((s) => s && s.id === seat.id)
+      : undefined;
+  const hasExplicitVotingTimeout =
+    typeof seat?._explicitVotingTimeout === 'boolean'
+      ? seat._explicitVotingTimeout
+      : (typeof configSeatMatch?._explicitVotingTimeout === 'boolean'
+          ? configSeatMatch._explicitVotingTimeout
+          : (typeof engineConfig?._explicitVotingTimeout === 'boolean'
+              ? Boolean(
+                  engineConfig._explicitVotingTimeout ||
+                    seat?.votingTimeoutMs !== undefined ||
+                    seat?.votingTimeout !== undefined ||
+                    seat?.['voting-timeout'] !== undefined
+                )
+              : Boolean(
+                  seat?.votingTimeoutMs !== undefined ||
+                    seat?.votingTimeout !== undefined ||
+                    seat?.['voting-timeout'] !== undefined ||
+                    engineConfig?.votingTimeoutMs !== undefined ||
+                    engineConfig?.votingTimeout !== undefined ||
+                    engineConfig?.['voting-timeout'] !== undefined
+                )));
+
+  const rawVotingTimeoutMs = hasExplicitVotingTimeout
+    ? configuredVotingTimeoutMs
+    : Math.min(baseTimeoutMs, configuredVotingTimeoutMs);
   const votingTimeoutMs =
     typeof totalSeatBudgetMs === 'number' && totalSeatBudgetMs > 0
       ? Math.min(rawVotingTimeoutMs, totalSeatBudgetMs)
@@ -84,7 +147,8 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
     ...seat,
     model,
     tools,
-    votingTimeoutMs
+    votingTimeoutMs,
+    ...(reasoningEffort ? { reasoningEffort } : {})
   };
 }
 
@@ -168,6 +232,27 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
   let reasoningEffort;
   if (explicitRebuttalModel) {
     model = explicitRebuttalModel;
+    let baseModel = '';
+    let parsedEffort = targetEffort;
+    try {
+      baseModel = extractCanonicalBaseModel(explicitRebuttalModel, targetEffort);
+      parsedEffort = parseModelAndEffort(explicitRebuttalModel, targetEffort).effort || targetEffort;
+    } catch {
+      baseModel = '';
+      parsedEffort = targetEffort;
+    }
+    if (baseModel && baseModel !== 'composer-2.5') {
+      const hasExplicitRebuttalEffort =
+        seat.rebuttalReasoningEffort !== undefined ||
+        seat.rebuttalEffort !== undefined ||
+        seat['rebuttal-reasoning-effort'] !== undefined ||
+        engineConfig.rebuttalReasoningEffort !== undefined ||
+        engineConfig.rebuttalEffort !== undefined ||
+        engineConfig['rebuttal-reasoning-effort'] !== undefined;
+      reasoningEffort = hasExplicitRebuttalEffort
+        ? downshiftEffort(parsedEffort, targetEffort)
+        : parsedEffort;
+    }
   } else if (!preserveEffort) {
     let baseModel = '';
     let currentEffort = 'high';
@@ -212,16 +297,13 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {})
       : DEFAULT_TIMEOUT_RESOLVER;
 
   let rawRebuttalTimeoutMs;
-  if (preserveEffort && explicitRebuttalTimeout === undefined) {
-    rawRebuttalTimeoutMs = timeoutResolver.resolveTimeoutMs(seat.model, explicitBaseTimeout);
+  if (explicitRebuttalTimeout !== undefined) {
+    rawRebuttalTimeoutMs = explicitRebuttalTimeout;
   } else if (preserveEffort) {
-    rawRebuttalTimeoutMs = explicitBaseTimeout
-      ? Math.min(explicitBaseTimeout, explicitRebuttalTimeout)
-      : explicitRebuttalTimeout;
+    rawRebuttalTimeoutMs = timeoutResolver.resolveTimeoutMs(seat.model, explicitBaseTimeout);
   } else {
     const capBaseTimeoutMs = explicitBaseTimeout || 240000;
-    const configuredRebuttalTimeoutMs = explicitRebuttalTimeout ?? 90000;
-    rawRebuttalTimeoutMs = Math.min(capBaseTimeoutMs, configuredRebuttalTimeoutMs);
+    rawRebuttalTimeoutMs = Math.min(capBaseTimeoutMs, 90000);
   }
 
   const rebuttalTimeoutMs =
@@ -559,6 +641,36 @@ export class CouncilEngine {
   }
 
   /**
+   * Creates a per-wave AbortController composed with `this.signal` when present.
+   * @private
+   * @returns {{ controller: AbortController, signal: AbortSignal }}
+   */
+  _createWaveController() {
+    const controller = new AbortController();
+    const signal = this.signal
+      ? AbortSignal.any([this.signal, controller.signal])
+      : controller.signal;
+    return { controller, signal };
+  }
+
+  /**
+   * Determines whether an error or active signal represents an abort/cancellation.
+   * @private
+   * @param {unknown} error
+   * @param {AbortSignal | null} [waveSignal=null]
+   * @returns {boolean}
+   */
+  _isAbortError(error, waveSignal = null) {
+    if (this.aborted || this.signal?.aborted || waveSignal?.aborted) {
+      return true;
+    }
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+    return error.name === 'AbortError' || error.code === 'ABORT_ERR';
+  }
+
+  /**
    * Classifies a fault error into 'fault_quota', 'fault_timeout', or 'fault'.
    * @param {unknown} error
    * @returns {'fault_quota' | 'fault_timeout' | 'fault'}
@@ -696,10 +808,10 @@ export class CouncilEngine {
 
     this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
-    this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass });
+    this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass }, true);
 
     if (seat && isRetryable && retries < this.config.maxRetriesPerSeat && !budgetExhausted) {
-      this._step({ type: 'RETRY_SEAT', seatId });
+      this._step({ type: 'RETRY_SEAT', seatId }, true);
       return { action: 'retried', retries: seat.retries + 1 };
     } else {
       let excuseReason;
@@ -710,7 +822,7 @@ export class CouncilEngine {
       } else {
         excuseReason = reason;
       }
-      this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason, errorClass });
+      this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason, errorClass }, true);
       const locked = (this.state.objections || []).filter((o) => o.seatId === seatId && o.status === 'preserved_excused').length;
       this.telemetry.emitSeatExcused(seatId, excuseReason, locked);
       return { action: 'excused', lockedObjections: locked };
@@ -737,7 +849,7 @@ export class CouncilEngine {
 
     // 1. BEGIN_ROUND
     if (this.state.phase !== 'reviewing') {
-      this._step({ type: 'BEGIN_ROUND' });
+      this._step({ type: 'BEGIN_ROUND' }, true);
     }
     const currentRound = this.state.round;
     this.telemetry.emitRoundStart(currentRound, activeSeats(this.state).map((s) => s.id));
@@ -808,7 +920,9 @@ export class CouncilEngine {
         effectiveBaseTimeoutMs =
           rebuttalSeat.preserveRebuttalEffort && !hasExplicitRebuttalTimeout
             ? retryBaseTimeoutMs
-            : Math.min(retryBaseTimeoutMs, rebuttalSeat.rebuttalTimeoutMs);
+            : (hasExplicitRebuttalTimeout
+                ? rebuttalSeat.rebuttalTimeoutMs
+                : Math.min(retryBaseTimeoutMs, rebuttalSeat.rebuttalTimeoutMs));
         currentSeatConfig = {
           ...seat,
           model: rebuttalSeat.model,
@@ -865,7 +979,6 @@ export class CouncilEngine {
 
         const submitEvent = {
           type: 'SUBMIT_PROOF',
-          id: slot.proofInput.id,
           seatId: slot.seat.id,
           scope: slot.proofInput.scope,
           kind: slot.proofInput.kind,
@@ -888,8 +1001,22 @@ export class CouncilEngine {
       }
     };
 
+    const { controller: delibWaveController, signal: delibWaveSignal } = this._createWaveController();
+    const activeCountAtDelibWaveStart = activeSeats(this.state).length;
+    let unrecoverableDelibFaults = 0;
+
     await mapConcurrent(delibSlots, concurrencyLimit, async (slot) => {
-      if (this.aborted || this.isCompleted() || slot.excused || slot.seat.status === 'excused') {
+      if (
+        this.aborted ||
+        this.signal?.aborted ||
+        delibWaveSignal.aborted ||
+        this.isCompleted() ||
+        slot.excused ||
+        slot.seat.status === 'excused'
+      ) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
         slot.skipped = true;
         return;
       }
@@ -899,20 +1026,31 @@ export class CouncilEngine {
       try {
         const callSeat = slot.isRebuttal ? slot.currentSeatConfig : slot.seat;
         const callTools = slot.isRebuttal ? slot.currentSeatConfig.tools : slot.seat.tools;
-        const rebuttalCallExtras = slot.isRebuttal
+        const callContext = slot.isRebuttal
           ? {
               rebuttalMode: true,
               mode: 'rebuttal',
-              context: {
-                rebuttalMode: true,
-                mode: 'rebuttal',
-                tools: callTools,
-                ...(slot.currentSeatConfig.reasoningEffort
-                  ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
-                  : {})
-              }
+              tools: callTools,
+              signal: delibWaveSignal,
+              ...(slot.currentSeatConfig.reasoningEffort
+                ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                : {})
             }
-          : {};
+          : {
+              tools: callTools,
+              signal: delibWaveSignal
+            };
+        const delibCallExtras = slot.isRebuttal
+          ? {
+              rebuttalMode: true,
+              mode: 'rebuttal',
+              signal: delibWaveSignal,
+              context: callContext
+            }
+          : {
+              signal: delibWaveSignal,
+              context: callContext
+            };
         let proofInput;
         if (typeof slot.harness.executeSeatProof === 'function') {
           proofInput = await slot.harness.executeSeatProof({
@@ -925,7 +1063,7 @@ export class CouncilEngine {
             timeoutMs: slot.turnTimeoutMs,
             tools: callTools,
             telemetry: this.telemetry,
-            ...rebuttalCallExtras
+            ...delibCallExtras
           });
         } else if (typeof slot.harness.executeSeat === 'function') {
           proofInput = await slot.harness.executeSeat({
@@ -938,16 +1076,38 @@ export class CouncilEngine {
             timeoutMs: slot.turnTimeoutMs,
             tools: callTools,
             telemetry: this.telemetry,
-            ...rebuttalCallExtras
+            ...delibCallExtras
           });
         } else {
           throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatProof or executeSeat`);
+        }
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this.aborted || delibWaveSignal.aborted) {
+          slot.aborted = true;
+          slot.skipped = true;
+          slot.proofInput = null;
+          slot.error = null;
+          slot.needsValidation = false;
+          return;
         }
         slot.seatElapsedMs += Date.now() - t0;
         slot.proofInput = proofInput;
         slot.error = null;
         slot.needsValidation = true;
       } catch (err) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this._isAbortError(err, delibWaveSignal)) {
+          slot.aborted = true;
+          slot.skipped = true;
+          slot.proofInput = null;
+          slot.error = null;
+          slot.needsValidation = false;
+          return;
+        }
         const elapsedMs =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
             ? err.timeoutMs
@@ -958,6 +1118,26 @@ export class CouncilEngine {
         slot.proofInput = null;
         slot.error = err;
         slot.needsValidation = false;
+
+        const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+        const minViable =
+          typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
+            ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
+            : 0;
+        const willExcuseImmediately =
+          !this._isRetryableError(err) ||
+          (slot.seat.retries || 0) >= this.config.maxRetriesPerSeat ||
+          remainingBudget <= 0 ||
+          remainingBudget < minViable;
+        if (willExcuseImmediately) {
+          unrecoverableDelibFaults += 1;
+          if (
+            !delibWaveController.signal.aborted &&
+            activeCountAtDelibWaveStart - unrecoverableDelibFaults < this.state.minQuorum
+          ) {
+            delibWaveController.abort(new Error('Active seats dropped below minimum quorum'));
+          }
+        }
       }
     });
 
@@ -1019,28 +1199,52 @@ export class CouncilEngine {
           break;
         }
 
+        const { controller: delibRetryController, signal: delibRetrySignal } = this._createWaveController();
+        const activeCountAtRetryStart = activeSeats(this.state).length;
+        let unrecoverableRetryFaults = 0;
+
         await mapConcurrent(retryBatch, concurrencyLimit, async (slot) => {
-          if (this.aborted || this.isCompleted() || slot.excused) {
+          if (
+            this.aborted ||
+            this.signal?.aborted ||
+            delibRetrySignal.aborted ||
+            this.isCompleted() ||
+            slot.excused
+          ) {
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
             return;
           }
 
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
           const retryT0 = Date.now();
           try {
-            const rebuttalRetryExtras = slot.isRebuttal
+            const retryContext = slot.isRebuttal
               ? {
                   rebuttalMode: true,
                   mode: 'rebuttal',
-                  context: {
-                    rebuttalMode: true,
-                    mode: 'rebuttal',
-                    tools: slot.currentSeatConfig.tools,
-                    ...(slot.currentSeatConfig.reasoningEffort
-                      ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
-                      : {})
-                  }
+                  tools: slot.currentSeatConfig.tools,
+                  signal: delibRetrySignal,
+                  ...(slot.currentSeatConfig.reasoningEffort
+                    ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                    : {})
                 }
-              : {};
+              : {
+                  tools: slot.currentSeatConfig.tools,
+                  signal: delibRetrySignal
+                };
+            const delibRetryExtras = slot.isRebuttal
+              ? {
+                  rebuttalMode: true,
+                  mode: 'rebuttal',
+                  signal: delibRetrySignal,
+                  context: retryContext
+                }
+              : {
+                  signal: delibRetrySignal,
+                  context: retryContext
+                };
             let proofInput;
             if (typeof slot.harness.executeSeatProof === 'function') {
               proofInput = await slot.harness.executeSeatProof({
@@ -1053,7 +1257,7 @@ export class CouncilEngine {
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry,
-                ...rebuttalRetryExtras
+                ...delibRetryExtras
               });
             } else if (typeof slot.harness.executeSeat === 'function') {
               proofInput = await slot.harness.executeSeat({
@@ -1066,14 +1270,36 @@ export class CouncilEngine {
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry,
-                ...rebuttalRetryExtras
+                ...delibRetryExtras
               });
+            }
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
+            if (this.aborted || delibRetrySignal.aborted) {
+              slot.aborted = true;
+              slot.skipped = true;
+              slot.proofInput = null;
+              slot.error = null;
+              slot.needsValidation = false;
+              return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
             slot.proofInput = proofInput;
             slot.error = null;
             slot.needsValidation = true;
           } catch (retryErr) {
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
+            if (this._isAbortError(retryErr, delibRetrySignal)) {
+              slot.aborted = true;
+              slot.skipped = true;
+              slot.proofInput = null;
+              slot.error = null;
+              slot.needsValidation = false;
+              return;
+            }
             const retryDuration =
               typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
                 ? retryErr.timeoutMs
@@ -1084,6 +1310,27 @@ export class CouncilEngine {
             slot.proofInput = null;
             slot.error = retryErr;
             slot.needsValidation = false;
+
+            const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+            const minViable =
+              typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
+                ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
+                : 0;
+            const currentSeatRetries = slot.currentSeatConfig.retries || 0;
+            const willExcuseOnRetry =
+              !this._isRetryableError(retryErr) ||
+              currentSeatRetries >= this.config.maxRetriesPerSeat ||
+              remainingBudget <= 0 ||
+              remainingBudget < minViable;
+            if (willExcuseOnRetry) {
+              unrecoverableRetryFaults += 1;
+              if (
+                !delibRetryController.signal.aborted &&
+                activeCountAtRetryStart - unrecoverableRetryFaults < this.state.minQuorum
+              ) {
+                delibRetryController.abort(new Error('Active seats dropped below minimum quorum'));
+              }
+            }
           }
         });
 
@@ -1108,7 +1355,6 @@ export class CouncilEngine {
 
         this._step({
           type: 'SUBMIT_PROOF',
-          id: slot.proofInput.id,
           seatId: slot.seat.id,
           scope: slot.proofInput.scope,
           kind: slot.proofInput.kind,
@@ -1142,7 +1388,7 @@ export class CouncilEngine {
     }
 
     // 3. JUDGING (Audit proofs and synthesize candidate)
-    this._step({ type: 'START_JUDGING' });
+    this._step({ type: 'START_JUDGING' }, true);
     const judge = this.state.judge;
     this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
     const judgeHarness = this.harnessResolver(judge.harness);
@@ -1189,15 +1435,29 @@ export class CouncilEngine {
         : (judgeBudgetMs < baseJudgeTimeoutMs ? judgeBudgetMs : undefined);
 
     const roundProofs = this.state.proofs.filter((p) => p.round === currentRound || p.status === 'pending');
-    const maxJudgeRetries = this.config.maxRetriesPerJudge ?? this.config.maxRetriesPerSeat ?? 1;
+    const maxJudgeRetries =
+      this.config.maxRetriesPerJudge ??
+      this.config.judge?.maxRetries ??
+      this.config.maxRetriesPerSeat ??
+      1;
+    let judgeRoundRetries = 0;
     let judgeExecuted = false;
     let judgeElapsedMs = 0;
     let currentJudgeConfig = { ...mergedJudge };
     let currentJudgeTimeoutMs = initialJudgeTimeoutMs;
 
     while (!judgeExecuted && !this.isCompleted() && !this.aborted) {
+      if (this.signal?.aborted) {
+        this.aborted = true;
+        break;
+      }
+      const { signal: judgeSignal } = this._createWaveController();
       const judgeT0 = Date.now();
       try {
+        const judgeContext = {
+          tools: currentJudgeConfig.tools,
+          signal: judgeSignal
+        };
         let synthesisResult;
         if (typeof judgeHarness.executeJudgeAuditAndSynthesis === 'function') {
           synthesisResult = await judgeHarness.executeJudgeAuditAndSynthesis({
@@ -1209,7 +1469,9 @@ export class CouncilEngine {
             topic: this.state.topic,
             timeoutMs: currentJudgeTimeoutMs,
             tools: currentJudgeConfig.tools,
-            telemetry: this.telemetry
+            telemetry: this.telemetry,
+            signal: judgeSignal,
+            context: judgeContext
           });
         } else if (typeof judgeHarness.executeJudge === 'function') {
           synthesisResult = await judgeHarness.executeJudge({
@@ -1221,13 +1483,18 @@ export class CouncilEngine {
             topic: this.state.topic,
             timeoutMs: currentJudgeTimeoutMs,
             tools: currentJudgeConfig.tools,
-            telemetry: this.telemetry
+            telemetry: this.telemetry,
+            signal: judgeSignal,
+            context: judgeContext
           });
         } else {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
         }
 
-        if (this.aborted || this.isCompleted()) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this.aborted || judgeSignal.aborted || this.isCompleted()) {
           break;
         }
 
@@ -1249,7 +1516,10 @@ export class CouncilEngine {
         judgeElapsedMs += Date.now() - judgeT0;
         judgeExecuted = true;
       } catch (err) {
-        if (this.aborted || this.isCompleted()) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this._isAbortError(err, judgeSignal) || this.isCompleted()) {
           break;
         }
         const attemptDuration =
@@ -1269,10 +1539,11 @@ export class CouncilEngine {
         const isTimeout = faultStatus === 'fault_timeout' || errorClass === 'TimeoutError';
         const isRetryable = this._isRetryableError(err);
         this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg, errorClass });
-        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass });
+        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass }, true);
 
-        if (isRetryable && this.state.judge.retries < maxJudgeRetries && !judgeBudgetExhausted) {
-          this._step({ type: 'RETRY_JUDGE' });
+        if (isRetryable && judgeRoundRetries < maxJudgeRetries && !judgeBudgetExhausted) {
+          judgeRoundRetries += 1;
+          this._step({ type: 'RETRY_JUDGE' }, true);
           currentJudgeConfig = {
             ...currentJudgeConfig,
             ...this.state.judge,
@@ -1284,14 +1555,17 @@ export class CouncilEngine {
           const terminalReason = judgeBudgetExhausted
             ? `Exhausted total judge phase time budget (${judgeElapsedMs}ms >= ${judgeBudgetMs}ms): ${errorMsg}`
             : errorMsg;
-          this._step({
-            type: 'JUDGE_FAULT',
-            error: terminalReason,
-            reason: terminalReason,
-            status: faultStatus,
-            errorClass,
-            terminal: true
-          });
+          this._step(
+            {
+              type: 'JUDGE_FAULT',
+              error: terminalReason,
+              reason: terminalReason,
+              status: faultStatus,
+              errorClass,
+              terminal: true
+            },
+            true
+          );
           this.telemetry.emitVerdict(this.state.verdict);
           break;
         }
@@ -1310,8 +1584,22 @@ export class CouncilEngine {
 
     const voteSlots = voters.map((seat, index) => {
       const seatHarness = this.harnessResolver(seat.harness);
+      const dynamicSeat = this._dynamicSeatConfigs.get(seat.id) || {};
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
-      const mergedSeat = { ...configSeat, ...seat };
+      const mergedSeat = { ...configSeat, ...dynamicSeat, ...seat };
+      if (
+        typeof configSeat._explicitVotingTimeout === 'boolean' &&
+        dynamicSeat.votingTimeoutMs === undefined &&
+        dynamicSeat.votingTimeout === undefined &&
+        dynamicSeat['voting-timeout'] === undefined &&
+        seat.votingTimeoutMs === undefined
+      ) {
+        Object.defineProperty(mergedSeat, '_explicitVotingTimeout', {
+          value: configSeat._explicitVotingTimeout,
+          enumerable: false,
+          configurable: true
+        });
+      }
       const votingSeat = resolveVotingSeatConfig(mergedSeat, this.config);
       const totalSeatBudgetMs =
         mergedSeat.totalSeatBudgetMs ||
@@ -1326,7 +1614,8 @@ export class CouncilEngine {
         tools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
         votingTools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
         votingTimeoutMs: initialVoteTimeoutMs,
-        ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
+        ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {}),
+        ...(votingSeat.reasoningEffort ? { reasoningEffort: votingSeat.reasoningEffort } : {})
       };
 
       return {
@@ -1369,6 +1658,17 @@ export class CouncilEngine {
           continue;
         }
 
+        const resolvedProofId =
+          slot.voteResult?.proofId !== undefined
+            ? slot.voteResult.proofId
+            : slot.voteResult?.backingProof;
+        if (voteOutcome === 'object' && resolvedProofId !== undefined && slot.voteResult.proofId === undefined) {
+          slot.voteResult = {
+            ...slot.voteResult,
+            proofId: resolvedProofId
+          };
+        }
+
         const castEvent =
           voteOutcome === 'accept'
             ? { type: 'CAST_VOTE', seatId: slot.seat.id, vote: 'accept' }
@@ -1377,7 +1677,7 @@ export class CouncilEngine {
                 seatId: slot.seat.id,
                 vote: 'object',
                 reason: slot.voteResult.reason,
-                proofId: slot.voteResult.proofId
+                proofId: resolvedProofId
               };
         const dryNext = transitionCouncil(this.state, castEvent);
         if (!dryNext.lastTransition?.ok) {
@@ -1395,8 +1695,22 @@ export class CouncilEngine {
       }
     };
 
+    const { controller: voteWaveController, signal: voteWaveSignal } = this._createWaveController();
+    const activeCountAtVoteWaveStart = activeSeats(this.state).length;
+    let unrecoverableVoteFaults = 0;
+
     await mapConcurrent(voteSlots, voteConcurrencyLimit, async (slot) => {
-      if (this.aborted || this.isCompleted() || slot.excused || slot.seat.status === 'excused') {
+      if (
+        this.aborted ||
+        this.signal?.aborted ||
+        voteWaveSignal.aborted ||
+        this.isCompleted() ||
+        slot.excused ||
+        slot.seat.status === 'excused'
+      ) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
         slot.skipped = true;
         return;
       }
@@ -1404,6 +1718,13 @@ export class CouncilEngine {
       this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
       try {
+        const voteContext = {
+          tools: slot.currentSeatConfig.tools,
+          signal: voteWaveSignal,
+          ...(slot.currentSeatConfig.reasoningEffort
+            ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+            : {})
+        };
         let voteResult;
         if (typeof slot.seatHarness.executeSeatVote === 'function') {
           voteResult = await slot.seatHarness.executeSeatVote({
@@ -1415,7 +1736,9 @@ export class CouncilEngine {
             state: this.state,
             timeoutMs: slot.turnTimeoutMs,
             tools: slot.currentSeatConfig.tools,
-            telemetry: this.telemetry
+            telemetry: this.telemetry,
+            signal: voteWaveSignal,
+            context: voteContext
           });
         } else if (typeof slot.seatHarness.executeSeat === 'function') {
           voteResult = await slot.seatHarness.executeSeat({
@@ -1427,16 +1750,40 @@ export class CouncilEngine {
             state: this.state,
             timeoutMs: slot.turnTimeoutMs,
             tools: slot.currentSeatConfig.tools,
-            telemetry: this.telemetry
+            telemetry: this.telemetry,
+            signal: voteWaveSignal,
+            context: voteContext
           });
         } else {
           throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatVote or executeSeat`);
+        }
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this.aborted || voteWaveSignal.aborted) {
+          slot.aborted = true;
+          slot.skipped = true;
+          slot.voteResult = null;
+          slot.error = null;
+          slot.needsValidation = false;
+          return;
         }
         slot.seatElapsedMs += Date.now() - t0;
         slot.voteResult = voteResult;
         slot.error = null;
         slot.needsValidation = true;
       } catch (err) {
+        if (this.signal?.aborted) {
+          this.aborted = true;
+        }
+        if (this._isAbortError(err, voteWaveSignal)) {
+          slot.aborted = true;
+          slot.skipped = true;
+          slot.voteResult = null;
+          slot.error = null;
+          slot.needsValidation = false;
+          return;
+        }
         const elapsedMs =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
             ? err.timeoutMs
@@ -1447,6 +1794,28 @@ export class CouncilEngine {
         slot.voteResult = null;
         slot.error = err;
         slot.needsValidation = false;
+
+        const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+        const minViable =
+          typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
+            ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
+            : 0;
+        const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+        const currentRetries = liveSeat ? liveSeat.retries : (slot.seat.retries || 0);
+        const willExcuseImmediately =
+          !this._isRetryableError(err) ||
+          currentRetries >= this.config.maxRetriesPerSeat ||
+          remainingBudget <= 0 ||
+          remainingBudget < minViable;
+        if (willExcuseImmediately) {
+          unrecoverableVoteFaults += 1;
+          if (
+            !voteWaveController.signal.aborted &&
+            activeCountAtVoteWaveStart - unrecoverableVoteFaults < this.state.minQuorum
+          ) {
+            voteWaveController.abort(new Error('Active seats dropped below minimum quorum'));
+          }
+        }
       }
     });
 
@@ -1507,14 +1876,34 @@ export class CouncilEngine {
           break;
         }
 
+        const { controller: voteRetryController, signal: voteRetrySignal } = this._createWaveController();
+        const activeCountAtVoteRetryStart = activeSeats(this.state).length;
+        let unrecoverableVoteRetryFaults = 0;
+
         await mapConcurrent(retryBatch, voteConcurrencyLimit, async (slot) => {
-          if (this.aborted || this.isCompleted() || slot.excused) {
+          if (
+            this.aborted ||
+            this.signal?.aborted ||
+            voteRetrySignal.aborted ||
+            this.isCompleted() ||
+            slot.excused
+          ) {
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
             return;
           }
 
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
           const retryT0 = Date.now();
           try {
+            const voteRetryContext = {
+              tools: slot.currentSeatConfig.tools,
+              signal: voteRetrySignal,
+              ...(slot.currentSeatConfig.reasoningEffort
+                ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                : {})
+            };
             let voteResult;
             if (typeof slot.seatHarness.executeSeatVote === 'function') {
               voteResult = await slot.seatHarness.executeSeatVote({
@@ -1526,7 +1915,9 @@ export class CouncilEngine {
                 state: this.state,
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry
+                telemetry: this.telemetry,
+                signal: voteRetrySignal,
+                context: voteRetryContext
               });
             } else if (typeof slot.seatHarness.executeSeat === 'function') {
               voteResult = await slot.seatHarness.executeSeat({
@@ -1538,14 +1929,38 @@ export class CouncilEngine {
                 state: this.state,
                 timeoutMs: slot.turnTimeoutMs,
                 tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry
+                telemetry: this.telemetry,
+                signal: voteRetrySignal,
+                context: voteRetryContext
               });
+            }
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
+            if (this.aborted || voteRetrySignal.aborted) {
+              slot.aborted = true;
+              slot.skipped = true;
+              slot.voteResult = null;
+              slot.error = null;
+              slot.needsValidation = false;
+              return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
             slot.voteResult = voteResult;
             slot.error = null;
             slot.needsValidation = true;
           } catch (retryErr) {
+            if (this.signal?.aborted) {
+              this.aborted = true;
+            }
+            if (this._isAbortError(retryErr, voteRetrySignal)) {
+              slot.aborted = true;
+              slot.skipped = true;
+              slot.voteResult = null;
+              slot.error = null;
+              slot.needsValidation = false;
+              return;
+            }
             const retryDuration =
               typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
                 ? retryErr.timeoutMs
@@ -1556,6 +1971,27 @@ export class CouncilEngine {
             slot.voteResult = null;
             slot.error = retryErr;
             slot.needsValidation = false;
+
+            const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+            const minViable =
+              typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
+                ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
+                : 0;
+            const currentSeatRetries = slot.currentSeatConfig.retries || 0;
+            const willExcuseOnVoteRetry =
+              !this._isRetryableError(retryErr) ||
+              currentSeatRetries >= this.config.maxRetriesPerSeat ||
+              remainingBudget <= 0 ||
+              remainingBudget < minViable;
+            if (willExcuseOnVoteRetry) {
+              unrecoverableVoteRetryFaults += 1;
+              if (
+                !voteRetryController.signal.aborted &&
+                activeCountAtVoteRetryStart - unrecoverableVoteRetryFaults < this.state.minQuorum
+              ) {
+                voteRetryController.abort(new Error('Active seats dropped below minimum quorum'));
+              }
+            }
           }
         });
 
@@ -1597,12 +2033,16 @@ export class CouncilEngine {
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'accepted');
           this.telemetry.emitVoteCast(slot.seat.id, 'accept');
         } else if (slot.voteResult.vote === 'object') {
+          const resolvedProofId =
+            slot.voteResult.proofId !== undefined
+              ? slot.voteResult.proofId
+              : slot.voteResult.backingProof;
           this._step({
             type: 'CAST_VOTE',
             seatId: slot.seat.id,
             vote: 'object',
             reason: slot.voteResult.reason,
-            proofId: slot.voteResult.proofId
+            proofId: resolvedProofId
           });
           if (!this.state.lastTransition?.ok) {
             slot.error = new InvalidResponseError(
@@ -1619,7 +2059,7 @@ export class CouncilEngine {
           }
           slot.committed = true;
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'objected');
-          this.telemetry.emitVoteCast(slot.seat.id, 'object', slot.voteResult.reason, slot.voteResult.proofId);
+          this.telemetry.emitVoteCast(slot.seat.id, 'object', slot.voteResult.reason, resolvedProofId);
           const latestObj = this.state.objections[this.state.objections.length - 1];
           this.telemetry.emitObjectionRaised(latestObj);
         }
@@ -1633,7 +2073,7 @@ export class CouncilEngine {
     }
 
     // 5. EVALUATE_ROUND
-    this._step({ type: 'EVALUATE_ROUND' });
+    this._step({ type: 'EVALUATE_ROUND' }, true);
     if (this.state.verdict) {
       this.telemetry.emitVerdict(this.state.verdict);
     }

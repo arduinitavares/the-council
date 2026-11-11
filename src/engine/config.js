@@ -67,6 +67,16 @@ export function validateConfig(config) {
     errors.push('maxRetriesPerSeat must be an integer >= 0.');
   }
 
+  if (config.maxRetriesPerJudge !== undefined) {
+    if (
+      typeof config.maxRetriesPerJudge !== 'number' ||
+      !Number.isInteger(config.maxRetriesPerJudge) ||
+      config.maxRetriesPerJudge < 0
+    ) {
+      errors.push('maxRetriesPerJudge must be an integer >= 0.');
+    }
+  }
+
   if (config.timeoutMs !== undefined) {
     if (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs)) {
       errors.push('timeoutMs must be a positive number.');
@@ -361,6 +371,15 @@ export function validateConfig(config) {
     }
     if (config.judge.cwd !== undefined && (typeof config.judge.cwd !== 'string' || !config.judge.cwd.trim())) {
       errors.push('Judge requires "cwd" to be a non-empty string.');
+    }
+    if (config.judge.maxRetries !== undefined) {
+      if (
+        typeof config.judge.maxRetries !== 'number' ||
+        !Number.isInteger(config.judge.maxRetries) ||
+        config.judge.maxRetries < 0
+      ) {
+        errors.push('Judge "maxRetries" must be an integer >= 0.');
+      }
     }
   }
 
@@ -764,12 +783,34 @@ export function resolveConfig(userConfig = {}) {
           ? userConfig.seatBudget
           : (userConfig['seat-budget'] !== undefined ? userConfig['seat-budget'] : undefined));
 
+  const hasExplicitGlobalVotingTimeout =
+    typeof userConfig._explicitVotingTimeout === 'boolean'
+      ? userConfig._explicitVotingTimeout
+      : (userConfig.votingTimeoutMs !== undefined ||
+          userConfig.votingTimeout !== undefined ||
+          userConfig['voting-timeout'] !== undefined ||
+          presetDefinition?.votingTimeoutMs !== undefined ||
+          presetDefinition?.votingTimeout !== undefined);
+
   const resolvedVotingTimeoutMs =
     userConfig.votingTimeoutMs !== undefined
       ? userConfig.votingTimeoutMs
       : (userConfig.votingTimeout !== undefined
           ? userConfig.votingTimeout
-          : (userConfig['voting-timeout'] !== undefined ? userConfig['voting-timeout'] : 90000));
+          : (userConfig['voting-timeout'] !== undefined
+              ? userConfig['voting-timeout']
+              : (presetDefinition?.votingTimeoutMs !== undefined
+                  ? presetDefinition.votingTimeoutMs
+                  : (presetDefinition?.votingTimeout !== undefined ? presetDefinition.votingTimeout : 90000))));
+
+  const resolvedMaxRetriesPerJudge =
+    userConfig.maxRetriesPerJudge !== undefined
+      ? userConfig.maxRetriesPerJudge
+      : (userConfig.judge?.maxRetries !== undefined
+          ? userConfig.judge.maxRetries
+          : (presetDefinition?.maxRetriesPerJudge !== undefined
+              ? presetDefinition.maxRetriesPerJudge
+              : presetDefinition?.judge?.maxRetries));
 
   const resolvedPreserveVotingEffort =
     typeof userConfig.preserveVotingEffort === 'boolean' ? userConfig.preserveVotingEffort : false;
@@ -898,6 +939,7 @@ export function resolveConfig(userConfig = {}) {
     ...(resolvedRebuttalTools !== undefined ? { rebuttalTools: resolvedRebuttalTools } : {}),
     rebuttalReasoningEffort: resolvedRebuttalReasoningEffort,
     ...(resolvedRebuttalModel !== undefined ? { rebuttalModel: resolvedRebuttalModel } : {}),
+    ...(resolvedMaxRetriesPerJudge !== undefined ? { maxRetriesPerJudge: resolvedMaxRetriesPerJudge } : {}),
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
     judge: {
       ...defaultJudge,
@@ -1057,18 +1099,34 @@ export function resolveConfig(userConfig = {}) {
     });
   }
   const normalizedSeats = Array.isArray(merged.seats)
-    ? merged.seats.map((s) =>
-        s && typeof s === 'object'
-          ? {
-              ...s,
-              ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {}),
-              ...(typeof s.rebuttalModel === 'string' ? { rebuttalModel: s.rebuttalModel.trim() } : {}),
-              ...(typeof s.rebuttalReasoningEffort === 'string'
-                ? { rebuttalReasoningEffort: s.rebuttalReasoningEffort.toLowerCase() }
-                : {})
-            }
-          : s
-      )
+    ? merged.seats.map((s, idx) => {
+        if (!s || typeof s !== 'object') return s;
+        const rawSeat = rawSeats[idx];
+        const hasExplicitSeatVotingTimeout =
+          typeof rawSeat?._explicitVotingTimeout === 'boolean'
+            ? rawSeat._explicitVotingTimeout
+            : Boolean(
+                rawSeat?.votingTimeoutMs !== undefined ||
+                  rawSeat?.votingTimeout !== undefined ||
+                  rawSeat?.['voting-timeout'] !== undefined ||
+                  hasExplicitGlobalVotingTimeout
+              );
+        const normSeat = {
+          ...s,
+          ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {}),
+          ...(typeof s.rebuttalModel === 'string' ? { rebuttalModel: s.rebuttalModel.trim() } : {}),
+          ...(typeof s.rebuttalReasoningEffort === 'string'
+            ? { rebuttalReasoningEffort: s.rebuttalReasoningEffort.toLowerCase() }
+            : {})
+        };
+        Object.defineProperty(normSeat, '_explicitVotingTimeout', {
+          value: hasExplicitSeatVotingTimeout,
+          enumerable: false,
+          configurable: false,
+          writable: false
+        });
+        return normSeat;
+      })
     : merged.seats;
 
   const finalConfig = {
@@ -1084,11 +1142,19 @@ export function resolveConfig(userConfig = {}) {
     evidence: normalizedEvidence,
     ...(normalizedClarifications !== undefined ? { clarifications: normalizedClarifications } : {})
   };
-  Object.defineProperty(finalConfig, '_explicitGlobalSeatBudget', {
-    value: hasExplicitGlobalSeatBudget,
-    enumerable: false,
-    configurable: false,
-    writable: false
+  Object.defineProperties(finalConfig, {
+    _explicitGlobalSeatBudget: {
+      value: hasExplicitGlobalSeatBudget,
+      enumerable: false,
+      configurable: false,
+      writable: false
+    },
+    _explicitVotingTimeout: {
+      value: Boolean(hasExplicitGlobalVotingTimeout),
+      enumerable: false,
+      configurable: false,
+      writable: false
+    }
   });
   return Object.freeze(finalConfig);
 }

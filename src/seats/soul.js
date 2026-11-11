@@ -544,6 +544,9 @@ export function formatJudgePrompt({
   proofs = [],
   evidence = [],
   clarifications = [],
+  previousCandidate = null,
+  openObjections = [],
+  priorAdmittedProofs = [],
   state = null,
   tools,
   cwd
@@ -558,6 +561,7 @@ export function formatJudgePrompt({
     (typeof state?.cwd === 'string' && state.cwd.trim())
   );
   const resolvedTopic = topic || state?.topic || '';
+  const resolvedRound = round || state?.round || 1;
   const resolvedMaxRounds = maxRounds || state?.maxRounds || 3;
   const resolvedEvidence = (evidence && evidence.length > 0)
     ? evidence
@@ -567,6 +571,70 @@ export function formatJudgePrompt({
     : (state?.clarifications || []);
 
   const groundingSection = formatGroundingSection(resolvedEvidence, resolvedClarifications);
+
+  const currentProofIds = new Set((proofs || []).map((p) => p?.id).filter(Boolean));
+  const resolvedPrevCandidate = previousCandidate || state?.candidate || null;
+  const resolvedOpenObjections = (Array.isArray(openObjections) && openObjections.length > 0)
+    ? openObjections
+    : (state?.objections || []).filter(
+        (o) => o && (o.status === 'open' || o.status === 'preserved_excused')
+      );
+  const resolvedPriorAdmittedProofs = (Array.isArray(priorAdmittedProofs) && priorAdmittedProofs.length > 0)
+    ? priorAdmittedProofs
+    : (state?.proofs || []).filter(
+        (p) =>
+          p &&
+          !currentProofIds.has(p.id) &&
+          (typeof p.round === 'number' ? p.round < resolvedRound : true) &&
+          (p.status === 'admitted' || p.status === 'partially_admitted')
+      );
+
+  let priorContextSection = '';
+  if (resolvedPrevCandidate) {
+    const prevCandRound = resolvedPrevCandidate.round ?? Math.max(1, resolvedRound - 1);
+    const prevClauses = (resolvedPrevCandidate.clauses || [])
+      .map((c, idx) => {
+        const cid = c.id || `C${idx + 1}`;
+        return `- [${cid}] [${c.context || 'General'}]: ${c.conclusion || ''} (cites: ${(c.citedProofIds || []).join(', ')})`;
+      })
+      .join('\n');
+    priorContextSection +=
+      `\nPrevious Candidate (Round ${prevCandRound}):\n` +
+      `Summary: ${resolvedPrevCandidate.summary || ''}\n` +
+      (prevClauses ? `${prevClauses}\n` : '');
+  }
+
+  if (resolvedOpenObjections.length > 0) {
+    const objLines = resolvedOpenObjections
+      .map((o) => {
+        const lockTag = o.status === 'preserved_excused' ? ' [LOCKED / preserved_excused — Excused Seat]' : '';
+        return `- [${o.id}]${lockTag} (Round ${o.round || 1}, Seat "${o.seatId}", backed by Proof ${o.proofId}): ${o.reason}`;
+      })
+      .join('\n');
+    priorContextSection += `\nUnresolved Open Objections:\n${objLines}\n`;
+  }
+
+  if (resolvedPriorAdmittedProofs.length > 0) {
+    const priorProofLines = resolvedPriorAdmittedProofs
+      .map((p, idx) => {
+        const pid = p.id || `P${idx + 1}`;
+        const kind = p.kind || 'check';
+        const scope = p.scope || 'general';
+        const stmt =
+          p.status === 'partially_admitted' &&
+          typeof p.judgeAdmittedStatement === 'string' &&
+          p.judgeAdmittedStatement.trim()
+            ? p.judgeAdmittedStatement.trim()
+            : (p.statement || '');
+        const src = p.source || 'unspecified';
+        const statusTag = p.status === 'partially_admitted' ? ' [PARTIALLY ADMITTED]' : ' [ADMITTED]';
+        return `- [${pid}]${statusTag} (Round ${p.round || 1}, Seat "${p.seatId || 'seat'}", ${kind}) [${scope}]: ${stmt} (source: ${src})`;
+      })
+      .join('\n');
+    priorContextSection +=
+      `\nPrior-Round Admitted Proofs (Already Admitted — Do NOT Re-Audit or Reject in "proofDecisions"; Valid for Citation in "clauses[].citedProofIds"):\n` +
+      `${priorProofLines}\n`;
+  }
 
   const proofList = (proofs && proofs.length > 0)
     ? proofs.map((p, idx) => {
@@ -579,9 +647,19 @@ export function formatJudgePrompt({
       }).join('\n')
     : 'No proofs submitted for auditing.';
 
+  const hasPriorRoundContext = Boolean(
+    resolvedPrevCandidate || resolvedOpenObjections.length > 0 || resolvedPriorAdmittedProofs.length > 0
+  );
+
   const judgeDirectives = [
-    '1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" (or "partially_admitted" / "admitted_with_caveat") with a concrete "note". If "partially_admitted", provide "admittedStatement" (the verified citable core statement) and "note" stating the caveat. When a seat relies on a supplied [E#] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted, excising or qualifying the imprecise phrase via admittedStatement / note, rather than binary rejected if the proof\'s core argument remains valid.',
-    '2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]). Proofs with status "partially_admitted" are valid to cite for their verified core statement.',
+    '1. Audit each submitted proof: record status in "proofDecisions" as "admitted" or "rejected" (or "partially_admitted" / "admitted_with_caveat") with a concrete "note". If "partially_admitted", provide "admittedStatement" (the verified citable core statement) and "note" stating the caveat. When a seat relies on a supplied [E#] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted, excising or qualifying the imprecise phrase via admittedStatement / note, rather than binary rejected if the proof\'s core argument remains valid.' +
+      (hasPriorRoundContext
+        ? ' Emit "proofDecisions" ONLY for current-round Submitted Proofs for Auditing; do not re-audit or reject prior-round admitted proofs (their settled admission status cannot be re-audited).'
+        : ''),
+    '2. Synthesize context-partitioned consensus clauses: every clause in "clauses" MUST cite at least one admitted Proof ID (e.g. ["P1"]). Proofs with status "partially_admitted" are valid to cite for their verified core statement.' +
+      (hasPriorRoundContext
+        ? ' Refine the Previous Candidate to address all Unresolved Open Objections while preserving settled clauses, citing both Prior-Round Admitted Proof IDs and newly admitted current-round Proof IDs in "clauses[].citedProofIds".'
+        : ''),
     '3. Bare opinions or conclusions ungrounded in admitted proofs are strictly forbidden.'
   ];
 
@@ -609,7 +687,7 @@ export function formatJudgePrompt({
 Topic: "${resolvedTopic}"
 Judge: ${judge?.id || 'judge'} (${judge?.model || 'model'})
 Soul: ${judgeSoul.name || 'Impartial Proof Auditor'}: ${judgeSoul.lens || ''}
-${groundingSection}
+${groundingSection}${priorContextSection}
 Submitted Proofs for Auditing:
 ${proofList}
 

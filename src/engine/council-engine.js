@@ -558,6 +558,7 @@ export class CouncilEngine {
 
     const validateDelibWave = () => {
       for (let i = 0; i < delibSlots.length; i++) {
+        if (this.aborted || this.isCompleted()) break;
         const slot = delibSlots[i];
         if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
         slot.needsValidation = false;
@@ -800,7 +801,7 @@ export class CouncilEngine {
           );
           slot.proofInput = null;
           commitFaulted = true;
-          continue;
+          break;
         }
         slot.committed = true;
         this.telemetry.emitSeatTelemetry(slot.seat.id, 'proof_submitted');
@@ -1017,6 +1018,7 @@ export class CouncilEngine {
 
     const validateVoteWave = () => {
       for (let i = 0; i < voteSlots.length; i++) {
+        if (this.aborted || this.isCompleted()) break;
         const slot = voteSlots[i];
         if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
         slot.needsValidation = false;
@@ -1257,7 +1259,7 @@ export class CouncilEngine {
             );
             slot.voteResult = null;
             commitFaulted = true;
-            continue;
+            break;
           }
           slot.committed = true;
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'accepted');
@@ -1281,7 +1283,7 @@ export class CouncilEngine {
             );
             slot.voteResult = null;
             commitFaulted = true;
-            continue;
+            break;
           }
           slot.committed = true;
           this.telemetry.emitSeatTelemetry(slot.seat.id, 'objected');

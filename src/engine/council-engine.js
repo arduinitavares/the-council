@@ -507,68 +507,143 @@ export class CouncilEngine {
     this.telemetry.emitRoundStart(currentRound, activeSeats(this.state).map((s) => s.id));
 
     // 2. PROOF COLLECTION (Active seats submit proofs concurrently)
+    // 2. PROOF COLLECTION (Active seats submit proofs concurrently across Attempt 0 and retry waves)
     const active = activeSeats(this.state);
     const concurrencyLimit = this.config.maxConcurrentSeats || active.length;
 
-    const turnResults = await mapConcurrent(active, concurrencyLimit, async (seat) => {
-      if (this.aborted || this.isCompleted() || seat.status === 'excused') {
-        return { seat, proofInput: null, error: null, skipped: true, elapsedMs: 0 };
-      }
-
-      this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+    const delibSlots = active.map((seat, index) => {
       const harness = this.harnessResolver(seat.harness);
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
       const mergedSeat = { ...configSeat, ...seat };
       const rawTurnTimeoutMs = mergedSeat.timeoutMs || this.config.timeoutMs;
-      const baseTurnTimeoutMs =
+      const initialBaseTimeoutMs =
         rawTurnTimeoutMs ||
         (typeof harness.resolveTimeoutMs === 'function' ? harness.resolveTimeoutMs(mergedSeat.model) : 240000);
+      const retryBaseTimeoutMs =
+        rawTurnTimeoutMs ||
+        (typeof harness.resolveTimeoutMs === 'function' ? harness.resolveTimeoutMs(mergedSeat.model) : 60000);
       const seatBudgetMs =
         mergedSeat.totalSeatBudgetMs ||
         mergedSeat.seatBudget ||
         this.config.totalSeatBudgetMs ||
         this.config.seatBudget;
-      const turnTimeoutMs =
+      const totalSeatBudgetMs = seatBudgetMs || retryBaseTimeoutMs * 2;
+      const initialTurnTimeoutMs =
         typeof rawTurnTimeoutMs === 'number' && typeof seatBudgetMs === 'number'
           ? Math.min(rawTurnTimeoutMs, seatBudgetMs)
           : (typeof rawTurnTimeoutMs === 'number'
               ? rawTurnTimeoutMs
-              : (typeof seatBudgetMs === 'number' && seatBudgetMs < baseTurnTimeoutMs
+              : (typeof seatBudgetMs === 'number' && seatBudgetMs < initialBaseTimeoutMs
                   ? seatBudgetMs
                   : undefined));
 
+      return {
+        index,
+        seat,
+        harness,
+        mergedSeat,
+        currentSeatConfig: { ...mergedSeat },
+        baseTimeoutMs: retryBaseTimeoutMs,
+        totalSeatBudgetMs,
+        turnTimeoutMs: initialTurnTimeoutMs,
+        seatElapsedMs: 0,
+        proofInput: null,
+        error: null,
+        skipped: false,
+        excused: seat.status === 'excused',
+        committed: false,
+        needsValidation: false
+      };
+    });
+
+    const validateDelibWave = () => {
+      for (let i = 0; i < delibSlots.length; i++) {
+        if (this.aborted || this.isCompleted()) break;
+        const slot = delibSlots[i];
+        if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
+        slot.needsValidation = false;
+
+        const validation = validateProof(slot.proofInput);
+        if (!validation.valid) {
+          slot.error = new InvalidResponseError(
+            `Invalid proof from seat ${slot.seat.id}: ${validation.errors.join('; ')}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model,
+              validationErrors: validation.errors
+            }
+          );
+          slot.proofInput = null;
+          continue;
+        }
+
+        const submitEvent = {
+          type: 'SUBMIT_PROOF',
+          id: slot.proofInput.id,
+          seatId: slot.seat.id,
+          scope: slot.proofInput.scope,
+          kind: slot.proofInput.kind,
+          source: slot.proofInput.source,
+          statement: slot.proofInput.statement
+        };
+        const dryNext = transitionCouncil(this.state, submitEvent);
+        if (!dryNext.lastTransition?.ok) {
+          this._step(submitEvent);
+          slot.error = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${slot.seat.id}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
+            }
+          );
+          slot.proofInput = null;
+        }
+      }
+    };
+
+    await mapConcurrent(delibSlots, concurrencyLimit, async (slot) => {
+      if (this.aborted || this.isCompleted() || slot.excused || slot.seat.status === 'excused') {
+        slot.skipped = true;
+        return;
+      }
+
+      this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
       try {
         let proofInput;
-        if (typeof harness.executeSeatProof === 'function') {
-          proofInput = await harness.executeSeatProof({
-            seat,
-            soul: seat.soul,
+        if (typeof slot.harness.executeSeatProof === 'function') {
+          proofInput = await slot.harness.executeSeatProof({
+            seat: slot.seat,
+            soul: slot.seat.soul,
             round: currentRound,
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: turnTimeoutMs,
-            tools: seat.tools,
+            timeoutMs: slot.turnTimeoutMs,
+            tools: slot.seat.tools,
             telemetry: this.telemetry
           });
-        } else if (typeof harness.executeSeat === 'function') {
-          proofInput = await harness.executeSeat({
-            seat,
-            soul: seat.soul,
+        } else if (typeof slot.harness.executeSeat === 'function') {
+          proofInput = await slot.harness.executeSeat({
+            seat: slot.seat,
+            soul: slot.seat.soul,
             round: currentRound,
             phase: 'DELIBERATION',
             state: this.state,
             topic: this.state.topic,
-            timeoutMs: turnTimeoutMs,
-            tools: seat.tools,
+            timeoutMs: slot.turnTimeoutMs,
+            tools: slot.seat.tools,
             telemetry: this.telemetry
           });
         } else {
-          throw new Error(`Harness for "${seat.harness}" does not implement executeSeatProof or executeSeat`);
+          throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatProof or executeSeat`);
         }
-        const elapsedMs = Date.now() - t0;
-        return { seat, proofInput, error: null, elapsedMs };
+        slot.seatElapsedMs += Date.now() - t0;
+        slot.proofInput = proofInput;
+        slot.error = null;
+        slot.needsValidation = true;
       } catch (err) {
         const elapsedMs =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
@@ -576,88 +651,103 @@ export class CouncilEngine {
             : (typeof err?.trace?.durationMs === 'number' && err.trace.durationMs > 0
                 ? err.trace.durationMs
                 : Date.now() - t0);
-        return { seat, proofInput: null, error: err, elapsedMs };
+        slot.seatElapsedMs += elapsedMs;
+        slot.proofInput = null;
+        slot.error = err;
+        slot.needsValidation = false;
       }
     });
 
-    // Apply proof collection results in strict roster order
-    for (let i = 0; i < active.length; i++) {
-      if (this.aborted || this.isCompleted()) break;
-      const seat = active[i];
-      let res = turnResults[i];
-      if (res?.skipped || seat.status === 'excused') continue;
+    if (!this.isCompleted() && !this.aborted) {
+      validateDelibWave();
+    }
 
-      const harness = this.harnessResolver(seat.harness);
-      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
-      const mergedSeat = { ...configSeat, ...seat };
-      const baseTimeoutMs =
-        mergedSeat.timeoutMs ||
-        this.config.timeoutMs ||
-        (typeof harness.resolveTimeoutMs === 'function' ? harness.resolveTimeoutMs(mergedSeat.model) : 60000);
-      const totalSeatBudgetMs =
-        mergedSeat.totalSeatBudgetMs ||
-        mergedSeat.seatBudget ||
-        this.config.totalSeatBudgetMs ||
-        this.config.seatBudget ||
-        baseTimeoutMs * 2;
-
-      let seatElapsedMs = res?.elapsedMs || 0;
-      let currentSeatConfig = { ...mergedSeat };
-
+    const runDelibRetryWaves = async () => {
       while (!this.isCompleted() && !this.aborted) {
-        if (res.error) {
-          const remainingBudget = totalSeatBudgetMs - seatElapsedMs;
-          const isTimeout =
-            this._classifyFaultStatus(res.error) === 'fault_timeout' ||
-            this._classifyErrorClass(res.error) === 'TimeoutError';
+        const faultedSlots = delibSlots.filter((s) => s.error && !s.excused && !s.skipped && !s.committed);
+        if (faultedSlots.length === 0) break;
 
-          const faultRes = this.handleSeatFault(seat.id, res.error, {
+        const retryBatch = [];
+        for (const slot of faultedSlots) {
+          if (this.isCompleted() || this.aborted) break;
+          const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+          if (!liveSeat || liveSeat.status === 'excused') {
+            slot.excused = true;
+            slot.error = null;
+            continue;
+          }
+
+          const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+          const isTimeout =
+            this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
+            this._classifyErrorClass(slot.error) === 'TimeoutError';
+
+          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, {
             remainingBudget,
-            seatElapsedMs,
-            totalSeatBudgetMs
+            seatElapsedMs: slot.seatElapsedMs,
+            totalSeatBudgetMs: slot.totalSeatBudgetMs
           });
-          if (faultRes.action === 'excused' || this.isCompleted()) {
+          slot.error = null;
+
+          if (this.isCompleted() || this.aborted) {
             break;
           }
-
-          const retryTimeoutMs = Math.min(baseTimeoutMs, 90000, remainingBudget);
-          if (isTimeout) {
-            currentSeatConfig = { ...currentSeatConfig, tools: 'none' };
+          if (faultRes.action === 'excused') {
+            slot.excused = true;
+            continue;
           }
 
-          // Retry the faulted seat
-          this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+          slot.turnTimeoutMs = Math.min(slot.baseTimeoutMs, 90000, Math.max(1, remainingBudget));
+          slot.currentSeatConfig = {
+            ...slot.currentSeatConfig,
+            retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
+            ...(isTimeout ? { tools: 'none' } : {})
+          };
+          retryBatch.push(slot);
+        }
+
+        if (this.isCompleted() || this.aborted || retryBatch.length === 0) {
+          break;
+        }
+
+        await mapConcurrent(retryBatch, concurrencyLimit, async (slot) => {
+          if (this.aborted || this.isCompleted() || slot.excused) {
+            return;
+          }
+
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
           const retryT0 = Date.now();
           try {
             let proofInput;
-            if (typeof harness.executeSeatProof === 'function') {
-              proofInput = await harness.executeSeatProof({
-                seat: currentSeatConfig,
-                soul: currentSeatConfig.soul,
+            if (typeof slot.harness.executeSeatProof === 'function') {
+              proofInput = await slot.harness.executeSeatProof({
+                seat: slot.currentSeatConfig,
+                soul: slot.currentSeatConfig.soul,
                 round: currentRound,
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: retryTimeoutMs,
-                tools: currentSeatConfig.tools,
+                timeoutMs: slot.turnTimeoutMs,
+                tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
-            } else if (typeof harness.executeSeat === 'function') {
-              proofInput = await harness.executeSeat({
-                seat: currentSeatConfig,
-                soul: currentSeatConfig.soul,
+            } else if (typeof slot.harness.executeSeat === 'function') {
+              proofInput = await slot.harness.executeSeat({
+                seat: slot.currentSeatConfig,
+                soul: slot.currentSeatConfig.soul,
                 round: currentRound,
                 phase: 'DELIBERATION',
                 state: this.state,
                 topic: this.state.topic,
-                timeoutMs: retryTimeoutMs,
-                tools: currentSeatConfig.tools,
+                timeoutMs: slot.turnTimeoutMs,
+                tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             }
-            const retryDuration = Date.now() - retryT0;
-            seatElapsedMs += retryDuration;
-            res = { seat: currentSeatConfig, proofInput, error: null, elapsedMs: seatElapsedMs };
+            slot.seatElapsedMs += Date.now() - retryT0;
+            slot.proofInput = proofInput;
+            slot.error = null;
+            slot.needsValidation = true;
           } catch (retryErr) {
             const retryDuration =
               typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
@@ -665,57 +755,64 @@ export class CouncilEngine {
                 : (typeof retryErr?.trace?.durationMs === 'number' && retryErr.trace.durationMs > 0
                     ? retryErr.trace.durationMs
                     : Date.now() - retryT0);
-            seatElapsedMs += retryDuration;
-            res = { seat: currentSeatConfig, proofInput: null, error: retryErr, elapsedMs: seatElapsedMs };
-            continue;
+            slot.seatElapsedMs += retryDuration;
+            slot.proofInput = null;
+            slot.error = retryErr;
+            slot.needsValidation = false;
           }
-        }
+        });
 
-        const validation = validateProof(res.proofInput);
-        if (!validation.valid) {
-          const valErr = new InvalidResponseError(
-            `Invalid proof from seat ${seat.id}: ${validation.errors.join('; ')}`,
-            {
-              harness: seat.harness,
-              seatId: seat.id,
-              model: seat.model,
-              validationErrors: validation.errors
-            }
-          );
-          res = { seat, proofInput: null, error: valErr };
-          continue;
+        if (!this.isCompleted() && !this.aborted) {
+          validateDelibWave();
         }
+      }
+    };
+
+    // Resolve retry waves, then commit validated SUBMIT_PROOF transitions in strict roster order
+    while (!this.isCompleted() && !this.aborted) {
+      await runDelibRetryWaves();
+      if (this.isCompleted() || this.aborted) break;
+
+      let commitFaulted = false;
+      for (let i = 0; i < delibSlots.length; i++) {
+        if (this.isCompleted() || this.aborted) break;
+        const slot = delibSlots[i];
+        if (slot.skipped || slot.excused || slot.committed || !slot.proofInput) continue;
+        const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+        if (!liveSeat || liveSeat.status === 'excused') continue;
 
         this._step({
           type: 'SUBMIT_PROOF',
-          id: res.proofInput.id,
-          seatId: seat.id,
-          scope: res.proofInput.scope,
-          kind: res.proofInput.kind,
-          source: res.proofInput.source,
-          statement: res.proofInput.statement
+          id: slot.proofInput.id,
+          seatId: slot.seat.id,
+          scope: slot.proofInput.scope,
+          kind: slot.proofInput.kind,
+          source: slot.proofInput.source,
+          statement: slot.proofInput.statement
         });
         if (!this.state.lastTransition?.ok) {
-          const transErr = new InvalidResponseError(
-            this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${seat.id}`,
+          slot.error = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${slot.seat.id}`,
             {
-              harness: seat.harness,
-              seatId: seat.id,
-              model: seat.model
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
             }
           );
-          res = { seat, proofInput: null, error: transErr };
-          continue;
+          slot.proofInput = null;
+          commitFaulted = true;
+          break;
         }
-
-        this.telemetry.emitSeatTelemetry(seat.id, 'proof_submitted');
+        slot.committed = true;
+        this.telemetry.emitSeatTelemetry(slot.seat.id, 'proof_submitted');
         const latestProof = this.state.proofs[this.state.proofs.length - 1];
         this.telemetry.emitProofSubmitted(latestProof);
-        break;
       }
+
+      if (!commitFaulted) break;
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 
@@ -726,6 +823,22 @@ export class CouncilEngine {
     const judgeHarness = this.harnessResolver(judge.harness);
     const configJudge = this.config.judge || {};
     const mergedJudge = { ...configJudge, ...judge };
+    const hasExplicitJudgeBudget =
+      typeof configJudge._explicitJudgeBudget === 'boolean'
+        ? configJudge._explicitJudgeBudget
+        : Boolean(
+            configJudge.totalSeatBudgetMs !== undefined ||
+              configJudge.seatBudget !== undefined ||
+              configJudge['seat-budget'] !== undefined ||
+              judge.totalSeatBudgetMs !== undefined ||
+              judge.seatBudget !== undefined
+          );
+    const hasExplicitJudgeTimeout =
+      typeof configJudge._explicitJudgeTimeout === 'boolean'
+        ? configJudge._explicitJudgeTimeout
+        : Boolean(configJudge.timeoutMs !== undefined || configJudge.timeout !== undefined);
+    const explicitJudgeTimeoutMs =
+      configJudge.timeoutMs ?? configJudge.timeout ?? (hasExplicitJudgeTimeout ? judge.timeoutMs : undefined);
     const rawJudgeTimeoutMs = mergedJudge.timeoutMs || this.config.timeoutMs;
     const baseJudgeTimeoutMs =
       rawJudgeTimeoutMs ||
@@ -737,9 +850,11 @@ export class CouncilEngine {
             this.config.totalSeatBudgetMs &&
               (!this.config.timeoutMs || this.config.totalSeatBudgetMs !== this.config.timeoutMs * 2)
           );
+    const explicitJudgeBudgetVal =
+      mergedJudge.totalSeatBudgetMs ?? mergedJudge.seatBudget ?? configJudge['seat-budget'];
     const judgeBudgetMs =
-      mergedJudge.totalSeatBudgetMs ||
-      mergedJudge.seatBudget ||
+      (hasExplicitJudgeBudget && typeof explicitJudgeBudgetVal === 'number' ? explicitJudgeBudgetVal : undefined) ||
+      (hasExplicitJudgeTimeout && typeof explicitJudgeTimeoutMs === 'number' ? explicitJudgeTimeoutMs * 2 : undefined) ||
       (explicitGlobalSeatBudget ? this.config.totalSeatBudgetMs : undefined) ||
       (rawJudgeTimeoutMs ? rawJudgeTimeoutMs * 2 : (this.config.totalSeatBudgetMs || 480000));
     const minViableJudgeBudgetMs = Math.min(5000, Math.floor(judgeBudgetMs * 0.1));
@@ -787,6 +902,10 @@ export class CouncilEngine {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
         }
 
+        if (this.aborted || this.isCompleted()) {
+          break;
+        }
+
         this._step({
           type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
           summary: synthesisResult ? synthesisResult.summary : undefined,
@@ -805,6 +924,9 @@ export class CouncilEngine {
         judgeElapsedMs += Date.now() - judgeT0;
         judgeExecuted = true;
       } catch (err) {
+        if (this.aborted || this.isCompleted()) {
+          break;
+        }
         const attemptDuration =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
             ? err.timeoutMs
@@ -851,22 +973,17 @@ export class CouncilEngine {
       }
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 
     this.telemetry.emitCandidateSynthesized(this.state.candidate);
 
-    // 4. VOTING (Active seats accept or object concurrently)
+    // 4. VOTING (Active seats accept or object concurrently across Attempt 0 and retry waves)
     const voters = activeSeats(this.state);
     const voteConcurrencyLimit = this.config.maxConcurrentSeats || voters.length;
 
-    const voteResults = await mapConcurrent(voters, voteConcurrencyLimit, async (seat) => {
-      if (this.aborted || this.isCompleted() || seat.status === 'excused') {
-        return { seat, voteResult: null, error: null, skipped: true, elapsedMs: 0 };
-      }
-
-      this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+    const voteSlots = voters.map((seat, index) => {
       const seatHarness = this.harnessResolver(seat.harness);
       const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
       const mergedSeat = { ...configSeat, ...seat };
@@ -877,48 +994,123 @@ export class CouncilEngine {
         this.config.totalSeatBudgetMs ||
         this.config.seatBudget ||
         votingSeat.votingTimeoutMs * 2;
-      const voteTimeoutMs = Math.min(votingSeat.votingTimeoutMs, totalSeatBudgetMs);
+      const initialVoteTimeoutMs = Math.min(votingSeat.votingTimeoutMs, totalSeatBudgetMs);
       const effectiveVotingSeat = {
         ...seat,
         model: votingSeat.model,
-        tools: votingSeat.tools,
-        votingTools: votingSeat.tools,
-        votingTimeoutMs: voteTimeoutMs,
+        tools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
+        votingTools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
+        votingTimeoutMs: initialVoteTimeoutMs,
         ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
       };
 
+      return {
+        index,
+        seat,
+        seatHarness,
+        votingSeat,
+        currentSeatConfig: effectiveVotingSeat,
+        baseVoteTimeoutMs: votingSeat.votingTimeoutMs,
+        totalSeatBudgetMs,
+        turnTimeoutMs: initialVoteTimeoutMs,
+        seatElapsedMs: 0,
+        voteResult: null,
+        error: null,
+        skipped: false,
+        excused: seat.status === 'excused',
+        committed: false,
+        needsValidation: false
+      };
+    });
+
+    const validateVoteWave = () => {
+      for (let i = 0; i < voteSlots.length; i++) {
+        if (this.aborted || this.isCompleted()) break;
+        const slot = voteSlots[i];
+        if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
+        slot.needsValidation = false;
+
+        const voteOutcome = slot.voteResult?.vote;
+        if (voteOutcome !== 'accept' && voteOutcome !== 'object') {
+          slot.error = new InvalidResponseError(
+            `Unknown vote outcome "${voteOutcome}" from seat ${slot.seat.id}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
+            }
+          );
+          slot.voteResult = null;
+          continue;
+        }
+
+        const castEvent =
+          voteOutcome === 'accept'
+            ? { type: 'CAST_VOTE', seatId: slot.seat.id, vote: 'accept' }
+            : {
+                type: 'CAST_VOTE',
+                seatId: slot.seat.id,
+                vote: 'object',
+                reason: slot.voteResult.reason,
+                proofId: slot.voteResult.proofId
+              };
+        const dryNext = transitionCouncil(this.state, castEvent);
+        if (!dryNext.lastTransition?.ok) {
+          this._step(castEvent);
+          slot.error = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
+            }
+          );
+          slot.voteResult = null;
+        }
+      }
+    };
+
+    await mapConcurrent(voteSlots, voteConcurrencyLimit, async (slot) => {
+      if (this.aborted || this.isCompleted() || slot.excused || slot.seat.status === 'excused') {
+        slot.skipped = true;
+        return;
+      }
+
+      this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
       try {
         let voteResult;
-        if (typeof seatHarness.executeSeatVote === 'function') {
-          voteResult = await seatHarness.executeSeatVote({
-            seat: effectiveVotingSeat,
-            soul: seat.soul,
+        if (typeof slot.seatHarness.executeSeatVote === 'function') {
+          voteResult = await slot.seatHarness.executeSeatVote({
+            seat: slot.currentSeatConfig,
+            soul: slot.seat.soul,
             candidate: this.state.candidate,
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
-            timeoutMs: voteTimeoutMs,
-            tools: votingSeat.tools,
+            timeoutMs: slot.turnTimeoutMs,
+            tools: slot.currentSeatConfig.tools,
             telemetry: this.telemetry
           });
-        } else if (typeof seatHarness.executeSeat === 'function') {
-          voteResult = await seatHarness.executeSeat({
-            seat: effectiveVotingSeat,
-            soul: seat.soul,
+        } else if (typeof slot.seatHarness.executeSeat === 'function') {
+          voteResult = await slot.seatHarness.executeSeat({
+            seat: slot.currentSeatConfig,
+            soul: slot.seat.soul,
             candidate: this.state.candidate,
             round: currentRound,
             phase: 'VOTING',
             state: this.state,
-            timeoutMs: voteTimeoutMs,
-            tools: votingSeat.tools,
+            timeoutMs: slot.turnTimeoutMs,
+            tools: slot.currentSeatConfig.tools,
             telemetry: this.telemetry
           });
         } else {
-          throw new Error(`Harness for "${seat.harness}" does not implement executeSeatVote or executeSeat`);
+          throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatVote or executeSeat`);
         }
-        const elapsedMs = Date.now() - t0;
-        return { seat: effectiveVotingSeat, voteResult, error: null, elapsedMs };
+        slot.seatElapsedMs += Date.now() - t0;
+        slot.voteResult = voteResult;
+        slot.error = null;
+        slot.needsValidation = true;
       } catch (err) {
         const elapsedMs =
           typeof err?.timeoutMs === 'number' && err.timeoutMs > 0
@@ -926,98 +1118,108 @@ export class CouncilEngine {
             : (typeof err?.trace?.durationMs === 'number' && err.trace.durationMs > 0
                 ? err.trace.durationMs
                 : Date.now() - t0);
-        return { seat: votingSeat, voteResult: null, error: err, elapsedMs };
+        slot.seatElapsedMs += elapsedMs;
+        slot.voteResult = null;
+        slot.error = err;
+        slot.needsValidation = false;
       }
     });
 
-    // Apply voting results in strict roster order
-    for (let i = 0; i < voters.length; i++) {
-      if (this.aborted || this.isCompleted()) break;
-      const seat = voters[i];
-      let res = voteResults[i];
-      if (res?.skipped || seat.status === 'excused') continue;
+    if (!this.isCompleted() && !this.aborted) {
+      validateVoteWave();
+    }
 
-      const seatHarness = this.harnessResolver(seat.harness);
-      const configSeat = (this.config.seats || []).find((s) => s.id === seat.id) || {};
-      const mergedSeat = { ...configSeat, ...seat };
-      const votingSeat = resolveVotingSeatConfig(mergedSeat, this.config);
-      const voteTimeoutMs = votingSeat.votingTimeoutMs;
-      const totalSeatBudgetMs =
-        mergedSeat.totalSeatBudgetMs ||
-        mergedSeat.seatBudget ||
-        this.config.totalSeatBudgetMs ||
-        this.config.seatBudget ||
-        voteTimeoutMs * 2;
-
-      let seatElapsedMs = res?.elapsedMs || 0;
-      let currentSeatConfig = {
-        ...seat,
-        model: votingSeat.model,
-        tools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
-        votingTools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
-        votingTimeoutMs: votingSeat.votingTimeoutMs,
-        ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {})
-      };
-
+    const runVoteRetryWaves = async () => {
       while (!this.isCompleted() && !this.aborted) {
-        if (res.error) {
-          const remainingBudget = totalSeatBudgetMs - seatElapsedMs;
-          const isTimeout =
-            this._classifyFaultStatus(res.error) === 'fault_timeout' ||
-            this._classifyErrorClass(res.error) === 'TimeoutError';
+        const faultedSlots = voteSlots.filter((s) => s.error && !s.excused && !s.skipped && !s.committed);
+        if (faultedSlots.length === 0) break;
 
-          const faultRes = this.handleSeatFault(seat.id, res.error, {
-            remainingBudget,
-            seatElapsedMs,
-            totalSeatBudgetMs
-          });
-          if (faultRes.action === 'excused' || this.isCompleted()) {
-            break;
+        const retryBatch = [];
+        for (const slot of faultedSlots) {
+          if (this.isCompleted() || this.aborted) break;
+          const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+          if (!liveSeat || liveSeat.status === 'excused') {
+            slot.excused = true;
+            slot.error = null;
+            continue;
           }
 
-          const retryTimeoutMs = Math.min(voteTimeoutMs, 90000, remainingBudget);
+          const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
+          const isTimeout =
+            this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
+            this._classifyErrorClass(slot.error) === 'TimeoutError';
+
+          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, {
+            remainingBudget,
+            seatElapsedMs: slot.seatElapsedMs,
+            totalSeatBudgetMs: slot.totalSeatBudgetMs
+          });
+          slot.error = null;
+
+          if (this.isCompleted() || this.aborted) {
+            break;
+          }
+          if (faultRes.action === 'excused') {
+            slot.excused = true;
+            continue;
+          }
+
+          slot.turnTimeoutMs = Math.min(slot.baseVoteTimeoutMs, 90000, Math.max(1, remainingBudget));
           const effectiveRetryTools = isTimeout
             ? 'none'
-            : (currentSeatConfig.tools !== undefined ? currentSeatConfig.tools : 'none');
-          currentSeatConfig = {
-            ...currentSeatConfig,
+            : (slot.currentSeatConfig.tools !== undefined ? slot.currentSeatConfig.tools : 'none');
+          slot.currentSeatConfig = {
+            ...slot.currentSeatConfig,
+            retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
             tools: effectiveRetryTools,
-            votingTools: effectiveRetryTools
+            votingTools: effectiveRetryTools,
+            votingTimeoutMs: slot.turnTimeoutMs
           };
+          retryBatch.push(slot);
+        }
 
-          // Retry the faulted seat
-          this.telemetry.emitSeatTelemetry(seat.id, 'thinking');
+        if (this.isCompleted() || this.aborted || retryBatch.length === 0) {
+          break;
+        }
+
+        await mapConcurrent(retryBatch, voteConcurrencyLimit, async (slot) => {
+          if (this.aborted || this.isCompleted() || slot.excused) {
+            return;
+          }
+
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
           const retryT0 = Date.now();
           try {
             let voteResult;
-            if (typeof seatHarness.executeSeatVote === 'function') {
-              voteResult = await seatHarness.executeSeatVote({
-                seat: currentSeatConfig,
-                soul: seat.soul,
+            if (typeof slot.seatHarness.executeSeatVote === 'function') {
+              voteResult = await slot.seatHarness.executeSeatVote({
+                seat: slot.currentSeatConfig,
+                soul: slot.seat.soul,
                 candidate: this.state.candidate,
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: retryTimeoutMs,
-                tools: currentSeatConfig.tools,
+                timeoutMs: slot.turnTimeoutMs,
+                tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
-            } else if (typeof seatHarness.executeSeat === 'function') {
-              voteResult = await seatHarness.executeSeat({
-                seat: currentSeatConfig,
-                soul: seat.soul,
+            } else if (typeof slot.seatHarness.executeSeat === 'function') {
+              voteResult = await slot.seatHarness.executeSeat({
+                seat: slot.currentSeatConfig,
+                soul: slot.seat.soul,
                 candidate: this.state.candidate,
                 round: currentRound,
                 phase: 'VOTING',
                 state: this.state,
-                timeoutMs: retryTimeoutMs,
-                tools: currentSeatConfig.tools,
+                timeoutMs: slot.turnTimeoutMs,
+                tools: slot.currentSeatConfig.tools,
                 telemetry: this.telemetry
               });
             }
-            const retryDuration = Date.now() - retryT0;
-            seatElapsedMs += retryDuration;
-            res = { seat: currentSeatConfig, voteResult, error: null, elapsedMs: seatElapsedMs };
+            slot.seatElapsedMs += Date.now() - retryT0;
+            slot.voteResult = voteResult;
+            slot.error = null;
+            slot.needsValidation = true;
           } catch (retryErr) {
             const retryDuration =
               typeof retryErr?.timeoutMs === 'number' && retryErr.timeoutMs > 0
@@ -1025,60 +1227,83 @@ export class CouncilEngine {
                 : (typeof retryErr?.trace?.durationMs === 'number' && retryErr.trace.durationMs > 0
                     ? retryErr.trace.durationMs
                     : Date.now() - retryT0);
-            seatElapsedMs += retryDuration;
-            res = { seat: currentSeatConfig, voteResult: null, error: retryErr, elapsedMs: seatElapsedMs };
-            continue;
+            slot.seatElapsedMs += retryDuration;
+            slot.voteResult = null;
+            slot.error = retryErr;
+            slot.needsValidation = false;
           }
-        }
+        });
 
-        if (res.voteResult.vote === 'accept') {
-          this._step({ type: 'CAST_VOTE', seatId: seat.id, vote: 'accept' });
-          if (!this.state.lastTransition.ok) {
-            const transErr = new InvalidResponseError(this.state.lastTransition.message, {
-              harness: seat.harness,
-              seatId: seat.id,
-              model: seat.model
-            });
-            res = { seat, voteResult: null, error: transErr };
-            continue;
+        if (!this.isCompleted() && !this.aborted) {
+          validateVoteWave();
+        }
+      }
+    };
+
+    // Resolve retry waves, then commit validated CAST_VOTE transitions in strict roster order
+    while (!this.isCompleted() && !this.aborted) {
+      await runVoteRetryWaves();
+      if (this.isCompleted() || this.aborted) break;
+
+      let commitFaulted = false;
+      for (let i = 0; i < voteSlots.length; i++) {
+        if (this.isCompleted() || this.aborted) break;
+        const slot = voteSlots[i];
+        if (slot.skipped || slot.excused || slot.committed || !slot.voteResult) continue;
+        const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+        if (!liveSeat || liveSeat.status === 'excused') continue;
+
+        if (slot.voteResult.vote === 'accept') {
+          this._step({ type: 'CAST_VOTE', seatId: slot.seat.id, vote: 'accept' });
+          if (!this.state.lastTransition?.ok) {
+            slot.error = new InvalidResponseError(
+              this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
+              {
+                harness: slot.seat.harness,
+                seatId: slot.seat.id,
+                model: slot.seat.model
+              }
+            );
+            slot.voteResult = null;
+            commitFaulted = true;
+            break;
           }
-          this.telemetry.emitSeatTelemetry(seat.id, 'accepted');
-          this.telemetry.emitVoteCast(seat.id, 'accept');
-        } else if (res.voteResult.vote === 'object') {
+          slot.committed = true;
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'accepted');
+          this.telemetry.emitVoteCast(slot.seat.id, 'accept');
+        } else if (slot.voteResult.vote === 'object') {
           this._step({
             type: 'CAST_VOTE',
-            seatId: seat.id,
+            seatId: slot.seat.id,
             vote: 'object',
-            reason: res.voteResult.reason,
-            proofId: res.voteResult.proofId
+            reason: slot.voteResult.reason,
+            proofId: slot.voteResult.proofId
           });
-          if (!this.state.lastTransition.ok) {
-            const transErr = new InvalidResponseError(this.state.lastTransition.message, {
-              harness: seat.harness,
-              seatId: seat.id,
-              model: seat.model
-            });
-            res = { seat, voteResult: null, error: transErr };
-            continue;
+          if (!this.state.lastTransition?.ok) {
+            slot.error = new InvalidResponseError(
+              this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
+              {
+                harness: slot.seat.harness,
+                seatId: slot.seat.id,
+                model: slot.seat.model
+              }
+            );
+            slot.voteResult = null;
+            commitFaulted = true;
+            break;
           }
-          this.telemetry.emitSeatTelemetry(seat.id, 'objected');
-          this.telemetry.emitVoteCast(seat.id, 'object', res.voteResult.reason, res.voteResult.proofId);
+          slot.committed = true;
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'objected');
+          this.telemetry.emitVoteCast(slot.seat.id, 'object', slot.voteResult.reason, slot.voteResult.proofId);
           const latestObj = this.state.objections[this.state.objections.length - 1];
           this.telemetry.emitObjectionRaised(latestObj);
-        } else {
-          const invErr = new InvalidResponseError(`Unknown vote outcome "${res.voteResult?.vote}" from seat ${seat.id}`, {
-            harness: seat.harness,
-            seatId: seat.id,
-            model: seat.model
-          });
-          res = { seat, voteResult: null, error: invErr };
-          continue;
         }
-        break;
       }
+
+      if (!commitFaulted) break;
     }
 
-    if (this.isCompleted()) {
+    if (this.isCompleted() || this.aborted) {
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 

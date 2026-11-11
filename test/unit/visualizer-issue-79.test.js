@@ -376,6 +376,7 @@ const ALLOWED_RENDERED_TAGS = new Set([
   'span',
   'strong',
   'table',
+  'caption',
   'thead',
   'tbody',
   'tr',
@@ -955,8 +956,9 @@ describe('Issue #79: Visualizer XSS Hardening, Validated runId Loading, and Diff
       getEl('timeline-list').dispatchEvent('click', { target: nestedSpan });
       assert.equal(getEl('heading-topic').textContent, 'Step 1 Topic');
 
-      // Keyboard delegation (Enter and Space) on [data-step-idx="1"]
+      // Native <button type="button"> click delegation on [data-step-idx="1"] (without Spacebar keydown hijacking)
       const row1 = {
+        tagName: 'BUTTON',
         getAttribute: (k) => (k === 'data-step-idx' ? '1' : null),
         dataset: { stepIdx: '1' },
         closest: (sel) => (sel === '[data-step-idx]' ? row1 : null)
@@ -969,7 +971,8 @@ describe('Issue #79: Visualizer XSS Hardening, Validated runId Loading, and Diff
           prevented = true;
         }
       });
-      assert.equal(prevented, true, 'Space key on timeline row must preventDefault');
+      assert.equal(prevented, false, 'Native <button> timeline row must not hijack Spacebar on keydown');
+      getEl('timeline-list').dispatchEvent('click', { target: row1 });
       assert.equal(getEl('heading-topic').textContent, 'Step 2 Topic');
 
       // Jump to Latest button listener restores latest snapshot

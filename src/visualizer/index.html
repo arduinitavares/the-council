@@ -4,18 +4,25 @@
   <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'none';">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
   <title>The Council — Live Deliberation Visualizer</title>
   <style>
     :root {
+      color-scheme: dark;
       --bg: #090e17;
       --surface: #111827;
       --surface-raised: #162235;
+      --bg-elevated: #182438;
       --surface-highlight: #1c2b42;
-      --border: #23334d;
-      --border-subtle: #1a273b;
+      --surface-excused: #101726;
+      --border: #647a99;
+      --border-subtle: #24344d;
+      --scrollbar-track: var(--bg);
+      --scrollbar-thumb: #6980a0;
+      --scrollbar-thumb-hover: #839ab8;
       --text: #f1f5f9;
-      --text-secondary: #94a3b8;
-      --text-muted: #64748b;
+      --text-secondary: #b8c5d6;
+      --text-muted: #8b9bb4;
       --accent: #38bdf8;
       --accent-soft: rgba(56, 189, 248, 0.12);
       --green: #34d399;
@@ -28,28 +35,48 @@
       --purple-soft: rgba(192, 132, 252, 0.12);
       --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
       --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-width: auto;
     }
 
     * { box-sizing: border-box; }
+
+    [hidden] { display: none !important; }
 
     ::selection {
       background: rgba(56, 189, 248, 0.28);
       color: var(--text);
     }
 
-    ::-webkit-scrollbar {
-      width: 7px;
-      height: 7px;
+    .clauses-list,
+    .graph-stage,
+    .timeline-list,
+    #telemetry-leaderboard-body {
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-width: auto;
     }
-    ::-webkit-scrollbar-track {
-      background: var(--bg);
+
+    @media (prefers-contrast: more) {
+      :root {
+        --scrollbar-thumb: #94a3b8;
+      }
     }
-    ::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: #334b70;
+
+    @supports not (scrollbar-color: auto) {
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--scrollbar-track);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb);
+        border-radius: 5px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--scrollbar-thumb-hover);
+      }
     }
 
     body {
@@ -95,9 +122,16 @@
       padding: 0;
       margin: -1px;
       overflow: hidden;
-      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
       white-space: nowrap;
       border: 0;
+    }
+
+    ul[role="list"],
+    ol[role="list"] {
+      list-style: none;
+      margin: 0;
+      padding: 0;
     }
 
     .layout {
@@ -185,6 +219,31 @@
       border: 1px solid rgba(248, 113, 113, 0.4);
     }
 
+    .badge-proof-pending {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .badge-proof-admitted {
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(52, 211, 153, 0.35);
+    }
+    .badge-proof-partially_admitted {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border: 1px solid #d97706;
+    }
+    .badge-proof-rejected {
+      background: var(--red-soft);
+      color: var(--red);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+    }
+    .badge-seat-proof {
+      font-size: 10.5px;
+      padding: 1px 6px;
+    }
+
     .pulse-dot {
       width: 7px;
       height: 7px;
@@ -211,7 +270,20 @@
       gap: 6px;
     }
 
-    /* Buttons */
+    /* Buttons & Interactive Controls */
+    button,
+    select {
+      min-block-size: 24px;
+      min-inline-size: 24px;
+    }
+    @media (pointer: coarse) {
+      button,
+      select {
+        min-block-size: 44px;
+        min-inline-size: 44px;
+      }
+    }
+
     button {
       font-family: var(--font);
       font-size: 12.5px;
@@ -231,10 +303,30 @@
       border-color: var(--accent);
       background: var(--surface-highlight);
     }
-    button.active {
+    button.active,
+    button[aria-pressed="true"] {
       background: var(--accent-soft);
       border-color: var(--accent);
       color: var(--accent);
+    }
+    .btn-compact {
+      font-size: 11px;
+      padding: 4px 10px;
+    }
+
+    .control-select {
+      background: var(--bg-elevated);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      cursor: pointer;
+    }
+    .control-select:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: var(--surface-highlight);
     }
 
     .icon-svg {
@@ -378,22 +470,22 @@
     }
     h2 {
       margin: 0;
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 700;
-      letter-spacing: -0.01em;
+      letter-spacing: 0.03em;
       color: var(--text);
       text-transform: uppercase;
-      font-size: 12px;
-      letter-spacing: 0.03em;
     }
 
     .clauses-list {
+      list-style: none;
+      margin: 0;
+      padding: 0 2px 0 0;
       display: flex;
       flex-direction: column;
       gap: 8px;
       max-height: 280px;
       overflow-y: auto;
-      padding-right: 2px;
     }
 
     .clause-card {
@@ -440,10 +532,12 @@
 
     /* Council Roster Cards */
     .roster-grid {
+      list-style: none;
+      margin: 10px 0 0;
+      padding: 0;
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 12px;
-      margin-top: 10px;
     }
     .participant-card {
       background: var(--surface-raised);
@@ -472,8 +566,12 @@
       background: var(--red-soft);
     }
     .participant-card.status-excused {
-      opacity: 0.55;
+      background: var(--surface-excused);
       border-style: dashed;
+      border-color: var(--border);
+    }
+    .participant-card.status-excused strong {
+      color: var(--text-secondary);
     }
 
     .harness-badge {
@@ -522,34 +620,73 @@
       border-bottom: 1px solid var(--border-subtle);
       padding-bottom: 10px;
     }
+    [role="tab"] {
+      position: relative;
+    }
+    [role="tab"][aria-selected="true"] {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    [role="tab"][aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      inset-inline: 6px;
+      inset-block-end: -1px;
+      border-block-end: 2px solid currentColor;
+      pointer-events: none;
+    }
+    @media (forced-colors: active) {
+      [role="tab"][aria-selected="true"],
+      button[aria-pressed="true"],
+      .timeline-row[aria-current="step"] {
+        border-color: Highlight;
+        color: Highlight;
+      }
+      [role="tab"][aria-selected="true"]::after {
+        border-block-end-color: Highlight;
+      }
+    }
 
     /* Timeline Activity Stream */
     .timeline-list {
+      list-style: none;
+      margin: 10px 0 0;
+      padding: 0 4px 0 0;
       display: flex;
       flex-direction: column;
       gap: 6px;
       max-height: 220px;
       overflow-y: auto;
-      margin-top: 10px;
-      padding-right: 4px;
+    }
+    .timeline-list > li {
+      margin: 0;
+      padding: 0;
     }
     .timeline-row {
+      width: 100%;
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 8px 12px;
       background: var(--surface-raised);
-      border: 1px solid var(--border-subtle);
+      border: 1px solid var(--border);
       border-radius: 6px;
       font-size: 12px;
+      font-weight: 500;
+      text-align: left;
       cursor: pointer;
-      transition: background-color 120ms ease;
+      transition: background-color 120ms ease, border-color 120ms ease;
     }
-    .timeline-row:hover {
+    .timeline-row-static {
+      cursor: default;
+    }
+    .timeline-row:hover:not(.timeline-row-static) {
       background: var(--surface-highlight);
       border-color: var(--accent);
     }
-    .timeline-row.active {
+    .timeline-row.active,
+    .timeline-row[aria-current="step"] {
       border-color: var(--accent);
       background: var(--accent-soft);
     }
@@ -572,11 +709,11 @@
   </style>
 </head>
 <body>
-  <a href="#main-content" class="skip-link">Skip to deliberation content</a>
+  <a href="#heading-topic" class="skip-link">Skip to deliberation content</a>
 
   <div class="layout">
     <!-- 1. Top Navigation & Status Bar -->
-    <header class="top-bar" role="banner">
+    <header class="top-bar">
       <div class="brand-cluster">
         <span class="brand-title">The Council</span>
         <span class="brand-sub">Live Research Visualizer</span>
@@ -584,7 +721,8 @@
       </div>
 
       <div class="status-cluster">
-        <select id="run-selector" aria-label="Select deliberation run" style="background:var(--surface-raised); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-family:var(--mono); font-size:11.5px;">
+        <label for="run-selector" class="sr-only">Select deliberation run</label>
+        <select id="run-selector" class="control-select">
           <option value="latest">Latest Run (Live Follow)</option>
         </select>
 
@@ -594,13 +732,14 @@
         </div>
 
         <div class="timer-pill">
-          <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          <span id="lbl-elapsed">00:00</span>
+          <svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <time id="lbl-elapsed" datetime="PT0M0S">00:00</time>
         </div>
 
-        <button id="btn-live-follow" aria-pressed="true" class="active">
-          <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
-          <span id="btn-live-follow-label">Live Follow: ON (1s)</span>
+        <button type="button" id="btn-live-follow" aria-pressed="true" class="active">
+          <svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+          <span class="sr-only">Live Follow</span>
+          <span id="btn-live-follow-label" aria-hidden="true">Live Follow: ON (1s)</span>
         </button>
 
         <span id="stream-badge" style="font-family:var(--mono); font-size:11px; color:var(--accent);"></span>
@@ -610,7 +749,7 @@
     <main id="main-content">
       <!-- 2. Question / Topic Card -->
       <section class="question-card" aria-labelledby="heading-topic">
-        <h1 id="heading-topic">Waiting for live deliberation to connect...</h1>
+        <h1 id="heading-topic" tabindex="-1">Waiting for live deliberation to connect...</h1>
         <div class="question-meta">
           <span class="meta-item">
             <strong>Phase:</strong> <span id="lbl-phase" style="font-family:var(--mono); color:var(--accent);">preflight</span>
@@ -659,18 +798,18 @@
               <span id="lbl-clauses-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 clauses</span>
             </div>
 
-            <div id="clauses-list" class="clauses-list">
-              <div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>
-            </div>
+            <ul id="clauses-list" class="clauses-list" role="list">
+              <li class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</li>
+            </ul>
 
             <div class="objections-box">
               <div class="panel-header">
                 <h2>Open Objections</h2>
                 <span id="lbl-objs-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 open</span>
               </div>
-              <div id="objections-list">
-                <div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>
-              </div>
+              <ul id="objections-list" role="list">
+                <li style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -682,7 +821,7 @@
           <h2 id="heading-roster">Active Council Roster &amp; Live Telemetry</h2>
           <span id="lbl-roster-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 seats</span>
         </div>
-        <div id="seats-grid" class="roster-grid"></div>
+        <ul id="seats-grid" class="roster-grid" role="list"></ul>
       </section>
 
       <!-- 4b. Submitted Proofs & Judge Audit Trail -->
@@ -691,24 +830,24 @@
           <h2 id="heading-proofs">Submitted Proofs &amp; Judge Audit Trail</h2>
           <span id="lbl-proofs-count" style="font-size:12px; color:var(--text-muted); font-family:var(--mono);">0 proofs</span>
         </div>
-        <div id="proofs-list" class="clauses-list" style="margin-top:10px; max-height:340px;">
-          <div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>
-        </div>
+        <ul id="proofs-list" class="clauses-list" role="list" style="margin-top:10px; max-height:340px;">
+          <li class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</li>
+        </ul>
       </section>
 
       <!-- 5. Deliberation Graphs (State Machine Flow & Causal DAG) -->
       <section class="surface-card" aria-labelledby="heading-graphs" style="margin-top:16px;">
         <h2 id="heading-graphs" class="sr-only">Deliberation Graphs</h2>
-        <div class="tabs-header">
-          <button id="btn-tab-topology" class="active">State Machine Flow</button>
-          <button id="btn-tab-causal">Causal Dependency DAG</button>
+        <div id="graphs-tablist" class="tabs-header" role="tablist" aria-labelledby="heading-graphs">
+          <button type="button" id="btn-tab-topology" role="tab" aria-selected="true" tabindex="0" class="active">State Machine Flow</button>
+          <button type="button" id="btn-tab-causal" role="tab" aria-selected="false" tabindex="-1">Causal Dependency DAG</button>
         </div>
 
-        <div id="stage-topology" class="graph-stage">
+        <div id="stage-topology" class="graph-stage" role="tabpanel" aria-labelledby="btn-tab-topology" tabindex="0">
           <svg id="state-machine-svg" viewBox="0 0 1120 285" width="100%" height="265" role="img" aria-label="State machine transition graph"></svg>
         </div>
 
-        <div id="stage-causal" class="graph-stage" style="display:none;">
+        <div id="stage-causal" class="graph-stage" role="tabpanel" aria-labelledby="btn-tab-causal" hidden>
           <svg id="causal-dependency-svg" viewBox="0 0 1120 260" width="100%" style="min-height:240px;" role="img" aria-label="Causal artifact dependency graph"></svg>
         </div>
       </section>
@@ -717,9 +856,9 @@
       <section class="surface-card" aria-labelledby="heading-timeline" style="margin-top:16px;">
         <div class="panel-header">
           <h2 id="heading-timeline">Deliberation Activity Timeline</h2>
-          <button id="btn-jump-latest" style="font-size:11px; padding:3px 8px;">Jump to Latest</button>
+          <button type="button" id="btn-jump-latest" class="btn-compact">Jump to Latest</button>
         </div>
-        <div id="timeline-list" class="timeline-list"></div>
+        <ol id="timeline-list" class="timeline-list" role="list"></ol>
       </section>
 
       <!-- 7. Cross-Run Voter & Tool Telemetry Leaderboard -->
@@ -731,19 +870,19 @@
           </div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <label for="telemetry-group-by" class="sr-only">Group telemetry by</label>
-            <select id="telemetry-group-by" aria-label="Group telemetry by" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+            <select id="telemetry-group-by" class="control-select">
               <option value="model">By Model</option>
               <option value="seat">By Seat</option>
             </select>
             <label for="telemetry-window" class="sr-only">Telemetry time window</label>
-            <select id="telemetry-window" aria-label="Telemetry time window" style="background:var(--bg-elevated); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11.5px; font-family:var(--mono); cursor:pointer;">
+            <select id="telemetry-window" class="control-select">
               <option value="all">Window: All</option>
               <option value="30d">Window: 30d</option>
               <option value="7d">Window: 7d</option>
             </select>
           </div>
         </div>
-        <div id="telemetry-leaderboard-body" style="margin-top:10px; overflow-x:auto;">
+        <div id="telemetry-leaderboard-body" role="region" aria-labelledby="heading-telemetry-leaderboard" tabindex="0" style="margin-top:10px; overflow-x:auto;">
           <div class="clause-card" style="color:var(--text-muted);">No completed run telemetry recorded yet.</div>
         </div>
       </section>
@@ -798,6 +937,36 @@
     function sanitizeClassToken(val, fallback) {
       const norm = String(val ?? '').trim().toLowerCase();
       return /^[a-z0-9_-]+$/.test(norm) ? norm : (fallback || 'unknown');
+    }
+
+    function setAttr(el, name, value) {
+      if (!el) return;
+      const strVal = String(value);
+      if (typeof el.setAttribute === 'function') {
+        el.setAttribute(name, strVal);
+      } else if (name === 'hidden') {
+        el.hidden = true;
+      } else {
+        el[name] = strVal;
+      }
+    }
+
+    function removeAttr(el, name) {
+      if (!el) return;
+      if (typeof el.removeAttribute === 'function') {
+        el.removeAttribute(name);
+      } else if (name === 'hidden') {
+        el.hidden = false;
+      } else if (name in el) {
+        delete el[name];
+      }
+    }
+
+    function getProofBadgeClass(status) {
+      if (status === 'admitted') return 'badge-proof-admitted';
+      if (status === 'partially_admitted') return 'badge-proof-partially_admitted';
+      if (status === 'rejected') return 'badge-proof-rejected';
+      return 'badge-proof-pending';
     }
 
     function isValidRunId(runId) {
@@ -1110,17 +1279,88 @@
       }
     }
 
-    function switchGraphTab(tab) {
-      activeGraphTab = (tab === 'causal') ? 'causal' : 'topology';
+    function syncGraphTabDom() {
+      const isTopology = (activeGraphTab !== 'causal');
       const btnTopo = document.getElementById('btn-tab-topology');
       const btnCausal = document.getElementById('btn-tab-causal');
       const stageTopo = document.getElementById('stage-topology');
       const stageCausal = document.getElementById('stage-causal');
-      if (btnTopo && btnTopo.classList) btnTopo.classList.toggle('active', activeGraphTab === 'topology');
-      if (btnCausal && btnCausal.classList) btnCausal.classList.toggle('active', activeGraphTab === 'causal');
-      if (stageTopo && stageTopo.style) stageTopo.style.display = activeGraphTab === 'topology' ? 'block' : 'none';
-      if (stageCausal && stageCausal.style) stageCausal.style.display = activeGraphTab === 'causal' ? 'block' : 'none';
+      if (btnTopo) {
+        if (btnTopo.classList) btnTopo.classList.toggle('active', isTopology);
+        setAttr(btnTopo, 'aria-selected', isTopology ? 'true' : 'false');
+        setAttr(btnTopo, 'tabindex', isTopology ? '0' : '-1');
+      }
+      if (btnCausal) {
+        if (btnCausal.classList) btnCausal.classList.toggle('active', !isTopology);
+        setAttr(btnCausal, 'aria-selected', !isTopology ? 'true' : 'false');
+        setAttr(btnCausal, 'tabindex', !isTopology ? '0' : '-1');
+      }
+      if (stageTopo) {
+        stageTopo.hidden = !isTopology;
+        if (isTopology) {
+          removeAttr(stageTopo, 'hidden');
+          setAttr(stageTopo, 'tabindex', '0');
+        } else {
+          setAttr(stageTopo, 'hidden', '');
+          removeAttr(stageTopo, 'tabindex');
+        }
+      }
+      if (stageCausal) {
+        stageCausal.hidden = isTopology;
+        if (!isTopology) {
+          removeAttr(stageCausal, 'hidden');
+          setAttr(stageCausal, 'tabindex', '0');
+        } else {
+          setAttr(stageCausal, 'hidden', '');
+          removeAttr(stageCausal, 'tabindex');
+        }
+      }
+    }
+
+    function switchGraphTab(tab) {
+      activeGraphTab = (tab === 'causal') ? 'causal' : 'topology';
+      syncGraphTabDom();
       renderActiveGraph();
+    }
+
+    function handleGraphTabKeydown(event) {
+      if (!event || event._graphTabHandled) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const key = event.key;
+      if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') {
+        return;
+      }
+      event._graphTabHandled = true;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const btnTopo = document.getElementById('btn-tab-topology');
+      const btnCausal = document.getElementById('btn-tab-causal');
+      const tabs = [
+        { key: 'topology', el: btnTopo },
+        { key: 'causal', el: btnCausal }
+      ];
+      let curIdx = activeGraphTab === 'causal' ? 1 : 0;
+      if (event.target) {
+        if (event.target === btnTopo || event.target.id === 'btn-tab-topology') {
+          curIdx = 0;
+        } else if (event.target === btnCausal || event.target.id === 'btn-tab-causal') {
+          curIdx = 1;
+        }
+      }
+      let nextIdx = curIdx;
+      if (key === 'ArrowRight') {
+        nextIdx = (curIdx + 1) % tabs.length;
+      } else if (key === 'ArrowLeft') {
+        nextIdx = (curIdx - 1 + tabs.length) % tabs.length;
+      } else if (key === 'Home') {
+        nextIdx = 0;
+      } else if (key === 'End') {
+        nextIdx = tabs.length - 1;
+      }
+      const nextTab = tabs[nextIdx];
+      switchGraphTab(nextTab.key);
+      if (nextTab.el && typeof nextTab.el.focus === 'function') {
+        nextTab.el.focus();
+      }
     }
 
     function clearPollTimer() {
@@ -1193,7 +1433,10 @@
       liveFollowActive = true;
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
-      if (btn && btn.classList) btn.classList.add('active');
+      if (btn) {
+        if (btn.classList) btn.classList.add('active');
+        setAttr(btn, 'aria-pressed', 'true');
+      }
       if (lbl) lbl.textContent = 'Live Follow: ON (1s)';
       const streamBadge = document.getElementById('stream-badge');
       if (streamBadge) streamBadge.textContent = '⚡ LIVE SYNC';
@@ -1219,7 +1462,10 @@
       if (oldTelemetry && typeof oldTelemetry.remove === 'function') oldTelemetry.remove();
       const btn = document.getElementById('btn-live-follow');
       const lbl = document.getElementById('btn-live-follow-label');
-      if (btn && btn.classList) btn.classList.remove('active');
+      if (btn) {
+        if (btn.classList) btn.classList.remove('active');
+        setAttr(btn, 'aria-pressed', 'false');
+      }
       if (lbl) lbl.textContent = 'Live Follow: OFF';
       const streamBadge = document.getElementById('stream-badge');
       if (streamBadge) streamBadge.textContent = '';
@@ -1363,11 +1609,17 @@
           }
         }
       }
+      const mins = hasValidTime ? Math.floor(elapsedMs / 60000) : 0;
+      const secs = hasValidTime ? Math.floor(elapsedMs / 1000) % 60 : 0;
       const str = hasValidTime
-        ? String(Math.floor(elapsedMs / 60000)).padStart(2, '0') + ':' + String(Math.floor(elapsedMs / 1000) % 60).padStart(2, '0')
+        ? String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0')
         : '00:00';
+      const isoDuration = 'PT' + mins + 'M' + secs + 'S';
       const el = document.getElementById('lbl-elapsed');
-      if (el && el.textContent !== str) el.textContent = str;
+      if (el) {
+        if (el.textContent !== str) el.textContent = str;
+        setAttr(el, 'datetime', isoDuration);
+      }
     }
 
     function renderTelemetryLeaderboard() {
@@ -1432,19 +1684,20 @@
 
       const headerTitle = groupBy === 'seat' ? 'Seat ID' : 'Canonical Model';
       let html =
-        '<table style="width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono);">' +
+        '<table aria-labelledby="heading-telemetry-leaderboard" style="width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono);">' +
+          '<caption class="sr-only">Cross-Run Voter &amp; Tool Telemetry Leaderboard</caption>' +
           '<thead>' +
             '<tr style="border-bottom:1px solid var(--border); color:var(--text-muted); text-align:left;">' +
-              '<th style="padding:6px 8px;">' + esc(headerTitle) + '</th>' +
-              '<th style="padding:6px 8px;">Runs</th>' +
-              '<th style="padding:6px 8px;">Proofs Submitted</th>' +
-              '<th style="padding:6px 8px;">Explicit Admission %</th>' +
-              '<th style="padding:6px 8px;">Partial Admission %</th>' +
-              '<th style="padding:6px 8px;">Default-Admitted</th>' +
-              '<th style="padding:6px 8px;">Judge Rejection %</th>' +
-              '<th style="padding:6px 8px;">Final Clause Citation %</th>' +
-              '<th style="padding:6px 8px;">Excused %</th>' +
-              '<th style="padding:6px 8px;">Observed Tools / Verified Skills</th>' +
+              '<th scope="col" style="padding:6px 8px;">' + esc(headerTitle) + '</th>' +
+              '<th scope="col" style="padding:6px 8px;">Runs</th>' +
+              '<th scope="col" style="padding:6px 8px;">Proofs Submitted</th>' +
+              '<th scope="col" style="padding:6px 8px;">Explicit Admission %</th>' +
+              '<th scope="col" style="padding:6px 8px;">Partial Admission %</th>' +
+              '<th scope="col" style="padding:6px 8px;">Default-Admitted</th>' +
+              '<th scope="col" style="padding:6px 8px;">Judge Rejection %</th>' +
+              '<th scope="col" style="padding:6px 8px;">Final Clause Citation %</th>' +
+              '<th scope="col" style="padding:6px 8px;">Excused %</th>' +
+              '<th scope="col" style="padding:6px 8px;">Observed Tools / Verified Skills</th>' +
             '</tr>' +
           '</thead>' +
           '<tbody>';
@@ -1454,7 +1707,7 @@
         const submitted = Number(b.proofsSubmitted) || 0;
         const guardRejected = Number(b.guardRejectedProofs) || 0;
         const guardBadge = guardRejected > 0
-          ? ' <span class="badge" style="background:var(--amber-soft); color:var(--amber); font-size:10px; padding:1px 5px;" title="Guard-rejected proof attempts">+' + guardRejected + ' guard-rejected</span>'
+          ? ' <span class="badge" style="background:var(--amber-soft); color:var(--amber); font-size:10px; padding:1px 5px;">+' + guardRejected + ' guard-rejected<span class="sr-only"> proof attempts</span></span>'
           : '';
         const explicitPct = (b.explicitAdmissionRate ?? 0) + '%';
         const partialPct = (b.partialAdmissionRate ?? 0) + '%';
@@ -1466,7 +1719,7 @@
         const isTraceUnavailable = b.observedToolCalls === null || (tc.unavailableRuns > 0 && !tc.fullRuns && !tc.partialRuns);
         let toolsHtml = '';
         if (isTraceUnavailable) {
-          toolsHtml = '<span class="badge" style="background:var(--bg-elevated); color:var(--text-muted); font-size:10.5px; padding:1px 6px;" title="Provider CLI does not expose tool event telemetry">Trace N/A</span>';
+          toolsHtml = '<span class="badge" style="background:var(--bg-elevated); color:var(--text-muted); font-size:10.5px; padding:1px 6px;">Trace N/A<span class="sr-only"> (provider CLI does not expose tool event telemetry)</span></span>';
         } else {
           const partialNote = tc.partialRuns > 0 ? ' (partial)' : '';
           toolsHtml = '<span style="color:var(--text);">' + (Number(b.observedToolCalls) || 0) + ' tools' + esc(partialNote) + '</span>';
@@ -1476,15 +1729,17 @@
         const skillsHtml = skills.length > 0
           ? ' ' + skills.map(function (sk) {
               const skillObj = sk || {};
-              return '<span class="badge" style="background:var(--accent-soft); color:var(--accent); font-size:10px; padding:1px 6px;" title="Verified via ' + esc(skillObj.evidence || 'skill_instructions_read') + '">' +
-                esc(skillObj.skill || '') + ' (' + (Number(skillObj.count) || 1) + ' · ' + esc(skillObj.evidence || 'skill_instructions_read') + ')' +
+              const evidenceText = esc(skillObj.evidence || 'skill_instructions_read');
+              return '<span class="badge" style="background:var(--accent-soft); color:var(--accent); font-size:10px; padding:1px 6px;">' +
+                esc(skillObj.skill || '') + ' (' + (Number(skillObj.count) || 1) + ' · ' + evidenceText + ')' +
+                '<span class="sr-only"> — verified via ' + evidenceText + '</span>' +
               '</span>';
             }).join(' ')
           : '';
 
         const subLabelList = groupBy === 'seat' ? (b.models || []) : (b.seatIds || []);
         const subLabelHtml = Array.isArray(subLabelList) && subLabelList.length > 0
-          ? '<div style="font-size:10.5px; color:var(--text-muted);">' + esc(subLabelList.join(', ')) + '</div>'
+          ? '<div style="font-size:10.5px; color:var(--text-muted); font-weight:400;">' + esc(subLabelList.join(', ')) + '</div>'
           : '';
 
         const judgeRejectedCount = Number(b.judgeRejected) || 0;
@@ -1492,7 +1747,7 @@
 
         html +=
           '<tr style="border-bottom:1px solid var(--border-subtle);">' +
-            '<td style="padding:7px 8px; font-weight:600; color:var(--text);">' + esc(b.key || '') + subLabelHtml + '</td>' +
+            '<th scope="row" style="padding:7px 8px; font-weight:600; color:var(--text); text-align:left;">' + esc(b.key || '') + subLabelHtml + '</th>' +
             '<td style="padding:7px 8px;">' + (Number(b.runs) || 0) + '</td>' +
             '<td style="padding:7px 8px;">' + submitted + guardBadge + '</td>' +
             '<td style="padding:7px 8px; color:var(--green);">' + (Number(b.explicitlyAdmitted) || 0) + ' (' + esc(explicitPct) + ')</td>' +
@@ -1559,11 +1814,11 @@
         const lblClausesCount = document.getElementById('lbl-clauses-count');
         if (lblClausesCount) lblClausesCount.textContent = '0 clauses';
         const clausesList = document.getElementById('clauses-list');
-        if (clausesList) clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
+        if (clausesList) clausesList.innerHTML = '<li class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</li>';
         const lblObjsCount = document.getElementById('lbl-objs-count');
         if (lblObjsCount) lblObjsCount.textContent = '0 open';
         const objsList = document.getElementById('objections-list');
-        if (objsList) objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
+        if (objsList) objsList.innerHTML = '<li style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</li>';
         const lblRosterCount = document.getElementById('lbl-roster-count');
         if (lblRosterCount) lblRosterCount.textContent = '0 members';
         const seatsGrid = document.getElementById('seats-grid');
@@ -1571,7 +1826,7 @@
         const lblProofsCount = document.getElementById('lbl-proofs-count');
         if (lblProofsCount) lblProofsCount.textContent = '0 proofs';
         const proofsList = document.getElementById('proofs-list');
-        if (proofsList) proofsList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+        if (proofsList) proofsList.innerHTML = '<li class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</li>';
         const stateSvg = document.getElementById('state-machine-svg');
         if (stateSvg) stateSvg.innerHTML = '';
         const causalSvg = document.getElementById('causal-dependency-svg');
@@ -1686,7 +1941,7 @@
 
         if (clausesList) {
           if (clauses.length === 0) {
-            clausesList.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</div>';
+            clausesList.innerHTML = '<li class="clause-card" style="color:var(--text-muted);">No candidate clauses synthesized yet.</li>';
           } else {
             clausesList.innerHTML = clauses.map(function (cl) {
               const clause = cl || {};
@@ -1694,13 +1949,13 @@
                 ? '<span class="badge" style="background:var(--green-soft); color:var(--green);">Cites: ' + esc(clause.citedProofIds.join(', ')) + '</span>'
                 : '';
               return (
-                '<div class="clause-card">' +
+                '<li class="clause-card">' +
                   '<div class="clause-head">' +
                     '<span class="clause-id">' + esc(clause.id) + '</span>' +
                     cites +
                   '</div>' +
                   '<div class="clause-body"><strong>WHEN [' + esc(clause.context) + ']:</strong> ' + esc(clause.conclusion) + '</div>' +
-                '</div>'
+                '</li>'
               );
             }).join('');
           }
@@ -1716,19 +1971,19 @@
 
         if (objsList) {
           if (openObjs.length === 0) {
-            objsList.innerHTML = '<div style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</div>';
+            objsList.innerHTML = '<li style="font-size:12.5px; color:var(--green); margin-top:4px;">✓ 0 Open Objections · Consensus Gate Clear</li>';
           } else {
             objsList.innerHTML = openObjs.map(function (o) {
               const isLocked = o.status === 'preserved_excused';
               return (
-                '<div class="objection-card ' + (isLocked ? 'locked' : '') + '">' +
+                '<li class="objection-card' + (isLocked ? ' locked' : '') + '">' +
                   '<div style="display:flex; justify-content:space-between; font-weight:700;">' +
                     '<span>' + esc(o.id) + ' · ' + esc(o.seatId) + '</span>' +
                     '<span class="badge" style="color:' + (isLocked ? 'var(--red)' : 'var(--amber)') + ';">' + (isLocked ? 'LOCKED' : 'OPEN') + '</span>' +
                   '</div>' +
                   '<div style="margin-top:4px; color:var(--text);">' + esc(o.reason) + '</div>' +
                   '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Backed by Proof: ' + esc(o.proofId) + '</div>' +
-                '</div>'
+                '</li>'
               );
             }).join('');
           }
@@ -1747,7 +2002,7 @@
           const judgeStatusToken = sanitizeClassToken(judge.status, 'idle');
           const judgeHarnessToken = sanitizeClassToken(judge.harness, 'unknown');
           judgeHtml =
-            '<div class="participant-card status-' + judgeStatusToken + '">' +
+            '<li class="participant-card status-' + judgeStatusToken + '">' +
               '<div style="display:flex; justify-content:space-between; align-items:center;">' +
                 '<strong>Judge: ' + esc(judge.id) + '</strong>' +
                 '<span class="harness-badge harness-' + judgeHarnessToken + '">' + esc(judge.harness) + '</span>' +
@@ -1758,7 +2013,7 @@
                 '<span style="color:var(--accent);">Status: ' + esc(String(judge.status || 'idle').toUpperCase()) + '</span>' +
                 (judge.faultReason ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(judge.faultReason) + '</span>' : '') +
               '</div>' +
-            '</div>';
+            '</li>';
         }
 
         const maxRetries = Number(councilState.maxRetriesPerSeat) || 1;
@@ -1771,19 +2026,11 @@
           const seatProofsHtml = seatProofs.length > 0
             ? seatProofs.map(function (p) {
                 const pStatus = p.status || 'pending';
-                let badgeStyle = 'background:var(--accent-soft); color:var(--accent);';
-                if (pStatus === 'admitted') {
-                  badgeStyle = 'background:var(--green-soft); color:var(--green);';
-                } else if (pStatus === 'partially_admitted') {
-                  badgeStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
-                } else if (pStatus === 'rejected') {
-                  badgeStyle = 'background:var(--red-soft); color:var(--red);';
-                }
-                return '<span class="badge" style="font-size:10.5px; padding:1px 6px; ' + badgeStyle + '">' + esc(p.id) + ': ' + esc(pStatus) + '</span>';
+                return '<span class="badge badge-seat-proof ' + getProofBadgeClass(pStatus) + '">' + esc(p.id) + ': ' + esc(pStatus) + '</span>';
               }).join(' ')
             : '<span style="color:var(--text-muted);">Proofs: none</span>';
           return (
-            '<div class="participant-card status-' + seatStatusToken + '">' +
+            '<li class="participant-card status-' + seatStatusToken + '">' +
               '<div style="display:flex; justify-content:space-between; align-items:center;">' +
                 '<strong>' + esc(s.id) + '</strong>' +
                 '<span class="harness-badge harness-' + seatHarnessToken + '">' + esc(s.harness) + '</span>' +
@@ -1797,7 +2044,7 @@
                 '<span style="color:var(--accent);">Status: ' + esc(String(s.status || 'idle').toUpperCase()) + '</span>' +
                 (seatFault ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(seatFault) + '</span>' : '') +
               '</div>' +
-            '</div>'
+            '</li>'
           );
         }).join('');
 
@@ -1811,26 +2058,18 @@
         }
         if (proofsListEl) {
           if (allProofs.length === 0) {
-            proofsListEl.innerHTML = '<div class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</div>';
+            proofsListEl.innerHTML = '<li class="clause-card" style="color:var(--text-muted);">No proofs submitted yet.</li>';
           } else {
             proofsListEl.innerHTML = allProofs.map(function (proofItem) {
               const p = proofItem || {};
               const pStatus = p.status || 'pending';
-              let statusStyle = 'background:var(--accent-soft); color:var(--accent);';
-              if (pStatus === 'admitted') {
-                statusStyle = 'background:var(--green-soft); color:var(--green);';
-              } else if (pStatus === 'partially_admitted') {
-                statusStyle = 'background:var(--amber-soft); color:var(--amber); border:1px solid #d97706;';
-              } else if (pStatus === 'rejected') {
-                statusStyle = 'background:var(--red-soft); color:var(--red);';
-              }
               const noteText = p.judgeNote || p.auditNote || '';
               return (
-                '<div class="clause-card">' +
+                '<li class="clause-card">' +
                   '<div class="clause-head" style="flex-wrap:wrap;">' +
                     '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">' +
                       '<span class="clause-id">' + esc(p.id) + '</span>' +
-                      '<span class="badge" style="' + statusStyle + '">' + esc(pStatus) + '</span>' +
+                      '<span class="badge ' + getProofBadgeClass(pStatus) + '">' + esc(pStatus) + '</span>' +
                       '<span style="font-family:var(--mono); font-size:11px; color:var(--accent);">[' + esc(p.kind || 'proof') + ']</span>' +
                       (p.seatId ? '<span style="font-family:var(--mono); font-size:11px; color:var(--text-muted);">Seat: ' + esc(p.seatId) + '</span>' : '') +
                     '</div>' +
@@ -1842,7 +2081,7 @@
                   '</div>' +
                   (p.judgeAdmittedStatement ? '<div style="font-size:11.5px; color:var(--amber); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Admitted Core:</strong> ' + esc(p.judgeAdmittedStatement) + '</div>' : '') +
                   (noteText ? '<div style="font-size:11.5px; color:var(--text-secondary); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;"><strong>Judge Note:</strong> ' + esc(noteText) + '</div>' : '') +
-                '</div>'
+                '</li>'
               );
             }).join('');
           }
@@ -1887,16 +2126,20 @@
 
           if (steps.length === 0 && historyItems.length > 0) {
             timelineEl.innerHTML = historyItems.map(function (h) {
-              return '<div class="timeline-row"><span class="timeline-action">' + esc(h) + '</span></div>';
+              return '<li class="timeline-row timeline-row-static"><span class="timeline-action">' + esc(h) + '</span></li>';
             }).join('');
           } else {
             timelineEl.innerHTML = steps.map(function (st, i) {
               const isActive = (i === currentStepIdx);
               return (
-                '<div class="timeline-row ' + (isActive ? 'active' : '') + '" role="button" tabindex="0" data-step-idx="' + i + '">' +
-                  '<span class="timeline-action">' + esc(st && st.label) + '</span>' +
-                  '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
-                '</div>'
+                '<li>' +
+                  '<button type="button" class="timeline-row' + (isActive ? ' active' : '') + '"' +
+                    (isActive ? ' aria-current="step"' : '') +
+                    ' data-step-idx="' + i + '">' +
+                    '<span class="timeline-action">' + esc(st && st.label) + '</span>' +
+                    '<span class="timeline-time">Step ' + (i + 1) + '</span>' +
+                  '</button>' +
+                '</li>'
               );
             }).join('');
           }
@@ -1965,12 +2208,18 @@
       onEvent(document.getElementById('btn-live-follow'), 'click', function () {
         toggleLiveFollow();
       });
-      onEvent(document.getElementById('btn-tab-topology'), 'click', function () {
+      const btnTopo = document.getElementById('btn-tab-topology');
+      const btnCausal = document.getElementById('btn-tab-causal');
+      const tablistEl = document.getElementById('graphs-tablist');
+      onEvent(btnTopo, 'click', function () {
         switchGraphTab('topology');
       });
-      onEvent(document.getElementById('btn-tab-causal'), 'click', function () {
+      onEvent(btnCausal, 'click', function () {
         switchGraphTab('causal');
       });
+      onEvent(tablistEl, 'keydown', handleGraphTabKeydown);
+      onEvent(btnTopo, 'keydown', handleGraphTabKeydown);
+      onEvent(btnCausal, 'keydown', handleGraphTabKeydown);
       onEvent(document.getElementById('btn-jump-latest'), 'click', function () {
         restoreLatestSnapshot();
       });
@@ -1986,21 +2235,14 @@
         const idx = resolveTimelineStepIdx(event, timelineEl);
         if (idx >= 0) inspectStep(idx);
       });
-      onEvent(timelineEl, 'keydown', function (event) {
-        if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
-        const idx = resolveTimelineStepIdx(event, timelineEl);
-        if (idx >= 0) {
-          if (typeof event.preventDefault === 'function') event.preventDefault();
-          inspectStep(idx);
-        }
-      });
 
       if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
         document.addEventListener('visibilitychange', handleVisibilityChange);
       }
     }
 
-    // Bind programmatic listeners and initialize Live Follow & Elapsed Timer
+    // Bind programmatic listeners and initialize ARIA states, Live Follow & Elapsed Timer
+    syncGraphTabDom();
     bindUiListeners();
     const initialLiveRun = getLiveRun();
     if (initialLiveRun && initialLiveRun.isRunning === false) {

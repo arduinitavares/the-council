@@ -435,11 +435,17 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     const proc = io.process || process;
     let terminatingSignal = null;
     let signalExitCode = null;
+    let externalAborted = false;
     let resolveSignalAbort = null;
     const signalAbortPromise = new Promise((resolve) => {
       resolveSignalAbort = resolve;
     });
+    let resolveExternalAbort = null;
+    const externalAbortPromise = new Promise((resolve) => {
+      resolveExternalAbort = resolve;
+    });
     const signalHandlers = new Map();
+    let onComposedAbort = null;
     const cleanupSignalListeners = () => {
       for (const [sig, handler] of signalHandlers.entries()) {
         if (proc && typeof proc.off === 'function') {
@@ -449,6 +455,9 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         }
       }
       signalHandlers.clear();
+      if (onComposedAbort && composedSignal && typeof composedSignal.removeEventListener === 'function') {
+        composedSignal.removeEventListener('abort', onComposedAbort);
+      }
     };
 
     if (io.registerSignalHandlers !== false && proc && typeof proc.on === 'function') {
@@ -471,11 +480,31 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       }
     }
 
+    onComposedAbort = () => {
+      if (terminatingSignal || externalAborted) return;
+      externalAborted = true;
+      cleanupSignalListeners();
+      if (liveWatcher) {
+        liveWatcher.stop({ reason: 'Aborted' });
+      }
+      if (resolveExternalAbort) {
+        resolveExternalAbort({ kind: 'external_abort' });
+      }
+    };
+    if (!composedSignal.aborted) {
+      composedSignal.addEventListener('abort', onComposedAbort, { once: true });
+    }
+
     const engine = new CouncilEngine(resolved, engineOptions);
     const runStartedAt = new Date().toISOString();
 
     if (liveWatcher) {
       liveWatcher.attach(engine.getTelemetry());
+    }
+
+    if (composedSignal.aborted) {
+      engine.initRoster();
+      onComposedAbort();
     }
 
     if (values.verbose) {
@@ -491,16 +520,37 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     let result;
     try {
-      const engineRunPromise = engine.run();
-      engineRunPromise.catch(() => {});
-      const raceResult = await Promise.race([
-        engineRunPromise.then((res) => ({ kind: 'result', res })),
-        signalAbortPromise.then((sigInfo) => ({ kind: 'signal', sigInfo }))
-      ]);
+      let raceResult;
+      if (externalAborted) {
+        raceResult = { kind: 'external_abort' };
+      } else {
+        const engineRunPromise = engine.run();
+        engineRunPromise.catch(() => {});
+        raceResult = await Promise.race([
+          engineRunPromise.then((res) => ({ kind: 'result', res })),
+          signalAbortPromise.then((sigInfo) => ({ kind: 'signal', sigInfo })),
+          externalAbortPromise
+        ]);
+      }
       if (raceResult.kind === 'signal') {
         return await safeExit(raceResult.sigInfo.exitCode);
       }
-      result = raceResult.res;
+      if (raceResult.kind === 'external_abort') {
+        const currentState = engine.getState();
+        result = {
+          ok: false,
+          aborted: true,
+          verdict: currentState?.verdict || null,
+          state: currentState,
+          snapshots: engine.getTelemetry().getSnapshots(),
+          providerCalls:
+            typeof engine.getTelemetry().getProviderCalls === 'function'
+              ? engine.getTelemetry().getProviderCalls()
+              : []
+        };
+      } else {
+        result = raceResult.res;
+      }
     } catch (runErr) {
       if (liveWatcher) {
         liveWatcher.stop({ reason: 'Aborted' });
@@ -509,7 +559,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     } finally {
       cleanupSignalListeners();
       if (liveWatcher) {
-        const wasAborted = Boolean(terminatingSignal || engine.aborted || result?.aborted);
+        const wasAborted = Boolean(terminatingSignal || externalAborted || engine.aborted || result?.aborted);
         liveWatcher.stop(wasAborted ? { reason: 'Aborted' } : undefined);
       }
     }

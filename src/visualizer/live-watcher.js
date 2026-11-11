@@ -1218,7 +1218,85 @@ export class VisualizerLiveWatcher {
   }
 
   /**
-   * Reconciles a dead or stale run's `<runId>.meta.json` and `<runId>.js` on disk.
+   * Extracts a balanced JSON object starting at `startIdx` (`'{'`), respecting JSON string quotes and escapes.
+   * @param {string} text
+   * @param {number} startIdx
+   * @returns {string|null}
+   * @private
+   */
+  _extractBalancedJsonObject(text, startIdx) {
+    if (typeof text !== 'string' || startIdx < 0 || text[startIdx] !== '{') {
+      return null;
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(startIdx, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Parses the embedded liveRun JSON object from either `_buildBundleScript` (`const data = {...}`)
+   * or legacy `window.COUNCIL_LIVE_RUN = {...}` JS bundle files.
+   * @param {string} rawJs
+   * @returns {{ parsedRun: Object, isLegacy: boolean }|null}
+   * @private
+   */
+  _parseRunBundleJs(rawJs) {
+    if (typeof rawJs !== 'string' || !rawJs) {
+      return null;
+    }
+    const bundleMatch = /\bconst\s+data\s*=\s*\{/.exec(rawJs);
+    if (bundleMatch) {
+      const braceIdx = bundleMatch.index + bundleMatch[0].length - 1;
+      const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+      if (jsonSlice) {
+        const parsedRun = JSON.parse(jsonSlice);
+        if (parsedRun && typeof parsedRun === 'object') {
+          return { parsedRun, isLegacy: false };
+        }
+      }
+    }
+
+    const legacyMatch = /(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(rawJs);
+    if (legacyMatch) {
+      const braceIdx = legacyMatch.index + legacyMatch[0].length - 1;
+      const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+      if (jsonSlice) {
+        const parsedRun = JSON.parse(jsonSlice);
+        if (parsedRun && typeof parsedRun === 'object') {
+          return { parsedRun, isLegacy: true };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Reconciles a dead or stale run's `<runId>.meta.json`, `<runId>.js`, and (if pointing to this orphan) `latest.js` on disk.
    * Supports both `_buildBundleScript` (`const data = ...;`) and `window.COUNCIL_LIVE_RUN = ...;` formats.
    * @param {Object} entry
    * @returns {Object} Reconciled manifest entry
@@ -1235,54 +1313,68 @@ export class VisualizerLiveWatcher {
       return reconciled;
     }
 
+    const runJsPath = path.join(this.outputDir, `${safeRunId}.js`);
+    let bundleOk = true;
+    try {
+      if (fs.existsSync(runJsPath)) {
+        bundleOk = false;
+        const rawJs = fs.readFileSync(runJsPath, 'utf8');
+        const extracted = this._parseRunBundleJs(rawJs);
+        if (extracted && extracted.parsedRun) {
+          const { parsedRun, isLegacy } = extracted;
+          parsedRun.isRunning = false;
+          parsedRun.verdictKind = parsedRun.verdictKind || reconciled.verdictKind;
+          let rebuilt = this._buildBundleScript(JSON.stringify(parsedRun, null, 2), false);
+          if (isLegacy) {
+            rebuilt +=
+              `if (typeof window !== 'undefined' && window.CouncilRuns) { window.COUNCIL_LIVE_RUN = window.CouncilRuns[${JSON.stringify(safeRunId)}]; }\n` +
+              `if (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) { globalThis.COUNCIL_LIVE_RUN = globalThis.CouncilRuns[${JSON.stringify(safeRunId)}]; }\n`;
+          }
+          this._atomicWriteFile(runJsPath, rebuilt);
+          bundleOk = true;
+        }
+      }
+    } catch {
+      bundleOk = false;
+    }
+
+    const defaultLatestPath = path.join(this.outputDir, 'latest.js');
+    if (this.outputPath !== defaultLatestPath) {
+      try {
+        if (fs.existsSync(defaultLatestPath)) {
+          const rawLatest = fs.readFileSync(defaultLatestPath, 'utf8');
+          const extractedLatest = this._parseRunBundleJs(rawLatest);
+          if (
+            extractedLatest &&
+            extractedLatest.parsedRun &&
+            extractedLatest.parsedRun.runId === safeRunId &&
+            extractedLatest.parsedRun.isRunning === true
+          ) {
+            extractedLatest.parsedRun.isRunning = false;
+            extractedLatest.parsedRun.verdictKind =
+              extractedLatest.parsedRun.verdictKind || reconciled.verdictKind;
+            const rebuiltLatest = this._buildBundleScript(
+              JSON.stringify(extractedLatest.parsedRun, null, 2),
+              true
+            );
+            this._atomicWriteFile(defaultLatestPath, rebuiltLatest);
+          }
+        }
+      } catch {
+        // Isolate latest.js pointer reconciliation errors
+      }
+    }
+
+    if (!bundleOk) {
+      // Retain retry eligibility on disk if `<runId>.js` exists and could not be reconciled yet
+      return entry;
+    }
+
     const metaPath = path.join(this.outputDir, `${safeRunId}.meta.json`);
     try {
       this._atomicWriteFile(metaPath, JSON.stringify(reconciled, null, 2));
     } catch {
       // Isolate disk reconciliation errors
-    }
-
-    const runJsPath = path.join(this.outputDir, `${safeRunId}.js`);
-    try {
-      if (fs.existsSync(runJsPath)) {
-        const rawJs = fs.readFileSync(runJsPath, 'utf8');
-        const bundlePrefix = '  const data = ';
-        const bundleSuffixMarker = ';\n  const isLatestPointer =';
-        const prefixIdx = rawJs.indexOf(bundlePrefix);
-        const suffixIdx = prefixIdx !== -1 ? rawJs.indexOf(bundleSuffixMarker, prefixIdx + bundlePrefix.length) : -1;
-
-        if (prefixIdx !== -1 && suffixIdx !== -1) {
-          const jsonSlice = rawJs.slice(prefixIdx + bundlePrefix.length, suffixIdx);
-          const parsedRun = JSON.parse(jsonSlice);
-          if (parsedRun && typeof parsedRun === 'object') {
-            parsedRun.isRunning = false;
-            parsedRun.verdictKind = parsedRun.verdictKind || reconciled.verdictKind;
-            const rebuilt = this._buildBundleScript(JSON.stringify(parsedRun, null, 2), false);
-            this._atomicWriteFile(runJsPath, rebuilt);
-          }
-        } else {
-          const legacyMatch = rawJs.match(
-            /^([\s\S]*?(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*)(\{[\s\S]*?\})(;\s*[\s\S]*)$/
-          );
-          if (legacyMatch) {
-            const parsedRun = JSON.parse(legacyMatch[2]);
-            if (parsedRun && typeof parsedRun === 'object') {
-              parsedRun.isRunning = false;
-              parsedRun.verdictKind = parsedRun.verdictKind || reconciled.verdictKind;
-              const serialized = JSON.stringify(parsedRun, null, 2);
-              let suffix = legacyMatch[3];
-              if (!/CouncilRuns/.test(rawJs) && parsedRun.runId) {
-                suffix =
-                  `;\nif (typeof window !== 'undefined') { window.CouncilRuns = window.CouncilRuns || {}; window.CouncilRuns[${JSON.stringify(parsedRun.runId)}] = window.COUNCIL_LIVE_RUN; }\n` +
-                  `if (typeof globalThis !== 'undefined') { globalThis.CouncilRuns = globalThis.CouncilRuns || {}; globalThis.CouncilRuns[${JSON.stringify(parsedRun.runId)}] = globalThis.COUNCIL_LIVE_RUN || window.COUNCIL_LIVE_RUN; }\n`;
-              }
-              this._atomicWriteFile(runJsPath, `${legacyMatch[1]}${serialized}${suffix}`);
-            }
-          }
-        }
-      }
-    } catch {
-      // Isolate malformed or partially written historical run JS errors
     }
 
     return reconciled;

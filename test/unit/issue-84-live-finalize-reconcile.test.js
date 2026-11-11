@@ -667,7 +667,8 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
         judge: { id: 'j1', harness: 'codex', model: 'gpt-6-astra (max)', status: 'idle', retries: 0 },
         proofs: [],
         objections: [],
-        history: []
+        lastTransition: { ok: true, message: 'Began Round 1/3 proof collection' },
+        history: ['Began Round 1/3 proof collection']
       },
       steps: []
     };
@@ -690,6 +691,7 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
     const verdictBox = elements.get('verdict-box');
     const verdictTitle = elements.get('verdict-title');
     const verdictBody = elements.get('verdict-body');
+    const transitionText = elements.get('transition-text');
     const runSelector = elements.get('run-selector');
 
     assert.equal(statusPill.className, 'badge badge-failed');
@@ -703,9 +705,228 @@ describe('Issue #84: Live run finalization on SIGINT/SIGTERM/abort & stale [RUNN
     assert.doesNotMatch(verdictTitle.textContent, /Deliberation in Progress/);
     assert.doesNotMatch(statusPillText.textContent, /COMPLETED: DISSENT/);
     assert.match(verdictBody.textContent, /stopped before reaching a terminal verdict/i);
+    assert.match(transitionText.textContent, /aborted before reaching a terminal verdict/i);
+    assert.doesNotMatch(transitionText.textContent, /Began Round 1\/3/);
 
     const runOpt = runSelector.options.find((o) => o.value === 'run-aborted-ui');
     assert.ok(runOpt);
     assert.match(runOpt.textContent, /\[Aborted\]$/);
+  });
+
+  it('3c. external io.signal cancellation while executeSeatProof() remains pending finalizes all artifacts immediately without waiting on stuck provider', async () => {
+    const outDir = makeTempDir('council-84-pending-ext-abort');
+    const telDir = makeTempDir('council-84-pending-ext-abort-tel');
+    const cfgFile = path.join(outDir, 'config.json');
+    fs.writeFileSync(
+      cfgFile,
+      JSON.stringify({
+        topic: 'Pending external signal abort test',
+        minQuorum: 2,
+        maxRounds: 1,
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'A' },
+          { id: 's2', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'B' }
+        ],
+        judge: { id: 'j1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' }
+      })
+    );
+
+    let releasePendingProvider;
+    const neverEndingUntilCleaned = new Promise((resolve) => {
+      releasePendingProvider = resolve;
+    });
+
+    try {
+      const beforeSigint = process.listenerCount('SIGINT');
+      const beforeSigterm = process.listenerCount('SIGTERM');
+      const beforeSighup = process.listenerCount('SIGHUP');
+
+      const extAbort = new AbortController();
+      let enteredSeat = false;
+      const registry = new HarnessRegistry();
+      registry.register(
+        'codex',
+        new FakeLiveHarness({
+          executeSeatProof: async () => {
+            if (!enteredSeat) {
+              enteredSeat = true;
+              setImmediate(() => extAbort.abort(new Error('External caller timeout')));
+            }
+            return neverEndingUntilCleaned;
+          }
+        })
+      );
+
+      const exitCode = await runCli(
+        ['run', '--live', '-c', cfgFile, '--output-dir', outDir, '--telemetry-dir', telDir],
+        {
+          stdout: { write: () => true },
+          stderr: { write: () => true },
+          exit: (c) => c,
+          signal: extAbort.signal,
+          harnessRegistry: registry,
+          liveWatcherOptions: { runId: 'run-ext-pending' }
+        }
+      );
+
+      assert.equal(exitCode, 2);
+      assert.equal(process.listenerCount('SIGINT'), beforeSigint);
+      assert.equal(process.listenerCount('SIGTERM'), beforeSigterm);
+      assert.equal(process.listenerCount('SIGHUP'), beforeSighup);
+
+      const meta = JSON.parse(fs.readFileSync(path.join(outDir, 'run-ext-pending.meta.json'), 'utf8'));
+      assert.equal(meta.isRunning, false);
+      assert.equal(meta.verdictKind, 'Aborted');
+
+      const latestEval = evalBundle(path.join(outDir, 'latest.js'));
+      assert.equal(latestEval.latest.isRunning, false);
+      assert.equal(latestEval.latest.verdictKind, 'Aborted');
+
+      const runEval = evalBundle(path.join(outDir, 'run-ext-pending.js'));
+      assert.equal(runEval.runs['run-ext-pending'].isRunning, false);
+      assert.equal(runEval.runs['run-ext-pending'].verdictKind, 'Aborted');
+
+      const indexEval = evalBundle(path.join(outDir, 'index.js'));
+      const entry = indexEval.index.find((e) => e.runId === 'run-ext-pending');
+      assert.equal(entry.isRunning, false);
+      assert.equal(entry.verdictKind, 'Aborted');
+    } finally {
+      releasePendingProvider({ scope: 'S', kind: 'check', source: 'Src', statement: 'Done' });
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.rmSync(telDir, { recursive: true, force: true });
+    }
+  });
+
+  it('4b. reconciles legacy bundles containing "};" and "CouncilRuns" inside JSON strings, retains retry eligibility on corrupt bundle, and reconciles latest.js under custom outputPath', () => {
+    const outDir = makeTempDir('council-84-edge-reconcile');
+    const telDir = makeTempDir('council-84-edge-reconcile-tel');
+    try {
+      const oldIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+      // 1) Legacy bundle whose step text contains BOTH `};` AND `CouncilRuns`
+      fs.writeFileSync(
+        path.join(outDir, 'run-tricky-legacy.meta.json'),
+        JSON.stringify(
+          {
+            id: 'run-tricky-legacy',
+            runId: 'run-tricky-legacy',
+            file: 'run-tricky-legacy.js',
+            title: 'Tricky Legacy',
+            topic: 'Parser edge case',
+            startedAt: oldIso,
+            updatedAt: oldIso,
+            isRunning: true,
+            verdictKind: null
+          },
+          null,
+          2
+        )
+      );
+      fs.writeFileSync(
+        path.join(outDir, 'run-tricky-legacy.js'),
+        `window.COUNCIL_LIVE_RUN = ${JSON.stringify({
+          runId: 'run-tricky-legacy',
+          isRunning: true,
+          verdictKind: null,
+          startedAt: oldIso,
+          updatedAt: oldIso,
+          steps: [
+            {
+              summary: 'Code snippet: const fn = () => { return window.CouncilRuns; }; statement'
+            }
+          ]
+        })};\n`
+      );
+
+      // 2) Corrupt/half-written `<runId>.js` — should retain retry eligibility in `.meta.json` until repaired
+      fs.writeFileSync(
+        path.join(outDir, 'run-half-written.meta.json'),
+        JSON.stringify(
+          {
+            id: 'run-half-written',
+            runId: 'run-half-written',
+            pid: 999404,
+            file: 'run-half-written.js',
+            title: 'Half Written',
+            topic: 'Partial write',
+            startedAt: oldIso,
+            updatedAt: oldIso,
+            isRunning: true,
+            verdictKind: null
+          },
+          null,
+          2
+        )
+      );
+      fs.writeFileSync(path.join(outDir, 'run-half-written.js'), 'window.COUNCIL_LIVE_RUN = {"runId":"run-half-written"');
+
+      // 3) Dead-PID orphan referenced by default `latest.js` while new watcher writes to custom `outputPath`
+      const orphanWatcher = new VisualizerLiveWatcher({
+        runId: 'run-orphan-latest',
+        pid: 999405,
+        outputDir: outDir,
+        telemetryDir: telDir,
+        initialConfig: { topic: 'Orphaned default latest.js' },
+        killProbe: () => true
+      });
+      orphanWatcher.detach();
+      assert.equal(evalBundle(path.join(outDir, 'latest.js')).latest.isRunning, true);
+
+      const customWatcher = new VisualizerLiveWatcher({
+        runId: 'run-custom-ptr',
+        outputDir: outDir,
+        outputPath: path.join(outDir, 'custom-pointer.js'),
+        telemetryDir: telDir,
+        staleRunThresholdMs: 10 * 60 * 1000,
+        initialConfig: { topic: 'Custom pointer watcher' },
+        killProbe: (pid) => {
+          if (pid === 999404 || pid === 999405) {
+            const err = new Error('No such process');
+            err.code = 'ESRCH';
+            throw err;
+          }
+          return true;
+        }
+      });
+
+      // Verify tricky legacy bundle parsed & registered in CouncilRuns cleanly!
+      const trickyMeta = JSON.parse(fs.readFileSync(path.join(outDir, 'run-tricky-legacy.meta.json'), 'utf8'));
+      assert.equal(trickyMeta.isRunning, false);
+      assert.equal(trickyMeta.verdictKind, 'Aborted');
+      const trickyEval = evalBundle(path.join(outDir, 'run-tricky-legacy.js'));
+      assert.ok(trickyEval.runs['run-tricky-legacy'], 'CouncilRuns[runId] must be registered even when payload mentions CouncilRuns');
+      assert.equal(trickyEval.runs['run-tricky-legacy'].isRunning, false);
+      assert.equal(trickyEval.runs['run-tricky-legacy'].verdictKind, 'Aborted');
+      assert.match(trickyEval.runs['run-tricky-legacy'].steps[0].summary, /};\s*statement/);
+
+      // Verify default latest.js pointing to dead `run-orphan-latest` was reconciled even under custom outputPath!
+      const defaultLatestEval = evalBundle(path.join(outDir, 'latest.js'));
+      assert.equal(defaultLatestEval.latest.runId, 'run-orphan-latest');
+      assert.equal(defaultLatestEval.latest.isRunning, false);
+      assert.equal(defaultLatestEval.latest.verdictKind, 'Aborted');
+
+      // Verify half-written bundle retained `isRunning: true` in meta on disk for retry, then reconciles once valid!
+      const halfMetaBefore = JSON.parse(fs.readFileSync(path.join(outDir, 'run-half-written.meta.json'), 'utf8'));
+      assert.equal(halfMetaBefore.isRunning, true);
+
+      fs.writeFileSync(
+        path.join(outDir, 'run-half-written.js'),
+        `window.COUNCIL_LIVE_RUN = ${JSON.stringify({
+          runId: 'run-half-written',
+          isRunning: true,
+          verdictKind: null
+        })};\n`
+      );
+      customWatcher.stop();
+
+      const halfMetaAfter = JSON.parse(fs.readFileSync(path.join(outDir, 'run-half-written.meta.json'), 'utf8'));
+      assert.equal(halfMetaAfter.isRunning, false);
+      assert.equal(halfMetaAfter.verdictKind, 'Aborted');
+      const halfEvalAfter = evalBundle(path.join(outDir, 'run-half-written.js'));
+      assert.equal(halfEvalAfter.runs['run-half-written'].isRunning, false);
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.rmSync(telDir, { recursive: true, force: true });
+    }
   });
 });

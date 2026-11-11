@@ -1942,12 +1942,15 @@
         // Transition Status (centralized polite live region #transition-banner)
         const transText = document.getElementById('transition-text');
         if (transText) {
-          if (councilState.lastTransition && councilState.lastTransition.message) {
+          if (isStoppedWithoutVerdict) {
+            transText.textContent =
+              'Run aborted before reaching a terminal verdict (stopped in phase "' +
+              String(councilState.phase || 'stopped') +
+              '").';
+          } else if (councilState.lastTransition && councilState.lastTransition.message) {
             transText.textContent = councilState.lastTransition.message;
           } else if (councilState.history && councilState.history.length > 0) {
             transText.textContent = councilState.history[0];
-          } else if (isStoppedWithoutVerdict) {
-            transText.textContent = 'Run stopped before reaching a terminal verdict.';
           }
         }
 

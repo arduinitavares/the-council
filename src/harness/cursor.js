@@ -96,6 +96,7 @@ export class CursorAdapter extends HarnessAdapter {
     context: callerContext
   }) {
     this.validateModel(seat.model);
+    const baseModel = extractCanonicalBaseModel(seat.model, 'high');
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const isRebuttal =
       !isVoting &&
@@ -107,6 +108,10 @@ export class CursorAdapter extends HarnessAdapter {
           seat?.rebuttalMode ||
           seat?.mode === 'rebuttal'
       );
+    const effectiveReasoningEffort =
+      baseModel === 'composer-2.5'
+        ? undefined
+        : (callerContext?.reasoningEffort ?? seat?.reasoningEffort);
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -129,6 +134,7 @@ export class CursorAdapter extends HarnessAdapter {
       seatId: seat.id,
       model: seat.model,
       tools: effectiveTools,
+      ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
       ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),

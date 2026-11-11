@@ -77,10 +77,9 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
         resolveRebuttalSeatConfig({ ...baseSeat, harness: 'cursor', model: 'grok-4.7-xhigh' }).model,
         'grok-4.7-medium'
       );
-      assert.equal(
-        resolveRebuttalSeatConfig({ ...baseSeat, harness: 'cursor', model: 'composer-2.5' }).model,
-        'composer-2.5'
-      );
+      const composerResolved = resolveRebuttalSeatConfig({ ...baseSeat, harness: 'cursor', model: 'composer-2.5' });
+      assert.equal(composerResolved.model, 'composer-2.5');
+      assert.equal(composerResolved.reasoningEffort, undefined);
       // Never upshifts -low to -medium
       assert.equal(
         resolveRebuttalSeatConfig({ ...baseSeat, harness: 'antigravity', model: 'claude-sonnet-5-5-low' }).model,
@@ -180,6 +179,32 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
         preserveRebuttalEffort: true
       });
       assert.equal(preservedHighModel.rebuttalTimeoutMs, 120000);
+
+      // Bare model without effort suffix uses HarnessAdapter default timeout (60000ms)
+      const preservedBareModel = resolveRebuttalSeatConfig({
+        id: 'bare-astra',
+        harness: 'codex',
+        model: 'gpt-6-astra',
+        soul: 'Reviewer',
+        tools: 'read-only',
+        preserveRebuttalEffort: true
+      });
+      assert.equal(preservedBareModel.rebuttalTimeoutMs, 60000);
+
+      // Custom harness timeout resolver is honored when provided
+      const preservedCustomHarness = resolveRebuttalSeatConfig(
+        {
+          id: 'bare-astra-custom',
+          harness: 'codex',
+          model: 'gpt-6-astra',
+          soul: 'Reviewer',
+          tools: 'read-only',
+          preserveRebuttalEffort: true
+        },
+        {},
+        { harness: { resolveTimeoutMs: () => 95000 } }
+      );
+      assert.equal(preservedCustomHarness.rebuttalTimeoutMs, 95000);
     });
   });
 
@@ -449,14 +474,14 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
       assert.ok(captured[1].args.some((a) => a.includes('TARGETED REBUTTAL & INVARIANT GUARD:')));
     });
 
-    it('CursorAdapter forwards rebuttalMode for Grok and Composer models without mutating persistent seat', async () => {
+    it('CursorAdapter forwards rebuttalMode and downshifted Grok CLI selector across all Grok formats while keeping Composer effort-free', async () => {
       const captured = [];
       const adapter = new CursorAdapter({
         spawnRunner: (opts) =>
           runCursorCli({
             ...opts,
             exec: async (executable, args, execOpts) => {
-              captured.push({ executable, args, cwd: execOpts.cwd });
+              captured.push({ executable, args, cwd: execOpts.cwd, context: opts.context });
               return {
                 exitCode: 0,
                 stdout: JSON.stringify({ type: 'result', result: validProofJson }),
@@ -466,7 +491,7 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
           })
       });
 
-      for (const origModel of ['grok-4.7-xhigh', 'composer-2.5']) {
+      for (const origModel of ['grok-4.7-xhigh', 'grok-4.7 (xhigh)', 'grok-4.7', 'composer-2.5']) {
         const persistentSeat = {
           id: `cursor-${origModel}`,
           harness: 'cursor',
@@ -491,11 +516,19 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
         assert.deepEqual(persistentSeat, snapshot);
       }
 
-      assert.equal(captured.length, 2);
-      assert.ok(captured[0].args.includes('grok-4.7-medium'));
-      assert.ok(captured[0].args[captured[0].args.length - 1].includes('TARGETED REBUTTAL & INVARIANT GUARD:'));
-      assert.ok(captured[1].args.includes('composer-2.5'));
-      assert.ok(captured[1].args[captured[1].args.length - 1].includes('TARGETED REBUTTAL & INVARIANT GUARD:'));
+      assert.equal(captured.length, 4);
+      // All 3 Grok model formats encode medium effort into Cursor's --model selector
+      for (const idx of [0, 1, 2]) {
+        const modelFlagIdx = captured[idx].args.indexOf('--model');
+        assert.equal(captured[idx].args[modelFlagIdx + 1], 'grok-4.7-medium');
+        assert.equal(captured[idx].context.reasoningEffort, 'medium');
+        assert.ok(captured[idx].args[captured[idx].args.length - 1].includes('TARGETED REBUTTAL & INVARIANT GUARD:'));
+      }
+      // Composer-2.5 stays effort-free
+      const composerModelFlagIdx = captured[3].args.indexOf('--model');
+      assert.equal(captured[3].args[composerModelFlagIdx + 1], 'composer-2.5');
+      assert.equal(captured[3].context.reasoningEffort, undefined);
+      assert.ok(captured[3].args[captured[3].args.length - 1].includes('TARGETED REBUTTAL & INVARIANT GUARD:'));
     });
 
     it('MockAdapter records rebuttalMode and renders targeted rebuttal directive', async () => {

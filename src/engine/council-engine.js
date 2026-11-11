@@ -21,9 +21,16 @@ import { transitionCouncil } from '../machine/reducer.js';
 import { validateProof } from '../proofs/validator.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
-import { EFFORT_TIMEOUT_MAP, HarnessError, InvalidResponseError } from '../harness/adapter.js';
+import { HarnessAdapter, HarnessError, InvalidResponseError } from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
-import { downshiftEffort, downshiftModel, parseModelAndEffort } from '../harness/cli-runner.js';
+import {
+  downshiftEffort,
+  downshiftModel,
+  extractCanonicalBaseModel,
+  parseModelAndEffort
+} from '../harness/cli-runner.js';
+
+const DEFAULT_TIMEOUT_RESOLVER = new HarnessAdapter();
 
 /**
  * Resolves the effective seat configuration for the VOTING phase.
@@ -82,35 +89,6 @@ export function resolveVotingSeatConfig(seat, engineConfig = {}) {
 }
 
 /**
- * Infers effort-scaled default deliberation timeout for a model identifier.
- * Falls back to 240000ms when no recognized effort tier is encoded in the model name.
- *
- * @param {string} [model]
- * @returns {number}
- */
-function inferEffortTimeoutMs(model) {
-  if (typeof model === 'string' && model.trim()) {
-    const trimmed = model.trim().toLowerCase();
-    const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
-    if (parenMatch) {
-      const effort = parenMatch[2].trim();
-      if (EFFORT_TIMEOUT_MAP[effort]) {
-        return EFFORT_TIMEOUT_MAP[effort];
-      }
-    }
-    for (const suffix of ['-xhigh', '-max', '-high', '-medium', '-low']) {
-      if (trimmed.endsWith(suffix)) {
-        const effort = suffix.slice(1);
-        if (EFFORT_TIMEOUT_MAP[effort]) {
-          return EFFORT_TIMEOUT_MAP[effort];
-        }
-      }
-    }
-  }
-  return 240000;
-}
-
-/**
  * Resolves the effective transient seat configuration for Round 2+ targeted rebuttals
  * executed by active seats that accepted the prior round's Candidate and hold zero open objections.
  *
@@ -124,9 +102,11 @@ function inferEffortTimeoutMs(model) {
  *
  * @param {Object} seat
  * @param {Object} [engineConfig={}]
+ * @param {Object} [options={}]
+ * @param {{ resolveTimeoutMs?: (model?: string, explicitTimeoutMs?: number) => number }} [options.harness]
  * @returns {Object}
  */
-export function resolveRebuttalSeatConfig(seat, engineConfig = {}) {
+export function resolveRebuttalSeatConfig(seat, engineConfig = {}, options = {}) {
   const preserveEffort =
     typeof seat.preserveRebuttalEffort === 'boolean'
       ? seat.preserveRebuttalEffort
@@ -189,14 +169,19 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}) {
   if (explicitRebuttalModel) {
     model = explicitRebuttalModel;
   } else if (!preserveEffort) {
+    let baseModel = '';
     let currentEffort = 'high';
     try {
+      baseModel = extractCanonicalBaseModel(seat.model, 'high');
       currentEffort = parseModelAndEffort(seat.model, 'high').effort || 'high';
     } catch {
+      baseModel = '';
       currentEffort = 'high';
     }
     model = downshiftModel(seat.model, targetEffort);
-    reasoningEffort = downshiftEffort(currentEffort, targetEffort);
+    if (baseModel !== 'composer-2.5') {
+      reasoningEffort = downshiftEffort(currentEffort, targetEffort);
+    }
   }
 
   const explicitRebuttalTimeout =
@@ -221,9 +206,14 @@ export function resolveRebuttalSeatConfig(seat, engineConfig = {}) {
     engineConfig.seatBudget ||
     engineConfig['seat-budget'];
 
+  const timeoutResolver =
+    options?.harness && typeof options.harness.resolveTimeoutMs === 'function'
+      ? options.harness
+      : DEFAULT_TIMEOUT_RESOLVER;
+
   let rawRebuttalTimeoutMs;
   if (preserveEffort && explicitRebuttalTimeout === undefined) {
-    rawRebuttalTimeoutMs = explicitBaseTimeout || inferEffortTimeoutMs(seat.model);
+    rawRebuttalTimeoutMs = timeoutResolver.resolveTimeoutMs(seat.model, explicitBaseTimeout);
   } else if (preserveEffort) {
     rawRebuttalTimeoutMs = explicitBaseTimeout
       ? Math.min(explicitBaseTimeout, explicitRebuttalTimeout)
@@ -802,7 +792,7 @@ export class CouncilEngine {
       let effectiveTurnTimeoutMs = initialTurnTimeoutMs;
 
       if (isRebuttal) {
-        rebuttalSeat = resolveRebuttalSeatConfig(mergedSeat, this.config);
+        rebuttalSeat = resolveRebuttalSeatConfig(mergedSeat, this.config, { harness });
         const hasExplicitRebuttalTimeout =
           mergedSeat.rebuttalTimeoutMs !== undefined ||
           mergedSeat.rebuttalTimeout !== undefined ||

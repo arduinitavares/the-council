@@ -3300,7 +3300,16 @@ export async function runCursorCli({
   context,
   onCallRecord
 } = {}) {
-  const parsed = parseModelAndEffort(model, 'high');
+  const baseModel = extractCanonicalBaseModel(model, 'high');
+  const parsed = parseModelAndEffort(
+    model,
+    baseModel === 'composer-2.5' ? 'high' : (context?.reasoningEffort || 'high')
+  );
+  const ALLOWED_GROK_CLI_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+  const cliModel =
+    baseModel === 'grok-4.7' && parsed.effort && ALLOWED_GROK_CLI_EFFORTS.has(parsed.effort)
+      ? `grok-4.7-${parsed.effort}`
+      : parsed.model;
   const effectiveTools =
     tools === 'none' || context?.tools === 'none'
       ? 'none'
@@ -3324,7 +3333,7 @@ export async function runCursorCli({
     '--trust',
     '--mode', 'plan',
     '--sandbox', 'enabled',
-    '--model', parsed.model,
+    '--model', cliModel,
     prompt
   ];
 

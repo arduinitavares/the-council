@@ -1837,10 +1837,12 @@
       }
 
       const isRunning = liveRun ? Boolean(liveRun.isRunning) : (councilState.phase !== 'completed');
+      const isStoppedWithoutVerdict = !isRunning && !councilState.verdict && councilState.phase !== 'completed';
       const panelSig = safeJsonSig({
         selectedRunId: selectedRunId,
         currentStepIdx: currentStepIdx,
         isRunning: isRunning,
+        verdictKind: liveRun ? (liveRun.verdictKind || null) : null,
         topic: councilState.topic,
         phase: councilState.phase,
         round: councilState.round,
@@ -1884,6 +1886,13 @@
             verdictStatusPill.className = 'badge badge-running';
             verdictStatusPill.textContent = 'DELIBERATING';
           }
+        } else if (isStoppedWithoutVerdict) {
+          if (statusPill) statusPill.className = 'badge badge-failed';
+          if (statusPillText) statusPillText.textContent = 'ABORTED: ' + String(councilState.phase || 'STOPPED').toUpperCase();
+          if (verdictStatusPill) {
+            verdictStatusPill.className = 'badge badge-failed';
+            verdictStatusPill.textContent = 'RUN ABORTED';
+          }
         } else {
           const isConsensus = councilState.verdict && councilState.verdict.kind === 'Unanimous Consensus';
           const badgeCls = isConsensus ? 'badge badge-completed' : 'badge badge-failed';
@@ -1906,6 +1915,15 @@
           if (vBox) vBox.className = 'verdict-banner ' + (isConsensus ? 'consensus' : 'dissent');
           if (vTitle) vTitle.textContent = 'Verdict: ' + v.kind;
           if (vBody) vBody.textContent = v.note || 'Deliberation reached conclusion.';
+        } else if (isStoppedWithoutVerdict) {
+          if (vBox) vBox.className = 'verdict-banner dissent';
+          if (vTitle) vTitle.textContent = 'Deliberation Aborted (Round ' + (councilState.round ?? 0) + ')';
+          if (vBody) {
+            vBody.textContent =
+              'Run stopped before reaching a terminal verdict during phase "' +
+              String(councilState.phase || 'stopped') +
+              '".';
+          }
         } else {
           if (vBox) vBox.className = 'verdict-banner running';
           if (vTitle) vTitle.textContent = 'Deliberation in Progress (Round ' + councilState.round + ')';
@@ -1921,13 +1939,15 @@
           }
         }
 
-        // Transition Status
+        // Transition Status (centralized polite live region #transition-banner)
         const transText = document.getElementById('transition-text');
         if (transText) {
           if (councilState.lastTransition && councilState.lastTransition.message) {
             transText.textContent = councilState.lastTransition.message;
           } else if (councilState.history && councilState.history.length > 0) {
             transText.textContent = councilState.history[0];
+          } else if (isStoppedWithoutVerdict) {
+            transText.textContent = 'Run stopped before reaching a terminal verdict.';
           }
         }
 

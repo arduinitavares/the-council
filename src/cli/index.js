@@ -423,11 +423,88 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         });
     }
 
+    const abortController = new AbortController();
+    const composedSignal = io.signal ? AbortSignal.any([abortController.signal, io.signal]) : abortController.signal;
+    engineOptions.signal = composedSignal;
+
+    const SIGNAL_EXIT_CODES = {
+      SIGINT: 130,
+      SIGTERM: 143,
+      SIGHUP: 129
+    };
+    const proc = io.process || process;
+    let terminatingSignal = null;
+    let signalExitCode = null;
+    let externalAborted = false;
+    let resolveSignalAbort = null;
+    const signalAbortPromise = new Promise((resolve) => {
+      resolveSignalAbort = resolve;
+    });
+    let resolveExternalAbort = null;
+    const externalAbortPromise = new Promise((resolve) => {
+      resolveExternalAbort = resolve;
+    });
+    const signalHandlers = new Map();
+    let onComposedAbort = null;
+    const cleanupSignalListeners = () => {
+      for (const [sig, handler] of signalHandlers.entries()) {
+        if (proc && typeof proc.off === 'function') {
+          proc.off(sig, handler);
+        } else if (proc && typeof proc.removeListener === 'function') {
+          proc.removeListener(sig, handler);
+        }
+      }
+      signalHandlers.clear();
+      if (onComposedAbort && composedSignal && typeof composedSignal.removeEventListener === 'function') {
+        composedSignal.removeEventListener('abort', onComposedAbort);
+      }
+    };
+
+    if (io.registerSignalHandlers !== false && proc && typeof proc.on === 'function') {
+      for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        const handler = () => {
+          if (terminatingSignal) return;
+          terminatingSignal = sig;
+          signalExitCode = SIGNAL_EXIT_CODES[sig] || 130;
+          cleanupSignalListeners();
+          abortController.abort(new Error(`Aborted by ${sig}`));
+          if (liveWatcher) {
+            liveWatcher.stop({ reason: 'Aborted' });
+          }
+          if (resolveSignalAbort) {
+            resolveSignalAbort({ abortedBySignal: sig, exitCode: signalExitCode });
+          }
+        };
+        signalHandlers.set(sig, handler);
+        proc.on(sig, handler);
+      }
+    }
+
+    onComposedAbort = () => {
+      if (terminatingSignal || externalAborted) return;
+      externalAborted = true;
+      cleanupSignalListeners();
+      if (liveWatcher) {
+        liveWatcher.stop({ reason: 'Aborted' });
+      }
+      if (resolveExternalAbort) {
+        resolveExternalAbort({ kind: 'external_abort' });
+      }
+    };
+    if (!composedSignal.aborted) {
+      composedSignal.addEventListener('abort', onComposedAbort, { once: true });
+    }
+
     const engine = new CouncilEngine(resolved, engineOptions);
     const runStartedAt = new Date().toISOString();
 
     if (liveWatcher) {
       liveWatcher.attach(engine.getTelemetry());
+    }
+
+    if (composedSignal.aborted) {
+      engine.initRoster();
+      onComposedAbort();
     }
 
     if (values.verbose) {
@@ -443,11 +520,52 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     let result;
     try {
-      result = await engine.run();
-    } finally {
-      if (liveWatcher) {
-        liveWatcher.stop();
+      let raceResult;
+      if (externalAborted) {
+        raceResult = { kind: 'external_abort' };
+      } else {
+        const engineRunPromise = engine.run();
+        engineRunPromise.catch(() => {});
+        raceResult = await Promise.race([
+          engineRunPromise.then((res) => ({ kind: 'result', res })),
+          signalAbortPromise.then((sigInfo) => ({ kind: 'signal', sigInfo })),
+          externalAbortPromise
+        ]);
       }
+      if (raceResult.kind === 'signal') {
+        return await safeExit(raceResult.sigInfo.exitCode);
+      }
+      if (raceResult.kind === 'external_abort') {
+        const currentState = engine.getState();
+        result = {
+          ok: false,
+          aborted: true,
+          verdict: currentState?.verdict || null,
+          state: currentState,
+          snapshots: engine.getTelemetry().getSnapshots(),
+          providerCalls:
+            typeof engine.getTelemetry().getProviderCalls === 'function'
+              ? engine.getTelemetry().getProviderCalls()
+              : []
+        };
+      } else {
+        result = raceResult.res;
+      }
+    } catch (runErr) {
+      if (liveWatcher) {
+        liveWatcher.stop({ reason: 'Aborted' });
+      }
+      throw runErr;
+    } finally {
+      cleanupSignalListeners();
+      if (liveWatcher) {
+        const wasAborted = Boolean(terminatingSignal || externalAborted || engine.aborted || result?.aborted);
+        liveWatcher.stop(wasAborted ? { reason: 'Aborted' } : undefined);
+      }
+    }
+
+    if (terminatingSignal && signalExitCode !== null) {
+      return await safeExit(signalExitCode);
     }
 
     const resolvedOutputDir = explicitOutputDir || liveWatcher?.outputDir;

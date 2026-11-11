@@ -157,6 +157,7 @@ export function getTransitionSummary(event, state) {
 }
 
 export const DEFAULT_OUTPUT_DIR = path.resolve(import.meta.dirname, '../../.council/runs');
+export const DEFAULT_STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
 
 export class VisualizerLiveWatcher {
   /**
@@ -167,6 +168,9 @@ export class VisualizerLiveWatcher {
    * @param {string} [options.runId] - Unique identifier for this deliberation run
    * @param {string} [options.outputPath] - Target path to latest pointer file
    * @param {Object} [options.initialConfig] - Snapshot of Council configuration
+   * @param {number} [options.pid] - Owning OS process PID (defaults to process.pid)
+   * @param {number} [options.staleRunThresholdMs] - Staleness threshold for legacy entries without pid
+   * @param {(pid: number, signal?: number | string) => boolean} [options.killProbe] - Injectable PID liveness probe
    */
   constructor(options = {}) {
     this.telemetry = options.telemetry || null;
@@ -174,6 +178,12 @@ export class VisualizerLiveWatcher {
       typeof options.runId === 'string' && options.runId.trim()
         ? options.runId.trim()
         : `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    this.pid = Number.isInteger(options.pid) && options.pid > 0 ? options.pid : process.pid;
+    this.staleRunThresholdMs =
+      typeof options.staleRunThresholdMs === 'number' && options.staleRunThresholdMs >= 0
+        ? options.staleRunThresholdMs
+        : DEFAULT_STALE_RUN_THRESHOLD_MS;
+    this._killProbe = typeof options.killProbe === 'function' ? options.killProbe : process.kill.bind(process);
     this.outputDir = options.outputDir
       ? path.resolve(options.outputDir)
       : options.outputPath
@@ -196,11 +206,13 @@ export class VisualizerLiveWatcher {
     this.liveRun = {
       id: 'wt-live-latest',
       runId: this.runId,
+      pid: this.pid,
       title: `Live Run: ${this.initialConfig.topic || 'Deliberation'}`,
       description: `Real-time observer stream for live deliberation: ${this.initialConfig.topic || 'Deliberation'}`,
       startedAt: nowIso,
       updatedAt: nowIso,
       isRunning: true,
+      verdictKind: null,
       initialConfig: {
         topic: this.initialConfig.topic || '',
         maxRounds: this.initialConfig.maxRounds ?? 3,
@@ -254,9 +266,38 @@ export class VisualizerLiveWatcher {
   }
 
   /**
-   * Alias for detach() for lifecycle cleanup.
+   * Finalizes an in-flight run on disk before detaching listeners.
+   * Idempotent: no-ops if already stopped or already finalized as completed.
+   * @param {Object} [options]
+   * @param {string} [options.reason]
    */
-  stop() {
+  finalize(options = {}) {
+    if (this._stopped || !this.liveRun || this.liveRun.isRunning !== true) {
+      return;
+    }
+    this.liveRun.isRunning = false;
+    this.liveRun.updatedAt = new Date().toISOString();
+    if (
+      this.liveRun.currentState?.phase !== 'completed' &&
+      !this.liveRun.currentState?.verdict?.kind &&
+      !this.liveRun.verdictKind
+    ) {
+      const reason =
+        options && typeof options.reason === 'string' && options.reason.trim()
+          ? options.reason.trim()
+          : 'Aborted';
+      this.liveRun.verdictKind = reason;
+    }
+    this._writeAtomic();
+  }
+
+  /**
+   * Finalizes any still-running state on disk and detaches listeners.
+   * @param {Object} [options]
+   * @param {string} [options.reason]
+   */
+  stop(options = {}) {
+    this.finalize(options);
     this.detach();
   }
 
@@ -589,6 +630,9 @@ export class VisualizerLiveWatcher {
 
     this.liveRun.currentState = clonedState;
     this.liveRun.isRunning = state.phase !== 'completed';
+    if (clonedState?.verdict?.kind) {
+      this.liveRun.verdictKind = clonedState.verdict.kind;
+    }
     this.liveRun.updatedAt = timestamp || new Date().toISOString();
 
     const stepLabel = `${this.liveRun.steps.length + 1}. Transition: ${event?.type || 'EVENT'} -> ${state.phase} (Round ${state.round})`;
@@ -1085,6 +1129,7 @@ export class VisualizerLiveWatcher {
   }
   function isNotStale(existing, incoming) {
     if (!existing) return true;
+    if (existing.isRunning && !incoming.isRunning) return true;
     const existingSteps = Array.isArray(existing.steps) ? existing.steps.length : 0;
     const incomingSteps = Array.isArray(incoming.steps) ? incoming.steps.length : 0;
     if (incomingSteps !== existingSteps) return incomingSteps > existingSteps;
@@ -1137,6 +1182,272 @@ export class VisualizerLiveWatcher {
   }
 
   /**
+   * Checks whether a given PID is dead (`ESRCH`).
+   * `EPERM` means the process exists and is owned by another user — never treat as dead.
+   * @param {number} pid
+   * @returns {boolean}
+   * @private
+   */
+  _isProcessDead(pid) {
+    try {
+      this._killProbe(pid, 0);
+      return false;
+    } catch (err) {
+      return Boolean(err && err.code === 'ESRCH');
+    }
+  }
+
+  /**
+   * Determines whether another run's manifest entry is orphaned/dead or stale.
+   * @param {Object} entry
+   * @returns {boolean}
+   * @private
+   */
+  _shouldReconcileStaleEntry(entry) {
+    if (!entry || !entry.runId || entry.runId === this.runId || entry.isRunning !== true) {
+      return false;
+    }
+    if (Number.isInteger(entry.pid) && entry.pid > 0) {
+      return this._isProcessDead(entry.pid);
+    }
+    const ts = Date.parse(entry.updatedAt || entry.startedAt || '');
+    if (!Number.isFinite(ts)) {
+      return false;
+    }
+    return Date.now() - ts > this.staleRunThresholdMs;
+  }
+
+  /**
+   * Extracts a balanced JSON object starting at `startIdx` (`'{'`), respecting JSON string quotes and escapes.
+   * @param {string} text
+   * @param {number} startIdx
+   * @returns {string|null}
+   * @private
+   */
+  _extractBalancedJsonObject(text, startIdx) {
+    if (typeof text !== 'string' || startIdx < 0 || text[startIdx] !== '{') {
+      return null;
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(startIdx, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Parses the embedded liveRun JSON object from either `_buildBundleScript` (`const data = {...}`)
+   * or legacy `window.COUNCIL_LIVE_RUN = {...}` JS bundle files without matching inside comments or strings.
+   * @param {string} rawJs
+   * @param {string} [expectedRunId]
+   * @returns {{ parsedRun: Object, isLegacy: boolean }|null}
+   * @private
+   */
+  _parseRunBundleJs(rawJs, expectedRunId) {
+    if (typeof rawJs !== 'string' || !rawJs) {
+      return null;
+    }
+
+    const len = rawJs.length;
+    let i = 0;
+    while (i < len) {
+      const ch = rawJs[i];
+      const next = i + 1 < len ? rawJs[i + 1] : '';
+
+      // Skip line comments
+      if (ch === '/' && next === '/') {
+        i += 2;
+        while (i < len && rawJs[i] !== '\n') i += 1;
+        continue;
+      }
+      // Skip block comments
+      if (ch === '/' && next === '*') {
+        const endComment = rawJs.indexOf('*/', i + 2);
+        if (endComment === -1) return null;
+        i = endComment + 2;
+        continue;
+      }
+      // Skip JS string / template literals outside the target assignment
+      if (ch === "'" || ch === '"' || ch === '`') {
+        const quote = ch;
+        i += 1;
+        while (i < len) {
+          if (rawJs[i] === '\\') {
+            i += 2;
+            continue;
+          }
+          if (rawJs[i] === quote) {
+            i += 1;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+
+      const slice = rawJs.slice(i);
+      const bundleMatch = /^const\s+data\s*=\s*\{/.exec(slice);
+      if (bundleMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+        const braceIdx = i + bundleMatch[0].length - 1;
+        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+        if (!jsonSlice) return null;
+        let parsedRun;
+        try {
+          parsedRun = JSON.parse(jsonSlice);
+        } catch {
+          return null;
+        }
+        if (
+          parsedRun &&
+          typeof parsedRun === 'object' &&
+          !Array.isArray(parsedRun) &&
+          typeof parsedRun.runId === 'string' &&
+          parsedRun.runId.length > 0 &&
+          (!expectedRunId || parsedRun.runId === expectedRunId)
+        ) {
+          return { parsedRun, isLegacy: false };
+        }
+        return null;
+      }
+
+      const legacyMatch = /^(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(slice);
+      if (legacyMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+        const braceIdx = i + legacyMatch[0].length - 1;
+        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
+        if (!jsonSlice) return null;
+        let parsedRun;
+        try {
+          parsedRun = JSON.parse(jsonSlice);
+        } catch {
+          return null;
+        }
+        if (
+          parsedRun &&
+          typeof parsedRun === 'object' &&
+          !Array.isArray(parsedRun) &&
+          typeof parsedRun.runId === 'string' &&
+          parsedRun.runId.length > 0 &&
+          (!expectedRunId || parsedRun.runId === expectedRunId)
+        ) {
+          return { parsedRun, isLegacy: true };
+        }
+        return null;
+      }
+
+      i += 1;
+    }
+
+    return null;
+  }
+
+  /**
+   * Reconciles a dead or stale run's `<runId>.meta.json`, `<runId>.js`, and (if pointing to this orphan) `latest.js` on disk.
+   * Supports both `_buildBundleScript` (`const data = ...;`) and `window.COUNCIL_LIVE_RUN = ...;` formats.
+   * @param {Object} entry
+   * @returns {Object} Reconciled manifest entry
+   * @private
+   */
+  _reconcileStaleRunOnDisk(entry) {
+    const reconciled = {
+      ...entry,
+      isRunning: false,
+      verdictKind: entry.verdictKind || 'Aborted'
+    };
+    const safeRunId = String(entry.runId);
+    if (!/^[a-zA-Z0-9._-]+$/.test(safeRunId) || safeRunId.includes('..')) {
+      return reconciled;
+    }
+
+    const runJsPath = path.join(this.outputDir, `${safeRunId}.js`);
+    let bundleOk = true;
+    try {
+      if (fs.existsSync(runJsPath)) {
+        bundleOk = false;
+        const rawJs = fs.readFileSync(runJsPath, 'utf8');
+        const extracted = this._parseRunBundleJs(rawJs, safeRunId);
+        if (extracted && extracted.parsedRun) {
+          const { parsedRun, isLegacy } = extracted;
+          parsedRun.isRunning = false;
+          parsedRun.verdictKind = parsedRun.verdictKind || reconciled.verdictKind;
+          let rebuilt = this._buildBundleScript(JSON.stringify(parsedRun, null, 2), false);
+          if (isLegacy) {
+            rebuilt +=
+              `if (typeof window !== 'undefined' && window.CouncilRuns) { window.COUNCIL_LIVE_RUN = window.CouncilRuns[${JSON.stringify(safeRunId)}]; }\n` +
+              `if (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) { globalThis.COUNCIL_LIVE_RUN = globalThis.CouncilRuns[${JSON.stringify(safeRunId)}]; }\n`;
+          }
+          this._atomicWriteFile(runJsPath, rebuilt);
+          bundleOk = true;
+        }
+      }
+    } catch {
+      bundleOk = false;
+    }
+
+    const defaultLatestPath = path.join(this.outputDir, 'latest.js');
+    if (this.outputPath !== defaultLatestPath) {
+      try {
+        if (fs.existsSync(defaultLatestPath)) {
+          const rawLatest = fs.readFileSync(defaultLatestPath, 'utf8');
+          const extractedLatest = this._parseRunBundleJs(rawLatest, safeRunId);
+          if (
+            extractedLatest &&
+            extractedLatest.parsedRun &&
+            extractedLatest.parsedRun.runId === safeRunId &&
+            extractedLatest.parsedRun.isRunning === true
+          ) {
+            extractedLatest.parsedRun.isRunning = false;
+            extractedLatest.parsedRun.verdictKind =
+              extractedLatest.parsedRun.verdictKind || reconciled.verdictKind;
+            const rebuiltLatest = this._buildBundleScript(
+              JSON.stringify(extractedLatest.parsedRun, null, 2),
+              true
+            );
+            this._atomicWriteFile(defaultLatestPath, rebuiltLatest);
+          }
+        }
+      } catch {
+        // Isolate latest.js pointer reconciliation errors
+      }
+    }
+
+    if (!bundleOk) {
+      // Retain retry eligibility on disk if `<runId>.js` exists and could not be reconciled yet
+      return entry;
+    }
+
+    const metaPath = path.join(this.outputDir, `${safeRunId}.meta.json`);
+    try {
+      this._atomicWriteFile(metaPath, JSON.stringify(reconciled, null, 2));
+    } catch {
+      // Isolate disk reconciliation errors
+    }
+
+    return reconciled;
+  }
+
+  /**
    * Atomically writes current liveRun to runFilePath, outputPath (latest.js), <runId>.meta.json, and updates index.js.
    * Wrapped in try/catch for observer safety so disk faults never crash deliberation.
    * @private
@@ -1157,13 +1468,14 @@ export class VisualizerLiveWatcher {
       const currentEntry = {
         id: this.runId,
         runId: this.runId,
+        pid: this.pid,
         file: `${this.runId}.js`,
         title: this.liveRun.title,
         topic: this.liveRun.currentState?.topic || this.liveRun.initialConfig?.topic || 'Deliberation',
         startedAt: this.liveRun.startedAt,
         updatedAt: this.liveRun.updatedAt,
         isRunning: this.liveRun.isRunning,
-        verdictKind: this.liveRun.currentState?.verdict?.kind || null
+        verdictKind: this.liveRun.currentState?.verdict?.kind || this.liveRun.verdictKind || null
       };
       this._atomicWriteFile(this.metaFilePath, JSON.stringify(currentEntry, null, 2));
 
@@ -1190,6 +1502,11 @@ export class VisualizerLiveWatcher {
           } catch {
             // Ignore unreadable or partially written meta files
           }
+        }
+      }
+      for (const [candidateRunId, candidateEntry] of byRunId.entries()) {
+        if (candidateRunId !== this.runId && this._shouldReconcileStaleEntry(candidateEntry)) {
+          byRunId.set(candidateRunId, this._reconcileStaleRunOnDisk(candidateEntry));
         }
       }
       byRunId.set(this.runId, currentEntry);

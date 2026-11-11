@@ -682,6 +682,56 @@ export function resolveConfig(userConfig = {}) {
   const defaultTotalBudget = resolvedTimeoutMs !== undefined ? resolvedTimeoutMs * 2 : 480000;
   const resolvedTotalSeatBudgetMs = resolvedSeatBudget !== undefined ? resolvedSeatBudget : defaultTotalBudget;
 
+  const hasExplicitJudgeTimeout =
+    typeof userConfig.judge?._explicitJudgeTimeout === 'boolean'
+      ? userConfig.judge._explicitJudgeTimeout
+      : (userConfig.judge?.timeoutMs !== undefined ||
+          userConfig.judge?.timeout !== undefined ||
+          presetDefinition?.judge?.timeoutMs !== undefined ||
+          presetDefinition?.judge?.timeout !== undefined);
+
+  const explicitJudgeTimeout =
+    userConfig.judge?.timeoutMs !== undefined
+      ? userConfig.judge.timeoutMs
+      : (userConfig.judge?.timeout !== undefined
+          ? userConfig.judge.timeout
+          : (presetDefinition?.judge?.timeoutMs !== undefined
+              ? presetDefinition.judge.timeoutMs
+              : presetDefinition?.judge?.timeout));
+
+  const hasExplicitJudgeBudget =
+    typeof userConfig.judge?._explicitJudgeBudget === 'boolean'
+      ? userConfig.judge._explicitJudgeBudget
+      : (userConfig.judge?.totalSeatBudgetMs !== undefined ||
+          userConfig.judge?.seatBudget !== undefined ||
+          userConfig.judge?.['seat-budget'] !== undefined ||
+          presetDefinition?.judge?.totalSeatBudgetMs !== undefined ||
+          presetDefinition?.judge?.seatBudget !== undefined ||
+          presetDefinition?.judge?.['seat-budget'] !== undefined);
+
+  const explicitJudgeBudget = hasExplicitJudgeBudget
+    ? (userConfig.judge?.totalSeatBudgetMs !== undefined
+        ? userConfig.judge.totalSeatBudgetMs
+        : (userConfig.judge?.seatBudget !== undefined
+            ? userConfig.judge.seatBudget
+            : (userConfig.judge?.['seat-budget'] !== undefined
+                ? userConfig.judge['seat-budget']
+                : (presetDefinition?.judge?.totalSeatBudgetMs !== undefined
+                    ? presetDefinition.judge.totalSeatBudgetMs
+                    : (presetDefinition?.judge?.seatBudget !== undefined
+                        ? presetDefinition.judge.seatBudget
+                        : presetDefinition?.judge?.['seat-budget'])))))
+    : undefined;
+
+  const resolvedJudgeBudgetMs =
+    hasExplicitJudgeBudget && explicitJudgeBudget !== undefined
+      ? explicitJudgeBudget
+      : (hasExplicitJudgeTimeout && typeof explicitJudgeTimeout === 'number'
+          ? explicitJudgeTimeout * 2
+          : (hasExplicitGlobalSeatBudget
+              ? resolvedSeatBudget
+              : resolvedTotalSeatBudgetMs));
+
   const merged = {
     ...DEFAULT_CONFIG,
     ...presetScalarDefaults,
@@ -700,34 +750,16 @@ export function resolveConfig(userConfig = {}) {
       tools: userConfig.judge?.tools !== undefined
         ? userConfig.judge.tools
         : (defaultJudge.tools || defaultTools),
-      ...(userConfig.judge?.timeoutMs !== undefined || userConfig.judge?.timeout !== undefined
+      ...(hasExplicitJudgeTimeout && explicitJudgeTimeout !== undefined
         ? {
-            timeoutMs:
-              userConfig.judge.timeoutMs !== undefined
-                ? userConfig.judge.timeoutMs
-                : userConfig.judge.timeout,
-            timeout:
-              userConfig.judge.timeoutMs !== undefined
-                ? userConfig.judge.timeoutMs
-                : userConfig.judge.timeout
+            timeoutMs: explicitJudgeTimeout,
+            timeout: explicitJudgeTimeout
           }
         : {}),
-      ...(userConfig.judge?.totalSeatBudgetMs !== undefined ||
-      userConfig.judge?.seatBudget !== undefined ||
-      userConfig.judge?.['seat-budget'] !== undefined
+      ...(resolvedJudgeBudgetMs !== undefined
         ? {
-            totalSeatBudgetMs:
-              userConfig.judge.totalSeatBudgetMs !== undefined
-                ? userConfig.judge.totalSeatBudgetMs
-                : (userConfig.judge.seatBudget !== undefined
-                    ? userConfig.judge.seatBudget
-                    : userConfig.judge['seat-budget']),
-            seatBudget:
-              userConfig.judge.totalSeatBudgetMs !== undefined
-                ? userConfig.judge.totalSeatBudgetMs
-                : (userConfig.judge.seatBudget !== undefined
-                    ? userConfig.judge.seatBudget
-                    : userConfig.judge['seat-budget'])
+            totalSeatBudgetMs: resolvedJudgeBudgetMs,
+            seatBudget: resolvedJudgeBudgetMs
           }
         : {}),
       ...(userConfig.judge?.disableHooks !== undefined
@@ -820,6 +852,22 @@ export function resolveConfig(userConfig = {}) {
           ...(typeof merged.judge.cwd === 'string' ? { cwd: merged.judge.cwd.trim() } : {})
         }
       : merged.judge;
+  if (normalizedJudge && typeof normalizedJudge === 'object') {
+    Object.defineProperties(normalizedJudge, {
+      _explicitJudgeTimeout: {
+        value: Boolean(hasExplicitJudgeTimeout),
+        enumerable: false,
+        configurable: false,
+        writable: false
+      },
+      _explicitJudgeBudget: {
+        value: Boolean(hasExplicitJudgeBudget),
+        enumerable: false,
+        configurable: false,
+        writable: false
+      }
+    });
+  }
   const normalizedSeats = Array.isArray(merged.seats)
     ? merged.seats.map((s) =>
         s && typeof s === 'object'

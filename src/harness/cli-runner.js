@@ -5,7 +5,7 @@
  */
 
 import { isUtf8 } from 'node:buffer';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -3424,7 +3424,8 @@ export function buildSanitizedCliEnv(cwd, env) {
 }
 
 /**
- * Executes a CLI process directly via execFile with timeout and abort support.
+ * Executes a CLI process directly via child_process.spawn with POSIX process-group isolation,
+ * bounded stdout/stderr collection, and timeout/abort escalation.
  * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error
  * and sanitizes error.message / error.cmd so raw prompts are never leaked.
  *
@@ -3465,21 +3466,32 @@ export async function execCli(executable, args = [], options = {}) {
     throw abortErr;
   }
 
+  const isPosix = process.platform !== 'win32';
   const normalizedCwd =
     typeof options.cwd === 'string' && options.cwd.trim() ? options.cwd.trim() : undefined;
   const effectiveEnv = buildSanitizedCliEnv(normalizedCwd, options.env);
-  const execOptions = {
-    maxBuffer,
-    encoding: 'utf8',
+  const spawnOptions = {
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    ...(isPosix ? { detached: true } : {}),
     ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
     ...(effectiveEnv ? { env: effectiveEnv } : {})
   };
 
   return new Promise((resolve, reject) => {
     let terminationCause = null;
+    let maxBufferError = null;
+    let terminating = false;
+    let settled = false;
     let timeoutTimer = null;
     let killTimer = null;
+    let drainTimer = null;
     let child = null;
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
 
     const clearTimersAndListeners = () => {
       if (timeoutTimer) {
@@ -3490,37 +3502,101 @@ export async function execCli(executable, args = [], options = {}) {
         clearTimeout(killTimer);
         killTimer = null;
       }
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+        drainTimer = null;
+      }
       if (options.signal) {
         options.signal.removeEventListener('abort', onAbort);
       }
     };
 
+    const destroyStdioStreams = () => {
+      try { child?.stdin?.destroy(); } catch {}
+      try { child?.stdout?.destroy(); } catch {}
+      try { child?.stderr?.destroy(); } catch {}
+    };
+
+    const isProcessGroupDead = () => {
+      if (!isPosix || !child?.pid) {
+        return true;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return false;
+      } catch (err) {
+        return Boolean(err && err.code === 'ESRCH');
+      }
+    };
+
+    const signalProcessTree = (sig) => {
+      if (!child || !child.pid) {
+        return false;
+      }
+      if (isPosix) {
+        try {
+          process.kill(-child.pid, sig);
+          return true;
+        } catch (err) {
+          if (!err || err.code !== 'ESRCH') {
+            // Fall through to direct child.kill attempt
+          }
+        }
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          return child.kill(sig);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    };
+
+    const scheduleStdioDrain = (attempt = 0) => {
+      if (settled || drainTimer) {
+        return;
+      }
+      drainTimer = setTimeout(() => {
+        drainTimer = null;
+        if (settled) {
+          return;
+        }
+        if (isProcessGroupDead() || attempt >= 5) {
+          destroyStdioStreams();
+          return;
+        }
+        signalProcessTree('SIGKILL');
+        scheduleStdioDrain(attempt + 1);
+      }, 15);
+      drainTimer.unref?.();
+    };
+
     const terminateChild = (cause) => {
+      if (settled) {
+        return;
+      }
       if (terminationCause === null) {
         terminationCause = cause;
       }
-      if (!child || child.exitCode !== null || child.signalCode !== null) {
+      if (terminating || !child || !child.pid) {
         return;
       }
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        return;
-      }
+      terminating = true;
+      signalProcessTree('SIGTERM');
       if (killGraceMs === 0) {
-        try {
-          child.kill('SIGKILL');
-        } catch {}
+        signalProcessTree('SIGKILL');
+        scheduleStdioDrain();
         return;
       }
       if (!killTimer) {
         killTimer = setTimeout(() => {
           killTimer = null;
-          if (child && child.exitCode === null && child.signalCode === null) {
-            try {
-              child.kill('SIGKILL');
-            } catch {}
+          if (settled) {
+            return;
           }
+          signalProcessTree('SIGKILL');
+          scheduleStdioDrain();
         }, killGraceMs);
         killTimer.unref?.();
       }
@@ -3534,24 +3610,75 @@ export async function execCli(executable, args = [], options = {}) {
       terminateChild('abort');
     };
 
-    child = execFile(executable, args, execOptions, (error, stdout, stderr) => {
+    try {
+      child = spawn(executable, args, spawnOptions);
+    } catch (spawnErr) {
+      settled = true;
       clearTimersAndListeners();
-      const out = stdout || '';
-      const errOut = stderr || '';
+      spawnErr.exitCode = null;
+      spawnErr.stdout = '';
+      spawnErr.stderr = '';
+      sanitizeCliError(spawnErr, executable, args, options.prompt);
+      return reject(spawnErr);
+    }
+
+    const appendChunk = (chunks, currentBytes, chunk, streamName) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (currentBytes + buf.length > maxBuffer) {
+        const remaining = Math.max(0, maxBuffer - currentBytes);
+        if (remaining > 0) {
+          chunks.push(buf.subarray(0, remaining));
+        }
+        if (!maxBufferError) {
+          maxBufferError = new RangeError(`${streamName} maxBuffer length exceeded`);
+          maxBufferError.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        }
+        terminateChild('maxBuffer');
+        return maxBuffer;
+      }
+      chunks.push(buf);
+      return currentBytes + buf.length;
+    };
+
+    child.stdout?.on('data', (chunk) => {
+      if (maxBufferError) return;
+      stdoutBytes = appendChunk(stdoutChunks, stdoutBytes, chunk, 'stdout');
+    });
+
+    child.stderr?.on('data', (chunk) => {
+      if (maxBufferError) return;
+      stderrBytes = appendChunk(stderrChunks, stderrBytes, chunk, 'stderr');
+    });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimersAndListeners();
+      destroyStdioStreams();
+      const out = Buffer.concat(stdoutChunks).toString('utf8');
+      const errOut = Buffer.concat(stderrChunks).toString('utf8');
+      err.exitCode = typeof err.exitCode === 'number' ? err.exitCode : null;
+      err.stdout = out;
+      err.stderr = errOut;
+      sanitizeCliError(err, executable, args, options.prompt);
+      reject(err);
+    });
+
+    child.on('close', (code, signalCode) => {
+      if (settled) return;
+      settled = true;
+      clearTimersAndListeners();
+      const out = Buffer.concat(stdoutChunks).toString('utf8');
+      const errOut = Buffer.concat(stderrChunks).toString('utf8');
 
       if (terminationCause === 'abort') {
-        const abortErr = error || new Error('The operation was aborted');
+        const abortErr = new Error('The operation was aborted');
         abortErr.name = 'AbortError';
         abortErr.code = 'ABORT_ERR';
-        if (options.signal?.reason !== undefined && abortErr.cause === undefined) {
+        if (options.signal?.reason !== undefined) {
           abortErr.cause = options.signal.reason;
         }
-        abortErr.exitCode =
-          typeof abortErr.status === 'number'
-            ? abortErr.status
-            : typeof child?.exitCode === 'number'
-              ? child.exitCode
-              : null;
+        abortErr.exitCode = typeof code === 'number' ? code : null;
         abortErr.stdout = out;
         abortErr.stderr = errOut;
         sanitizeCliError(abortErr, executable, args, options.prompt);
@@ -3559,36 +3686,47 @@ export async function execCli(executable, args = [], options = {}) {
       }
 
       if (terminationCause === 'timeout') {
-        const timeoutErr = error || new Error(`Command timed out after ${options.timeoutMs}ms`);
+        const timeoutErr = new Error(`Command timed out after ${options.timeoutMs}ms`);
         timeoutErr.killed = true;
-        if (!timeoutErr.code || typeof timeoutErr.code === 'number') {
-          timeoutErr.code = 'ETIMEDOUT';
-        }
-        if (!timeoutErr.signal) {
-          timeoutErr.signal = child?.signalCode || 'SIGTERM';
-        }
-        timeoutErr.exitCode =
-          typeof child?.exitCode === 'number' ? child.exitCode : null;
+        timeoutErr.code = 'ETIMEDOUT';
+        timeoutErr.signal = signalCode || child?.signalCode || 'SIGTERM';
+        timeoutErr.exitCode = typeof code === 'number' ? code : null;
         timeoutErr.stdout = out;
         timeoutErr.stderr = errOut;
         sanitizeCliError(timeoutErr, executable, args, options.prompt);
         return reject(timeoutErr);
       }
 
-      if (!error) {
+      if (terminationCause === 'maxBuffer') {
+        const bufErr = maxBufferError || new RangeError('stdout maxBuffer length exceeded');
+        bufErr.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        bufErr.killed = true;
+        bufErr.signal = signalCode || child?.signalCode || 'SIGTERM';
+        bufErr.exitCode = typeof code === 'number' ? code : null;
+        bufErr.stdout = out;
+        bufErr.stderr = errOut;
+        sanitizeCliError(bufErr, executable, args, options.prompt);
+        return reject(bufErr);
+      }
+
+      if (code === 0 && !signalCode) {
         return resolve({ stdout: out, stderr: errOut, exitCode: 0 });
       }
 
-      const exitCode = typeof error.code === 'number'
-        ? error.code
-        : (typeof error.status === 'number' ? error.status : null);
-
-      error.exitCode = exitCode;
+      const cmd = [executable, ...(Array.isArray(args) ? args : [])].filter(Boolean).join(' ');
+      const failMsg = errOut ? `Command failed: ${cmd}\n${errOut}` : `Command failed: ${cmd}`;
+      const error = new Error(failMsg);
+      error.cmd = cmd;
+      error.killed = Boolean(signalCode);
+      error.signal = signalCode || null;
+      if (typeof code === 'number') {
+        error.code = code;
+      }
+      error.exitCode = typeof code === 'number' ? code : null;
       error.stdout = out;
       error.stderr = errOut;
       sanitizeCliError(error, executable, args, options.prompt);
-
-      reject(error);
+      return reject(error);
     });
 
     if (options.signal) {
@@ -3684,9 +3822,12 @@ function createForbiddenStateAccessError(details, trace, exitCode = 0) {
   return err;
 }
 
+const AGY_FAILURE_FINISH_REASONS = new Set(['print_timeout', 'interrupted', 'error']);
+
 function parseAntigravityOutput(raw, options = null) {
   const str = typeof raw === 'string' ? raw : String(raw || '');
   let unwrappedResponse = null;
+  let hasFailureMetadata = false;
   let toolCalls = [];
   let traceCoverage = 'unavailable';
   let traceForbidden = false;
@@ -3700,6 +3841,7 @@ function parseAntigravityOutput(raw, options = null) {
   if (!str.trim()) {
     return {
       unwrappedResponse,
+      hasFailureMetadata,
       toolCalls,
       skillsRead: [],
       traceCoverage,
@@ -3714,6 +3856,15 @@ function parseAntigravityOutput(raw, options = null) {
     if (json && typeof json === 'object') {
       if (typeof json.response === 'string') {
         unwrappedResponse = json.response;
+      }
+      const finishReason =
+        typeof json.finished_reason === 'string'
+          ? json.finished_reason.trim().toLowerCase()
+          : typeof json.finish_reason === 'string'
+            ? json.finish_reason.trim().toLowerCase()
+            : '';
+      if (AGY_FAILURE_FINISH_REASONS.has(finishReason) || Boolean(json.error)) {
+        hasFailureMetadata = true;
       }
       const hasToolArrayProp =
         Array.isArray(json.toolCalls) ||
@@ -3807,6 +3958,7 @@ function parseAntigravityOutput(raw, options = null) {
 
   return {
     unwrappedResponse,
+    hasFailureMetadata,
     toolCalls,
     skillsRead: [...skillsByName.values()],
     traceCoverage,
@@ -4096,6 +4248,14 @@ export async function runAntigravityCli({
     const durationMs = Date.now() - startTime;
     const raw = result?.stdout || '';
     const parsedOut = parseAntigravityOutput(raw, { forbiddenWorkspaceRoots });
+    const resolvedOutput =
+      typeof parsedOut.unwrappedResponse === 'string'
+        ? (parsedOut.unwrappedResponse.trim() ? parsedOut.unwrappedResponse : '')
+        : raw.trim();
+    const isErrorOutcome =
+      parsedOut.forbiddenStateAccess ||
+      parsedOut.hasFailureMetadata ||
+      !resolvedOutput.trim();
 
     const trace = {
       traceCoverage: parsedOut.traceCoverage,
@@ -4104,7 +4264,7 @@ export async function runAntigravityCli({
       forbiddenStateAccess: parsedOut.forbiddenStateAccess,
       forbiddenAccessDetails: parsedOut.forbiddenAccessDetails,
       durationMs,
-      outcome: parsedOut.forbiddenStateAccess ? 'error' : 'success'
+      outcome: isErrorOutcome ? 'error' : 'success'
     };
 
     if (parsedOut.forbiddenStateAccess) {
@@ -4129,11 +4289,7 @@ export async function runAntigravityCli({
       }
     });
 
-    if (typeof parsedOut.unwrappedResponse === 'string') {
-      return parsedOut.unwrappedResponse;
-    }
-
-    return raw.trim();
+    return resolvedOutput;
   } catch (err) {
     primaryError = err;
     const durationMs = Date.now() - startTime;

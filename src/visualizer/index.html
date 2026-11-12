@@ -1682,6 +1682,10 @@
 
       script.onerror = function () {
         script.remove();
+        if (epoch !== pollEpoch || !liveFollowActive || selectedRunId !== 'latest') {
+          onBranchSettled();
+          return;
+        }
         const fallback = document.createElement('script');
         fallback.id = 'script-live-fallback';
         fallback.src = './live-run-latest.js?t=' + Date.now();

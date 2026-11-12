@@ -419,7 +419,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
         });
 
         assert.ok(capturedArgs.includes('--model'));
-        assert.equal(capturedArgs[capturedArgs.indexOf('--model') + 1], 'claude-sonnet-5-5');
+        assert.equal(capturedArgs[capturedArgs.indexOf('--model') + 1], 'claude-sonnet-5-5-high');
         assert.ok(capturedArgs.includes('--effort'));
         assert.equal(capturedArgs[capturedArgs.indexOf('--effort') + 1], 'max');
         assert.ok(capturedArgs.includes('--print=Test prompt'));

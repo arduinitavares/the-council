@@ -4,6 +4,7 @@
  * Node >= 22 ESM.
  */
 
+import { isUtf8 } from 'node:buffer';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -62,11 +63,12 @@ export function redactArgv(args, prompt = '') {
  * @param {'high'|'medium'|'low'|'max'|'xhigh'|string} [defaultEffort='high']
  * @returns {{ model: string, effort: string, codexEffort: string }}
  */
-export function parseModelAndEffort(modelString, defaultEffort = 'high') {
+export function parseModelAndEffort(modelString, defaultEffort, fallbackReasoningEffort = 'high') {
   if (typeof modelString !== 'string' || !modelString.trim()) {
     throw new Error('modelString must be a non-empty string');
   }
 
+  const resolvedDefault = defaultEffort ?? fallbackReasoningEffort ?? 'high';
   const trimmed = modelString.trim();
 
   // 1. Parenthesized effort format: e.g. "gpt-6-astra (max)"
@@ -75,7 +77,7 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
     const model = parenMatch[1].trim();
     const rawEffort = parenMatch[2].trim();
     if (!rawEffort) {
-      const defaultEff = (defaultEffort || 'high').toLowerCase();
+      const defaultEff = (resolvedDefault || 'high').toLowerCase();
       const codexEffort = CODEX_EFFORT_MAP[defaultEff] || 'high';
       return { model, effort: '', codexEffort };
     }
@@ -98,10 +100,10 @@ export function parseModelAndEffort(modelString, defaultEffort = 'high') {
   }
 
   // 3. Fallback to default effort
-  const defaultEff = (defaultEffort || 'high').toLowerCase();
+  const defaultEff = (resolvedDefault || 'high').toLowerCase();
   if (!CODEX_EFFORT_MAP[defaultEff]) {
     throw new Error(
-      `Configuration error: Unsupported reasoning effort "${defaultEffort}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
+      `Configuration error: Unsupported reasoning effort "${resolvedDefault}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
     );
   }
   const codexEffort = CODEX_EFFORT_MAP[defaultEff];
@@ -1213,19 +1215,16 @@ const FORBIDDEN_COUNCIL_PATH_REGEX =
   /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])\.council(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])/i;
 
 const FORBIDDEN_COUNCIL_GLOB_REGEX =
-  /(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[?*\[\]{}a-z0-9_!^,-]*[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:live-run-)?latest[.*a-z0-9_-]*|telemetry-summary[.*a-z0-9_-]*|[*?]+[\\/](?:(?:live-run-)?latest|run-|telemetry-summary))|\.(?:c(?:o(?:u(?:n(?:c(?:i(?:l)?)?)?)?)?)?[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|\[(?:[!^][^\]\s/]+|[a-z0-9_.-]*c[a-z0-9_.-]*|[a-c]-[c-z])\](?:[*?]+|(?:o(?:u(?:n(?:c(?:i(?:l)?)?)?)?)?)?[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|[?*\[\]{}a-z0-9_!^,-]*(?:council|ouncil|uncil|ncil|cil))|(?:\[[!^]?[a-z0-9_.-]+\]|\{[a-z0-9_.,-]+\}|[?*])+(?:council|ouncil|uncil|ncil|cil)|\{[^}\s/]*council[^}\s/]*\})(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:\?council|\*[^/\s]*council|\.\*\\?\.?council)(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*]|[a-z0-9_.*?-]*))/i;
+  /(?:(?:^|[\s"'`=,:;()[\]{}|&<>!?*\\/])(?:\.[a-z0-9_!^,-]*[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*[\\/](?:runs(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|telemetry(?:[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:live-run-)?latest[.*a-z0-9_-]*|telemetry-summary[.*a-z0-9_-]*|[*?]+[\\/](?:(?:live-run-)?latest|run-|telemetry-summary))|\.(?:c(?:o(?:u(?:n(?:c(?:i(?:l)?)?)?)?)?)?[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|\[(?:[!^][^\]\s/]+|[abd-z0-9_.-]*c[a-z0-9_.-]*|[a-c]-[c-z])\](?:[*?]+|(?:o(?:u(?:n(?:c(?:i(?:l)?)?)?)?)?)?[?*\[\]{}][?*\[\]{}a-z0-9_!^,-]*|[?*\[\]{}a-z0-9_!^,-]*(?:council|ouncil|uncil|ncil|cil))|(?:\[[!^]?[a-z0-9_.-]+\]|\{[a-z0-9_.,-]+\}|[?*])+(?:council|ouncil|uncil|ncil|cil)|\{(?:[^}\s/c]|c(?!ouncil))*council[^}\s/]*\})(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*])|(?:\?council|\.\*\\?\.?council)(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*a-z0-9_.-]))|(?:^|[/\s"'`=,:;()|&<>\\])[^/\s"'`=,:;()|&<>\\*]*\*[^/\s"'`=,:;()|&<>\\]*council(?=[\\/]|$|[\s"'`=,:;()[\]{}|&<>!?*a-z0-9_.-]))/i;
 
 const FORBIDDEN_COUNCIL_ARTIFACT_REGEX =
-  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.(?:js|json|[a-z0-9_!^,.-]*[*?[\]{}][*?[\]{}a-z0-9_!^,.-]*)|live-run-[a-z0-9_*?[\]{}.-]+|(?:runs[\\/]run-[a-z0-9_*?[\]{}!^,-]+|run-\d+-[a-f0-9]+(?:-[a-z0-9]+)*|run-[a-z0-9_!^,-]*[*?[\]{}][a-z0-9_*?[\]{}!^,-]*)\.(?:js|json|[a-z0-9_!^,.-]*[*?[\]{}][*?[\]{}a-z0-9_!^,.-]*)|[a-z0-9_*?[\]{}!^,-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary(?:\.(?:json|js|[*?a-z0-9_-]+)|[*?][*?a-z0-9_.-]*))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
+  /(?:^|[\\/\s"'`=,:;()[\]{}*?])(?:(?:live-run-)?latest\.(?:js|json|[a-z0-9_!^,.-]*[*?[\]{}][*?[\]{}a-z0-9_!^,.-]*)|live-run-[a-z0-9_*?[\]{}.-]+|(?:runs[\\/]run-[a-z0-9_*?[\]{}!^,-]+|run-\d+-[a-f0-9]+(?:-[a-z0-9]+)*|run-[a-z0-9_!^,-]*[*?[\]{}][a-z0-9_*?[\]{}!^,-]*)\.(?:js|json|[a-z0-9_!^,.-]*[*?[\]{}][*?[\]{}a-z0-9_!^,.-]*)|[a-z0-9_!^-]*\.(?:meta\.json|events\.jsonl)|telemetry-summary(?:\.(?:json|js|[*?a-z0-9_-]+)|[*?][*?a-z0-9_.-]*))(?:$|[\\/\s"'`=,:;()[\]{}|&<>!?*])/i;
 
 const SAFE_EXCLUSION_ARG_PATTERN =
   '(?!\'?\"?[^\\s\'"\\r\\n;|&<>()`$]*\\.council\\/[a-z0-9_])(?:\'[^\'\\r\\n;|&<>()`$]*\'|"[^"\\r\\n;|&<>()`$]*"|[^\\s;|&<>()`$]+)';
 
 const SAFE_NEGATED_GLOB_ARG_PATTERN =
   '(?!\'?\"?![^\\s\'"\\r\\n;|&<>()`$]*\\.council\\/[a-z0-9_])(?:\'![^\'\\r\\n;|&<>()`$]*\'|"![^"\\r\\n;|&<>()`$]*"|![^\\s;|&<>()`$]+)';
-
-const SAFE_FIND_NEGATED_GLOB_ARG_PATTERN =
-  '(?!\'?\"?[^\\s\'"\\r\\n;|&<>()`$]*\\.council\\/[a-z0-9_])(?:\'[^\'\\r\\n;|&<>()`$]*\\/\\*\\*?\'|"[^"\\r\\n;|&<>()`$]*\\/\\*\\*?"|[^\\s\'"\\r\\n;|&<>()`$]*\\/\\*\\*?)';
 
 const SEARCH_EXCLUSION_FLAG_REGEX = new RegExp(
   `(?:^|\\s)(?:--(?:exclude-dir|exclude|ignore-dir)(?:=|\\s+)|--ignore=)${SAFE_EXCLUSION_ARG_PATTERN}`,
@@ -1240,23 +1239,8 @@ const NEGATED_GLOB_FLAG_REGEX = new RegExp(
 const GIT_EXCLUDE_PATHSPEC_REGEX =
   /(?:^|\s)(?!'?"?:\((?:exclude(?:,glob)?|glob,exclude)\)[^\s'"\r\n;|&<>()`$]*\.council\/[a-z0-9_])(?:':\((?:exclude(?:,glob)?|glob,exclude)\)[^'\r\n;|&<>()`$]*'|":\((?:exclude(?:,glob)?|glob,exclude)\)[^"\r\n;|&<>()`$]*"|:\((?:exclude(?:,glob)?|glob,exclude)\)[^\s;|&<>()`$]+)/gi;
 
-const FIND_UNNEGATED_CLAUSE_LOOKBEHIND =
-  '(?<=^|[\\s(])(?<!(?:^|[\\s(])(?:(?:\\\\!|!|-not|-o|-or)\\s+|(?:\\\\!|!|-not)\\s*\\\\?\\([^()]*))';
-
-const FIND_PAREN_PRUNE_REGEX = new RegExp(
-  `${FIND_UNNEGATED_CLAUSE_LOOKBEHIND}(?:\\\\\\(|[(])\\s*(?:(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}(?:\\s+(?:-a|-and))?(?:\\s+-prune)?(?:\\s+(?:-o|-or)\\s+(?=-i?(?:path|wholename|name|regex)\\b))?)+\\s*(?:\\\\\\)|[)])\\s*(?:(?:-a|-and)\\s+)?-prune|(?:-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}(?:\\s+(?:-a|-and))?\\s+-prune(?:\\s+(?:-o|-or)\\s+(?=-i?(?:path|wholename|name|regex)\\b))?)+\\s*(?:\\\\\\)|[)])(?:\\s*-prune)?)\\s+(?:-o|-or)\\b`,
-  'gi'
-);
-
-const FIND_SIMPLE_PRUNE_REGEX = new RegExp(
-  `${FIND_UNNEGATED_CLAUSE_LOOKBEHIND}-i?(?:path|wholename|name|regex)\\s+${SAFE_EXCLUSION_ARG_PATTERN}(?:\\s+(?:-a|-and))?\\s+-prune\\s+(?:-o|-or)\\b`,
-  'gi'
-);
-
-const FIND_NEGATED_PATH_REGEX = new RegExp(
-  `${FIND_UNNEGATED_CLAUSE_LOOKBEHIND}(?:\\\\!|!|-not)\\s+-i?(?:path|wholename)\\s+${SAFE_FIND_NEGATED_GLOB_ARG_PATTERN}(?!\\s*(?:\\\\?\\)\\s*)*(?:-o|-or)\\b)`,
-  'gi'
-);
+const FIND_SCAN_TOKEN_REGEX =
+  /\\\(|\\\)|\\?!(?=\s|\\?\(|$)|[();|&<>]|[\r\n]+|'[^'\r\n]*'|"[^"\r\n]*"|[^\s()'";|&<>]+/g;
 
 function isSafeExclusionToken(token) {
   if (typeof token !== 'string') return false;
@@ -1269,6 +1253,192 @@ function isSafeExclusionToken(token) {
 function isSafeFindNegatedGlobToken(token) {
   if (!isSafeExclusionToken(token)) return false;
   return /\/\*\*?['"]?$/.test(token.trim());
+}
+
+function isSafeFindStringExclusionToken(rawToken) {
+  if (typeof rawToken !== 'string') return false;
+  const trimmed = rawToken.trim();
+  if (!trimmed) return false;
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2)
+  ) {
+    const inner = trimmed.slice(1, -1);
+    if (/[\r\n;|&<>()`$]/.test(inner)) return false;
+    if (/\.council\/[a-z0-9_]/i.test(inner)) return false;
+    return true;
+  }
+  return isSafeExclusionToken(trimmed);
+}
+
+function isSafeFindStringNegatedGlobToken(rawToken) {
+  if (!isSafeFindStringExclusionToken(rawToken)) return false;
+  const unquoted = stripOuterMatchingQuotes(rawToken.trim());
+  return /\/\*\*?$/.test(unquoted);
+}
+
+function stripFindExclusionsLinear(str) {
+  const hasFindDepthOrDelete = /(?:^|[\s('"\\])-(?:depth|d|delete)\b/i.test(str);
+  const tokens = [];
+  let m;
+  FIND_SCAN_TOKEN_REGEX.lastIndex = 0;
+  while ((m = FIND_SCAN_TOKEN_REGEX.exec(str)) !== null) {
+    tokens.push({
+      text: m[0],
+      start: m.index,
+      end: m.index + m[0].length
+    });
+  }
+  if (tokens.length === 0) return str;
+
+  const stripRanges = [];
+  const negatedParenStack = [];
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tk = tokens[i].text;
+
+    if (/^[;|&<>]|^[\r\n]/.test(tk)) {
+      negatedParenStack.length = 0;
+      continue;
+    }
+
+    const insideTaintedParen =
+      negatedParenStack.length > 0 && negatedParenStack[negatedParenStack.length - 1];
+    const prevText = i > 0 ? tokens[i - 1].text : '';
+    const precededByNegOrOr =
+      insideTaintedParen || /^(?:\\!|!|-not|-o|-or)$/i.test(prevText);
+
+    if (
+      !precededByNegOrOr &&
+      /^(?:\\!|!|-not)$/i.test(tk) &&
+      i + 2 < tokens.length &&
+      /^-i?(?:path|wholename)$/i.test(tokens[i + 1].text) &&
+      isSafeFindStringNegatedGlobToken(tokens[i + 2].text)
+    ) {
+      let nextIdx = i + 3;
+      while (nextIdx < tokens.length && /^(?:\\\)|\))$/.test(tokens[nextIdx].text)) {
+        nextIdx += 1;
+      }
+      const effectiveAfter = nextIdx < tokens.length ? tokens[nextIdx].text : '';
+      if (!/^(?:-o|-or)$/i.test(effectiveAfter)) {
+        stripRanges.push([tokens[i].start, tokens[i + 2].end]);
+        i += 2;
+        continue;
+      }
+    }
+
+    if (!hasFindDepthOrDelete && !precededByNegOrOr) {
+      if (
+        /^-i?(?:path|wholename|name|regex)$/i.test(tk) &&
+        i + 3 < tokens.length &&
+        isSafeFindStringExclusionToken(tokens[i + 1].text)
+      ) {
+        let pruneIdx = i + 2;
+        if (/^(?:-a|-and)$/i.test(tokens[pruneIdx].text)) {
+          pruneIdx += 1;
+        }
+        if (
+          pruneIdx + 1 < tokens.length &&
+          tokens[pruneIdx].text.toLowerCase() === '-prune' &&
+          /^(?:-o|-or)$/i.test(tokens[pruneIdx + 1].text)
+        ) {
+          stripRanges.push([tokens[i].start, tokens[pruneIdx + 1].end]);
+          i = pruneIdx + 1;
+          continue;
+        }
+      }
+
+      if (/^(?:\\\(|\()$/.test(tk)) {
+        let k = i + 1;
+        let validGroup = false;
+        let allClausesPruned = true;
+        let clauseCount = 0;
+        while (k < tokens.length) {
+          const innerTk = tokens[k].text;
+          if (/^(?:\\\)|\))$/.test(innerTk)) {
+            validGroup = clauseCount > 0;
+            break;
+          }
+          if (
+            /^-i?(?:path|wholename|name|regex)$/i.test(innerTk) &&
+            k + 1 < tokens.length &&
+            isSafeFindStringExclusionToken(tokens[k + 1].text)
+          ) {
+            clauseCount += 1;
+            k += 2;
+            const maybeAnd = k < tokens.length ? tokens[k].text : '';
+            if (
+              /^(?:-a|-and)$/i.test(maybeAnd) &&
+              k + 1 < tokens.length &&
+              tokens[k + 1].text.toLowerCase() === '-prune'
+            ) {
+              k += 2;
+            } else if (maybeAnd.toLowerCase() === '-prune') {
+              k += 1;
+            } else {
+              allClausesPruned = false;
+            }
+            const nextInGroup = k < tokens.length ? tokens[k].text : '';
+            if (/^(?:\\\)|\))$/.test(nextInGroup)) {
+              continue;
+            }
+            if (
+              /^(?:-o|-or)$/i.test(nextInGroup) &&
+              k + 1 < tokens.length &&
+              /^-i?(?:path|wholename|name|regex)$/i.test(tokens[k + 1].text)
+            ) {
+              k += 1;
+              continue;
+            }
+          }
+          validGroup = false;
+          break;
+        }
+
+        if (validGroup && k < tokens.length) {
+          let afterClose = k + 1;
+          let hasOuterPrune = false;
+          const afterCloseToken = afterClose < tokens.length ? tokens[afterClose].text : '';
+          if (afterCloseToken.toLowerCase() === '-prune') {
+            hasOuterPrune = true;
+            afterClose += 1;
+          } else if (
+            /^(?:-a|-and)$/i.test(afterCloseToken) &&
+            afterClose + 1 < tokens.length &&
+            tokens[afterClose + 1].text.toLowerCase() === '-prune'
+          ) {
+            hasOuterPrune = true;
+            afterClose += 2;
+          }
+          const orToken = afterClose < tokens.length ? tokens[afterClose].text : '';
+          if ((hasOuterPrune || allClausesPruned) && /^(?:-o|-or)$/i.test(orToken)) {
+            stripRanges.push([tokens[i].start, tokens[afterClose].end]);
+            i = afterClose;
+            continue;
+          }
+        }
+      }
+    }
+
+    if (/^(?:\\\(|\()$/.test(tk)) {
+      negatedParenStack.push(precededByNegOrOr);
+    } else if (/^(?:\\\)|\))$/.test(tk)) {
+      if (negatedParenStack.length > 0) {
+        negatedParenStack.pop();
+      }
+    }
+  }
+
+  if (stripRanges.length === 0) return str;
+
+  let out = '';
+  let cursor = 0;
+  for (const [start, end] of stripRanges) {
+    out += str.slice(cursor, start) + ' ';
+    cursor = end;
+  }
+  out += str.slice(cursor);
+  return out;
 }
 
 function isSafeExclusionValue(val) {
@@ -1301,16 +1471,10 @@ function stripBenignCouncilExclusions(str) {
   next = next.replace(NEGATED_GLOB_FLAG_REGEX, ' ');
   next = next.replace(GIT_EXCLUDE_PATHSPEC_REGEX, ' ');
 
-  // 4. find exclusion clauses:
-  //    a) parenthesized or simple -path / -ipath / -wholename / -name / -iname / -regex followed by -prune -o
-  //       (only when -depth / -d / -delete is absent, since -prune is a no-op under depth-first traversal)
-  const hasFindDepthOrDelete = /(?:^|[\s('"\\])-(?:depth|d|delete)\b/i.test(next);
-  if (!hasFindDepthOrDelete) {
-    next = next.replace(FIND_PAREN_PRUNE_REGEX, ' ');
-    next = next.replace(FIND_SIMPLE_PRUNE_REGEX, ' ');
+  // 4. find exclusion clauses (linear single-pass token scan when find predicates appear):
+  if (/-i?(?:path|wholename|name|regex)\b/i.test(next)) {
+    next = stripFindExclusionsLinear(next);
   }
-  //    b) single ! or -not preceding -path / -ipath / -wholename / -iwholename ending in /* or /** (not preceded by outer negation or -o, nor followed by -o)
-  next = next.replace(FIND_NEGATED_PATH_REGEX, ' ');
 
   // 5. Standalone negated glob tokens inside a command or list (e.g., rg "pattern" -g '!.council/**')
   next = next.replace(
@@ -1319,6 +1483,169 @@ function stripBenignCouncilExclusions(str) {
   );
 
   return next;
+}
+
+const MAX_TRACE_SCAN_BYTES = 262_144;
+
+function sliceUtf8Bytes(str, maxBytes = MAX_TRACE_SCAN_BYTES) {
+  if (typeof str !== 'string' || !str) return '';
+  const pre = str.length > maxBytes ? str.slice(0, maxBytes) : str;
+  if (Buffer.byteLength(pre, 'utf8') <= maxBytes) {
+    return pre;
+  }
+  return Buffer.from(pre, 'utf8')
+    .subarray(0, maxBytes)
+    .toString('utf8')
+    .replace(/\uFFFD+$/, '');
+}
+
+function stripOuterMatchingQuotes(s) {
+  if (s.length >= 2) {
+    const first = s[0];
+    const last = s[s.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return s.slice(1, -1);
+    }
+  }
+  return s;
+}
+
+function normalizeComparablePath(rawPath, { allowFileUri = false } = {}) {
+  if (typeof rawPath !== 'string') return null;
+  let p = stripOuterMatchingQuotes(rawPath.trim());
+  if (!p) return null;
+
+  let fromFileUri = false;
+  if (allowFileUri && p.toLowerCase().startsWith('file://')) {
+    fromFileUri = true;
+    p = p.slice('file://'.length);
+    if (p.toLowerCase().startsWith('localhost/')) {
+      p = p.slice('localhost'.length);
+    }
+    try {
+      p = decodeURIComponent(p);
+    } catch {
+      // Keep raw URI path on malformed percent encoding
+    }
+    if (/^\/[A-Za-z][:|](?:[\\/]|$)/.test(p)) {
+      p = `${p[1]}:${p.slice(3)}`;
+    } else if (/^[A-Za-z]\|(?:[\\/]|$)/.test(p)) {
+      p = `${p[0]}:${p.slice(2)}`;
+    }
+  }
+
+  const slashPreview = p.replace(/\\/g, '/');
+  const isWinDrive = /^[A-Za-z]:(?:\/|$)/.test(slashPreview);
+  const isWinBackslashUnc = /^\\\\[^\\]+\\[^\\]+/.test(p);
+
+  if (isWinDrive || isWinBackslashUnc) {
+    if (allowFileUri && !fromFileUri && /^[A-Za-z]:$/.test(slashPreview)) {
+      return null;
+    }
+    const winNorm = path.win32.normalize(p).replace(/\\/g, '/').toLowerCase();
+    const clean = winNorm.length > 1 ? winNorm.replace(/\/+$/, '') : winNorm;
+    return clean || null;
+  }
+
+  if (!slashPreview.startsWith('/')) {
+    return null;
+  }
+
+  const posixNorm = path.posix.normalize(slashPreview);
+  const clean = posixNorm.length > 1 ? posixNorm.replace(/\/+$/, '') : posixNorm;
+  return clean || null;
+}
+
+function normalizeForbiddenWorkspaceRoots(optionsOrRoots) {
+  const rawList = Array.isArray(optionsOrRoots)
+    ? optionsOrRoots
+    : Array.isArray(optionsOrRoots?.forbiddenWorkspaceRoots)
+      ? optionsOrRoots.forbiddenWorkspaceRoots
+      : [];
+  if (rawList.length === 0) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of rawList) {
+    const clean = normalizeComparablePath(item, { allowFileUri: false });
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+function checkSinglePathCandidateAgainstRoots(rawCand, normRoots) {
+  const clean = normalizeComparablePath(rawCand, { allowFileUri: true });
+  if (!clean) return false;
+  for (const root of normRoots) {
+    if (clean === root || clean.startsWith(`${root}/`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pushTokenAndAttachedForms(target, rawSpan) {
+  const trimmedTok = stripOuterMatchingQuotes(
+    rawSpan.trim().replace(/^[([{]+/, '').replace(/[)\]}]+$/, '')
+  );
+  if (!trimmedTok) return;
+  target.push(trimmedTok);
+
+  const eqIdx = trimmedTok.indexOf('=');
+  if (eqIdx !== -1 && eqIdx + 1 < trimmedTok.length) {
+    target.push(stripOuterMatchingQuotes(trimmedTok.slice(eqIdx + 1)));
+  }
+
+  const shortFlagMatch = trimmedTok.match(
+    /^-[A-Za-z]((?:\/|\\|[A-Za-z]:[\\/]|file:\/\/).*)$/i
+  );
+  if (shortFlagMatch) {
+    target.push(stripOuterMatchingQuotes(shortFlagMatch[1]));
+  }
+}
+
+function matchesForbiddenWorkspaceRoot(str, normRoots) {
+  if (!str || !normRoots || normRoots.length === 0) return false;
+  if (!str.includes('/') && !str.includes('\\')) return false;
+
+  const rawCandidates = [];
+
+  // 1. Extract single- and double-quoted spans linearly
+  const quoteRegex = /'([^'\r\n]+)'|"([^"\r\n]+)"/g;
+  let qMatch;
+  while ((qMatch = quoteRegex.exec(str)) !== null) {
+    const inner = qMatch[1] ?? qMatch[2];
+    if (inner) pushTokenAndAttachedForms(rawCandidates, inner);
+  }
+
+  // 2. Extract whitespace / shell-punctuator delimited tokens linearly
+  const tokens = str.split(/[\s;|&<>()`]+/);
+  for (const rawTok of tokens) {
+    if (!rawTok) continue;
+    pushTokenAndAttachedForms(rawCandidates, rawTok);
+  }
+
+  for (const cand of rawCandidates) {
+    if (checkSinglePathCandidateAgainstRoots(cand, normRoots)) {
+      return true;
+    }
+    if (
+      !cand.toLowerCase().includes('file://') &&
+      !/^[A-Za-z]:[\\/]/.test(cand) &&
+      cand.includes(':/')
+    ) {
+      const parts = cand.split(/:(?=\/)/);
+      for (const part of parts) {
+        if (checkSinglePathCandidateAgainstRoots(part, normRoots)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 function matchesForbiddenCouncilPattern(str) {
@@ -1330,41 +1657,104 @@ function matchesForbiddenCouncilPattern(str) {
   );
 }
 
-export function hasForbiddenCouncilToken(str) {
-  if (typeof str !== 'string' || !str) return false;
-  const sanitized = stripBenignCouncilExclusions(str);
-  if (!sanitized || !sanitized.trim()) return false;
-  if (matchesForbiddenCouncilPattern(sanitized)) return true;
-  if (
-    sanitized.includes('"') ||
-    sanitized.includes("'") ||
-    sanitized.includes('\\') ||
-    sanitized.includes('[') ||
-    sanitized.includes('{') ||
-    sanitized.includes('(')
-  ) {
-    let dequoted = sanitized
-      .replace(/\$['"]{2}/g, '')
-      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-      .replace(/\$(?=['"])/g, '');
-    let prevDequoted;
-    do {
-      prevDequoted = dequoted;
-      dequoted = dequoted.replace(/([@+*?!])\(([^()]+)\)/g, (_, op, inner) => {
-        if (op === '!') return '*';
-        return inner.includes('|') ? `{${inner.replace(/\|/g, ',')}}` : inner;
-      });
-    } while (dequoted !== prevDequoted);
-    dequoted = dequoted
-      .replace(/\\(?=[.a-zA-Z0-9_/*?[\]{}!^()-])/g, '')
-      .replace(/["']/g, '')
-      .replace(/\[([a-zA-Z0-9_.-])\]/g, '$1')
-      .replace(/\{([a-zA-Z0-9_.-]+)\}/g, '$1');
-    if (dequoted !== sanitized && matchesForbiddenCouncilPattern(dequoted)) {
+function hasOneShotEncodedForbiddenToken(bounded, normRoots) {
+  // 1. One-shot printf / ANSI-C octal escape decode (\056, \143, etc.)
+  if (bounded.includes('\\')) {
+    const octalDecoded = bounded.replace(/\\(0?[0-7]{2,3})/g, (full, oct) => {
+      const code = parseInt(oct, 8);
+      return code >= 32 && code <= 126 ? String.fromCharCode(code) : full;
+    });
+    if (octalDecoded !== bounded) {
+      const strippedQuotes = octalDecoded.replace(/\$?['"]/g, '');
+      if (
+        matchesForbiddenCouncilPattern(octalDecoded) ||
+        matchesForbiddenCouncilPattern(strippedQuotes) ||
+        (normRoots.length > 0 &&
+          (matchesForbiddenWorkspaceRoot(octalDecoded, normRoots) ||
+            matchesForbiddenWorkspaceRoot(strippedQuotes, normRoots)))
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // 2. One-shot standalone base64 literal decode across the full 262,144-byte slice
+  const b64Regex = /[A-Za-z0-9+/]{8,}={0,2}/g;
+  let match;
+  while ((match = b64Regex.exec(bounded)) !== null) {
+    const token = match[0];
+    if (token.length % 4 === 1) continue;
+    const buf = Buffer.from(token, 'base64');
+    if (buf.length < 6 || !isUtf8(buf)) {
+      continue;
+    }
+    const decoded = buf.toString('utf8');
+    if (decoded.length < 6 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      continue;
+    }
+    if (
+      matchesForbiddenCouncilPattern(decoded) ||
+      (normRoots.length > 0 && matchesForbiddenWorkspaceRoot(decoded, normRoots))
+    ) {
       return true;
     }
   }
+
   return false;
+}
+
+export function hasForbiddenCouncilToken(str, options = null) {
+  if (typeof str !== 'string' || !str) return false;
+  const bounded = sliceUtf8Bytes(str, MAX_TRACE_SCAN_BYTES);
+  const normRoots = normalizeForbiddenWorkspaceRoots(options);
+
+  if (normRoots.length > 0 && matchesForbiddenWorkspaceRoot(bounded, normRoots)) {
+    return true;
+  }
+
+  const sanitized = stripBenignCouncilExclusions(bounded);
+  if (sanitized && sanitized.trim()) {
+    if (matchesForbiddenCouncilPattern(sanitized)) return true;
+    if (
+      sanitized.includes('"') ||
+      sanitized.includes("'") ||
+      sanitized.includes('\\') ||
+      sanitized.includes('[') ||
+      sanitized.includes('{') ||
+      sanitized.includes('(')
+    ) {
+      let dequoted = sanitized
+        .replace(/\$['"]{2}/g, '')
+        .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/\$(?=['"])/g, '');
+      if (/[@+*?!]\(/.test(dequoted)) {
+        let prevDequoted;
+        let passes = 0;
+        do {
+          prevDequoted = dequoted;
+          dequoted = dequoted.replace(/([@+*?!])\(([^()]+)\)/g, (_, op, inner) => {
+            if (op === '!') return '*';
+            return inner.includes('|') ? `{${inner.replace(/\|/g, ',')}}` : inner;
+          });
+          passes += 1;
+        } while (dequoted !== prevDequoted && passes < 8);
+      }
+      dequoted = dequoted
+        .replace(/\\(?=[.a-zA-Z0-9_/*?[\]{}!^()-])/g, '')
+        .replace(/["']/g, '')
+        .replace(/\[([a-zA-Z0-9_.-])\]/g, '$1')
+        .replace(/\{([a-zA-Z0-9_.-]+)\}/g, '$1');
+      if (
+        dequoted !== sanitized &&
+        (matchesForbiddenCouncilPattern(dequoted) ||
+          (normRoots.length > 0 && matchesForbiddenWorkspaceRoot(dequoted, normRoots)))
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return hasOneShotEncodedForbiddenToken(bounded, normRoots);
 }
 
 const FORBIDDEN_ACCESS_OUTPUT_KEYS = new Set([
@@ -1412,41 +1802,22 @@ const FORBIDDEN_ACCESS_INPUT_CONTAINER_KEYS = new Set([
   'params'
 ]);
 
-function isPrecededByNegationOrOrInFindArray(arr, index) {
-  if (index <= 0) return false;
-  const immediatePrev = String(arr[index - 1] || '').trim();
-  if (/^(?:\\!|!|-not|-o|-or)$/i.test(immediatePrev)) {
-    return true;
-  }
-  let depth = 0;
-  for (let j = index - 1; j >= 0; j -= 1) {
-    const tk = String(arr[j] || '').trim();
-    if (/^(?:\\\)|\))$/.test(tk)) {
-      depth += 1;
-    } else if (/^(?:\\\(|\()$/.test(tk)) {
-      if (depth > 0) {
-        depth -= 1;
-      } else {
-        const beforeParen = j > 0 ? String(arr[j - 1] || '').trim() : '';
-        if (/^(?:\\!|!|-not|-o|-or)$/i.test(beforeParen)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 function filterBenignStringArrayExclusions(arr) {
   const hasFindDepthOrDelete = arr.some(
     (item) => typeof item === 'string' && /^['"]?-(?:depth|d|delete)['"]?$/i.test(item.trim())
   );
   const result = [];
+  const negatedParenStack = [];
   for (let i = 0; i < arr.length; i += 1) {
     const token = arr[i].trim();
     const nextToken = typeof arr[i + 1] === 'string' ? arr[i + 1].trim() : '';
     const thirdToken = typeof arr[i + 2] === 'string' ? arr[i + 2].trim() : '';
     const fourthToken = typeof arr[i + 3] === 'string' ? arr[i + 3].trim() : '';
+    const insideTaintedParen =
+      negatedParenStack.length > 0 && negatedParenStack[negatedParenStack.length - 1];
+    const prevToken = i > 0 && typeof arr[i - 1] === 'string' ? arr[i - 1].trim() : '';
+    const precededByNegOrOr =
+      insideTaintedParen || /^(?:\\!|!|-not|-o|-or)$/i.test(prevToken);
 
     if (
       /^--(?:exclude-dir|exclude|ignore-dir)$/i.test(token) &&
@@ -1473,6 +1844,7 @@ function filterBenignStringArrayExclusions(arr) {
       continue;
     }
     if (
+      !precededByNegOrOr &&
       /^(?:\\!|!|-not)$/i.test(token) &&
       /^-i?(?:path|wholename)$/i.test(nextToken) &&
       i + 2 < arr.length &&
@@ -1483,23 +1855,29 @@ function filterBenignStringArrayExclusions(arr) {
         nextIdx += 1;
       }
       const effectiveAfter = nextIdx < arr.length ? String(arr[nextIdx] || '').trim() : '';
-      if (
-        !isPrecededByNegationOrOrInFindArray(arr, i) &&
-        !/^(?:-o|-or)$/i.test(effectiveAfter)
-      ) {
+      if (!/^(?:-o|-or)$/i.test(effectiveAfter)) {
         i += 2;
         continue;
       }
     }
-    if (!hasFindDepthOrDelete && !isPrecededByNegationOrOrInFindArray(arr, i)) {
+    if (!hasFindDepthOrDelete && !precededByNegOrOr) {
       if (
         /^-i?(?:path|wholename|name|regex)$/i.test(token) &&
-        isSafeExclusionToken(nextToken) &&
-        thirdToken === '-prune' &&
-        /^(?:-o|-or)$/i.test(fourthToken)
+        isSafeExclusionToken(nextToken)
       ) {
-        i += 3;
-        continue;
+        if (thirdToken === '-prune' && /^(?:-o|-or)$/i.test(fourthToken)) {
+          i += 3;
+          continue;
+        }
+        const fifthToken = typeof arr[i + 4] === 'string' ? arr[i + 4].trim() : '';
+        if (
+          /^(?:-a|-and)$/i.test(thirdToken) &&
+          fourthToken === '-prune' &&
+          /^(?:-o|-or)$/i.test(fifthToken)
+        ) {
+          i += 4;
+          continue;
+        }
       }
       if (/^(?:\\\(|\()$/.test(token)) {
         let k = i + 1;
@@ -1572,6 +1950,14 @@ function filterBenignStringArrayExclusions(arr) {
         }
       }
     }
+
+    if (/^(?:\\\(|\()$/.test(token)) {
+      negatedParenStack.push(precededByNegOrOr);
+    } else if (/^(?:\\\)|\))$/.test(token)) {
+      if (negatedParenStack.length > 0) {
+        negatedParenStack.pop();
+      }
+    }
     result.push(arr[i]);
   }
   return result;
@@ -1583,12 +1969,12 @@ function filterBenignStringArrayExclusions(arr) {
  * @param {string|Object} value
  * @returns {boolean}
  */
-export function isForbiddenCouncilPathOrCommand(value) {
+export function isForbiddenCouncilPathOrCommand(value, options = null) {
   if (typeof value === 'string') {
-    return hasForbiddenCouncilToken(value);
+    return hasForbiddenCouncilToken(value, options);
   }
   if (value && typeof value === 'object') {
-    return detectForbiddenCouncilAccess(value).forbiddenStateAccess;
+    return detectForbiddenCouncilAccess(value, null, options).forbiddenStateAccess;
   }
   return false;
 }
@@ -1599,15 +1985,32 @@ export function isForbiddenCouncilPathOrCommand(value) {
  * never triggers a false positive unless the tool input/command/path itself targeted `.council/`.
  *
  * @param {Array<Object>|Object|string} toolCalls
- * @param {WeakMap<Object, Object>} [rawInputsByToolEntry]
+ * @param {WeakMap<Object, Object>|Object|null} [rawInputsByToolEntry]
+ * @param {Object|string[]|null} [options]
  * @returns {{ forbiddenStateAccess: boolean, forbiddenAccessDetails: string[] }}
  */
-export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = null) {
+export function detectForbiddenCouncilAccess(
+  toolCalls,
+  rawInputsByToolEntry = null,
+  options = null
+) {
+  let effectiveRawMap = rawInputsByToolEntry;
+  let effectiveOptions = options;
+  if (
+    rawInputsByToolEntry &&
+    typeof rawInputsByToolEntry === 'object' &&
+    typeof rawInputsByToolEntry.get !== 'function'
+  ) {
+    effectiveRawMap = null;
+    effectiveOptions = options || rawInputsByToolEntry;
+  }
+
   if (typeof toolCalls === 'string') {
-    const matched = isForbiddenCouncilPathOrCommand(toolCalls);
+    const boundedInput = sliceUtf8Bytes(toolCalls, MAX_TRACE_SCAN_BYTES);
+    const matched = isForbiddenCouncilPathOrCommand(boundedInput, effectiveOptions);
     return {
       forbiddenStateAccess: matched,
-      forbiddenAccessDetails: matched ? [toolCalls.trim()] : []
+      forbiddenAccessDetails: matched ? [boundedInput.trim()] : []
     };
   }
   const list = Array.isArray(toolCalls)
@@ -1623,7 +2026,8 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
       return;
     }
     if (typeof val === 'string') {
-      const trimmed = val.trim();
+      const boundedField = sliceUtf8Bytes(val, MAX_TRACE_SCAN_BYTES);
+      const trimmed = boundedField.trim();
       if (!trimmed) {
         return;
       }
@@ -1641,7 +2045,7 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
           // Fall through to raw string check
         }
       }
-      if (hasForbiddenCouncilToken(trimmed)) {
+      if (hasForbiddenCouncilToken(trimmed, effectiveOptions)) {
         details.add(trimmed);
       }
       return;
@@ -1700,7 +2104,7 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
     }
     const visited = new Map();
     inspectValue(tc, visited, 0, false);
-    const rawInput = rawInputsByToolEntry?.get?.(tc);
+    const rawInput = effectiveRawMap?.get?.(tc);
     if (rawInput && typeof rawInput === 'object') {
       inspectValue(rawInput, visited, 0, false);
     }
@@ -1719,9 +2123,10 @@ export function detectForbiddenCouncilAccess(toolCalls, rawInputsByToolEntry = n
  * Maintains backwards compatibility when plain text or single non-event JSON is returned.
  *
  * @param {string} stdout
+ * @param {Object|null} [options]
  * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], eventsParsed: boolean }}
  */
-export function parseCodexEventStream(stdout) {
+export function parseCodexEventStream(stdout, options = null) {
   const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -2088,7 +2493,11 @@ export function parseCodexEventStream(stdout) {
     }
   }
 
-  const forbiddenCheck = detectForbiddenCouncilAccess(finalToolCalls, rawInputsByToolEntry);
+  const forbiddenCheck = detectForbiddenCouncilAccess(
+    finalToolCalls,
+    rawInputsByToolEntry,
+    options
+  );
 
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
@@ -2162,9 +2571,10 @@ function isCursorStreamEvent(obj) {
  * Maintains backwards compatibility when plain text or single non-event JSON is returned.
  *
  * @param {string} stdout
+ * @param {Object|null} [options]
  * @returns {{ text: string, traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], eventsParsed: boolean }}
  */
-export function parseCursorEventStream(stdout) {
+export function parseCursorEventStream(stdout, options = null) {
   const raw = typeof stdout === 'string' ? stdout : String(stdout || '');
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -2569,7 +2979,11 @@ export function parseCursorEventStream(stdout) {
     }
   }
 
-  const forbiddenCheck = detectForbiddenCouncilAccess(finalToolCalls, rawInputsByToolEntry);
+  const forbiddenCheck = detectForbiddenCouncilAccess(
+    finalToolCalls,
+    rawInputsByToolEntry,
+    options
+  );
 
   const nonEmptyMessages = orderedMessages.map((m) => m.trim()).filter(Boolean);
   const extractedText =
@@ -2683,8 +3097,31 @@ export function buildSanitizedCliEnv(cwd, env) {
  * @param {number} [options.maxBuffer=10485760]
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
  */
+const DEFAULT_KILL_GRACE_MS = 250;
+
 export async function execCli(executable, args = [], options = {}) {
   const maxBuffer = options.maxBuffer || DEFAULT_MAX_BUFFER;
+  const killGraceMs =
+    typeof options.killGraceMs === 'number' &&
+    Number.isFinite(options.killGraceMs) &&
+    options.killGraceMs >= 0
+      ? options.killGraceMs
+      : DEFAULT_KILL_GRACE_MS;
+
+  if (options.signal?.aborted) {
+    const abortErr = new Error('The operation was aborted');
+    abortErr.name = 'AbortError';
+    abortErr.code = 'ABORT_ERR';
+    abortErr.exitCode = null;
+    abortErr.stdout = '';
+    abortErr.stderr = '';
+    if (options.signal.reason !== undefined) {
+      abortErr.cause = options.signal.reason;
+    }
+    sanitizeCliError(abortErr, executable, args, options.prompt);
+    throw abortErr;
+  }
+
   const normalizedCwd =
     typeof options.cwd === 'string' && options.cwd.trim() ? options.cwd.trim() : undefined;
   const effectiveEnv = buildSanitizedCliEnv(normalizedCwd, options.env);
@@ -2692,15 +3129,108 @@ export async function execCli(executable, args = [], options = {}) {
     maxBuffer,
     encoding: 'utf8',
     ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
-    ...(effectiveEnv ? { env: effectiveEnv } : {}),
-    ...(options.signal ? { signal: options.signal } : {}),
-    ...(options.timeoutMs ? { timeout: options.timeoutMs } : {})
+    ...(effectiveEnv ? { env: effectiveEnv } : {})
   };
 
   return new Promise((resolve, reject) => {
-    const child = execFile(executable, args, execOptions, (error, stdout, stderr) => {
+    let terminationCause = null;
+    let timeoutTimer = null;
+    let killTimer = null;
+    let child = null;
+
+    const clearTimersAndListeners = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const terminateChild = (cause) => {
+      if (terminationCause === null) {
+        terminationCause = cause;
+      }
+      if (!child || child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        return;
+      }
+      if (killGraceMs === 0) {
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+        return;
+      }
+      if (!killTimer) {
+        killTimer = setTimeout(() => {
+          killTimer = null;
+          if (child && child.exitCode === null && child.signalCode === null) {
+            try {
+              child.kill('SIGKILL');
+            } catch {}
+          }
+        }, killGraceMs);
+        killTimer.unref?.();
+      }
+    };
+
+    const onAbort = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      terminateChild('abort');
+    };
+
+    child = execFile(executable, args, execOptions, (error, stdout, stderr) => {
+      clearTimersAndListeners();
       const out = stdout || '';
       const errOut = stderr || '';
+
+      if (terminationCause === 'abort') {
+        const abortErr = error || new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        abortErr.code = 'ABORT_ERR';
+        if (options.signal?.reason !== undefined && abortErr.cause === undefined) {
+          abortErr.cause = options.signal.reason;
+        }
+        abortErr.exitCode =
+          typeof abortErr.status === 'number'
+            ? abortErr.status
+            : typeof child?.exitCode === 'number'
+              ? child.exitCode
+              : null;
+        abortErr.stdout = out;
+        abortErr.stderr = errOut;
+        sanitizeCliError(abortErr, executable, args, options.prompt);
+        return reject(abortErr);
+      }
+
+      if (terminationCause === 'timeout') {
+        const timeoutErr = error || new Error(`Command timed out after ${options.timeoutMs}ms`);
+        timeoutErr.killed = true;
+        if (!timeoutErr.code || typeof timeoutErr.code === 'number') {
+          timeoutErr.code = 'ETIMEDOUT';
+        }
+        if (!timeoutErr.signal) {
+          timeoutErr.signal = child?.signalCode || 'SIGTERM';
+        }
+        timeoutErr.exitCode =
+          typeof child?.exitCode === 'number' ? child.exitCode : null;
+        timeoutErr.stdout = out;
+        timeoutErr.stderr = errOut;
+        sanitizeCliError(timeoutErr, executable, args, options.prompt);
+        return reject(timeoutErr);
+      }
 
       if (!error) {
         return resolve({ stdout: out, stderr: errOut, exitCode: 0 });
@@ -2717,6 +3247,27 @@ export async function execCli(executable, args = [], options = {}) {
 
       reject(error);
     });
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+      } else {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
+    if (
+      terminationCause === null &&
+      typeof options.timeoutMs === 'number' &&
+      Number.isFinite(options.timeoutMs) &&
+      options.timeoutMs > 0
+    ) {
+      timeoutTimer = setTimeout(() => {
+        timeoutTimer = null;
+        terminateChild('timeout');
+      }, options.timeoutMs);
+      timeoutTimer.unref?.();
+    }
 
     child.stdin?.on?.('error', () => {});
     if (options.input !== undefined && options.input !== null) {
@@ -2790,7 +3341,7 @@ function createForbiddenStateAccessError(details, trace, exitCode = 0) {
   return err;
 }
 
-function parseAntigravityOutput(raw) {
+function parseAntigravityOutput(raw, options = null) {
   const str = typeof raw === 'string' ? raw : String(raw || '');
   let unwrappedResponse = null;
   let toolCalls = [];
@@ -2850,7 +3401,7 @@ function parseAntigravityOutput(raw) {
         }
       }
       if (envelopeTools.length === 0 || isCursorStreamEvent(json)) {
-        const maybeStream = parseCursorEventStream(str);
+        const maybeStream = parseCursorEventStream(str, options);
         if (maybeStream.eventsParsed) {
           eventsParsed = true;
           if (toolCalls.length === 0) {
@@ -2871,7 +3422,7 @@ function parseAntigravityOutput(raw) {
       }
     }
   } catch {
-    const maybeStream = parseCursorEventStream(str);
+    const maybeStream = parseCursorEventStream(str, options);
     if (maybeStream.eventsParsed) {
       eventsParsed = true;
       toolCalls = maybeStream.toolCalls;
@@ -2887,7 +3438,7 @@ function parseAntigravityOutput(raw) {
 
   const envelopeCheck =
     toolCalls.length > 0
-      ? detectForbiddenCouncilAccess(toolCalls)
+      ? detectForbiddenCouncilAccess(toolCalls, null, options)
       : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
   const forbiddenAccessDetails = [
     ...new Set([
@@ -2922,6 +3473,204 @@ function parseAntigravityOutput(raw) {
   };
 }
 
+function hasDotCouncilEntry(dirPath) {
+  try {
+    fs.lstatSync(path.join(dirPath, '.council'));
+    return true;
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')) {
+      throw err;
+    }
+  }
+  try {
+    const names = fs.readdirSync(dirPath);
+    return names.some((name) => name.toLowerCase() === '.council');
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+function makeTempDirsWritableForCleanup(dirPath) {
+  let stat;
+  try {
+    stat = fs.lstatSync(dirPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  if (!stat.isDirectory()) {
+    return;
+  }
+  try {
+    fs.chmodSync(dirPath, 0o700);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(dirPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  for (const name of entries) {
+    makeTempDirsWritableForCleanup(path.join(dirPath, name));
+  }
+}
+
+function cleanupTempWorkspace(tempDir, { suppressErrors = false } = {}) {
+  if (!tempDir) return;
+  let chmodErr = null;
+  try {
+    makeTempDirsWritableForCleanup(tempDir);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      chmodErr = err;
+    }
+  }
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: false });
+  } catch (rmErr) {
+    if (suppressErrors) {
+      return;
+    }
+    if (rmErr && rmErr.code === 'ENOENT') {
+      if (chmodErr) {
+        throw chmodErr;
+      }
+      return;
+    }
+    throw chmodErr || rmErr;
+  }
+  if (chmodErr && !suppressErrors) {
+    throw chmodErr;
+  }
+}
+
+function copySafeWorkspace(srcDir, destDir, realRoot, realTempSafeCwd) {
+  const names = fs.readdirSync(srcDir);
+  for (const name of names) {
+    if (name.toLowerCase() === '.council' || name === 'node_modules') {
+      continue;
+    }
+    const srcPath = path.join(srcDir, name);
+    const destPath = path.join(destDir, name);
+    const stat = fs.lstatSync(srcPath);
+
+    if (stat.isSymbolicLink()) {
+      let realTarget;
+      try {
+        realTarget = fs.realpathSync(srcPath);
+      } catch {
+        // Omit broken symlink
+        continue;
+      }
+      const relToRoot = path.relative(realRoot, realTarget);
+      if (
+        relToRoot === '..' ||
+        relToRoot.startsWith('../') ||
+        relToRoot.startsWith('..\\') ||
+        path.isAbsolute(relToRoot)
+      ) {
+        // Omit workspace-escaping symlink
+        continue;
+      }
+      const relParts = relToRoot.split(/[\\/]+/).filter(Boolean);
+      if (relParts.some((p) => p.toLowerCase() === '.council' || p === 'node_modules')) {
+        // Omit symlink targeting .council or node_modules
+        continue;
+      }
+      const mappedAbsTarget = relToRoot ? path.join(realTempSafeCwd, relToRoot) : realTempSafeCwd;
+      const relLink = path.relative(path.dirname(destPath), mappedAbsTarget) || '.';
+      fs.symlinkSync(relLink, destPath);
+    } else if (stat.isDirectory()) {
+      const safeDirMode = (stat.mode & 0o777) | 0o700;
+      fs.mkdirSync(destPath, { mode: safeDirMode });
+      fs.chmodSync(destPath, safeDirMode);
+      copySafeWorkspace(srcPath, destPath, realRoot, realTempSafeCwd);
+    } else if (stat.isFile()) {
+      try {
+        fs.copyFileSync(srcPath, destPath, fs.constants.COPYFILE_FICLONE);
+      } catch (copyErr) {
+        if (
+          copyErr &&
+          (copyErr.code === 'EACCES' || copyErr.code === 'EPERM' || copyErr.code === 'ENOENT')
+        ) {
+          throw copyErr;
+        }
+        fs.copyFileSync(srcPath, destPath);
+      }
+      fs.chmodSync(destPath, (stat.mode & 0o777) | 0o600);
+    }
+  }
+}
+
+function prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env }) {
+  const explicitCwd =
+    effectiveTools === 'none'
+      ? null
+      : typeof cwd === 'string' && cwd.trim()
+        ? cwd.trim()
+        : typeof context?.cwd === 'string' && context.cwd.trim()
+          ? context.cwd.trim()
+          : null;
+
+  if (!explicitCwd) {
+    const tempCwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+    return {
+      effectiveCwd: tempCwdDir,
+      tempCwdDir,
+      forbiddenWorkspaceRoots: [],
+      effectiveEnv: buildSanitizedCliEnv(tempCwdDir, env)
+    };
+  }
+
+  if (!hasDotCouncilEntry(explicitCwd)) {
+    return {
+      effectiveCwd: explicitCwd,
+      tempCwdDir: null,
+      forbiddenWorkspaceRoots: [],
+      effectiveEnv: buildSanitizedCliEnv(explicitCwd, env)
+    };
+  }
+
+  const resolvedRoot = path.resolve(explicitCwd);
+  const realRoot = fs.realpathSync(resolvedRoot);
+  const forbiddenWorkspaceRoots = [...new Set([resolvedRoot, realRoot])];
+  const tempSafeCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-safe-cwd-'));
+
+  try {
+    const realTempSafeCwd = fs.realpathSync(tempSafeCwd);
+    copySafeWorkspace(realRoot, realTempSafeCwd, realRoot, realTempSafeCwd);
+  } catch (err) {
+    cleanupTempWorkspace(tempSafeCwd, { suppressErrors: true });
+    throw err;
+  }
+
+  const effectiveEnv = buildSanitizedCliEnv(tempSafeCwd, env);
+  if (effectiveEnv && typeof effectiveEnv === 'object') {
+    delete effectiveEnv.OLDPWD;
+    delete effectiveEnv.INIT_CWD;
+  }
+
+  return {
+    effectiveCwd: tempSafeCwd,
+    tempCwdDir: tempSafeCwd,
+    forbiddenWorkspaceRoots,
+    effectiveEnv
+  };
+}
+
 /**
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
@@ -2947,6 +3696,7 @@ export async function runAntigravityCli({
   prompt,
   signal,
   timeoutMs,
+  killGraceMs,
   tools,
   cwd,
   env,
@@ -2954,48 +3704,54 @@ export async function runAntigravityCli({
   context,
   onCallRecord
 } = {}) {
-  const parsed = parseModelAndEffort(model, context?.reasoningEffort || 'high');
+  const effectiveKillGraceMs = killGraceMs ?? context?.killGraceMs;
+  const defaultEffort = context?.reasoningEffort || 'high';
+  const parsed = parseModelAndEffort(model, defaultEffort);
+  const baseModel = extractCanonicalBaseModel(model, defaultEffort);
+  const trimmedModel = String(model || '').trim();
+  const isDateStamped = /-\d{8}(?:\s*\([^)]*\))?$/i.test(trimmedModel);
+  const isCanonicalAgyFamily =
+    baseModel === 'gemini-4-argon' ||
+    baseModel === 'gemini-4-carbon' ||
+    baseModel === 'claude-opus-5-5' ||
+    baseModel === 'claude-sonnet-5-5';
+  const agySelectorEffort =
+    parsed.effort === 'low' || parsed.effort === 'medium' ? parsed.effort : 'high';
+  const cliModel =
+    isCanonicalAgyFamily && !isDateStamped ? `${baseModel}-${agySelectorEffort}` : parsed.model;
   const effectiveTools =
     tools === 'none' || context?.tools === 'none'
       ? 'none'
       : (tools ?? context?.tools ?? 'read-only');
-  const explicitCwd =
-    effectiveTools === 'none'
-      ? null
-      : typeof cwd === 'string' && cwd.trim()
-        ? cwd.trim()
-        : typeof context?.cwd === 'string' && context.cwd.trim()
-          ? context.cwd.trim()
-          : null;
-  const tempCwdDir = explicitCwd
-    ? null
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
-  const effectiveCwd = explicitCwd || tempCwdDir;
-  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
+  const { effectiveCwd, tempCwdDir, forbiddenWorkspaceRoots, effectiveEnv } =
+    prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env });
   const args = [
     '--output-format', 'json',
     '--mode', 'plan',
     '--sandbox',
     '--disable-slash-commands',
-    '--model', parsed.model,
+    '--model', cliModel,
     '--effort', parsed.effort,
     '--print=' + prompt
   ];
 
   const startTime = Date.now();
   let exitCode = 0;
+  let cleanedUp = false;
+  let primaryError = null;
 
   try {
     const result = await exec(executable, args, {
       signal,
       timeoutMs,
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
     const raw = result?.stdout || '';
-    const parsedOut = parseAntigravityOutput(raw);
+    const parsedOut = parseAntigravityOutput(raw, { forbiddenWorkspaceRoots });
 
     const trace = {
       traceCoverage: parsedOut.traceCoverage,
@@ -3010,6 +3766,9 @@ export async function runAntigravityCli({
     if (parsedOut.forbiddenStateAccess) {
       throw createForbiddenStateAccessError(parsedOut.forbiddenAccessDetails, trace, exitCode);
     }
+
+    cleanedUp = true;
+    cleanupTempWorkspace(tempCwdDir);
 
     recordProviderCall({
       context,
@@ -3032,6 +3791,7 @@ export async function runAntigravityCli({
 
     return raw.trim();
   } catch (err) {
+    primaryError = err;
     const durationMs = Date.now() - startTime;
     exitCode = typeof err.exitCode === 'number'
       ? err.exitCode
@@ -3040,7 +3800,7 @@ export async function runAntigravityCli({
     sanitizeCliError(err, executable, args, prompt);
     const parsedErr =
       !err?.trace && typeof err?.stdout === 'string' && err.stdout.trim()
-        ? parseAntigravityOutput(err.stdout)
+        ? parseAntigravityOutput(err.stdout, { forbiddenWorkspaceRoots })
         : null;
 
     const errorTrace = err?.trace
@@ -3086,12 +3846,8 @@ export async function runAntigravityCli({
 
     throw err;
   } finally {
-    if (tempCwdDir) {
-      try {
-        fs.rmSync(tempCwdDir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
+    if (!cleanedUp) {
+      cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
     }
   }
 }
@@ -3121,6 +3877,7 @@ export async function runCodexCli({
   prompt,
   signal,
   timeoutMs,
+  killGraceMs,
   tools,
   cwd,
   env,
@@ -3130,24 +3887,18 @@ export async function runCodexCli({
   ignoreUserConfig,
   disableHooks
 } = {}) {
-  const parsed = parseModelAndEffort(model, context?.reasoningEffort || 'high');
+  const effectiveKillGraceMs = killGraceMs ?? context?.killGraceMs;
+  const defaultEffort = context?.reasoningEffort || 'high';
+  const parsed = parseModelAndEffort(model, defaultEffort);
+  const baseModel = extractCanonicalBaseModel(model, defaultEffort);
+  const cliModel =
+    baseModel === 'gpt-6-astra' || baseModel === 'gpt-6.1-sol' ? baseModel : parsed.model;
   const effectiveTools =
     tools === 'none' || context?.tools === 'none'
       ? 'none'
       : (tools ?? context?.tools ?? 'read-only');
-  const explicitCwd =
-    effectiveTools === 'none'
-      ? null
-      : typeof cwd === 'string' && cwd.trim()
-        ? cwd.trim()
-        : typeof context?.cwd === 'string' && context.cwd.trim()
-          ? context.cwd.trim()
-          : null;
-  const tempCwdDir = explicitCwd
-    ? null
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
-  const effectiveCwd = explicitCwd || tempCwdDir;
-  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
+  const { effectiveCwd, tempCwdDir, forbiddenWorkspaceRoots, effectiveEnv } =
+    prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env });
   const shouldDisableHooks =
     disableHooks !== undefined ? Boolean(disableHooks) : context?.disableHooks !== false;
   const shouldIgnoreUserConfig =
@@ -3159,7 +3910,7 @@ export async function runCodexCli({
     ...(shouldDisableHooks ? ['--disable', 'hooks'] : []),
     '--skip-git-repo-check',
     '--sandbox', 'read-only',
-    '-m', parsed.model,
+    '-m', cliModel,
     '-c', `model_reasoning_effort="${parsed.codexEffort}"`,
     prompt
   ];
@@ -3170,17 +3921,20 @@ export async function runCodexCli({
 
   const startTime = Date.now();
   let exitCode = 0;
+  let cleanedUp = false;
+  let primaryError = null;
 
   try {
     const result = await exec(executable, args, {
       signal,
       timeoutMs,
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
-    const parsedStream = parseCodexEventStream(result?.stdout || '');
+    const parsedStream = parseCodexEventStream(result?.stdout || '', { forbiddenWorkspaceRoots });
 
     const trace = {
       traceCoverage: parsedStream.traceCoverage,
@@ -3195,6 +3949,9 @@ export async function runCodexCli({
     if (parsedStream.forbiddenStateAccess) {
       throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
     }
+
+    cleanedUp = true;
+    cleanupTempWorkspace(tempCwdDir);
 
     recordProviderCall({
       context,
@@ -3213,13 +3970,16 @@ export async function runCodexCli({
 
     return parsedStream.text;
   } catch (err) {
+    primaryError = err;
     const durationMs = Date.now() - startTime;
     exitCode = typeof err.exitCode === 'number'
       ? err.exitCode
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = err?.trace ? null : parseCodexEventStream(err?.stdout || '');
+    const parsedErrStream = err?.trace
+      ? null
+      : parseCodexEventStream(err?.stdout || '', { forbiddenWorkspaceRoots });
     const errorTrace = err?.trace
       ? {
           ...err.trace,
@@ -3259,12 +4019,8 @@ export async function runCodexCli({
 
     throw err;
   } finally {
-    if (tempCwdDir) {
-      try {
-        fs.rmSync(tempCwdDir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
+    if (!cleanedUp) {
+      cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
     }
   }
 }
@@ -3293,6 +4049,7 @@ export async function runCursorCli({
   prompt,
   signal,
   timeoutMs,
+  killGraceMs,
   tools,
   cwd,
   env,
@@ -3300,6 +4057,7 @@ export async function runCursorCli({
   context,
   onCallRecord
 } = {}) {
+  const effectiveKillGraceMs = killGraceMs ?? context?.killGraceMs;
   const baseModel = extractCanonicalBaseModel(model, 'high');
   const parsed = parseModelAndEffort(
     model,
@@ -3314,19 +4072,8 @@ export async function runCursorCli({
     tools === 'none' || context?.tools === 'none'
       ? 'none'
       : (tools ?? context?.tools ?? 'read-only');
-  const explicitCwd =
-    effectiveTools === 'none'
-      ? null
-      : typeof cwd === 'string' && cwd.trim()
-        ? cwd.trim()
-        : typeof context?.cwd === 'string' && context.cwd.trim()
-          ? context.cwd.trim()
-          : null;
-  const tempCwdDir = explicitCwd
-    ? null
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
-  const effectiveCwd = explicitCwd || tempCwdDir;
-  const effectiveEnv = buildSanitizedCliEnv(effectiveCwd, env);
+  const { effectiveCwd, tempCwdDir, forbiddenWorkspaceRoots, effectiveEnv } =
+    prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env });
   const args = [
     '--print',
     '--output-format', 'stream-json',
@@ -3339,17 +4086,20 @@ export async function runCursorCli({
 
   const startTime = Date.now();
   let exitCode = 0;
+  let cleanedUp = false;
+  let primaryError = null;
 
   try {
     const result = await exec(executable, args, {
       signal,
       timeoutMs,
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
-    const parsedStream = parseCursorEventStream(result?.stdout || '');
+    const parsedStream = parseCursorEventStream(result?.stdout || '', { forbiddenWorkspaceRoots });
 
     const trace = {
       traceCoverage: parsedStream.traceCoverage,
@@ -3364,6 +4114,9 @@ export async function runCursorCli({
     if (parsedStream.forbiddenStateAccess) {
       throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
     }
+
+    cleanedUp = true;
+    cleanupTempWorkspace(tempCwdDir);
 
     recordProviderCall({
       context,
@@ -3387,12 +4140,15 @@ export async function runCursorCli({
         const fallbackResult = await exec('agent', args, {
           signal,
           timeoutMs,
+          ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
           cwd: effectiveCwd,
           env: effectiveEnv
         });
         exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
         const durationMs = Date.now() - startTime;
-        const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '');
+        const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '', {
+          forbiddenWorkspaceRoots
+        });
 
         const fallbackTrace = {
           traceCoverage: parsedFallback.traceCoverage,
@@ -3412,6 +4168,9 @@ export async function runCursorCli({
           );
         }
 
+        cleanedUp = true;
+        cleanupTempWorkspace(tempCwdDir);
+
         recordProviderCall({
           context,
           onCallRecord,
@@ -3429,6 +4188,7 @@ export async function runCursorCli({
 
         return parsedFallback.text;
       } catch (fallbackErr) {
+        primaryError = fallbackErr;
         const durationMs = Date.now() - startTime;
         exitCode = typeof fallbackErr.exitCode === 'number'
           ? fallbackErr.exitCode
@@ -3437,7 +4197,7 @@ export async function runCursorCli({
         sanitizeCliError(fallbackErr, 'agent', args, prompt);
         const parsedFallbackErr = fallbackErr?.trace
           ? null
-          : parseCursorEventStream(fallbackErr?.stdout || '');
+          : parseCursorEventStream(fallbackErr?.stdout || '', { forbiddenWorkspaceRoots });
         const fallbackErrorTrace = fallbackErr?.trace
           ? {
               ...fallbackErr.trace,
@@ -3484,13 +4244,16 @@ export async function runCursorCli({
       }
     }
 
+    primaryError = err;
     const durationMs = Date.now() - startTime;
     exitCode = typeof err.exitCode === 'number'
       ? err.exitCode
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = err?.trace ? null : parseCursorEventStream(err?.stdout || '');
+    const parsedErrStream = err?.trace
+      ? null
+      : parseCursorEventStream(err?.stdout || '', { forbiddenWorkspaceRoots });
     const errorTrace = err?.trace
       ? {
           ...err.trace,
@@ -3530,12 +4293,8 @@ export async function runCursorCli({
 
     throw err;
   } finally {
-    if (tempCwdDir) {
-      try {
-        fs.rmSync(tempCwdDir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
+    if (!cleanedUp) {
+      cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
     }
   }
 }

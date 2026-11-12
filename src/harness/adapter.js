@@ -152,6 +152,39 @@ export class AuthenticationError extends HarnessError {
   }
 }
 
+/**
+ * Thrown when an adapter execution is cancelled via AbortSignal.
+ */
+export class AbortError extends HarnessError {
+  /**
+   * @param {string} message
+   * @param {Object} [options]
+   */
+  constructor(message = 'The operation was aborted', options = {}) {
+    super(message, {
+      ...options,
+      isQuotaFault: false,
+      isRetryable: false
+    });
+    this.name = 'AbortError';
+    this.code = options.code || 'ABORT_ERR';
+    if (options.trace) {
+      this.trace = options.trace;
+    }
+  }
+}
+
+/**
+ * Factory helper for canonical non-retryable AbortError instances.
+ *
+ * @param {string} [message]
+ * @param {Object} [options]
+ * @returns {AbortError}
+ */
+export function createAbortError(message = 'The operation was aborted', options = {}) {
+  return new AbortError(message, options);
+}
+
 // ============================================================================
 // ABSTRACT BASE HARNESS ADAPTER
 // ============================================================================
@@ -252,6 +285,15 @@ export class HarnessAdapter {
   }
 
   /**
+   * Helper alias to execute pre-deliberation clarification discovery for a seat.
+   * @param {Object} params
+   * @returns {Promise<Object>}
+   */
+  async executeSeatClarification(params) {
+    return this.executeSeat({ ...params, phase: params.phase || 'CLARIFICATION' });
+  }
+
+  /**
    * Helper alias to execute proof submission for a seat.
    * @param {Object} params
    * @returns {Promise<Object>}
@@ -296,7 +338,7 @@ export class HarnessAdapter {
   }
 
   /**
-   * Execute an async operation with strict timeout boundary.
+   * Execute an async operation with strict timeout boundary and first-cause cancellation latch.
    *
    * @template T
    * @param {(signal: AbortSignal) => Promise<T>} fn
@@ -306,30 +348,188 @@ export class HarnessAdapter {
    */
   async executeWithTimeout(fn, timeoutMs, context = {}) {
     const effectiveTimeoutMs = this.resolveTimeoutMs(context.model, timeoutMs);
-    const controller = new AbortController();
-    let timer;
+    const externalSignal = context?.signal || null;
+
+    const buildAbortErr = (causeOverride) =>
+      createAbortError(
+        `Harness "${this.name}" execution aborted for seat "${context.seatId || 'unknown'}"`,
+        {
+          harness: this.name,
+          seatId: context.seatId,
+          model: context.model,
+          cause:
+            causeOverride instanceof Error
+              ? causeOverride
+              : externalSignal?.reason instanceof Error
+                ? externalSignal.reason
+                : undefined
+        }
+      );
+
+    if (externalSignal?.aborted) {
+      throw buildAbortErr();
+    }
+
+    const timeoutController = new AbortController();
+    const composedSignal = externalSignal
+      ? AbortSignal.any([externalSignal, timeoutController.signal])
+      : timeoutController.signal;
+
+    let firstCause = null;
+    let latchedTimeoutErr = null;
+    let timer = null;
+    let onExternalAbort = null;
+
+    let triggerExternalAbort;
+    const externalAbortPromise = externalSignal
+      ? new Promise((resolve) => {
+          triggerExternalAbort = resolve;
+        })
+      : null;
+
+    if (externalSignal) {
+      onExternalAbort = () => {
+        if (firstCause === null) {
+          firstCause = 'external';
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+        }
+        triggerExternalAbort?.({ type: 'external' });
+      };
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      if (externalSignal.aborted) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+        throw buildAbortErr();
+      }
+    }
 
     const timeoutPromise = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        reject(
-          new TimeoutError(
-            `Harness "${this.name}" execution timed out after ${effectiveTimeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
-            {
-              harness: this.name,
-              seatId: context.seatId,
-              model: context.model,
-              timeoutMs: effectiveTimeoutMs
-            }
-          )
+        timer = null;
+        if (firstCause !== null) {
+          return;
+        }
+        firstCause = 'timeout';
+        latchedTimeoutErr = new TimeoutError(
+          `Harness "${this.name}" execution timed out after ${effectiveTimeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
+          {
+            harness: this.name,
+            seatId: context.seatId,
+            model: context.model,
+            timeoutMs: effectiveTimeoutMs
+          }
         );
-        controller.abort();
+        reject(latchedTimeoutErr);
+        timeoutController.abort();
       }, effectiveTimeoutMs);
     });
 
+    let fnPromise;
     try {
-      return await Promise.race([fn(controller.signal), timeoutPromise]);
+      fnPromise = Promise.resolve(fn(composedSignal));
+    } catch (syncErr) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (externalSignal && onExternalAbort) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+      throw syncErr;
+    }
+
+    // Prevent unhandled rejection when timeout or abortDrainMs wins before fnPromise settles
+    fnPromise.catch(() => {});
+
+    try {
+      if (!externalAbortPromise) {
+        try {
+          return await Promise.race([timeoutPromise, fnPromise]);
+        } catch (err) {
+          if (firstCause === 'timeout' && latchedTimeoutErr) {
+            throw latchedTimeoutErr;
+          }
+          throw err;
+        }
+      }
+
+      const outcome = await Promise.race([
+        timeoutPromise,
+        fnPromise.then(
+          (value) => ({ type: 'fn_ok', value }),
+          (error) => ({ type: 'fn_err', error })
+        ),
+        externalAbortPromise
+      ]);
+
+      if (firstCause === 'timeout' && latchedTimeoutErr) {
+        throw latchedTimeoutErr;
+      }
+
+      if (outcome.type === 'external' || (firstCause === 'external' && externalSignal.aborted)) {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        const hasExplicitAbortDrain =
+          typeof context.abortDrainMs === 'number' &&
+          Number.isFinite(context.abortDrainMs) &&
+          context.abortDrainMs >= 0;
+
+        let settledError = null;
+        const waitForSettlement = fnPromise.then(
+          () => {},
+          (err) => {
+            settledError = err;
+          }
+        );
+
+        if (hasExplicitAbortDrain) {
+          let drainTimer = null;
+          await Promise.race([
+            waitForSettlement,
+            new Promise((resolve) => {
+              drainTimer = setTimeout(resolve, context.abortDrainMs);
+            })
+          ]);
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+          }
+        } else {
+          await waitForSettlement;
+        }
+
+        if (settledError instanceof AbortError) {
+          throw settledError;
+        }
+        throw buildAbortErr(settledError);
+      }
+
+      if (outcome.type === 'fn_err') {
+        if (settledIsAbort(outcome.error, externalSignal, firstCause)) {
+          if (outcome.error instanceof AbortError) {
+            throw outcome.error;
+          }
+          throw buildAbortErr(outcome.error);
+        }
+        throw outcome.error;
+      }
+
+      if (externalSignal.aborted && firstCause !== 'timeout') {
+        throw buildAbortErr();
+      }
+
+      return outcome.value;
     } finally {
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (externalSignal && onExternalAbort) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
     }
   }
 
@@ -356,6 +556,19 @@ export class HarnessAdapter {
 
     const msg = error?.message || String(error);
     const raw = `${msg} ${error?.stderr || ''}`;
+
+    // Cancellation / AbortSignal guard (non-retryable)
+    if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
+      return new AbortError(msg, {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
+        stderr: error?.stderr || '',
+        trace: error?.trace || null,
+        cause: error
+      });
+    }
 
     // Forbidden .council/ state access guard
     if (
@@ -470,6 +683,26 @@ export class HarnessAdapter {
     }
 
     const trimmed = resolvedText.trim();
+
+    if (schemaType === 'clarification') {
+      const questionMatch = trimmed.match(/(?:^|\n)\s*QUESTION\s*:\s*([\s\S]+)$/i);
+      if (questionMatch && questionMatch[1].trim()) {
+        return {
+          needsClarification: true,
+          status: 'question',
+          question: questionMatch[1].trim(),
+          raw: trimmed
+        };
+      }
+      if (/(?:^|\n)\s*CLEAR(?:\s*:|$)/i.test(trimmed)) {
+        return {
+          needsClarification: false,
+          status: 'clear',
+          question: null,
+          raw: trimmed
+        };
+      }
+    }
 
     // 1. Search for all markdown code blocks (```(?:json)? ... ```)
     const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
@@ -612,6 +845,16 @@ export class HarnessAdapter {
     }
 
     switch (schemaType) {
+      case 'clarification':
+        if (
+          typeof data.question !== 'string' &&
+          typeof data.needsClarification !== 'boolean' &&
+          typeof data.status !== 'string'
+        ) {
+          errors.push('Clarification payload requires "question", "needsClarification", or "status".');
+        }
+        break;
+
       case 'proof':
         if (!data.scope || typeof data.scope !== 'string' || !data.scope.trim()) {
           errors.push('"scope" condition is required.');
@@ -635,7 +878,15 @@ export class HarnessAdapter {
           if (!data.reason || typeof data.reason !== 'string' || !data.reason.trim()) {
             errors.push('An objection requires a concrete "reason".');
           }
-          if (!data.proofId && !data.backingProof) {
+          const normalizedProofId =
+            typeof data.proofId === 'string' && data.proofId.trim()
+              ? data.proofId.trim()
+              : typeof data.backingProof === 'string' && data.backingProof.trim()
+                ? data.backingProof.trim()
+                : '';
+          if (normalizedProofId) {
+            data.proofId = normalizedProofId;
+          } else {
             errors.push('An objection must cite a "proofId" or provide a "backingProof".');
           }
         }
@@ -665,4 +916,14 @@ export class HarnessAdapter {
 
     return errors;
   }
+}
+
+function settledIsAbort(error, externalSignal, firstCause) {
+  if (firstCause === 'timeout') {
+    return false;
+  }
+  if (externalSignal?.aborted) {
+    return true;
+  }
+  return Boolean(error && typeof error === 'object' && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
 }

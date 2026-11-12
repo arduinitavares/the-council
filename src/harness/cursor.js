@@ -8,6 +8,7 @@
 import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
 import { runCursorCli, extractCanonicalBaseModel, parseModelAndEffort } from './cli-runner.js';
 import {
+  formatClarificationPrompt,
   formatDeliberationPrompt,
   formatVotingPrompt,
   formatJudgePrompt as formatJudgeSoulPrompt
@@ -19,6 +20,7 @@ export class CursorAdapter extends HarnessAdapter {
     this.executable = config.executable || process.env.CURSOR_CLI_COMMAND || 'cursor-agent';
     this.spawnRunner = config.spawnRunner || runCursorCli;
     this.cwd = config.cwd;
+    this.killGraceMs = config.killGraceMs;
   }
 
   validateModel(model) {
@@ -50,6 +52,8 @@ export class CursorAdapter extends HarnessAdapter {
     }
 
     if (
+      error?.name === 'AbortError' ||
+      error?.code === 'ABORT_ERR' ||
       error?.code === 'FORBIDDEN_STATE_ACCESS' ||
       error?.trace?.forbiddenStateAccess === true ||
       /\[ForbiddenStateAccessError\]/i.test(error?.message || '')
@@ -93,13 +97,18 @@ export class CursorAdapter extends HarnessAdapter {
     cwd,
     rebuttalMode,
     mode,
+    signal: callerSignal,
+    abortDrainMs,
+    killGraceMs,
     context: callerContext
   }) {
     this.validateModel(seat.model);
     const baseModel = extractCanonicalBaseModel(seat.model, 'high');
+    const isClarification = phase === 'CLARIFICATION' || phase === 'clarifying';
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const isRebuttal =
       !isVoting &&
+      !isClarification &&
       Boolean(
         rebuttalMode ||
           mode === 'rebuttal' ||
@@ -130,6 +139,9 @@ export class CursorAdapter extends HarnessAdapter {
       tools: effectiveTools,
       ...(effectiveTools === 'none' ? { cwd: undefined } : {})
     };
+    const externalSignal = callerSignal ?? callerContext?.signal;
+    const effectiveAbortDrainMs = abortDrainMs ?? callerContext?.abortDrainMs;
+    const effectiveKillGraceMs = killGraceMs ?? callerContext?.killGraceMs ?? this.killGraceMs;
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -138,7 +150,10 @@ export class CursorAdapter extends HarnessAdapter {
       ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(externalSignal ? { signal: externalSignal } : {}),
+      ...(effectiveAbortDrainMs !== undefined ? { abortDrainMs: effectiveAbortDrainMs } : {}),
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {})
     };
 
     return this.executeWithTimeout(
@@ -165,7 +180,7 @@ export class CursorAdapter extends HarnessAdapter {
             ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
-          const schemaType = isVoting ? 'vote' : 'proof';
+          const schemaType = isClarification ? 'clarification' : (isVoting ? 'vote' : 'proof');
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
           if (err?.trace && !err._providerCallRecorded) {
@@ -192,7 +207,22 @@ export class CursorAdapter extends HarnessAdapter {
     );
   }
 
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
+  async executeJudge({
+    judge,
+    round,
+    phase,
+    proofs,
+    state,
+    timeoutMs,
+    tools,
+    telemetry,
+    onCallRecord,
+    cwd,
+    signal: callerSignal,
+    abortDrainMs,
+    killGraceMs,
+    context: callerContext
+  }) {
     this.validateModel(judge.model);
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
@@ -209,13 +239,19 @@ export class CursorAdapter extends HarnessAdapter {
       tools: effectiveTools,
       ...(effectiveTools === 'none' ? { cwd: undefined } : {})
     };
+    const externalSignal = callerSignal ?? callerContext?.signal;
+    const effectiveAbortDrainMs = abortDrainMs ?? callerContext?.abortDrainMs;
+    const effectiveKillGraceMs = killGraceMs ?? callerContext?.killGraceMs ?? this.killGraceMs;
     const context = {
       seatId: judge.id,
       model: judge.model,
       tools: effectiveTools,
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(externalSignal ? { signal: externalSignal } : {}),
+      ...(effectiveAbortDrainMs !== undefined ? { abortDrainMs: effectiveAbortDrainMs } : {}),
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {})
     };
 
     return this.executeWithTimeout(
@@ -267,9 +303,11 @@ export class CursorAdapter extends HarnessAdapter {
   }
 
   formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, rebuttalMode, mode, context: callerContext }) {
+    const isClarification = phase === 'CLARIFICATION' || phase === 'clarifying';
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const isRebuttal =
       !isVoting &&
+      !isClarification &&
       Boolean(
         rebuttalMode ||
           mode === 'rebuttal' ||
@@ -294,6 +332,15 @@ export class CursorAdapter extends HarnessAdapter {
     const effectiveSeat = seat
       ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : seat;
+    if (isClarification) {
+      return formatClarificationPrompt({
+        soul,
+        seat: effectiveSeat,
+        topic: state?.topic || '',
+        batch: round || state?.clarificationBatch || 1,
+        maxBatches: state?.maxClarificationBatches || 1
+      });
+    }
     if (isVoting) {
       const admittedProofs = (state?.proofs || []).filter(
         (p) => p.status === 'admitted' || p.status === 'partially_admitted'

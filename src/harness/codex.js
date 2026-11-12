@@ -7,6 +7,7 @@
 import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
 import { runCodexCli, extractCanonicalBaseModel } from './cli-runner.js';
 import {
+  formatClarificationPrompt,
   formatDeliberationPrompt,
   formatVotingPrompt,
   formatJudgePrompt as formatJudgeSoulPrompt
@@ -26,6 +27,7 @@ export class CodexAdapter extends HarnessAdapter {
     this.disableHooks = config.disableHooks;
     this.ignoreUserConfig = config.ignoreUserConfig;
     this.cwd = config.cwd;
+    this.killGraceMs = config.killGraceMs;
   }
 
   /**
@@ -61,6 +63,8 @@ export class CodexAdapter extends HarnessAdapter {
     }
 
     if (
+      error?.name === 'AbortError' ||
+      error?.code === 'ABORT_ERR' ||
       error?.code === 'FORBIDDEN_STATE_ACCESS' ||
       error?.trace?.forbiddenStateAccess === true ||
       /\[ForbiddenStateAccessError\]/i.test(error?.message || '')
@@ -107,14 +111,19 @@ export class CodexAdapter extends HarnessAdapter {
     cwd,
     rebuttalMode,
     mode,
+    signal: callerSignal,
+    abortDrainMs,
+    killGraceMs,
     context: callerContext
   }) {
     this.validateModel(seat.model);
     const disableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.disableHooks;
     const ignoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.ignoreUserConfig;
+    const isClarification = phase === 'CLARIFICATION' || phase === 'clarifying';
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const isRebuttal =
       !isVoting &&
+      !isClarification &&
       Boolean(
         rebuttalMode ||
           mode === 'rebuttal' ||
@@ -142,6 +151,9 @@ export class CodexAdapter extends HarnessAdapter {
       tools: effectiveTools,
       ...(effectiveTools === 'none' ? { cwd: undefined } : {})
     };
+    const externalSignal = callerSignal ?? callerContext?.signal;
+    const effectiveAbortDrainMs = abortDrainMs ?? callerContext?.abortDrainMs;
+    const effectiveKillGraceMs = killGraceMs ?? callerContext?.killGraceMs ?? this.killGraceMs;
     const context = {
       seatId: seat.id,
       model: seat.model,
@@ -152,7 +164,10 @@ export class CodexAdapter extends HarnessAdapter {
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(disableHooks !== undefined ? { disableHooks } : {}),
       ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {}),
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(externalSignal ? { signal: externalSignal } : {}),
+      ...(effectiveAbortDrainMs !== undefined ? { abortDrainMs: effectiveAbortDrainMs } : {}),
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {})
     };
 
     return this.executeWithTimeout(
@@ -179,7 +194,7 @@ export class CodexAdapter extends HarnessAdapter {
             ...(effectiveCwd ? { cwd: effectiveCwd } : {})
           });
 
-          const schemaType = isVoting ? 'vote' : 'proof';
+          const schemaType = isClarification ? 'clarification' : (isVoting ? 'vote' : 'proof');
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
           if (err?.trace && !err._providerCallRecorded) {
@@ -209,7 +224,22 @@ export class CodexAdapter extends HarnessAdapter {
   /**
    * Execute judge turn on Codex.
    */
-  async executeJudge({ judge, round, phase, proofs, state, timeoutMs, tools, telemetry, onCallRecord, cwd, context: callerContext }) {
+  async executeJudge({
+    judge,
+    round,
+    phase,
+    proofs,
+    state,
+    timeoutMs,
+    tools,
+    telemetry,
+    onCallRecord,
+    cwd,
+    signal: callerSignal,
+    abortDrainMs,
+    killGraceMs,
+    context: callerContext
+  }) {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
@@ -228,6 +258,9 @@ export class CodexAdapter extends HarnessAdapter {
       tools: effectiveTools,
       ...(effectiveTools === 'none' ? { cwd: undefined } : {})
     };
+    const externalSignal = callerSignal ?? callerContext?.signal;
+    const effectiveAbortDrainMs = abortDrainMs ?? callerContext?.abortDrainMs;
+    const effectiveKillGraceMs = killGraceMs ?? callerContext?.killGraceMs ?? this.killGraceMs;
     const context = {
       seatId: judge.id,
       model: judge.model,
@@ -236,7 +269,10 @@ export class CodexAdapter extends HarnessAdapter {
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(disableHooks !== undefined ? { disableHooks } : {}),
       ...(ignoreUserConfig !== undefined ? { ignoreUserConfig } : {}),
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(externalSignal ? { signal: externalSignal } : {}),
+      ...(effectiveAbortDrainMs !== undefined ? { abortDrainMs: effectiveAbortDrainMs } : {}),
+      ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {})
     };
 
     return this.executeWithTimeout(
@@ -291,9 +327,11 @@ export class CodexAdapter extends HarnessAdapter {
    * Formats seat prompt with soul temperament injection.
    */
   formatSeatPrompt({ seat, soul, round, phase, state, tools, cwd, rebuttalMode, mode, context: callerContext }) {
+    const isClarification = phase === 'CLARIFICATION' || phase === 'clarifying';
     const isVoting = phase === 'VOTING' || phase === 'confirming';
     const isRebuttal =
       !isVoting &&
+      !isClarification &&
       Boolean(
         rebuttalMode ||
           mode === 'rebuttal' ||
@@ -318,6 +356,15 @@ export class CodexAdapter extends HarnessAdapter {
     const effectiveSeat = seat
       ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : seat;
+    if (isClarification) {
+      return formatClarificationPrompt({
+        soul,
+        seat: effectiveSeat,
+        topic: state?.topic || '',
+        batch: round || state?.clarificationBatch || 1,
+        maxBatches: state?.maxClarificationBatches || 1
+      });
+    }
     if (isVoting) {
       const admittedProofs = (state?.proofs || []).filter(
         (p) => p.status === 'admitted' || p.status === 'partially_admitted'

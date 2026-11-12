@@ -846,21 +846,10 @@ export class CouncilEngine {
   }
 
   /**
-   * Handles a faulted seat per ADR 0003: bounded retry or excusal.
-   * Preserves completed turns and locks open objections as preserved_excused.
-   * @param {string} seatId
-   * @param {Error|string} error
-   * @param {Object} [options={}]
-   * @param {number} [options.remainingBudget] - Remaining budget in ms
-   * @param {number} [options.seatElapsedMs] - Total time elapsed for seat in phase
-   * @param {number} [options.totalSeatBudgetMs] - Total seat budget allocated
-   * @returns {{ action: string, retries?: number, lockedObjections?: number }}
+   * Evaluates whether a seat fault can be retried within retry-cap and phase budget limits.
+   * @private
    */
-  handleSeatFault(seatId, error, options = {}) {
-    const errorClass = this._classifyErrorClass(error);
-    const reason = this._formatFaultReason(error);
-    const faultStatus = this._classifyFaultStatus(error);
-    const seat = (this.state.seats || []).find((s) => s.id === seatId);
+  _evaluateSeatFaultRetryability(seat, error, options = {}) {
     const retries = seat ? seat.retries : 0;
     const isRetryable = this._isRetryableError(error);
     const remainingBudget = options.remainingBudget;
@@ -872,12 +861,193 @@ export class CouncilEngine {
     const budgetExhausted =
       typeof remainingBudget === 'number' &&
       (remainingBudget <= 0 || remainingBudget < minViableBudgetMs);
+    const canRetry = Boolean(
+      seat &&
+        seat.status !== 'excused' &&
+        isRetryable &&
+        retries < this.config.maxRetriesPerSeat &&
+        !budgetExhausted
+    );
+    return { retries, isRetryable, budgetExhausted, canRetry };
+  }
+
+  /**
+   * Predicts whether `handleSeatFault` for `seatId` will excuse the seat and drop
+   * active seats below `this.state.minQuorum` (entering `completed`).
+   * @param {string} seatId
+   * @param {Error|string} error
+   * @param {Object} [options={}]
+   * @returns {boolean}
+   */
+  _willSeatFaultExcuseAndCollapseQuorum(seatId, error, options = {}) {
+    if (this.isCompleted()) {
+      return false;
+    }
+    const seat = (this.state.seats || []).find((s) => s.id === seatId);
+    if (!seat || seat.status === 'excused') {
+      return false;
+    }
+    const { canRetry } = this._evaluateSeatFaultRetryability(seat, error, options);
+    if (canRetry) {
+      return false;
+    }
+    const remainingAfterExcuse = activeSeats(this.state).filter((s) => s.id !== seatId).length;
+    return remainingAfterExcuse < this.state.minQuorum;
+  }
+
+  /**
+   * Commits validated, non-excused, uncommitted deliberation proof slots in strict roster order.
+   * When `preCollapse` is true, commit-time guard rejections discard only the rejecting slot and
+   * continue flushing remaining valid slots without starting a retry wave.
+   * @private
+   * @returns {boolean}
+   */
+  _commitDelibSlots(delibSlots, { preCollapse = false } = {}) {
+    for (let i = 0; i < delibSlots.length; i++) {
+      if (this.isCompleted() || this.aborted) break;
+      const slot = delibSlots[i];
+      if (slot.skipped || slot.excused || slot.committed || !slot.proofInput) continue;
+      const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+      if (!liveSeat || liveSeat.status === 'excused') continue;
+
+      this._step({
+        type: 'SUBMIT_PROOF',
+        seatId: slot.seat.id,
+        scope: slot.proofInput.scope,
+        kind: slot.proofInput.kind,
+        source: slot.proofInput.source,
+        statement: slot.proofInput.statement
+      });
+      if (!this.state.lastTransition?.ok) {
+        slot.proofInput = null;
+        if (preCollapse) {
+          slot.error = null;
+          continue;
+        }
+        slot.error = new InvalidResponseError(
+          this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${slot.seat.id}`,
+          {
+            harness: slot.seat.harness,
+            seatId: slot.seat.id,
+            model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model
+          }
+        );
+        return true;
+      }
+      slot.committed = true;
+      this.telemetry.emitSeatTelemetry(slot.seat.id, 'proof_submitted');
+      const latestProof = this.state.proofs[this.state.proofs.length - 1];
+      this.telemetry.emitProofSubmitted(latestProof);
+    }
+    return false;
+  }
+
+  /**
+   * Commits validated, non-excused, uncommitted voting slots in strict roster order.
+   * When `preCollapse` is true, commit-time guard rejections discard only the rejecting slot and
+   * continue flushing remaining valid slots without starting a retry wave.
+   * @private
+   * @returns {boolean}
+   */
+  _commitVoteSlots(voteSlots, { preCollapse = false } = {}) {
+    for (let i = 0; i < voteSlots.length; i++) {
+      if (this.isCompleted() || this.aborted) break;
+      const slot = voteSlots[i];
+      if (slot.skipped || slot.excused || slot.committed || !slot.voteResult) continue;
+      const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
+      if (!liveSeat || liveSeat.status === 'excused') continue;
+
+      if (slot.voteResult.vote === 'accept') {
+        this._step({ type: 'CAST_VOTE', seatId: slot.seat.id, vote: 'accept' });
+        if (!this.state.lastTransition?.ok) {
+          slot.voteResult = null;
+          if (preCollapse) {
+            slot.error = null;
+            continue;
+          }
+          slot.error = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
+            }
+          );
+          return true;
+        }
+        slot.committed = true;
+        this.telemetry.emitSeatTelemetry(slot.seat.id, 'accepted');
+        this.telemetry.emitVoteCast(slot.seat.id, 'accept');
+      } else if (slot.voteResult.vote === 'object') {
+        const resolvedProofId =
+          typeof slot.voteResult.proofId === 'string' && slot.voteResult.proofId.trim()
+            ? slot.voteResult.proofId.trim()
+            : (typeof slot.voteResult.backingProof === 'string' && slot.voteResult.backingProof.trim()
+                ? slot.voteResult.backingProof.trim()
+                : (slot.voteResult.proofId || slot.voteResult.backingProof));
+        this._step({
+          type: 'CAST_VOTE',
+          seatId: slot.seat.id,
+          vote: 'object',
+          reason: slot.voteResult.reason,
+          proofId: resolvedProofId
+        });
+        if (!this.state.lastTransition?.ok) {
+          slot.voteResult = null;
+          if (preCollapse) {
+            slot.error = null;
+            continue;
+          }
+          slot.error = new InvalidResponseError(
+            this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.seat.model
+            }
+          );
+          return true;
+        }
+        slot.committed = true;
+        this.telemetry.emitSeatTelemetry(slot.seat.id, 'objected');
+        this.telemetry.emitVoteCast(slot.seat.id, 'object', slot.voteResult.reason, resolvedProofId);
+        const latestObj = this.state.objections[this.state.objections.length - 1];
+        this.telemetry.emitObjectionRaised(latestObj);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Handles a faulted seat per ADR 0003: bounded retry or excusal.
+   * Preserves completed turns and locks open objections as preserved_excused.
+   * @param {string} seatId
+   * @param {Error|string} error
+   * @param {Object} [options={}]
+   * @param {number} [options.remainingBudget] - Remaining budget in ms
+   * @param {number} [options.seatElapsedMs] - Total time elapsed for seat in phase
+   * @param {number} [options.totalSeatBudgetMs] - Total seat budget allocated
+   * @returns {{ action: string, retries?: number, lockedObjections?: number }}
+   */
+  handleSeatFault(seatId, error, options = {}) {
+    if (this.isCompleted()) {
+      return { action: 'skipped' };
+    }
+    const errorClass = this._classifyErrorClass(error);
+    const reason = this._formatFaultReason(error);
+    const faultStatus = this._classifyFaultStatus(error);
+    const seat = (this.state.seats || []).find((s) => s.id === seatId);
+    const { retries, isRetryable, budgetExhausted, canRetry } = this._evaluateSeatFaultRetryability(
+      seat,
+      error,
+      options
+    );
 
     this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
     this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass }, true);
 
-    if (seat && isRetryable && retries < this.config.maxRetriesPerSeat && !budgetExhausted) {
+    if (canRetry) {
       this._step({ type: 'RETRY_SEAT', seatId }, true);
       return { action: 'retried', retries: seat.retries + 1 };
     } else {
@@ -1152,7 +1322,7 @@ export class CouncilEngine {
         if (this.signal?.aborted) {
           this.aborted = true;
         }
-        if (this.aborted || delibWaveSignal.aborted) {
+        if (this.aborted || this.signal?.aborted || (delibWaveSignal.aborted && !delibQuorumAborted)) {
           if (this.signal?.aborted || !delibQuorumAborted) {
             this.aborted = true;
           }
@@ -1243,11 +1413,18 @@ export class CouncilEngine {
             this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
             this._classifyErrorClass(slot.error) === 'TimeoutError';
 
-          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, {
+          const faultOptions = {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs
-          });
+          };
+          if (this._willSeatFaultExcuseAndCollapseQuorum(slot.seat.id, slot.error, faultOptions)) {
+            this._commitDelibSlots(delibSlots, { preCollapse: true });
+            if (this.isCompleted() || this.aborted) {
+              break;
+            }
+          }
+          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, faultOptions);
           slot.error = null;
 
           if (this.isCompleted() || this.aborted) {
@@ -1355,7 +1532,7 @@ export class CouncilEngine {
             if (this.signal?.aborted) {
               this.aborted = true;
             }
-            if (this.aborted || delibRetrySignal.aborted) {
+            if (this.aborted || this.signal?.aborted || (delibRetrySignal.aborted && !delibRetryQuorumAborted)) {
               if (this.signal?.aborted || !delibRetryQuorumAborted) {
                 this.aborted = true;
               }
@@ -1434,41 +1611,7 @@ export class CouncilEngine {
       await runDelibRetryWaves();
       if (this.isCompleted() || this.aborted) break;
 
-      let commitFaulted = false;
-      for (let i = 0; i < delibSlots.length; i++) {
-        if (this.isCompleted() || this.aborted) break;
-        const slot = delibSlots[i];
-        if (slot.skipped || slot.excused || slot.committed || !slot.proofInput) continue;
-        const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
-        if (!liveSeat || liveSeat.status === 'excused') continue;
-
-        this._step({
-          type: 'SUBMIT_PROOF',
-          seatId: slot.seat.id,
-          scope: slot.proofInput.scope,
-          kind: slot.proofInput.kind,
-          source: slot.proofInput.source,
-          statement: slot.proofInput.statement
-        });
-        if (!this.state.lastTransition?.ok) {
-          slot.error = new InvalidResponseError(
-            this.state.lastTransition?.message || `Guard rejected SUBMIT_PROOF from seat ${slot.seat.id}`,
-            {
-              harness: slot.seat.harness,
-              seatId: slot.seat.id,
-              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model
-            }
-          );
-          slot.proofInput = null;
-          commitFaulted = true;
-          break;
-        }
-        slot.committed = true;
-        this.telemetry.emitSeatTelemetry(slot.seat.id, 'proof_submitted');
-        const latestProof = this.state.proofs[this.state.proofs.length - 1];
-        this.telemetry.emitProofSubmitted(latestProof);
-      }
-
+      const commitFaulted = this._commitDelibSlots(delibSlots);
       if (!commitFaulted) break;
     }
 
@@ -1858,7 +2001,7 @@ export class CouncilEngine {
         if (this.signal?.aborted) {
           this.aborted = true;
         }
-        if (this.aborted || voteWaveSignal.aborted) {
+        if (this.aborted || this.signal?.aborted || (voteWaveSignal.aborted && !voteQuorumAborted)) {
           if (this.signal?.aborted || !voteQuorumAborted) {
             this.aborted = true;
           }
@@ -1951,11 +2094,18 @@ export class CouncilEngine {
             this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
             this._classifyErrorClass(slot.error) === 'TimeoutError';
 
-          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, {
+          const faultOptions = {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs
-          });
+          };
+          if (this._willSeatFaultExcuseAndCollapseQuorum(slot.seat.id, slot.error, faultOptions)) {
+            this._commitVoteSlots(voteSlots, { preCollapse: true });
+            if (this.isCompleted() || this.aborted) {
+              break;
+            }
+          }
+          const faultRes = this.handleSeatFault(slot.seat.id, slot.error, faultOptions);
           slot.error = null;
 
           if (this.isCompleted() || this.aborted) {
@@ -2046,7 +2196,7 @@ export class CouncilEngine {
             if (this.signal?.aborted) {
               this.aborted = true;
             }
-            if (this.aborted || voteRetrySignal.aborted) {
+            if (this.aborted || this.signal?.aborted || (voteRetrySignal.aborted && !voteRetryQuorumAborted)) {
               if (this.signal?.aborted || !voteRetryQuorumAborted) {
                 this.aborted = true;
               }
@@ -2125,67 +2275,7 @@ export class CouncilEngine {
       await runVoteRetryWaves();
       if (this.isCompleted() || this.aborted) break;
 
-      let commitFaulted = false;
-      for (let i = 0; i < voteSlots.length; i++) {
-        if (this.isCompleted() || this.aborted) break;
-        const slot = voteSlots[i];
-        if (slot.skipped || slot.excused || slot.committed || !slot.voteResult) continue;
-        const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
-        if (!liveSeat || liveSeat.status === 'excused') continue;
-
-        if (slot.voteResult.vote === 'accept') {
-          this._step({ type: 'CAST_VOTE', seatId: slot.seat.id, vote: 'accept' });
-          if (!this.state.lastTransition?.ok) {
-            slot.error = new InvalidResponseError(
-              this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
-              {
-                harness: slot.seat.harness,
-                seatId: slot.seat.id,
-                model: slot.seat.model
-              }
-            );
-            slot.voteResult = null;
-            commitFaulted = true;
-            break;
-          }
-          slot.committed = true;
-          this.telemetry.emitSeatTelemetry(slot.seat.id, 'accepted');
-          this.telemetry.emitVoteCast(slot.seat.id, 'accept');
-        } else if (slot.voteResult.vote === 'object') {
-          const resolvedProofId =
-            typeof slot.voteResult.proofId === 'string' && slot.voteResult.proofId.trim()
-              ? slot.voteResult.proofId.trim()
-              : (typeof slot.voteResult.backingProof === 'string' && slot.voteResult.backingProof.trim()
-                  ? slot.voteResult.backingProof.trim()
-                  : (slot.voteResult.proofId || slot.voteResult.backingProof));
-          this._step({
-            type: 'CAST_VOTE',
-            seatId: slot.seat.id,
-            vote: 'object',
-            reason: slot.voteResult.reason,
-            proofId: resolvedProofId
-          });
-          if (!this.state.lastTransition?.ok) {
-            slot.error = new InvalidResponseError(
-              this.state.lastTransition?.message || `Guard rejected CAST_VOTE from seat ${slot.seat.id}`,
-              {
-                harness: slot.seat.harness,
-                seatId: slot.seat.id,
-                model: slot.seat.model
-              }
-            );
-            slot.voteResult = null;
-            commitFaulted = true;
-            break;
-          }
-          slot.committed = true;
-          this.telemetry.emitSeatTelemetry(slot.seat.id, 'objected');
-          this.telemetry.emitVoteCast(slot.seat.id, 'object', slot.voteResult.reason, resolvedProofId);
-          const latestObj = this.state.objections[this.state.objections.length - 1];
-          this.telemetry.emitObjectionRaised(latestObj);
-        }
-      }
-
+      const commitFaulted = this._commitVoteSlots(voteSlots);
       if (!commitFaulted) break;
     }
 

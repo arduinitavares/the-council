@@ -362,8 +362,22 @@ Neither should unbalanced braces in error logs: "error: unexpected } at column 1
       assert.equal(parsed.source, 'Balanced brace scanner test harness');
     });
 
-    it('parses objection vote that provides backingProof object instead of proofId string', () => {
-      const rawOutput = `
+    it('normalizes string backingProof into proofId and rejects object-only backingProof without string proofId', () => {
+      const validRawOutput = `
+\`\`\`json
+{
+  "vote": "object",
+  "backingProof": "P1",
+  "reason": "SLA violation detected during load testing."
+}
+\`\`\`
+`;
+      const parsed = adapter.parseStructuredOutput(validRawOutput, 'vote');
+      assert.equal(parsed.vote, 'object');
+      assert.equal(parsed.proofId, 'P1');
+      assert.equal(parsed.reason, 'SLA violation detected during load testing.');
+
+      const objectOnlyBacking = `
 \`\`\`json
 {
   "vote": "object",
@@ -377,11 +391,7 @@ Neither should unbalanced braces in error logs: "error: unexpected } at column 1
 }
 \`\`\`
 `;
-      const parsed = adapter.parseStructuredOutput(rawOutput, 'vote');
-      assert.equal(parsed.vote, 'object');
-      assert.equal(parsed.reason, 'SLA violation detected during load testing.');
-      assert.ok(parsed.backingProof);
-      assert.equal(parsed.backingProof.kind, 'benchmark');
+      assert.throws(() => adapter.parseStructuredOutput(objectOnlyBacking, 'vote'));
     });
 
     it('parses proof when preceded by tool chatter containing curly braces and logs', () => {

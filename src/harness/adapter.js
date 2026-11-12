@@ -405,7 +405,7 @@ export class HarnessAdapter {
       }
     }
 
-    const timeoutPromise = new Promise((_, reject) => {
+    const timeoutPromise = new Promise((resolve) => {
       timer = setTimeout(() => {
         timer = null;
         if (firstCause !== null) {
@@ -421,8 +421,8 @@ export class HarnessAdapter {
             timeoutMs: effectiveTimeoutMs
           }
         );
-        reject(latchedTimeoutErr);
         timeoutController.abort();
+        resolve({ type: 'timeout' });
       }, effectiveTimeoutMs);
     });
 
@@ -443,64 +443,63 @@ export class HarnessAdapter {
     // Prevent unhandled rejection when timeout or abortDrainMs wins before fnPromise settles
     fnPromise.catch(() => {});
 
-    try {
-      if (!externalAbortPromise) {
-        try {
-          return await Promise.race([timeoutPromise, fnPromise]);
-        } catch (err) {
-          if (firstCause === 'timeout' && latchedTimeoutErr) {
-            throw latchedTimeoutErr;
-          }
-          throw err;
+    const drainFnSettlement = async () => {
+      const hasExplicitAbortDrain =
+        typeof context.abortDrainMs === 'number' &&
+        Number.isFinite(context.abortDrainMs) &&
+        context.abortDrainMs >= 0;
+
+      let settledError = null;
+      const waitForSettlement = fnPromise.then(
+        () => {},
+        (err) => {
+          settledError = err;
         }
+      );
+
+      if (hasExplicitAbortDrain) {
+        let drainTimer = null;
+        await Promise.race([
+          waitForSettlement,
+          new Promise((resolve) => {
+            drainTimer = setTimeout(resolve, context.abortDrainMs);
+          })
+        ]);
+        if (drainTimer) {
+          clearTimeout(drainTimer);
+        }
+      } else {
+        await waitForSettlement;
       }
 
-      const outcome = await Promise.race([
+      return settledError;
+    };
+
+    try {
+      const raceInputs = [
         timeoutPromise,
         fnPromise.then(
           (value) => ({ type: 'fn_ok', value }),
           (error) => ({ type: 'fn_err', error })
-        ),
-        externalAbortPromise
-      ]);
+        )
+      ];
+      if (externalAbortPromise) {
+        raceInputs.push(externalAbortPromise);
+      }
 
-      if (firstCause === 'timeout' && latchedTimeoutErr) {
+      const outcome = await Promise.race(raceInputs);
+
+      if (outcome.type === 'timeout' || (firstCause === 'timeout' && latchedTimeoutErr)) {
+        await drainFnSettlement();
         throw latchedTimeoutErr;
       }
 
-      if (outcome.type === 'external' || (firstCause === 'external' && externalSignal.aborted)) {
+      if (outcome.type === 'external' || (firstCause === 'external' && externalSignal?.aborted)) {
         if (timer) {
           clearTimeout(timer);
           timer = null;
         }
-        const hasExplicitAbortDrain =
-          typeof context.abortDrainMs === 'number' &&
-          Number.isFinite(context.abortDrainMs) &&
-          context.abortDrainMs >= 0;
-
-        let settledError = null;
-        const waitForSettlement = fnPromise.then(
-          () => {},
-          (err) => {
-            settledError = err;
-          }
-        );
-
-        if (hasExplicitAbortDrain) {
-          let drainTimer = null;
-          await Promise.race([
-            waitForSettlement,
-            new Promise((resolve) => {
-              drainTimer = setTimeout(resolve, context.abortDrainMs);
-            })
-          ]);
-          if (drainTimer) {
-            clearTimeout(drainTimer);
-          }
-        } else {
-          await waitForSettlement;
-        }
-
+        const settledError = await drainFnSettlement();
         if (settledError instanceof AbortError) {
           throw settledError;
         }
@@ -517,7 +516,7 @@ export class HarnessAdapter {
         throw outcome.error;
       }
 
-      if (externalSignal.aborted && firstCause !== 'timeout') {
+      if (externalSignal?.aborted && firstCause !== 'timeout') {
         throw buildAbortErr();
       }
 

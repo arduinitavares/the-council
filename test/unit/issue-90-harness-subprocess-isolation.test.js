@@ -279,6 +279,130 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
       );
     });
 
+    it('drains SIGTERM -> SIGKILL subprocess settlement and council-seat-cwd-* cleanup on deadline timeout (with or without externalSignal, preserving first-cause TimeoutError and honoring abortDrainMs)', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue90-timeout-drain-'));
+      const scriptFile = path.join(tmpDir, 'trap-timeout-child.cjs');
+
+      try {
+        // 1. Without externalSignal: internal timeoutMs expires while child traps SIGTERM
+        const infoNoExt = path.join(tmpDir, 'info-no-ext.json');
+        fs.writeFileSync(
+          scriptFile,
+          [
+            'const fs = require("node:fs");',
+            'process.on("SIGTERM", () => {});',
+            `fs.writeFileSync(${JSON.stringify(infoNoExt)}, JSON.stringify({ pid: process.pid, cwd: process.cwd() }));`,
+            'setInterval(() => {}, 1000);'
+          ].join('\n')
+        );
+
+        const adapterNoExt = new CodexAdapter({
+          spawnRunner: (runnerOpts) =>
+            runCodexCli({
+              ...runnerOpts,
+              exec: (_bin, _args, execOpts) => execCli(process.execPath, [scriptFile], execOpts)
+            })
+        });
+
+        const noExtPromise = adapterNoExt.executeSeatProof({
+          seat: { id: 'seat-timeout-no-ext', model: 'gpt-6.1-sol (high)', tools: 'read-only' },
+          soul: 'pragmatist',
+          round: 1,
+          timeoutMs: 90,
+          killGraceMs: 180,
+          state: { topic: 'Verify timeout drain without externalSignal', maxRounds: 2, clarifications: [], proofs: [], objections: [] }
+        });
+
+        const { pid: pidNoExt, cwd: cwdNoExt } = JSON.parse(await waitForFile(infoNoExt));
+        assert.match(path.basename(cwdNoExt), /^council-seat-cwd-/);
+
+        await assert.rejects(
+          noExtPromise,
+          (err) => err instanceof TimeoutError && !(err instanceof AbortError) && err.isRetryable === true,
+          'Timeout without externalSignal must reject with retryable TimeoutError'
+        );
+
+        assert.throws(
+          () => process.kill(pidNoExt, 0),
+          (killErr) => killErr && killErr.code === 'ESRCH',
+          'Subprocess must already be dead (ESRCH) before TimeoutError rejects (no externalSignal)'
+        );
+        assert.equal(
+          fs.existsSync(cwdNoExt),
+          false,
+          'council-seat-cwd-* must already be cleaned up before TimeoutError rejects (no externalSignal)'
+        );
+
+        // 2. With externalSignal (which also aborts AFTER timeoutMs fires during the SIGKILL drain):
+        // must still drain child + temp dir AND preserve first-cause retryable TimeoutError
+        const infoWithExt = path.join(tmpDir, 'info-with-ext.json');
+        const scriptWithExt = path.join(tmpDir, 'trap-timeout-ext.cjs');
+        fs.writeFileSync(
+          scriptWithExt,
+          [
+            'const fs = require("node:fs");',
+            'process.on("SIGTERM", () => {});',
+            `fs.writeFileSync(${JSON.stringify(infoWithExt)}, JSON.stringify({ pid: process.pid, cwd: process.cwd() }));`,
+            'setInterval(() => {}, 1000);'
+          ].join('\n')
+        );
+
+        const lateExternal = new AbortController();
+        const adapterWithExt = new CodexAdapter({
+          spawnRunner: (runnerOpts) =>
+            runCodexCli({
+              ...runnerOpts,
+              exec: (_bin, _args, execOpts) => execCli(process.execPath, [scriptWithExt], execOpts)
+            })
+        });
+
+        const withExtPromise = adapterWithExt.executeSeatProof({
+          seat: { id: 'seat-timeout-with-ext', model: 'gpt-6.1-sol (high)', tools: 'read-only' },
+          soul: 'pragmatist',
+          round: 1,
+          timeoutMs: 90,
+          killGraceMs: 220,
+          signal: lateExternal.signal,
+          state: { topic: 'Verify timeout drain with late externalSignal', maxRounds: 2, clarifications: [], proofs: [], objections: [] }
+        });
+
+        const { pid: pidWithExt, cwd: cwdWithExt } = JSON.parse(await waitForFile(infoWithExt));
+        setTimeout(() => lateExternal.abort(), 140);
+
+        await assert.rejects(
+          withExtPromise,
+          (err) => err instanceof TimeoutError && !(err instanceof AbortError) && err.isRetryable === true,
+          'Timeout with externalSignal aborting mid-drain must preserve first-cause TimeoutError'
+        );
+
+        assert.throws(
+          () => process.kill(pidWithExt, 0),
+          (killErr) => killErr && killErr.code === 'ESRCH',
+          'Subprocess must already be dead (ESRCH) before TimeoutError rejects (with externalSignal)'
+        );
+        assert.equal(
+          fs.existsSync(cwdWithExt),
+          false,
+          'council-seat-cwd-* must already be cleaned up before TimeoutError rejects (with externalSignal)'
+        );
+
+        // 3. Explicit abortDrainMs bounds non-cooperative fn wait on deadline timeout too
+        const baseAdapter = new HarnessAdapter({ name: 'base' });
+        const tBound0 = Date.now();
+        await assert.rejects(
+          baseAdapter.executeWithTimeout(
+            () => new Promise(() => {}),
+            25,
+            { seatId: 's-drain-bound', model: 'm1', abortDrainMs: 30 }
+          ),
+          (err) => err instanceof TimeoutError && err.isRetryable === true
+        );
+        assert.ok(Date.now() - tBound0 < 1000, 'abortDrainMs must bound non-cooperative timeout drain');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it('waits for real SIGTERM-trapping child close (ESRCH) and council-seat-cwd-* cleanup across AbortSignal.any([signal]) with killGraceMs: 600', async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue90-adapter-grace600-'));
       const infoFile = path.join(tmpDir, 'child-info.json');
@@ -495,6 +619,162 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
       assert.equal(captured[3][captured[3].indexOf('--model') + 1], 'gemini-3.1-pro');
     });
 
+    it('forwards judge.reasoningEffort, context.reasoningEffort, and top-level reasoningEffort in executeJudge and executeSeat across Codex, Antigravity, and Cursor adapters', async () => {
+      const judgeJson = JSON.stringify({
+        summary: 'Synthesized consensus',
+        clauses: [{ id: 'C1', context: 'ctx', conclusion: 'conc', citedProofIds: ['P1'] }]
+      });
+      const voteJson = JSON.stringify({ vote: 'accept' });
+      const proofs = [{ id: 'P1', status: 'admitted', statement: 's', source: 'src', scope: 'all', kind: 'check' }];
+      const baseState = {
+        topic: 'Verify judge reasoningEffort forwarding',
+        maxRounds: 2,
+        clarifications: [],
+        proofs,
+        objections: [],
+        candidate: { summary: 'sum', clauses: [{ id: 'C1', context: 'ctx', conclusion: 'conc', citedProofIds: ['P1'] }] }
+      };
+
+      // 1. CodexAdapter
+      const codexArgvs = [];
+      const codexAdapter = new CodexAdapter({
+        spawnRunner: (opts) =>
+          runCodexCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              codexArgvs.push(args);
+              const payload = args.some((a) => String(a).includes('JUDGE')) ? judgeJson : judgeJson;
+              return {
+                stdout: JSON.stringify({
+                  type: 'item.completed',
+                  item: { type: 'agent_message', text: codexArgvs.length === 3 ? voteJson : payload }
+                }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      await codexAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-codex', model: 'gpt-6.1-sol', reasoningEffort: 'low', tools: 'none' },
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await codexAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-codex', model: 'gpt-6.1-sol', reasoningEffort: 'low', tools: 'none' },
+        reasoningEffort: 'medium',
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await codexAdapter.executeSeatVote({
+        seat: { id: 'seat-codex', model: 'gpt-6-astra', tools: 'none' },
+        reasoningEffort: 'low',
+        soul: 'pragmatist',
+        round: 1,
+        state: baseState
+      });
+
+      assert.equal(codexArgvs[0][codexArgvs[0].indexOf('-m') + 1], 'gpt-6.1-sol');
+      assert.ok(codexArgvs[0].includes('model_reasoning_effort="low"'), `Expected low effort in ${JSON.stringify(codexArgvs[0])}`);
+      assert.ok(codexArgvs[1].includes('model_reasoning_effort="medium"'), `Expected top-level medium effort override in ${JSON.stringify(codexArgvs[1])}`);
+      assert.equal(codexArgvs[2][codexArgvs[2].indexOf('-m') + 1], 'gpt-6-astra');
+      assert.ok(codexArgvs[2].includes('model_reasoning_effort="low"'), `Expected top-level low effort on executeSeat in ${JSON.stringify(codexArgvs[2])}`);
+
+      // 2. AntigravityAdapter
+      const agyArgvs = [];
+      const agyAdapter = new AntigravityAdapter({
+        spawnRunner: (opts) =>
+          runAntigravityCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              agyArgvs.push(args);
+              return {
+                stdout: JSON.stringify({ response: agyArgvs.length === 3 ? voteJson : judgeJson }),
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          })
+      });
+
+      await agyAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-agy', model: 'gemini-4-argon', reasoningEffort: 'low', tools: 'none' },
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await agyAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-agy', model: 'gemini-4-argon', tools: 'none' },
+        context: { reasoningEffort: 'medium' },
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await agyAdapter.executeSeatVote({
+        seat: { id: 'seat-agy', model: 'gemini-4-carbon', tools: 'none' },
+        reasoningEffort: 'low',
+        soul: 'pragmatist',
+        round: 1,
+        state: baseState
+      });
+
+      assert.equal(agyArgvs[0][agyArgvs[0].indexOf('--model') + 1], 'gemini-4-argon-low');
+      assert.equal(agyArgvs[0][agyArgvs[0].indexOf('--effort') + 1], 'low');
+      assert.equal(agyArgvs[1][agyArgvs[1].indexOf('--model') + 1], 'gemini-4-argon-medium');
+      assert.equal(agyArgvs[1][agyArgvs[1].indexOf('--effort') + 1], 'medium');
+      assert.equal(agyArgvs[2][agyArgvs[2].indexOf('--model') + 1], 'gemini-4-carbon-low');
+      assert.equal(agyArgvs[2][agyArgvs[2].indexOf('--effort') + 1], 'low');
+
+      // 3. CursorAdapter (including composer-2.5 guard against invented reasoningEffort)
+      const cursorArgvs = [];
+      const cursorContexts = [];
+      const cursorAdapter = new CursorAdapter({
+        spawnRunner: (opts) => {
+          cursorContexts.push(opts.context);
+          return runCursorCli({
+            ...opts,
+            exec: async (_bin, args) => {
+              cursorArgvs.push(args);
+              return {
+                stdout: `${JSON.stringify({ type: 'result', result: cursorArgvs.length === 3 ? voteJson : judgeJson })}\n`,
+                stderr: '',
+                exitCode: 0
+              };
+            }
+          });
+        }
+      });
+
+      await cursorAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-cursor', model: 'grok-4.7', reasoningEffort: 'low', tools: 'none' },
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await cursorAdapter.executeJudgeAuditAndSynthesis({
+        judge: { id: 'judge-composer', model: 'composer-2.5', reasoningEffort: 'low', tools: 'none' },
+        reasoningEffort: 'low',
+        round: 1,
+        proofs,
+        state: baseState
+      });
+      await cursorAdapter.executeSeatVote({
+        seat: { id: 'seat-cursor', model: 'grok-4.7', tools: 'none' },
+        reasoningEffort: 'medium',
+        soul: 'pragmatist',
+        round: 1,
+        state: baseState
+      });
+
+      assert.equal(cursorArgvs[0][cursorArgvs[0].indexOf('--model') + 1], 'grok-4.7-low');
+      assert.equal(cursorArgvs[1][cursorArgvs[1].indexOf('--model') + 1], 'composer-2.5');
+      assert.equal(cursorContexts[1].reasoningEffort, undefined, 'composer-2.5 must not carry invented reasoningEffort');
+      assert.equal(cursorArgvs[2][cursorArgvs[2].indexOf('--model') + 1], 'grok-4.7-medium');
+    });
+
     it('normalizes non-empty string backingProof into proofId and rejects vote === "object" without non-empty string proofId or backingProof', () => {
       const adapter = new HarnessAdapter({ name: 'base' });
 
@@ -620,8 +900,8 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
 
             // Source 0555 directory permissions must NOT be mutated
             assert.equal(fs.statSync(roDir).mode & 0o777, 0o555);
-            // Copy's readonly-dir must be owner-writable in temp copy
-            assert.equal((fs.statSync(path.join(opts.cwd, 'readonly-dir')).mode & 0o700), 0o700);
+            // Copy's readonly-dir must be 0700 (owner-writable) in temp copy per spec
+            assert.equal(fs.statSync(path.join(opts.cwd, 'readonly-dir')).mode & 0o777, 0o700);
 
             return { stdout: '{"vote":"accept"}\n', stderr: '', exitCode: 0 };
           }
@@ -882,7 +1162,7 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
       ]);
       assert.equal(multiCallRes.forbiddenStateAccess, true, 'Large benign field must not blind subsequent tool-call inspection');
 
-      // Adversarial 262,144-byte metacharacter inputs must stay linear (<100ms)
+      // Adversarial 262,144-byte metacharacter and quote inputs must stay linear (<100ms)
       for (const ch of ['[', '*', '{']) {
         const meta256k = ch.repeat(262_144);
         const tMeta0 = performance.now();
@@ -892,6 +1172,22 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
         const metaElapsedMs = performance.now() - tMeta0;
         assert.equal(metaRes.forbiddenStateAccess, false);
         assert.ok(metaElapsedMs < 100, `Expected 256KiB '${ch}' scan <100ms, got ${metaElapsedMs.toFixed(2)}ms`);
+      }
+
+      for (const quoteAdv of [
+        `/${"$'".repeat(131_071)}`,
+        `/${'"'.repeat(262_143)}`,
+        `/${"'/a'".repeat(65_535)}`
+      ]) {
+        const tQ0 = performance.now();
+        const qRes = detectForbiddenCouncilAccess(
+          [{ name: 'bash', input: { command: quoteAdv } }],
+          null,
+          { forbiddenWorkspaceRoots: ['/tmp/repo'] }
+        );
+        const qElapsedMs = performance.now() - tQ0;
+        assert.equal(qRes.forbiddenStateAccess, false);
+        assert.ok(qElapsedMs < 100, `Expected 256KiB quote scan <100ms, got ${qElapsedMs.toFixed(2)}ms`);
       }
 
       const nestedLoops = `${'for i in 1 2; do '.repeat(20)}echo safe_command_arg; ${'done; '.repeat(20)} ${'('.repeat(20)}echo ok${')'.repeat(20)} ${'@('.repeat(20)}foo|bar${')'.repeat(20)}`;
@@ -1118,6 +1414,62 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
             { forbiddenWorkspaceRoots: roots }
           );
           assert.equal(res.forbiddenStateAccess, false, `Must NOT false-positive on sibling path: ${cmd}`);
+        }
+
+        const fixedQuotedRoot = ['/tmp/repo'];
+        const quotedSiblingNegatives = [
+          'cat "/tmp/repo backup"',
+          "cat '/tmp/repo backup'",
+          'cat "/tmp/repo)"',
+          'cat "/tmp/repo}"',
+          'cat "/tmp/repo]"',
+          'cat "/tmp/repo "',
+          'rg --dir="/tmp/repo backup" pat',
+          'git -C"/tmp/repo backup" status',
+          'TARGET="/tmp/repo backup" node -e 1',
+          "cat $'/tmp/repo\\040backup'",
+          "printf '/tmp/repo\\040backup'",
+          'echo -e "/tmp/repo\\x20backup"'
+        ];
+        for (const cmd of quotedSiblingNegatives) {
+          const res = detectForbiddenCouncilAccess(
+            [{ name: 'bash', input: { command: cmd } }],
+            null,
+            { forbiddenWorkspaceRoots: fixedQuotedRoot }
+          );
+          assert.equal(
+            res.forbiddenStateAccess,
+            false,
+            `Must NOT false-positive on quoted/escaped sibling path: ${cmd}`
+          );
+        }
+
+        const quotedRootPositives = [
+          'cat "/tmp/repo"',
+          "cat '/tmp/repo'",
+          'cat "/tmp/repo/file"',
+          'rg --dir="/tmp/repo/file" pat',
+          'git -C"/tmp/repo" status',
+          'TARGET="/tmp/repo/index.js" node -e 1',
+          '(cat /tmp/repo)',
+          'cat {/tmp/repo}',
+          'cat [/tmp/repo/file]',
+          "cat $'/tmp/repo\\057file'",
+          "printf '/tmp/repo\\057file'",
+          'echo -e "/tmp/repo\\x2ffile"',
+          "# don't skip\ncat /tmp/repo/file"
+        ];
+        for (const cmd of quotedRootPositives) {
+          const res = detectForbiddenCouncilAccess(
+            [{ name: 'bash', input: { command: cmd } }],
+            null,
+            { forbiddenWorkspaceRoots: fixedQuotedRoot }
+          );
+          assert.equal(
+            res.forbiddenStateAccess,
+            true,
+            `Expected forbidden root match for quoted/grouped form: ${cmd}`
+          );
         }
 
         const winRoots = ['C:\\work\\repo'];

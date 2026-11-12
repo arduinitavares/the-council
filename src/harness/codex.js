@@ -111,6 +111,7 @@ export class CodexAdapter extends HarnessAdapter {
     cwd,
     rebuttalMode,
     mode,
+    reasoningEffort,
     signal: callerSignal,
     abortDrainMs,
     killGraceMs,
@@ -132,7 +133,8 @@ export class CodexAdapter extends HarnessAdapter {
           seat?.rebuttalMode ||
           seat?.mode === 'rebuttal'
       );
-    const effectiveReasoningEffort = callerContext?.reasoningEffort ?? seat?.reasoningEffort;
+    const effectiveReasoningEffort =
+      reasoningEffort ?? callerContext?.reasoningEffort ?? seat?.reasoningEffort;
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -235,6 +237,7 @@ export class CodexAdapter extends HarnessAdapter {
     telemetry,
     onCallRecord,
     cwd,
+    reasoningEffort,
     signal: callerSignal,
     abortDrainMs,
     killGraceMs,
@@ -243,6 +246,8 @@ export class CodexAdapter extends HarnessAdapter {
     this.validateModel(judge.model);
     const disableHooks = judge.disableHooks !== undefined ? judge.disableHooks : this.disableHooks;
     const ignoreUserConfig = judge.ignoreUserConfig !== undefined ? judge.ignoreUserConfig : this.ignoreUserConfig;
+    const effectiveReasoningEffort =
+      reasoningEffort ?? callerContext?.reasoningEffort ?? judge?.reasoningEffort;
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -265,6 +270,7 @@ export class CodexAdapter extends HarnessAdapter {
       seatId: judge.id,
       model: judge.model,
       tools: effectiveTools,
+      ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(disableHooks !== undefined ? { disableHooks } : {}),

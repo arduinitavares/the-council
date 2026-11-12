@@ -97,6 +97,7 @@ export class CursorAdapter extends HarnessAdapter {
     cwd,
     rebuttalMode,
     mode,
+    reasoningEffort,
     signal: callerSignal,
     abortDrainMs,
     killGraceMs,
@@ -120,7 +121,7 @@ export class CursorAdapter extends HarnessAdapter {
     const effectiveReasoningEffort =
       baseModel === 'composer-2.5'
         ? undefined
-        : (callerContext?.reasoningEffort ?? seat?.reasoningEffort);
+        : (reasoningEffort ?? callerContext?.reasoningEffort ?? seat?.reasoningEffort);
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -218,12 +219,18 @@ export class CursorAdapter extends HarnessAdapter {
     telemetry,
     onCallRecord,
     cwd,
+    reasoningEffort,
     signal: callerSignal,
     abortDrainMs,
     killGraceMs,
     context: callerContext
   }) {
     this.validateModel(judge.model);
+    const baseModel = extractCanonicalBaseModel(judge.model, 'high');
+    const effectiveReasoningEffort =
+      baseModel === 'composer-2.5'
+        ? undefined
+        : (reasoningEffort ?? callerContext?.reasoningEffort ?? judge?.reasoningEffort);
     const effectiveTools =
       tools === 'none' || callerContext?.tools === 'none'
         ? 'none'
@@ -246,6 +253,7 @@ export class CursorAdapter extends HarnessAdapter {
       seatId: judge.id,
       model: judge.model,
       tools: effectiveTools,
+      ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),

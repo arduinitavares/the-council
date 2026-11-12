@@ -1510,9 +1510,15 @@ function stripOuterMatchingQuotes(s) {
   return s;
 }
 
-function normalizeComparablePath(rawPath, { allowFileUri = false } = {}) {
+function normalizeComparablePath(
+  rawPath,
+  { allowFileUri = false, trimWhitespace = true, stripOuterQuotes = true } = {}
+) {
   if (typeof rawPath !== 'string') return null;
-  let p = stripOuterMatchingQuotes(rawPath.trim());
+  let p = trimWhitespace ? rawPath.trim() : rawPath;
+  if (stripOuterQuotes) {
+    p = stripOuterMatchingQuotes(p);
+  }
   if (!p) return null;
 
   let fromFileUri = false;
@@ -1547,11 +1553,11 @@ function normalizeComparablePath(rawPath, { allowFileUri = false } = {}) {
     return clean || null;
   }
 
-  if (!slashPreview.startsWith('/')) {
+  if (!p.startsWith('/')) {
     return null;
   }
 
-  const posixNorm = path.posix.normalize(slashPreview);
+  const posixNorm = path.posix.normalize(p);
   const clean = posixNorm.length > 1 ? posixNorm.replace(/\/+$/, '') : posixNorm;
   return clean || null;
 }
@@ -1575,8 +1581,16 @@ function normalizeForbiddenWorkspaceRoots(optionsOrRoots) {
   return out;
 }
 
-function checkSinglePathCandidateAgainstRoots(rawCand, normRoots) {
-  const clean = normalizeComparablePath(rawCand, { allowFileUri: true });
+function checkSinglePathCandidateAgainstRoots(
+  rawCand,
+  normRoots,
+  { trimWhitespace = false, stripOuterQuotes = false } = {}
+) {
+  const clean = normalizeComparablePath(rawCand, {
+    allowFileUri: true,
+    trimWhitespace,
+    stripOuterQuotes
+  });
   if (!clean) return false;
   for (const root of normRoots) {
     if (clean === root || clean.startsWith(`${root}/`)) {
@@ -1586,46 +1600,373 @@ function checkSinglePathCandidateAgainstRoots(rawCand, normRoots) {
   return false;
 }
 
-function pushTokenAndAttachedForms(target, rawSpan) {
-  const trimmedTok = stripOuterMatchingQuotes(
-    rawSpan.trim().replace(/^[([{]+/, '').replace(/[)\]}]+$/, '')
+function isUnquotedWorkspaceTokenDelimiter(ch) {
+  return (
+    ch === ' ' ||
+    ch === '\t' ||
+    ch === '\n' ||
+    ch === '\r' ||
+    ch === '\v' ||
+    ch === '\f' ||
+    ch === ';' ||
+    ch === '|' ||
+    ch === '&' ||
+    ch === '<' ||
+    ch === '>' ||
+    ch === '(' ||
+    ch === ')' ||
+    ch === '`'
   );
-  if (!trimmedTok) return;
+}
+
+function decodeAnsiCBodyLinear(body) {
+  if (!body || !body.includes('\\')) return body;
+  let out = '';
+  let pendingBytes = [];
+  const flushBytes = () => {
+    if (pendingBytes.length > 0) {
+      out += Buffer.from(pendingBytes).toString('utf8');
+      pendingBytes = [];
+    }
+  };
+
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] !== '\\' || i + 1 >= body.length) {
+      flushBytes();
+      out += body[i];
+      continue;
+    }
+    const next = body[i + 1];
+    if (next === 'x' && i + 2 < body.length) {
+      const h1 = body[i + 2];
+      const isHex1 =
+        (h1 >= '0' && h1 <= '9') || (h1 >= 'a' && h1 <= 'f') || (h1 >= 'A' && h1 <= 'F');
+      if (isHex1) {
+        let hexStr = h1;
+        if (i + 3 < body.length) {
+          const h2 = body[i + 3];
+          const isHex2 =
+            (h2 >= '0' && h2 <= '9') || (h2 >= 'a' && h2 <= 'f') || (h2 >= 'A' && h2 <= 'F');
+          if (isHex2) hexStr += h2;
+        }
+        pendingBytes.push(parseInt(hexStr, 16) & 0xff);
+        i += 1 + hexStr.length;
+        continue;
+      }
+    }
+    if (next >= '0' && next <= '7') {
+      let octStr = next;
+      if (i + 2 < body.length && body[i + 2] >= '0' && body[i + 2] <= '7') {
+        octStr += body[i + 2];
+        if (i + 3 < body.length && body[i + 3] >= '0' && body[i + 3] <= '7') {
+          octStr += body[i + 3];
+        }
+      }
+      pendingBytes.push(parseInt(octStr, 8) & 0xff);
+      i += octStr.length;
+      continue;
+    }
+    flushBytes();
+    i += 1;
+    switch (next) {
+      case "'":
+      case '"':
+      case '\\':
+        out += next;
+        break;
+      case 'n':
+        out += '\n';
+        break;
+      case 'r':
+        out += '\r';
+        break;
+      case 't':
+        out += '\t';
+        break;
+      case 'v':
+        out += '\v';
+        break;
+      case 'f':
+        out += '\f';
+        break;
+      case 'a':
+        out += '\x07';
+        break;
+      case 'b':
+        out += '\b';
+        break;
+      case 'e':
+      case 'E':
+        out += '\x1b';
+        break;
+      default:
+        out += `\\${next}`;
+        break;
+    }
+  }
+  flushBytes();
+  return out;
+}
+
+function pushSpanAndAttachedForms(target, buf, leadingUnquotedEnd, trailingUnquotedStart) {
+  if (!buf) return;
+  let start = 0;
+  const maxLead = Math.min(leadingUnquotedEnd, buf.length);
+  while (start < maxLead && (buf[start] === '[' || buf[start] === '{')) {
+    start += 1;
+  }
+  let end = buf.length;
+  const minTrail = Math.max(start, trailingUnquotedStart);
+  while (end > minTrail && (buf[end - 1] === ']' || buf[end - 1] === '}')) {
+    end -= 1;
+  }
+  if (start >= end) return;
+
+  const trimmedTok = start === 0 && end === buf.length ? buf : buf.slice(start, end);
   target.push(trimmedTok);
 
+  const adjLeadUnquoted = Math.max(0, leadingUnquotedEnd - start);
   const eqIdx = trimmedTok.indexOf('=');
   if (eqIdx !== -1 && eqIdx + 1 < trimmedTok.length) {
-    target.push(stripOuterMatchingQuotes(trimmedTok.slice(eqIdx + 1)));
+    let valStart = eqIdx + 1;
+    while (
+      valStart < adjLeadUnquoted &&
+      (trimmedTok[valStart] === '[' || trimmedTok[valStart] === '{')
+    ) {
+      valStart += 1;
+    }
+    if (valStart < trimmedTok.length) {
+      target.push(trimmedTok.slice(valStart));
+    }
   }
 
   const shortFlagMatch = trimmedTok.match(
     /^-[A-Za-z]((?:\/|\\|[A-Za-z]:[\\/]|file:\/\/).*)$/i
   );
   if (shortFlagMatch) {
-    target.push(stripOuterMatchingQuotes(shortFlagMatch[1]));
+    target.push(shortFlagMatch[1]);
   }
+}
+
+function extractWorkspacePathCandidatesLinear(str) {
+  const candidates = [];
+  const len = str.length;
+  let i = 0;
+
+  let cachedLineEnd = -1;
+  let noSingleOnLine = false;
+  let noAnsiSingleOnLine = false;
+  let noDoubleOnLine = false;
+
+  const getLineEnd = (pos) => {
+    if (pos > cachedLineEnd) {
+      let e = pos;
+      while (e < len && str[e] !== '\n' && str[e] !== '\r') {
+        e += 1;
+      }
+      cachedLineEnd = e;
+      noSingleOnLine = false;
+      noAnsiSingleOnLine = false;
+      noDoubleOnLine = false;
+    }
+    return cachedLineEnd;
+  };
+
+  while (i < len) {
+    while (i < len && isUnquotedWorkspaceTokenDelimiter(str[i])) {
+      i += 1;
+    }
+    if (i >= len) break;
+
+    let rawBuf = '';
+    let unescBuf = '';
+    let sawLiteral = false;
+    let rawLeadEnd = 0;
+    let rawTrailStart = 0;
+    let unescLeadEnd = 0;
+    let unescTrailStart = 0;
+
+    const appendPlain = (piece) => {
+      if (!piece) return;
+      rawBuf += piece;
+      unescBuf += piece;
+      if (!sawLiteral) {
+        rawLeadEnd = rawBuf.length;
+        unescLeadEnd = unescBuf.length;
+      }
+    };
+
+    const appendLiteral = (rawPiece, unescPiece) => {
+      sawLiteral = true;
+      rawBuf += rawPiece;
+      unescBuf += unescPiece;
+      rawTrailStart = rawBuf.length;
+      unescTrailStart = unescBuf.length;
+    };
+
+    while (i < len) {
+      const ch = str[i];
+      if (isUnquotedWorkspaceTokenDelimiter(ch)) {
+        break;
+      }
+
+      // 1. ANSI-C $'...' single-quoted span (if closed on current line)
+      if (ch === '$' && i + 1 < len && str[i + 1] === "'") {
+        const lineEnd = getLineEnd(i);
+        let closeIdx = -1;
+        if (!noAnsiSingleOnLine) {
+          for (let j = i + 2; j < lineEnd; j += 1) {
+            if (str[j] === '\\' && j + 1 < lineEnd) {
+              j += 1;
+              continue;
+            }
+            if (str[j] === "'") {
+              closeIdx = j;
+              break;
+            }
+          }
+          if (closeIdx === -1) {
+            noAnsiSingleOnLine = true;
+          }
+        }
+        if (closeIdx !== -1) {
+          const decoded = decodeAnsiCBodyLinear(str.slice(i + 2, closeIdx));
+          appendLiteral(decoded, decoded);
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+
+      // 2. Plain '...' single-quoted span (if closed on current line)
+      if (ch === "'") {
+        const lineEnd = getLineEnd(i);
+        let closeIdx = -1;
+        if (!noSingleOnLine) {
+          const found = str.indexOf("'", i + 1);
+          if (found !== -1 && found < lineEnd) {
+            closeIdx = found;
+          } else {
+            noSingleOnLine = true;
+          }
+        }
+        if (closeIdx !== -1) {
+          const inner = str.slice(i + 1, closeIdx);
+          appendLiteral(inner, inner);
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+
+      // 3. "..." or $"..." double-quoted span (if closed on current line)
+      if (ch === '"' || (ch === '$' && i + 1 < len && str[i + 1] === '"')) {
+        const quoteOpenIdx = ch === '$' ? i + 1 : i;
+        const lineEnd = getLineEnd(quoteOpenIdx);
+        let closeIdx = -1;
+        if (!noDoubleOnLine) {
+          for (let j = quoteOpenIdx + 1; j < lineEnd; j += 1) {
+            if (str[j] === '\\' && j + 1 < lineEnd) {
+              j += 1;
+              continue;
+            }
+            if (str[j] === '"') {
+              closeIdx = j;
+              break;
+            }
+          }
+          if (closeIdx === -1) {
+            noDoubleOnLine = true;
+          }
+        }
+        if (closeIdx !== -1) {
+          appendLiteral('', '');
+          let cur = quoteOpenIdx + 1;
+          while (cur < closeIdx) {
+            if (str[cur] === '\\' && cur + 1 < closeIdx) {
+              const next = str[cur + 1];
+              if (next === '"' || next === '\\' || next === '$' || next === '`') {
+                appendLiteral(next, next);
+              } else {
+                appendLiteral(`\\${next}`, `\\${next}`);
+              }
+              cur += 2;
+              continue;
+            }
+            let runEnd = cur;
+            while (runEnd < closeIdx && str[runEnd] !== '\\') {
+              runEnd += 1;
+            }
+            const seg = str.slice(cur, runEnd);
+            appendLiteral(seg, seg);
+            cur = runEnd;
+          }
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+
+      // 4. Unquoted backslash escape
+      if (ch === '\\') {
+        if (i + 1 < len) {
+          const next = str[i + 1];
+          if (next === '\n') {
+            i += 2;
+            continue;
+          }
+          const rawPiece =
+            isUnquotedWorkspaceTokenDelimiter(next) || next === '"' || next === "'"
+              ? next
+              : `\\${next}`;
+          appendLiteral(rawPiece, next);
+          i += 2;
+          continue;
+        }
+        appendPlain('\\');
+        i += 1;
+        continue;
+      }
+
+      // 5. Plain unquoted character run
+      let runStart = i;
+      i += 1;
+      while (i < len) {
+        const c = str[i];
+        if (
+          isUnquotedWorkspaceTokenDelimiter(c) ||
+          c === "'" ||
+          c === '"' ||
+          c === '\\' ||
+          (c === '$' && i + 1 < len && (str[i + 1] === "'" || str[i + 1] === '"'))
+        ) {
+          break;
+        }
+        i += 1;
+      }
+      appendPlain(str.slice(runStart, i));
+    }
+
+    pushSpanAndAttachedForms(candidates, rawBuf, rawLeadEnd, rawTrailStart);
+    if (unescBuf !== rawBuf || unescLeadEnd !== rawLeadEnd || unescTrailStart !== rawTrailStart) {
+      pushSpanAndAttachedForms(candidates, unescBuf, unescLeadEnd, unescTrailStart);
+    }
+  }
+
+  return candidates;
 }
 
 function matchesForbiddenWorkspaceRoot(str, normRoots) {
   if (!str || !normRoots || normRoots.length === 0) return false;
   if (!str.includes('/') && !str.includes('\\')) return false;
 
-  const rawCandidates = [];
-
-  // 1. Extract single- and double-quoted spans linearly
-  const quoteRegex = /'([^'\r\n]+)'|"([^"\r\n]+)"/g;
-  let qMatch;
-  while ((qMatch = quoteRegex.exec(str)) !== null) {
-    const inner = qMatch[1] ?? qMatch[2];
-    if (inner) pushTokenAndAttachedForms(rawCandidates, inner);
+  if (
+    checkSinglePathCandidateAgainstRoots(str, normRoots, {
+      trimWhitespace: true,
+      stripOuterQuotes: true
+    })
+  ) {
+    return true;
   }
 
-  // 2. Extract whitespace / shell-punctuator delimited tokens linearly
-  const tokens = str.split(/[\s;|&<>()`]+/);
-  for (const rawTok of tokens) {
-    if (!rawTok) continue;
-    pushTokenAndAttachedForms(rawCandidates, rawTok);
-  }
+  const rawCandidates = extractWorkspacePathCandidatesLinear(str);
 
   for (const cand of rawCandidates) {
     if (checkSinglePathCandidateAgainstRoots(cand, normRoots)) {
@@ -1658,22 +1999,28 @@ function matchesForbiddenCouncilPattern(str) {
 }
 
 function hasOneShotEncodedForbiddenToken(bounded, normRoots) {
-  // 1. One-shot printf / ANSI-C octal escape decode (\056, \143, etc.)
+  // 1. One-shot printf / ANSI-C octal & \xHH hex escape decode (\056, \143, \x2f, etc.)
   if (bounded.includes('\\')) {
-    const octalDecoded = bounded.replace(/\\(0?[0-7]{2,3})/g, (full, oct) => {
-      const code = parseInt(oct, 8);
-      return code >= 32 && code <= 126 ? String.fromCharCode(code) : full;
-    });
-    if (octalDecoded !== bounded) {
-      const strippedQuotes = octalDecoded.replace(/\$?['"]/g, '');
+    const escapedDecoded = bounded.replace(
+      /\\(0?[0-7]{2,3})|\\x([0-9a-fA-F]{2})/g,
+      (full, oct, hex) => {
+        const code = oct !== undefined ? parseInt(oct, 8) : parseInt(hex, 16);
+        return code >= 32 && code <= 126 ? String.fromCharCode(code) : full;
+      }
+    );
+    if (escapedDecoded !== bounded) {
+      const strippedQuotes = escapedDecoded.replace(/\$?['"]/g, '');
       if (
-        matchesForbiddenCouncilPattern(octalDecoded) ||
-        matchesForbiddenCouncilPattern(strippedQuotes) ||
-        (normRoots.length > 0 &&
-          (matchesForbiddenWorkspaceRoot(octalDecoded, normRoots) ||
-            matchesForbiddenWorkspaceRoot(strippedQuotes, normRoots)))
+        matchesForbiddenCouncilPattern(escapedDecoded) ||
+        matchesForbiddenCouncilPattern(strippedQuotes)
       ) {
         return true;
+      }
+      if (normRoots.length > 0) {
+        const quotePreserved = escapedDecoded.replace(/\$(?=['"])/g, '');
+        if (matchesForbiddenWorkspaceRoot(quotePreserved, normRoots)) {
+          return true;
+        }
       }
     }
   }
@@ -1744,11 +2091,7 @@ export function hasForbiddenCouncilToken(str, options = null) {
         .replace(/["']/g, '')
         .replace(/\[([a-zA-Z0-9_.-])\]/g, '$1')
         .replace(/\{([a-zA-Z0-9_.-]+)\}/g, '$1');
-      if (
-        dequoted !== sanitized &&
-        (matchesForbiddenCouncilPattern(dequoted) ||
-          (normRoots.length > 0 && matchesForbiddenWorkspaceRoot(dequoted, normRoots)))
-      ) {
+      if (dequoted !== sanitized && matchesForbiddenCouncilPattern(dequoted)) {
         return true;
       }
     }
@@ -3594,7 +3937,8 @@ function copySafeWorkspace(srcDir, destDir, realRoot, realTempSafeCwd) {
       const relLink = path.relative(path.dirname(destPath), mappedAbsTarget) || '.';
       fs.symlinkSync(relLink, destPath);
     } else if (stat.isDirectory()) {
-      const safeDirMode = (stat.mode & 0o777) | 0o700;
+      const rawDirMode = stat.mode & 0o777;
+      const safeDirMode = (rawDirMode & 0o200) === 0 ? 0o700 : (rawDirMode | 0o700);
       fs.mkdirSync(destPath, { mode: safeDirMode });
       fs.chmodSync(destPath, safeDirMode);
       copySafeWorkspace(srcPath, destPath, realRoot, realTempSafeCwd);

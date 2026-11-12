@@ -899,6 +899,9 @@
   <script>
     'use strict';
 
+    const ACTIVE_POLL_MS = 1000;
+    const IDLE_POLL_MS = 2500;
+
     let liveFollowTimer = null;
     let liveFollowActive = false;
     let pollInFlight = false;
@@ -908,6 +911,7 @@
     let activeGraphTab = 'topology';
     let selectedRunId = 'latest';
     let selectRunRequestId = 0;
+    let lastObservedLatestRunId = null;
     let lastRenderStateSig = null;
     let lastRenderedTopologySig = null;
     let lastRenderedCausalSig = null;
@@ -1066,6 +1070,88 @@
       return text ? '<div class="soul-block">' + escape(text) + '</div>' : '';
     }
 
+    function getLatestRunObject() {
+      return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
+             (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
+    }
+
+    function mergeManifestEntry(existing, incoming) {
+      if (!existing) return incoming;
+      if (!incoming) return existing;
+      if (existing.isRunning === false && incoming.isRunning === true) return existing;
+      if (existing.isRunning === true && incoming.isRunning === false) return incoming;
+      const exTs = String(existing.updatedAt || existing.startedAt || '');
+      const inTs = String(incoming.updatedAt || incoming.startedAt || '');
+      if (inTs && exTs && inTs !== exTs) {
+        return inTs > exTs ? incoming : existing;
+      }
+      return incoming;
+    }
+
+    function getManifestEntries() {
+      const rawPrimary = (typeof window !== 'undefined' && window.COUNCIL_RUNS_INDEX !== undefined)
+        ? window.COUNCIL_RUNS_INDEX
+        : (typeof globalThis !== 'undefined' ? globalThis.COUNCIL_RUNS_INDEX : undefined);
+      const rawSecondary = (typeof window !== 'undefined' && window.CouncilRunIndex !== undefined)
+        ? window.CouncilRunIndex
+        : (typeof globalThis !== 'undefined' ? globalThis.CouncilRunIndex : undefined);
+      if (rawPrimary === undefined && rawSecondary === undefined) return [];
+      const primary = Array.isArray(rawPrimary) ? rawPrimary : null;
+      const secondary = Array.isArray(rawSecondary) ? rawSecondary : null;
+      if (!primary && !secondary) return null;
+      if (!primary) return secondary;
+      if (!secondary || primary === secondary) return primary;
+      const byId = new Map();
+      for (let i = 0; i < secondary.length; i++) {
+        const e = secondary[i];
+        if (e && e.runId != null && e.runId !== '') {
+          byId.set(String(e.runId), e);
+        }
+      }
+      for (let j = 0; j < primary.length; j++) {
+        const e = primary[j];
+        if (e && e.runId != null && e.runId !== '') {
+          const id = String(e.runId);
+          byId.set(id, mergeManifestEntry(byId.get(id), e));
+        }
+      }
+      return Array.from(byId.values());
+    }
+
+    let reselectingInvalidatedRunId = null;
+
+    function reconcileRunsCacheWithIndex() {
+      const invalidatedIds = [];
+      const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
+                   (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
+      if (!runs || typeof runs !== 'object') return invalidatedIds;
+      const entries = getManifestEntries();
+      if (!Array.isArray(entries)) return invalidatedIds;
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        if (!entry || entry.runId == null || entry.runId === '') continue;
+        const id = String(entry.runId);
+        if (!Object.prototype.hasOwnProperty.call(runs, id) || !runs[id]) continue;
+        const cached = runs[id];
+        const becameTerminal = (cached.isRunning === true && entry.isRunning === false);
+        const hasNewerTimestamp = Boolean(
+          entry.updatedAt &&
+          cached.updatedAt &&
+          String(entry.updatedAt) > String(cached.updatedAt)
+        );
+        const entryStepCount = typeof entry.stepCount === 'number'
+          ? entry.stepCount
+          : (Array.isArray(entry.steps) ? entry.steps.length : -1);
+        const cachedStepCount = Array.isArray(cached.steps) ? cached.steps.length : 0;
+        const hasMoreSteps = entryStepCount > cachedStepCount;
+        if (becameTerminal || hasNewerTimestamp || hasMoreSteps) {
+          delete runs[id];
+          invalidatedIds.push(id);
+        }
+      }
+      return invalidatedIds;
+    }
+
     function getLiveRun() {
       const runs = (typeof window !== 'undefined' && window.CouncilRuns) ||
                    (typeof globalThis !== 'undefined' && globalThis.CouncilRuns) || null;
@@ -1074,15 +1160,27 @@
           ? runs[selectedRunId]
           : null;
       }
-      return (typeof window !== 'undefined' && window.CouncilLatestLiveRun) ||
-             (typeof globalThis !== 'undefined' && globalThis.CouncilLatestLiveRun) || null;
+      return getLatestRunObject();
     }
 
     function updateRunSelector() {
+      const invalidatedIds = reconcileRunsCacheWithIndex();
+      if (
+        selectedRunId &&
+        selectedRunId !== 'latest' &&
+        reselectingInvalidatedRunId !== selectedRunId &&
+        invalidatedIds.indexOf(selectedRunId) !== -1
+      ) {
+        reselectingInvalidatedRunId = selectedRunId;
+        try {
+          selectRun(selectedRunId);
+        } finally {
+          reselectingInvalidatedRunId = null;
+        }
+      }
       const sel = document.getElementById('run-selector');
       if (!sel) return;
-      const runIndex = (typeof window !== 'undefined' && window.CouncilRunIndex) ||
-                       (typeof globalThis !== 'undefined' && globalThis.CouncilRunIndex) || [];
+      const runIndex = getManifestEntries();
       if (!Array.isArray(runIndex)) return;
       const targetValue = selectedRunId || sel.value || 'latest';
       let hasTargetOption = (targetValue === 'latest');
@@ -1156,6 +1254,7 @@
     }
 
     function selectRun(runId) {
+      reconcileRunsCacheWithIndex();
       const reqId = ++selectRunRequestId;
       const oldSelectScript = document.getElementById('script-run-select');
       if (oldSelectScript && typeof oldSelectScript.remove === 'function') oldSelectScript.remove();
@@ -1165,6 +1264,9 @@
       if (selectedRunId === 'latest') {
         if (badgeTag) badgeTag.textContent = 'Latest Live Run';
         const latestRun = getLiveRun();
+        if (latestRun && latestRun.runId) {
+          lastObservedLatestRunId = latestRun.runId;
+        }
         councilState = (latestRun && latestRun.currentState) ? latestRun.currentState : null;
         startLiveFollow();
         renderAll();
@@ -1183,10 +1285,9 @@
       if (
         runs &&
         Object.prototype.hasOwnProperty.call(runs, selectedRunId) &&
-        runs[selectedRunId] &&
-        runs[selectedRunId].currentState
+        runs[selectedRunId]
       ) {
-        councilState = runs[selectedRunId].currentState;
+        councilState = runs[selectedRunId].currentState || null;
         renderAll();
         return;
       }
@@ -1200,11 +1301,12 @@
         script.remove();
         if (reqId !== selectRunRequestId || selectedRunId !== requestedRunId) return;
         const loadedRun = getLiveRun();
-        councilState = (loadedRun && loadedRun.currentState) ? loadedRun.currentState : null;
-        renderAll();
-        if (!councilState) {
+        if (!loadedRun) {
           renderFailedRunLoad(requestedRunId);
+          return;
         }
+        councilState = loadedRun.currentState || null;
+        renderAll();
       };
       script.onerror = function () {
         script.remove();
@@ -1218,6 +1320,9 @@
 
     let councilState = (function () {
       const liveRun = getLiveRun();
+      if (liveRun && liveRun.runId) {
+        lastObservedLatestRunId = liveRun.runId;
+      }
       return (liveRun && liveRun.currentState) ? liveRun.currentState : null;
     })();
 
@@ -1402,18 +1507,52 @@
       }
     }
 
+    function syncLiveFollowButtonUI() {
+      const btn = document.getElementById('btn-live-follow');
+      const lbl = document.getElementById('btn-live-follow-label');
+      const streamBadge = document.getElementById('stream-badge');
+      if (!liveFollowActive) {
+        if (btn) {
+          if (btn.classList) btn.classList.remove('active');
+          setAttr(btn, 'aria-pressed', 'false');
+        }
+        if (lbl && lbl.textContent !== 'Live Follow: OFF') {
+          lbl.textContent = 'Live Follow: OFF';
+        }
+        if (streamBadge && streamBadge.textContent !== '') {
+          streamBadge.textContent = '';
+        }
+        return;
+      }
+      if (btn) {
+        if (btn.classList) btn.classList.add('active');
+        setAttr(btn, 'aria-pressed', 'true');
+      }
+      const latestRun = getLatestRunObject();
+      const isIdleWatch = Boolean(latestRun && latestRun.isRunning === false);
+      const nextLabel = isIdleWatch ? 'Live Follow: ON (Idle)' : 'Live Follow: ON (1s)';
+      if (lbl && lbl.textContent !== nextLabel) {
+        lbl.textContent = nextLabel;
+      }
+      if (streamBadge && streamBadge.textContent !== '⚡ LIVE SYNC') {
+        streamBadge.textContent = '⚡ LIVE SYNC';
+      }
+    }
+
     function scheduleNextPoll() {
       clearPollTimer();
       if (!liveFollowActive || selectedRunId !== 'latest' || isDocumentHidden() || pollInFlight) {
         return;
       }
+      const latestRun = getLatestRunObject();
+      const pollDelayMs = (latestRun && latestRun.isRunning === false) ? IDLE_POLL_MS : ACTIVE_POLL_MS;
       liveFollowTimer = setTimeout(function () {
         liveFollowTimer = null;
         if (!liveFollowActive || selectedRunId !== 'latest' || isDocumentHidden()) {
           return;
         }
         pollLiveRun();
-      }, 1000);
+      }, pollDelayMs);
       if (liveFollowTimer && typeof liveFollowTimer === 'object' && typeof liveFollowTimer.unref === 'function') {
         liveFollowTimer.unref();
       }
@@ -1431,15 +1570,7 @@
 
     function startLiveFollow() {
       liveFollowActive = true;
-      const btn = document.getElementById('btn-live-follow');
-      const lbl = document.getElementById('btn-live-follow-label');
-      if (btn) {
-        if (btn.classList) btn.classList.add('active');
-        setAttr(btn, 'aria-pressed', 'true');
-      }
-      if (lbl) lbl.textContent = 'Live Follow: ON (1s)';
-      const streamBadge = document.getElementById('stream-badge');
-      if (streamBadge) streamBadge.textContent = '⚡ LIVE SYNC';
+      syncLiveFollowButtonUI();
       syncElapsedTimer();
       if (!isDocumentHidden()) {
         pollLiveRun();
@@ -1460,15 +1591,7 @@
       if (oldIndex && typeof oldIndex.remove === 'function') oldIndex.remove();
       const oldTelemetry = document.getElementById('script-telemetry-reload');
       if (oldTelemetry && typeof oldTelemetry.remove === 'function') oldTelemetry.remove();
-      const btn = document.getElementById('btn-live-follow');
-      const lbl = document.getElementById('btn-live-follow-label');
-      if (btn) {
-        if (btn.classList) btn.classList.remove('active');
-        setAttr(btn, 'aria-pressed', 'false');
-      }
-      if (lbl) lbl.textContent = 'Live Follow: OFF';
-      const streamBadge = document.getElementById('stream-badge');
-      if (streamBadge) streamBadge.textContent = '';
+      syncLiveFollowButtonUI();
     }
 
     function pollLiveRun() {
@@ -1492,11 +1615,8 @@
         if (!liveFollowActive || selectedRunId !== 'latest') {
           return;
         }
-        const latestRun = getLiveRun();
-        if (latestRun && latestRun.isRunning === false) {
-          stopLiveFollow();
-          return;
-        }
+        syncLiveFollowButtonUI();
+        syncElapsedTimer();
         if (!isDocumentHidden()) {
           scheduleNextPoll();
         }
@@ -1507,6 +1627,7 @@
       idxScript.src = '../../.council/runs/index.js?t=' + Date.now();
       idxScript.onload = function () {
         idxScript.remove();
+        if (epoch !== pollEpoch) return;
         updateRunSelector();
         onBranchSettled();
       };
@@ -1521,6 +1642,7 @@
       telScript.src = '../../.council/runs/telemetry-summary.js?t=' + Date.now();
       telScript.onload = function () {
         telScript.remove();
+        if (epoch !== pollEpoch) return;
         renderTelemetryLeaderboard();
         onBranchSettled();
       };
@@ -1535,14 +1657,20 @@
       script.src = '../../.council/runs/latest.js?t=' + Date.now();
 
       const onRunLoaded = function () {
+        if (epoch !== pollEpoch || !liveFollowActive) return;
         updateRunSelector();
         if (selectedRunId !== 'latest') return;
         const liveRun = getLiveRun();
-        if (liveRun && liveRun.currentState) {
-          if (currentStepIdx === -1 || currentStepIdx === (liveRun.steps || []).length - 1) {
-            councilState = liveRun.currentState;
+        if (liveRun && liveRun.runId) {
+          if (lastObservedLatestRunId !== liveRun.runId) {
+            currentStepIdx = -1;
+            lastObservedLatestRunId = liveRun.runId;
           }
         }
+        if (currentStepIdx === -1) {
+          councilState = (liveRun && liveRun.currentState) ? liveRun.currentState : null;
+        }
+        syncLiveFollowButtonUI();
         renderAll();
       };
 
@@ -1584,9 +1712,9 @@
 
     function restoreLatestSnapshot() {
       const liveRun = getLiveRun();
-      if (!liveRun || !liveRun.currentState) return;
+      if (!liveRun) return;
       currentStepIdx = -1;
-      councilState = liveRun.currentState;
+      councilState = liveRun.currentState || null;
       renderAll();
     }
 
@@ -1773,7 +1901,21 @@
       const esc = escapeHtml;
 
       if (!councilState) {
-        const emptySig = 'EMPTY|' + selectedRunId;
+        const isAbortedPreflight = Boolean(liveRun && liveRun.isRunning === false);
+        const initCfg = (liveRun && liveRun.initialConfig) ? liveRun.initialConfig : {};
+        const preflightTopic = initCfg.topic || (liveRun && (liveRun.topic || liveRun.title)) || (isAbortedPreflight ? 'Deliberation Run' : 'Waiting for live deliberation to start...');
+        const preflightMaxRounds = initCfg.maxRounds ?? 3;
+        const preflightQuorum = initCfg.minQuorum ?? 2;
+        const emptySig = safeJsonSig({
+          empty: true,
+          selectedRunId: selectedRunId,
+          runId: liveRun ? (liveRun.runId || null) : null,
+          isAbortedPreflight: isAbortedPreflight,
+          verdictKind: liveRun ? (liveRun.verdictKind || null) : null,
+          topic: preflightTopic,
+          maxRounds: preflightMaxRounds,
+          minQuorum: preflightQuorum
+        });
         if (lastRenderStateSig === emptySig) {
           return;
         }
@@ -1783,34 +1925,50 @@
         lastTimelineSig = null;
 
         const topicEl = document.getElementById('heading-topic');
-        if (topicEl) topicEl.textContent = 'Waiting for live deliberation to start...';
+        if (topicEl) topicEl.textContent = preflightTopic;
         const phaseEl = document.getElementById('lbl-phase');
         if (phaseEl) phaseEl.textContent = 'preflight';
         const roundEl = document.getElementById('lbl-round');
         if (roundEl) roundEl.textContent = 0;
         const maxRoundsEl = document.getElementById('lbl-max-rounds');
-        if (maxRoundsEl) maxRoundsEl.textContent = 3;
+        if (maxRoundsEl) maxRoundsEl.textContent = preflightMaxRounds;
         const quorumEl = document.getElementById('lbl-quorum');
-        if (quorumEl) quorumEl.textContent = 2;
+        if (quorumEl) quorumEl.textContent = preflightQuorum;
         const statusPill = document.getElementById('status-pill');
         const statusPillText = document.getElementById('status-pill-text');
         const verdictStatusPill = document.getElementById('lbl-verdict-status');
-        if (statusPill) statusPill.className = 'badge badge-running';
-        if (statusPillText) statusPillText.textContent = 'IDLE';
-        if (verdictStatusPill) {
-          verdictStatusPill.className = 'badge badge-running';
-          verdictStatusPill.textContent = 'EVALUATING';
-        }
         const vBox = document.getElementById('verdict-box');
         const vTitle = document.getElementById('verdict-title');
         const vBody = document.getElementById('verdict-body');
-        if (vBox) vBox.className = 'verdict-banner running';
-        if (vTitle) vTitle.textContent = 'Deliberation in Progress';
-        if (vBody) vBody.textContent = 'Gathering structured evidence and testing hypotheses across multi-model participant seats.';
         const synEl = document.getElementById('synthesis-text');
-        if (synEl) synEl.textContent = 'Awaiting initial proof collection before candidate synthesis can begin.';
         const transText = document.getElementById('transition-text');
-        if (transText) transText.textContent = 'Deliberation engine connected. Awaiting state transitions.';
+
+        if (isAbortedPreflight) {
+          if (statusPill) statusPill.className = 'badge badge-failed';
+          if (statusPillText) statusPillText.textContent = 'ABORTED: PREFLIGHT';
+          if (verdictStatusPill) {
+            verdictStatusPill.className = 'badge badge-failed';
+            verdictStatusPill.textContent = 'RUN ABORTED';
+          }
+          if (vBox) vBox.className = 'verdict-banner dissent';
+          if (vTitle) vTitle.textContent = 'Deliberation Aborted (Before Initialization)';
+          if (vBody) vBody.textContent = 'Run stopped before deliberation state was initialized.';
+          if (synEl) synEl.textContent = 'No Candidate synthesized (run aborted before initialization).';
+          if (transText) transText.textContent = 'Run aborted before initialization in phase "preflight".';
+        } else {
+          if (statusPill) statusPill.className = 'badge badge-running';
+          if (statusPillText) statusPillText.textContent = 'IDLE';
+          if (verdictStatusPill) {
+            verdictStatusPill.className = 'badge badge-running';
+            verdictStatusPill.textContent = 'EVALUATING';
+          }
+          if (vBox) vBox.className = 'verdict-banner running';
+          if (vTitle) vTitle.textContent = 'Deliberation in Progress';
+          if (vBody) vBody.textContent = 'Gathering structured evidence and testing hypotheses across multi-model participant seats.';
+          if (synEl) synEl.textContent = 'Awaiting initial proof collection before candidate synthesis can begin.';
+          if (transText) transText.textContent = 'Deliberation engine connected. Awaiting state transitions.';
+        }
+
         const lblClausesCount = document.getElementById('lbl-clauses-count');
         if (lblClausesCount) lblClausesCount.textContent = '0 clauses';
         const clausesList = document.getElementById('clauses-list');
@@ -1836,13 +1994,18 @@
         return;
       }
 
-      const isRunning = liveRun ? Boolean(liveRun.isRunning) : (councilState.phase !== 'completed');
-      const isStoppedWithoutVerdict = !isRunning && !councilState.verdict && councilState.phase !== 'completed';
+      const terminalState = (liveRun && liveRun.currentState) ? liveRun.currentState : councilState;
+      const isRunning = liveRun ? Boolean(liveRun.isRunning) : (terminalState.phase !== 'completed');
+      const terminalVerdict = (terminalState && terminalState.verdict) ? terminalState.verdict : councilState.verdict;
+      const isStoppedWithoutVerdict = !isRunning && (!terminalState || (!terminalState.verdict && terminalState.phase !== 'completed'));
       const panelSig = safeJsonSig({
         selectedRunId: selectedRunId,
         currentStepIdx: currentStepIdx,
         isRunning: isRunning,
         verdictKind: liveRun ? (liveRun.verdictKind || null) : null,
+        terminalPhase: terminalState ? terminalState.phase : null,
+        terminalRound: terminalState ? terminalState.round : null,
+        terminalVerdict: terminalVerdict,
         topic: councilState.topic,
         phase: councilState.phase,
         round: councilState.round,
@@ -1887,14 +2050,18 @@
             verdictStatusPill.textContent = 'DELIBERATING';
           }
         } else if (isStoppedWithoutVerdict) {
+          const abortedPhase = (terminalState && terminalState.phase) ? terminalState.phase : (councilState.phase || 'STOPPED');
           if (statusPill) statusPill.className = 'badge badge-failed';
-          if (statusPillText) statusPillText.textContent = 'ABORTED: ' + String(councilState.phase || 'STOPPED').toUpperCase();
+          if (statusPillText) statusPillText.textContent = 'ABORTED: ' + String(abortedPhase).toUpperCase();
           if (verdictStatusPill) {
             verdictStatusPill.className = 'badge badge-failed';
             verdictStatusPill.textContent = 'RUN ABORTED';
           }
         } else {
-          const isConsensus = councilState.verdict && councilState.verdict.kind === 'Unanimous Consensus';
+          const isConsensus = Boolean(
+            (terminalVerdict && terminalVerdict.kind === 'Unanimous Consensus') ||
+            (!terminalVerdict && liveRun && liveRun.verdictKind === 'Unanimous Consensus')
+          );
           const badgeCls = isConsensus ? 'badge badge-completed' : 'badge badge-failed';
           if (statusPill) statusPill.className = badgeCls;
           if (statusPillText) statusPillText.textContent = isConsensus ? 'COMPLETED: CONSENSUS' : 'COMPLETED: DISSENT';
@@ -1909,19 +2076,21 @@
         const vTitle = document.getElementById('verdict-title');
         const vBody = document.getElementById('verdict-body');
 
-        if (councilState.verdict) {
-          const v = councilState.verdict;
+        if (terminalVerdict) {
+          const v = terminalVerdict;
           const isConsensus = v.kind === 'Unanimous Consensus';
           if (vBox) vBox.className = 'verdict-banner ' + (isConsensus ? 'consensus' : 'dissent');
           if (vTitle) vTitle.textContent = 'Verdict: ' + v.kind;
           if (vBody) vBody.textContent = v.note || 'Deliberation reached conclusion.';
         } else if (isStoppedWithoutVerdict) {
+          const abortedRound = (terminalState && terminalState.round !== undefined) ? terminalState.round : (councilState.round ?? 0);
+          const abortedPhase = (terminalState && terminalState.phase) ? terminalState.phase : (councilState.phase || 'stopped');
           if (vBox) vBox.className = 'verdict-banner dissent';
-          if (vTitle) vTitle.textContent = 'Deliberation Aborted (Round ' + (councilState.round ?? 0) + ')';
+          if (vTitle) vTitle.textContent = 'Deliberation Aborted (Round ' + abortedRound + ')';
           if (vBody) {
             vBody.textContent =
               'Run stopped before reaching a terminal verdict during phase "' +
-              String(councilState.phase || 'stopped') +
+              String(abortedPhase) +
               '".';
           }
         } else {
@@ -1942,15 +2111,22 @@
         // Transition Status (centralized polite live region #transition-banner)
         const transText = document.getElementById('transition-text');
         if (transText) {
-          if (isStoppedWithoutVerdict) {
+          if (isStoppedWithoutVerdict && currentStepIdx === -1) {
+            const abortedPhase = (terminalState && terminalState.phase) ? terminalState.phase : (councilState.phase || 'stopped');
             transText.textContent =
               'Run aborted before reaching a terminal verdict (stopped in phase "' +
-              String(councilState.phase || 'stopped') +
+              String(abortedPhase) +
               '").';
           } else if (councilState.lastTransition && councilState.lastTransition.message) {
             transText.textContent = councilState.lastTransition.message;
           } else if (councilState.history && councilState.history.length > 0) {
             transText.textContent = councilState.history[0];
+          } else if (isStoppedWithoutVerdict) {
+            const abortedPhase = (terminalState && terminalState.phase) ? terminalState.phase : (councilState.phase || 'stopped');
+            transText.textContent =
+              'Run aborted before reaching a terminal verdict (stopped in phase "' +
+              String(abortedPhase) +
+              '").';
           }
         }
 
@@ -2267,12 +2443,7 @@
     // Bind programmatic listeners and initialize ARIA states, Live Follow & Elapsed Timer
     syncGraphTabDom();
     bindUiListeners();
-    const initialLiveRun = getLiveRun();
-    if (initialLiveRun && initialLiveRun.isRunning === false) {
-      stopLiveFollow();
-    } else {
-      startLiveFollow();
-    }
+    startLiveFollow();
     renderAll();
   </script>
 </body>

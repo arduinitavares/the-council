@@ -1129,51 +1129,49 @@ export class VisualizerLiveWatcher {
   }
   function isNotStale(existing, incoming) {
     if (!existing) return true;
+    if (existing.isRunning === false && incoming.isRunning === true) return false;
     if (existing.isRunning && !incoming.isRunning) return true;
     const existingSteps = Array.isArray(existing.steps) ? existing.steps.length : 0;
     const incomingSteps = Array.isArray(incoming.steps) ? incoming.steps.length : 0;
     if (incomingSteps !== existingSteps) return incomingSteps > existingSteps;
     return String(incoming.updatedAt || '') >= String(existing.updatedAt || '');
   }
+  function shouldReplaceLatest(existingLatest, incoming, isLatestPointer) {
+    if (!existingLatest) return true;
+    if (existingLatest.runId === incoming.runId) return isNotStale(existingLatest, incoming);
+    if (!isLatestPointer) return false;
+    var inTs = String(incoming.startedAt || incoming.updatedAt || '');
+    var exTs = String(existingLatest.startedAt || existingLatest.updatedAt || '');
+    if (inTs && exTs && inTs < exTs) return false;
+    return Boolean(incoming.isRunning === true || inTs >= exTs);
+  }
   if (typeof window !== 'undefined') {
     window.CouncilRuns = window.CouncilRuns || {};
-    if (data.runId && isNotStale(window.CouncilRuns[data.runId], data)) {
+    var winAccepted = !data.runId || isNotStale(window.CouncilRuns[data.runId], data);
+    if (data.runId && winAccepted) {
       window.CouncilRuns[data.runId] = data;
     }
-    if (
-      !window.CouncilLatestLiveRun ||
-      (window.CouncilLatestLiveRun.runId === data.runId
-        ? isNotStale(window.CouncilLatestLiveRun, data)
-        : isLatestPointer)
-    ) {
+    if (winAccepted && shouldReplaceLatest(window.CouncilLatestLiveRun, data, isLatestPointer)) {
       window.CouncilLatestLiveRun = data;
     }
   }
   if (typeof globalThis !== 'undefined') {
     globalThis.CouncilRuns = globalThis.CouncilRuns || {};
-    if (data.runId && isNotStale(globalThis.CouncilRuns[data.runId], data)) {
+    var gtAccepted = !data.runId || isNotStale(globalThis.CouncilRuns[data.runId], data);
+    if (data.runId && gtAccepted) {
       globalThis.CouncilRuns[data.runId] = data;
     }
-    if (
-      !globalThis.CouncilLatestLiveRun ||
-      (globalThis.CouncilLatestLiveRun.runId === data.runId
-        ? isNotStale(globalThis.CouncilLatestLiveRun, data)
-        : isLatestPointer)
-    ) {
+    if (gtAccepted && shouldReplaceLatest(globalThis.CouncilLatestLiveRun, data, isLatestPointer)) {
       globalThis.CouncilLatestLiveRun = data;
     }
   }
   if (root) {
     root.CouncilRuns = root.CouncilRuns || {};
-    if (data.runId && isNotStale(root.CouncilRuns[data.runId], data)) {
+    var rootAccepted = !data.runId || isNotStale(root.CouncilRuns[data.runId], data);
+    if (data.runId && rootAccepted) {
       root.CouncilRuns[data.runId] = data;
     }
-    if (
-      !root.CouncilLatestLiveRun ||
-      (root.CouncilLatestLiveRun.runId === data.runId
-        ? isNotStale(root.CouncilLatestLiveRun, data)
-        : isLatestPointer)
-    ) {
+    if (rootAccepted && shouldReplaceLatest(root.CouncilLatestLiveRun, data, isLatestPointer)) {
       root.CouncilLatestLiveRun = data;
     }
   }
@@ -1207,8 +1205,8 @@ export class VisualizerLiveWatcher {
     if (!entry || !entry.runId || entry.runId === this.runId || entry.isRunning !== true) {
       return false;
     }
-    if (Number.isInteger(entry.pid) && entry.pid > 0) {
-      return this._isProcessDead(entry.pid);
+    if (Number.isInteger(entry.pid) && entry.pid > 0 && this._isProcessDead(entry.pid)) {
+      return true;
     }
     const ts = Date.parse(entry.updatedAt || entry.startedAt || '');
     if (!Number.isFinite(ts)) {
@@ -1370,10 +1368,13 @@ export class VisualizerLiveWatcher {
    * @private
    */
   _reconcileStaleRunOnDisk(entry) {
+    const prevMs = Date.parse(entry.updatedAt || entry.startedAt || '') || 0;
+    const reconciledAt = new Date(Math.max(Date.now(), prevMs + 1)).toISOString();
     const reconciled = {
       ...entry,
       isRunning: false,
-      verdictKind: entry.verdictKind || 'Aborted'
+      verdictKind: entry.verdictKind || 'Aborted',
+      updatedAt: reconciledAt
     };
     const safeRunId = String(entry.runId);
     if (!/^[a-zA-Z0-9._-]+$/.test(safeRunId) || safeRunId.includes('..')) {
@@ -1391,6 +1392,7 @@ export class VisualizerLiveWatcher {
           const { parsedRun, isLegacy } = extracted;
           parsedRun.isRunning = false;
           parsedRun.verdictKind = parsedRun.verdictKind || reconciled.verdictKind;
+          parsedRun.updatedAt = reconciledAt;
           let rebuilt = this._buildBundleScript(JSON.stringify(parsedRun, null, 2), false);
           if (isLegacy) {
             rebuilt +=
@@ -1420,6 +1422,7 @@ export class VisualizerLiveWatcher {
             extractedLatest.parsedRun.isRunning = false;
             extractedLatest.parsedRun.verdictKind =
               extractedLatest.parsedRun.verdictKind || reconciled.verdictKind;
+            extractedLatest.parsedRun.updatedAt = reconciledAt;
             const rebuiltLatest = this._buildBundleScript(
               JSON.stringify(extractedLatest.parsedRun, null, 2),
               true
@@ -1533,14 +1536,17 @@ export class VisualizerLiveWatcher {
   const index = /* COUNCIL_RUN_INDEX_START */ ${indexJson} /* COUNCIL_RUN_INDEX_END */;
   if (typeof window !== 'undefined') {
     window.CouncilRunIndex = index;
+    window.COUNCIL_RUNS_INDEX = index;
     window.CouncilRuns = window.CouncilRuns || {};
   }
   if (typeof globalThis !== 'undefined') {
     globalThis.CouncilRunIndex = index;
+    globalThis.COUNCIL_RUNS_INDEX = index;
     globalThis.CouncilRuns = globalThis.CouncilRuns || {};
   }
   if (root) {
     root.CouncilRunIndex = index;
+    root.COUNCIL_RUNS_INDEX = index;
     root.CouncilRuns = root.CouncilRuns || {};
   }
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

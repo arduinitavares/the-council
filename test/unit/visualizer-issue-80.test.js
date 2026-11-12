@@ -657,11 +657,15 @@ describe('Issue #80 — Criterion 1: #btn-live-follow ARIA toggle state & clean 
     h.api.selectRun('latest');
     assert.equal(btn.getAttribute('aria-pressed'), 'true');
 
-    // Initial boot when latest run is already completed sets aria-pressed="false"
+    // Initial boot when latest run is already completed enters Idle Watch Mode (aria-pressed="true", Live Follow: ON (Idle))
     const completedHarness = createA11yHarness({
       win: { CouncilLatestLiveRun: makeSampleRun({ isRunning: false }) }
     });
+    assert.equal(completedHarness.getEl('btn-live-follow').getAttribute('aria-pressed'), 'true');
+    assert.equal(completedHarness.getEl('btn-live-follow-label').textContent, 'Live Follow: ON (Idle)');
+    completedHarness.getEl('btn-live-follow').dispatchEvent('click');
     assert.equal(completedHarness.getEl('btn-live-follow').getAttribute('aria-pressed'), 'false');
+    assert.equal(completedHarness.getEl('btn-live-follow-label').textContent, 'Live Follow: OFF');
   });
 
   it('synchronizes aria-pressed via property fallback on minimal mock DOM stubs lacking setAttribute', () => {

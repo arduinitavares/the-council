@@ -607,6 +607,7 @@ describe('Unit: Council CLI Runner (src/cli/index.js & bin/council)', () => {
         topic: 'Verbose Fault Diagnostics Test',
         minQuorum: 2,
         maxRetriesPerSeat: 0,
+        maxRetriesPerJudge: 0,
         seats: [
           { id: 'seat-ok-1', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'S1' },
           { id: 'seat-ok-2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2' },

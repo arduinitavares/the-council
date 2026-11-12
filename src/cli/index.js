@@ -14,7 +14,11 @@
 import { parseArgs } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CouncilEngine } from '../engine/council-engine.js';
+import {
+  CouncilEngine,
+  resolveVotingSeatConfig,
+  resolveRebuttalSeatConfig
+} from '../engine/council-engine.js';
 import { loadConfigFile, resolveConfig } from '../engine/config.js';
 import { deserializeSnapshot } from '../telemetry/snapshot.js';
 import {
@@ -45,6 +49,11 @@ Options:
   -m, --mock                  Run in hermetic deterministic simulated mock mode (required unless --live)
       --timeout <ms>          Turn timeout in milliseconds (positive integer)
       --seat-budget <ms>      Total seat phase budget in milliseconds (positive integer)
+      --rebuttal-timeout <ms> Round 2+ rebuttal turn timeout in milliseconds (positive integer)
+      --preserve-rebuttal-effort Disable Round 2+ rebuttal effort/timeout/tools downshift
+      --rebuttal-tools <mode> Tool policy for Round 2+ rebuttal ('none' | 'read-only')
+      --rebuttal-reasoning-effort <level> Override reasoning effort for Round 2+ rebuttal
+      --rebuttal-model <id>   Override model selector for Round 2+ rebuttal
       --cwd <dir>             Explicit working directory for seat/judge CLI inspection (alias: --workspace)
       --workspace <dir>       Alias for --cwd <dir>
       --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
@@ -108,6 +117,141 @@ function parseEvidenceFile(rawPath) {
 }
 
 /**
+ * Parses CLI arguments using `node:util.parseArgs`.
+ * @param {string[]} [rawArgs]
+ * @returns {{ command: string, values: Object, positionals: string[] }}
+ */
+export function parseCliArgs(rawArgs = []) {
+  const command = rawArgs[0] && !rawArgs[0].startsWith('-') ? rawArgs[0] : 'run';
+  const flagArgs = command === rawArgs[0] ? rawArgs.slice(1) : rawArgs;
+  const parsed = parseArgs({
+    args: flagArgs,
+    options: {
+      config: { type: 'string', short: 'c' },
+      preset: { type: 'string', short: 'p' },
+      topic: { type: 'string', short: 't' },
+      evidence: { type: 'string', short: 'e', multiple: true },
+      rounds: { type: 'string', short: 'r' },
+      quorum: { type: 'string', short: 'q' },
+      live: { type: 'boolean', short: 'l', default: false },
+      mock: { type: 'boolean', short: 'm', default: false },
+      timeout: { type: 'string' },
+      'seat-budget': { type: 'string' },
+      seatBudget: { type: 'string' },
+      'rebuttal-timeout': { type: 'string' },
+      rebuttalTimeout: { type: 'string' },
+      'preserve-rebuttal-effort': { type: 'boolean' },
+      preserveRebuttalEffort: { type: 'boolean' },
+      'rebuttal-tools': { type: 'string' },
+      rebuttalTools: { type: 'string' },
+      'rebuttal-reasoning-effort': { type: 'string' },
+      rebuttalReasoningEffort: { type: 'string' },
+      'rebuttal-model': { type: 'string' },
+      rebuttalModel: { type: 'string' },
+      cwd: { type: 'string' },
+      workspace: { type: 'string' },
+      days: { type: 'string' },
+      by: { type: 'string' },
+      'output-dir': { type: 'string' },
+      'telemetry-dir': { type: 'string' },
+      json: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', short: 'v', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+      version: { type: 'boolean', short: 'V', default: false }
+    },
+    allowPositionals: true
+  });
+  return {
+    command,
+    values: parsed.values,
+    positionals: parsed.positionals
+  };
+}
+
+/**
+ * Converts parsed CLI flag values into a configuration override object.
+ * @param {Object} [values]
+ * @returns {Object}
+ */
+export function buildCliFlagsForConfig(values = {}) {
+  const overrides = {};
+  if (values.preset !== undefined) overrides.preset = values.preset;
+  if (values.topic !== undefined) overrides.topic = values.topic;
+  if (values.rounds !== undefined) overrides.maxRounds = parseInt(values.rounds, 10);
+  if (values.quorum !== undefined) overrides.minQuorum = parseInt(values.quorum, 10);
+  const explicitCwd = values.cwd !== undefined ? values.cwd : values.workspace;
+  if (explicitCwd !== undefined) overrides.cwd = explicitCwd;
+
+  if (values.timeout !== undefined) {
+    const rawTimeout = String(values.timeout).trim();
+    const numTimeout = Number(rawTimeout);
+    if (!rawTimeout || !Number.isInteger(numTimeout) || numTimeout <= 0 || !Number.isFinite(numTimeout)) {
+      throw new Error(`--timeout must be a positive integer (received "${values.timeout}").`);
+    }
+    overrides.timeout = numTimeout;
+    overrides.timeoutMs = numTimeout;
+  }
+
+  const rawSeatBudgetVal = values['seat-budget'] !== undefined ? values['seat-budget'] : values.seatBudget;
+  if (rawSeatBudgetVal !== undefined) {
+    const rawSeatBudget = String(rawSeatBudgetVal).trim();
+    const numSeatBudget = Number(rawSeatBudget);
+    if (!rawSeatBudget || !Number.isInteger(numSeatBudget) || numSeatBudget <= 0 || !Number.isFinite(numSeatBudget)) {
+      throw new Error(`--seat-budget must be a positive integer (received "${rawSeatBudgetVal}").`);
+    }
+    overrides.seatBudget = numSeatBudget;
+    overrides.totalSeatBudgetMs = numSeatBudget;
+  }
+
+  const rawRebuttalTimeoutVal =
+    values['rebuttal-timeout'] !== undefined ? values['rebuttal-timeout'] : values.rebuttalTimeout;
+  if (rawRebuttalTimeoutVal !== undefined) {
+    const rawRebuttalTimeout = String(rawRebuttalTimeoutVal).trim();
+    const numRebuttalTimeout = Number(rawRebuttalTimeout);
+    if (
+      !rawRebuttalTimeout ||
+      !Number.isInteger(numRebuttalTimeout) ||
+      numRebuttalTimeout <= 0 ||
+      !Number.isFinite(numRebuttalTimeout)
+    ) {
+      throw new Error(`--rebuttal-timeout must be a positive integer (received "${rawRebuttalTimeoutVal}").`);
+    }
+    overrides.rebuttalTimeoutMs = numRebuttalTimeout;
+  }
+
+  const rawPreserveRebuttal =
+    values['preserve-rebuttal-effort'] !== undefined
+      ? values['preserve-rebuttal-effort']
+      : values.preserveRebuttalEffort;
+  if (rawPreserveRebuttal !== undefined) {
+    overrides.preserveRebuttalEffort = Boolean(rawPreserveRebuttal);
+  }
+
+  const rawRebuttalTools =
+    values['rebuttal-tools'] !== undefined ? values['rebuttal-tools'] : values.rebuttalTools;
+  if (rawRebuttalTools !== undefined) {
+    const normalizedTools = String(rawRebuttalTools).trim().toLowerCase();
+    overrides.rebuttalTools = normalizedTools === 'readonly' ? 'read-only' : normalizedTools;
+  }
+
+  const rawRebuttalEffort =
+    values['rebuttal-reasoning-effort'] !== undefined
+      ? values['rebuttal-reasoning-effort']
+      : values.rebuttalReasoningEffort;
+  if (rawRebuttalEffort !== undefined) {
+    overrides.rebuttalReasoningEffort = String(rawRebuttalEffort).trim().toLowerCase();
+  }
+
+  const rawRebuttalModel =
+    values['rebuttal-model'] !== undefined ? values['rebuttal-model'] : values.rebuttalModel;
+  if (rawRebuttalModel !== undefined) {
+    overrides.rebuttalModel = String(rawRebuttalModel).trim();
+  }
+
+  return overrides;
+}
+
+/**
  * Runs the CLI command with the given argument list.
  * @param {string[]} [rawArgs]
  * @param {Object} [io]
@@ -133,46 +277,16 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
   const log = (...msg) => stdout.write(msg.join(' ') + '\n');
   const logErr = (...msg) => stderr.write(msg.join(' ') + '\n');
 
-  // Command detection
-  const command = rawArgs[0] && !rawArgs[0].startsWith('-') ? rawArgs[0] : 'run';
-  const flagArgs = command === rawArgs[0] ? rawArgs.slice(1) : rawArgs;
-
   let parsed;
   try {
-    parsed = parseArgs({
-      args: flagArgs,
-      options: {
-        config: { type: 'string', short: 'c' },
-        preset: { type: 'string', short: 'p' },
-        topic: { type: 'string', short: 't' },
-        evidence: { type: 'string', short: 'e', multiple: true },
-        rounds: { type: 'string', short: 'r' },
-        quorum: { type: 'string', short: 'q' },
-        live: { type: 'boolean', short: 'l', default: false },
-        mock: { type: 'boolean', short: 'm', default: false },
-        timeout: { type: 'string' },
-        'seat-budget': { type: 'string' },
-        seatBudget: { type: 'string' },
-        cwd: { type: 'string' },
-        workspace: { type: 'string' },
-        days: { type: 'string' },
-        by: { type: 'string' },
-        'output-dir': { type: 'string' },
-        'telemetry-dir': { type: 'string' },
-        json: { type: 'boolean', default: false },
-        verbose: { type: 'boolean', short: 'v', default: false },
-        help: { type: 'boolean', short: 'h', default: false },
-        version: { type: 'boolean', short: 'V', default: false }
-      },
-      allowPositionals: true
-    });
+    parsed = parseCliArgs(rawArgs);
   } catch (err) {
     logErr(`CLI argument error: ${err.message}\n`);
     logErr(HELP_TEXT);
     return await safeExit(1);
   }
 
-  const { values, positionals } = parsed;
+  const { command, values, positionals } = parsed;
 
   if (values.help) {
     log(HELP_TEXT);
@@ -316,39 +430,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
   }
 
   if (command === 'run') {
-    const overrides = {};
-    if (values.preset !== undefined) overrides.preset = values.preset;
-    if (values.topic !== undefined) overrides.topic = values.topic;
-    if (values.rounds !== undefined) overrides.maxRounds = parseInt(values.rounds, 10);
-    if (values.quorum !== undefined) overrides.minQuorum = parseInt(values.quorum, 10);
-    const explicitCwd = values.cwd !== undefined ? values.cwd : values.workspace;
-    if (explicitCwd !== undefined) overrides.cwd = explicitCwd;
-
-    if (values.timeout !== undefined) {
-      const rawTimeout = String(values.timeout).trim();
-      const numTimeout = Number(rawTimeout);
-      if (!rawTimeout || !Number.isInteger(numTimeout) || numTimeout <= 0 || !Number.isFinite(numTimeout)) {
-        logErr(`Configuration error: --timeout must be a positive integer (received "${values.timeout}").`);
-        return await safeExit(1);
-      }
-      overrides.timeout = numTimeout;
-      overrides.timeoutMs = numTimeout;
-    }
-
-    const rawSeatBudgetVal = values['seat-budget'] !== undefined ? values['seat-budget'] : values.seatBudget;
-    if (rawSeatBudgetVal !== undefined) {
-      const rawSeatBudget = String(rawSeatBudgetVal).trim();
-      const numSeatBudget = Number(rawSeatBudget);
-      if (!rawSeatBudget || !Number.isInteger(numSeatBudget) || numSeatBudget <= 0 || !Number.isFinite(numSeatBudget)) {
-        logErr(`Configuration error: --seat-budget must be a positive integer (received "${rawSeatBudgetVal}").`);
-        return await safeExit(1);
-      }
-      overrides.seatBudget = numSeatBudget;
-      overrides.totalSeatBudgetMs = numSeatBudget;
-    }
-
+    let overrides;
     let resolved;
     try {
+      overrides = buildCliFlagsForConfig(values);
       if (Array.isArray(values.evidence) && values.evidence.length > 0) {
         const cliEvidence = [];
         for (const evPath of values.evidence) {
@@ -405,6 +490,55 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
               throw new Error(
                 `Invalid model for ${role} "${participant.id}" (harness "${participant.harness}", model "${participant.model}"): ${modelErr.message}`
               );
+            }
+            if (role === 'seat') {
+              const rawVotingModel =
+                typeof participant.votingModel === 'string' && participant.votingModel.trim()
+                  ? participant.votingModel.trim()
+                  : undefined;
+              if (rawVotingModel) {
+                try {
+                  adapter.validateModel(rawVotingModel);
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid votingModel for seat "${participant.id}" (harness "${participant.harness}", votingModel "${rawVotingModel}"): ${modelErr.message}`
+                  );
+                }
+              }
+              const votingCfg = resolveVotingSeatConfig(participant, resolved, { harness: adapter });
+              if (votingCfg && votingCfg.model) {
+                try {
+                  adapter.validateModel(votingCfg.model);
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid votingModel for seat "${participant.id}" (harness "${participant.harness}", votingModel "${votingCfg.model}"): ${modelErr.message}`
+                  );
+                }
+              }
+              const rawRebuttalModel =
+                participant.rebuttalModel ??
+                participant['rebuttal-model'] ??
+                resolved.rebuttalModel ??
+                resolved['rebuttal-model'];
+              if (typeof rawRebuttalModel === 'string' && rawRebuttalModel.trim()) {
+                try {
+                  adapter.validateModel(rawRebuttalModel.trim());
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid rebuttalModel for seat "${participant.id}" (harness "${participant.harness}", rebuttalModel "${rawRebuttalModel.trim()}"): ${modelErr.message}`
+                  );
+                }
+              }
+              const rebuttalCfg = resolveRebuttalSeatConfig(participant, resolved, { harness: adapter });
+              if (rebuttalCfg && rebuttalCfg.model) {
+                try {
+                  adapter.validateModel(rebuttalCfg.model);
+                } catch (modelErr) {
+                  throw new Error(
+                    `Invalid rebuttalModel for seat "${participant.id}" (harness "${participant.harness}", rebuttalModel "${rebuttalCfg.model}"): ${modelErr.message}`
+                  );
+                }
+              }
             }
           }
         }
@@ -468,9 +602,6 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           signalExitCode = SIGNAL_EXIT_CODES[sig] || 130;
           cleanupSignalListeners();
           abortController.abort(new Error(`Aborted by ${sig}`));
-          if (liveWatcher) {
-            liveWatcher.stop({ reason: 'Aborted' });
-          }
           if (resolveSignalAbort) {
             resolveSignalAbort({ abortedBySignal: sig, exitCode: signalExitCode });
           }
@@ -484,9 +615,6 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       if (terminatingSignal || externalAborted) return;
       externalAborted = true;
       cleanupSignalListeners();
-      if (liveWatcher) {
-        liveWatcher.stop({ reason: 'Aborted' });
-      }
       if (resolveExternalAbort) {
         resolveExternalAbort({ kind: 'external_abort' });
       }
@@ -518,13 +646,15 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       });
     }
 
+    const drainMs = typeof io.abortDrainMs === 'number' && io.abortDrainMs >= 0 ? io.abortDrainMs : 1500;
     let result;
     try {
       let raceResult;
+      let engineRunPromise = null;
       if (externalAborted) {
         raceResult = { kind: 'external_abort' };
       } else {
-        const engineRunPromise = engine.run();
+        engineRunPromise = engine.run();
         engineRunPromise.catch(() => {});
         raceResult = await Promise.race([
           engineRunPromise.then((res) => ({ kind: 'result', res })),
@@ -532,7 +662,25 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           externalAbortPromise
         ]);
       }
+      if ((raceResult.kind === 'signal' || raceResult.kind === 'external_abort') && engineRunPromise && drainMs > 0) {
+        let drainTimer = null;
+        try {
+          await Promise.race([
+            engineRunPromise.catch(() => {}),
+            new Promise((r) => {
+              drainTimer = setTimeout(r, drainMs);
+            })
+          ]);
+        } finally {
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+          }
+        }
+      }
       if (raceResult.kind === 'signal') {
+        if (liveWatcher) {
+          liveWatcher.stop({ reason: 'Aborted' });
+        }
         return await safeExit(raceResult.sigInfo.exitCode);
       }
       if (raceResult.kind === 'external_abort') {

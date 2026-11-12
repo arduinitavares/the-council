@@ -927,11 +927,14 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
             source: 'Deterministic test'
           };
         },
-        executeJudge: async () => ({
-          summary: 'Consensus synthesis',
-          proofDecisions: { 'P-voter-plain-1': { status: 'admitted' }, 'P-voter-co-1': { status: 'admitted' } },
-          clauses: [{ context: 'General', conclusion: 'Solid consensus', citedProofIds: ['P-voter-plain-1'] }]
-        })
+        executeJudge: async ({ proofs }) => {
+          const proofIds = (proofs || []).map((p) => p.id);
+          return {
+            summary: 'Consensus synthesis',
+            proofDecisions: Object.fromEntries(proofIds.map((id) => [id, { status: 'admitted' }])),
+            clauses: [{ context: 'General', conclusion: 'Solid consensus', citedProofIds: [proofIds[0]] }]
+          };
+        }
       };
 
       const engine = new CouncilEngine(

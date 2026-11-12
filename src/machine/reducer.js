@@ -258,7 +258,21 @@ export function transitionCouncil(state, event) {
       if (!event.statement || !String(event.statement).trim()) {
         return reject(state, event.type, 'Structural Proof Guard: falsifiable "statement" is required.');
       }
-      const proofId = event.id || 'P' + (next.proofs.length + 1);
+      const rawExplicitId =
+        typeof event.id === 'string' && event.id.trim()
+          ? event.id.trim()
+          : undefined;
+      if (event.id !== undefined && !rawExplicitId) {
+        return reject(state, event.type, 'Structural Proof Guard: explicit Proof "id" must be a non-empty string.');
+      }
+      const proofId = rawExplicitId || 'P' + (next.proofs.length + 1);
+      if (next.proofs.some((p) => p.id === proofId)) {
+        return reject(
+          state,
+          event.type,
+          'Structural Proof Guard: Duplicate or invalid Proof ID "' + proofId + '" already exists in state.proofs.'
+        );
+      }
       next.proofs.push({
         id: proofId,
         round: state.round,
@@ -306,14 +320,40 @@ export function transitionCouncil(state, event) {
         return reject(state, event.type, 'Judge can only synthesize a Candidate during the judging phase.');
       }
 
+      let effectiveEvent = event;
+      let effectiveProofDecisions = event.proofDecisions;
+      if (
+        event.proofDecisions &&
+        typeof event.proofDecisions === 'object' &&
+        !Array.isArray(event.proofDecisions)
+      ) {
+        effectiveProofDecisions = {};
+        for (const [pid, dec] of Object.entries(event.proofDecisions)) {
+          const existingProof = (state.proofs || []).find((p) => p && p.id === pid);
+          if (
+            existingProof &&
+            typeof existingProof.round === 'number' &&
+            existingProof.round < state.round &&
+            existingProof.status !== 'pending'
+          ) {
+            continue;
+          }
+          effectiveProofDecisions[pid] = dec;
+        }
+        effectiveEvent = { ...event, proofDecisions: effectiveProofDecisions };
+      }
+
       // Guard pre-check: validates decisions fail-closed, caveats, and candidate clauses
-      const guardRes = guardJudgeAuditAndSynthesize(state, event);
+      const guardRes = guardJudgeAuditAndSynthesize(state, effectiveEvent);
       if (!guardRes.ok) {
         return reject(state, event.type, guardRes.message);
       }
 
-      const decisions = event.proofDecisions || {};
+      const decisions = effectiveProofDecisions || {};
       next.proofs.forEach((p) => {
+        if (typeof p.round === 'number' && p.round < state.round && p.status !== 'pending') {
+          return;
+        }
         const hasExplicitDecision = Object.prototype.hasOwnProperty.call(decisions, p.id);
         if (hasExplicitDecision) {
           const normalized = normalizeProofDecision(decisions[p.id], p, p.id);

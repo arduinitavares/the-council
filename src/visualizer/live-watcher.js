@@ -1142,7 +1142,7 @@ export class VisualizerLiveWatcher {
     if (!isLatestPointer) return false;
     var inTs = String(incoming.startedAt || incoming.updatedAt || '');
     var exTs = String(existingLatest.startedAt || existingLatest.updatedAt || '');
-    if (existingLatest.isRunning === true && inTs && exTs && inTs < exTs) return false;
+    if (inTs && exTs && inTs < exTs) return false;
     return Boolean(incoming.isRunning === true || inTs >= exTs);
   }
   if (typeof window !== 'undefined') {

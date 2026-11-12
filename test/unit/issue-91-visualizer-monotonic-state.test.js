@@ -736,6 +736,38 @@ describe('Issue #91: Monotonic Run-State Reconciliation, Historical Step Inspect
           'Delayed running payload for finalized older run-mono-1 must never resurrect in CouncilLatestLiveRun'
         );
         assert.equal(sandbox.CouncilLatestLiveRun.isRunning, true);
+
+        // Complete newer run-mono-2 (startedAt 11:00, isRunning: false), then deliver an uncached delayed running latest.js from older run-mono-0 (startedAt 10:00, isRunning: true)
+        const completedNewerPayload = JSON.stringify({
+          runId: 'run-mono-2',
+          isRunning: false,
+          verdictKind: 'Unanimous Consensus',
+          startedAt: '2026-11-11T11:00:00.000Z',
+          updatedAt: '2026-11-11T11:01:00.000Z',
+          currentState: { topic: 'Newer Run', phase: 'completed', round: 1 },
+          steps: [{ label: 'Done' }]
+        });
+        vm.runInNewContext(watcher._buildBundleScript(completedNewerPayload, true), sandbox);
+        assert.equal(sandbox.CouncilLatestLiveRun.runId, 'run-mono-2');
+        assert.equal(sandbox.CouncilLatestLiveRun.isRunning, false);
+
+        const uncachedOlderRunningPayload = JSON.stringify({
+          runId: 'run-mono-0',
+          isRunning: true,
+          verdictKind: null,
+          startedAt: '2026-11-11T10:00:00.000Z',
+          updatedAt: '2026-11-11T10:00:30.000Z',
+          currentState: { topic: 'Older Uncached Running Run', phase: 'reviewing', round: 1 },
+          steps: []
+        });
+        assert.equal(sandbox.CouncilRuns['run-mono-0'], undefined);
+        vm.runInNewContext(watcher._buildBundleScript(uncachedOlderRunningPayload, true), sandbox);
+        assert.equal(
+          sandbox.CouncilLatestLiveRun.runId,
+          'run-mono-2',
+          'Uncached delayed older running latest.js must not overwrite a newer completed run in CouncilLatestLiveRun'
+        );
+        assert.equal(sandbox.CouncilLatestLiveRun.isRunning, false);
       } finally {
         fs.rmSync(outDir, { recursive: true, force: true });
       }

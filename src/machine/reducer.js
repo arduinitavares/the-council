@@ -54,6 +54,22 @@ function reject(state, eventType, reason) {
  * Success helper: updates previousPhase, lastEventName, lastTransition, history.
  */
 function succeed(prevState, next, eventType, message) {
+  if (normalizePhase(next.phase) === 'completed') {
+    if (Array.isArray(next.seats)) {
+      for (const seat of next.seats) {
+        if (seat && seat.status === 'thinking') {
+          seat.status = 'idle';
+          delete seat.faultReason;
+          delete seat.errorClass;
+        }
+      }
+    }
+    if (next.judge && next.judge.status === 'thinking') {
+      next.judge.status = 'idle';
+      delete next.judge.faultReason;
+      delete next.judge.errorClass;
+    }
+  }
   next.previousPhase = prevState.phase;
   const subType = next.faultSeatId
     ? 'seat_fault'

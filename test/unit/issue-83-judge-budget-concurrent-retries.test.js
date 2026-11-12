@@ -493,7 +493,10 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
         assert.equal(result.state.phase, 'completed');
         assert.match(result.state.verdict.kind, /Below Quorum/);
         assert.equal(retryCalls, 0, 'No subsequent retry wave should execute after quorum drop');
-        assert.equal(transitions.includes('SUBMIT_PROOF'), false, 'No SUBMIT_PROOF committed after quorum drop');
+        const excuseIdx = transitions.indexOf('EXCUSE_SEAT');
+        assert.notEqual(excuseIdx, -1, 'EXCUSE_SEAT must be dispatched on quorum drop');
+        assert.equal(transitions.slice(0, excuseIdx).includes('SUBMIT_PROOF'), true, 'Pre-collapse valid sibling proof commits before EXCUSE_SEAT');
+        assert.equal(transitions.slice(excuseIdx + 1).includes('SUBMIT_PROOF'), false, 'No SUBMIT_PROOF committed after EXCUSE_SEAT');
       }
 
       // Case B: VOTING quorum drop
@@ -555,7 +558,10 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
         assert.equal(result.state.phase, 'completed');
         assert.match(result.state.verdict.kind, /Below Quorum/);
         assert.equal(voteRetryCalls, 0, 'No subsequent vote retry wave should execute after quorum drop');
-        assert.equal(transitions.includes('CAST_VOTE'), false, 'No CAST_VOTE committed after quorum drop');
+        const excuseIdx = transitions.indexOf('EXCUSE_SEAT');
+        assert.notEqual(excuseIdx, -1, 'EXCUSE_SEAT must be dispatched on quorum drop');
+        assert.equal(transitions.slice(0, excuseIdx).includes('CAST_VOTE'), true, 'Pre-collapse valid sibling vote commits before EXCUSE_SEAT');
+        assert.equal(transitions.slice(excuseIdx + 1).includes('CAST_VOTE'), false, 'No CAST_VOTE committed after EXCUSE_SEAT');
       }
     });
 

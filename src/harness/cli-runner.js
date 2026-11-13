@@ -3483,6 +3483,9 @@ export async function execCli(executable, args = [], options = {}) {
     let terminationCause = null;
     let maxBufferError = null;
     let terminating = false;
+    let sigkillSent = false;
+    let groupDrainExhausted = false;
+    let pendingClose = null;
     let settled = false;
     let timeoutTimer = null;
     let killTimer = null;
@@ -3554,7 +3557,13 @@ export async function execCli(executable, args = [], options = {}) {
     };
 
     const scheduleStdioDrain = (attempt = 0) => {
-      if (settled || drainTimer) {
+      if (settled) {
+        return;
+      }
+      if (drainTimer) {
+        if (pendingClose) {
+          drainTimer.ref?.();
+        }
         return;
       }
       drainTimer = setTimeout(() => {
@@ -3562,14 +3571,30 @@ export async function execCli(executable, args = [], options = {}) {
         if (settled) {
           return;
         }
+        if (!sigkillSent) {
+          if (isProcessGroupDead() && pendingClose) {
+            finalizeClose(pendingClose.code, pendingClose.signalCode);
+            return;
+          }
+          scheduleStdioDrain(0);
+          return;
+        }
         if (isProcessGroupDead() || attempt >= 5) {
+          if (attempt >= 5) {
+            groupDrainExhausted = true;
+          }
           destroyStdioStreams();
+          if (pendingClose) {
+            finalizeClose(pendingClose.code, pendingClose.signalCode);
+          }
           return;
         }
         signalProcessTree('SIGKILL');
         scheduleStdioDrain(attempt + 1);
       }, 15);
-      drainTimer.unref?.();
+      if (!pendingClose) {
+        drainTimer.unref?.();
+      }
     };
 
     const terminateChild = (cause) => {
@@ -3585,7 +3610,12 @@ export async function execCli(executable, args = [], options = {}) {
       terminating = true;
       signalProcessTree('SIGTERM');
       if (killGraceMs === 0) {
+        sigkillSent = true;
         signalProcessTree('SIGKILL');
+        if (pendingClose && isProcessGroupDead()) {
+          finalizeClose(pendingClose.code, pendingClose.signalCode);
+          return;
+        }
         scheduleStdioDrain();
         return;
       }
@@ -3595,10 +3625,21 @@ export async function execCli(executable, args = [], options = {}) {
           if (settled) {
             return;
           }
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+            drainTimer = null;
+          }
+          sigkillSent = true;
           signalProcessTree('SIGKILL');
+          if (pendingClose && isProcessGroupDead()) {
+            finalizeClose(pendingClose.code, pendingClose.signalCode);
+            return;
+          }
           scheduleStdioDrain();
         }, killGraceMs);
-        killTimer.unref?.();
+        if (!pendingClose) {
+          killTimer.unref?.();
+        }
       }
     };
 
@@ -3664,7 +3705,7 @@ export async function execCli(executable, args = [], options = {}) {
       reject(err);
     });
 
-    child.on('close', (code, signalCode) => {
+    const finalizeClose = (code, signalCode) => {
       if (settled) return;
       settled = true;
       clearTimersAndListeners();
@@ -3727,6 +3768,18 @@ export async function execCli(executable, args = [], options = {}) {
       error.stderr = errOut;
       sanitizeCliError(error, executable, args, options.prompt);
       return reject(error);
+    };
+
+    child.on('close', (code, signalCode) => {
+      if (settled) return;
+      if (terminating && !groupDrainExhausted && !isProcessGroupDead()) {
+        pendingClose = { code, signalCode };
+        killTimer?.ref?.();
+        drainTimer?.ref?.();
+        scheduleStdioDrain(0);
+        return;
+      }
+      finalizeClose(code, signalCode);
     });
 
     if (options.signal) {

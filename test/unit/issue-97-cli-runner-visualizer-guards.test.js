@@ -405,9 +405,15 @@ describe('Issue #97 — CLI Runner & Visualizer Guards', () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue97-leader-exits-'));
       const leaderPidFile = path.join(tmpDir, 'leader.pid');
       const childPidFile = path.join(tmpDir, 'child.pid');
+      const readyFile = path.join(tmpDir, 'grandchild.ready');
       const controller = new AbortController();
 
-      const grandchildCode = 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 1500);';
+      const grandchildCode = [
+        'const fs = require("node:fs");',
+        'process.on("SIGTERM", () => {});',
+        `fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");`,
+        'setTimeout(() => {}, 1500);'
+      ].join(' ');
       const leaderScript = [
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
@@ -429,9 +435,7 @@ describe('Issue #97 — CLI Runner & Visualizer Guards', () => {
         childPid = Number(await waitForFile(childPidFile));
         trackedPids.add(leaderPid);
         trackedPids.add(childPid);
-
-        // Give grandchild a brief moment to install its SIGTERM handler
-        await new Promise((r) => setTimeout(r, 40));
+        await waitForFile(readyFile);
 
         const abortAt = Date.now();
         controller.abort();
@@ -450,6 +454,92 @@ describe('Issue #97 — CLI Runner & Visualizer Guards', () => {
         try { if (leaderPid) process.kill(leaderPid, 'SIGKILL'); } catch {}
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
+    });
+
+    it('still escalates SIGKILL against -pid when leader exits on SIGTERM and in-group grandchild closes stdio (stdio: ignore)', { timeout: 4000 }, async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue97-closed-stdio-gc-'));
+      const leaderPidFile = path.join(tmpDir, 'leader.pid');
+      const childPidFile = path.join(tmpDir, 'child.pid');
+      const readyFile = path.join(tmpDir, 'grandchild.ready');
+
+      const grandchildCode = [
+        'const fs = require("node:fs");',
+        'process.on("SIGTERM", () => {});',
+        `fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");`,
+        'setTimeout(() => {}, 1500);'
+      ].join(' ');
+      const leaderScript = [
+        'const fs = require("node:fs");',
+        'const { spawn } = require("node:child_process");',
+        `const gc = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildCode)}], { stdio: "ignore" });`,
+        'gc.unref();',
+        `fs.writeFileSync(${JSON.stringify(childPidFile)}, String(gc.pid));`,
+        `fs.writeFileSync(${JSON.stringify(leaderPidFile)}, String(process.pid));`,
+        'setTimeout(() => process.exit(0), 2000);'
+      ].join(' ');
+
+      let leaderPid = 0;
+      let childPid = 0;
+      try {
+        const execPromise = execCli(process.execPath, ['-e', leaderScript], {
+          timeoutMs: 120,
+          killGraceMs: 50
+        });
+
+        leaderPid = Number(await waitForFile(leaderPidFile));
+        childPid = Number(await waitForFile(childPidFile));
+        trackedPids.add(leaderPid);
+        trackedPids.add(childPid);
+        await waitForFile(readyFile);
+
+        const startedWaitAt = Date.now();
+        await assert.rejects(
+          execPromise,
+          (err) => err && err.killed === true && err.code === 'ETIMEDOUT'
+        );
+
+        const elapsed = Date.now() - startedWaitAt;
+        assert.ok(elapsed < 400, `Expected bounded escalation settlement < 400ms, took ${elapsed}ms`);
+        assertPidDead(leaderPid, 'leader');
+        assertPidDead(childPid, 'closed-stdio SIGTERM-ignoring in-group grandchild');
+      } finally {
+        try { if (childPid) process.kill(childPid, 'SIGKILL'); } catch {}
+        try { if (leaderPid) process.kill(leaderPid, 'SIGKILL'); } catch {}
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps existing drainTimer refd when close arrives after SIGKILL with delayed group reaping (no exit 13 unsettled await)', { timeout: 4000 }, () => {
+      const cliRunnerUrl = new URL('../../src/harness/cli-runner.js', import.meta.url).href;
+      const probeScript = `
+        import { execCli } from ${JSON.stringify(cliRunnerUrl)};
+        const origKill = process.kill.bind(process);
+        let lagProbeOnce = true;
+        process.kill = (pid, sig) => {
+          if (pid < 0 && (sig === 0 || sig === undefined) && lagProbeOnce) {
+            lagProbeOnce = false;
+            return true;
+          }
+          return origKill(pid, sig);
+        };
+        try {
+          await execCli(process.execPath, ['-e', 'setTimeout(() => {}, 1000);'], {
+            timeoutMs: 25,
+            killGraceMs: 0
+          });
+          process.exit(2);
+        } catch (err) {
+          if (err && err.code === 'ETIMEDOUT') {
+            process.stdout.write('SETTLED_OK');
+            process.exit(0);
+          }
+          process.exit(3);
+        }
+      `;
+      const out = execFileSync(process.execPath, ['--input-type=module', '-e', probeScript], {
+        encoding: 'utf8'
+      });
+      assert.equal(out, 'SETTLED_OK');
     });
 
     it('maxBuffer overflow terminates a SIGTERM-trapping process group cleanly and settles with ERR_CHILD_PROCESS_STDIO_MAXBUFFER', { timeout: 4000 }, async () => {

@@ -695,17 +695,28 @@ const VERSIONED_RUNTIME_NOUNS = new Set([
   'java', 'javac', 'ruby', 'php', 'perl', 'dotnet', 'clang', 'gcc', 'cmake', 'make'
 ]);
 
-const PROSE_POST_COMPARISON_WORDS = new Set([
-  'and', 'or', 'is', 'are', 'was', 'were', 'has', 'have', 'had', 'should', 'must',
+const PROSE_PREDICATE_POST_COMPARISON_WORDS = new Set([
+  'is', 'are', 'was', 'were', 'has', 'have', 'had', 'should', 'must',
   'will', 'can', 'may', 'does', 'do', 'while', 'when', 'where', 'if', 'unless',
   'until', 'before', 'after', 'for', 'in', 'with', 'because', 'since'
 ]);
 
-const COMPARISON_UNIT_WORDS = new Set([
-  'ms', 's', 'sec', 'secs', 'us', 'ns', 'm', 'min', 'mins', 'h', 'hr', 'hrs', 'd',
-  'b', 'kb', 'mb', 'gb', 'tb', 'kib', 'mib', 'gib', 'hz', 'khz', 'mhz', 'ghz',
-  'fps', 'rps', 'qps', 'tps'
+const SUBORDINATE_COMPARISON_INTRODUCERS = new Set([
+  'if', 'when', 'while', 'unless', 'where', 'because', 'since', 'although', 'though'
 ]);
+
+const COMPARISON_UNIT_SUFFIXES = [
+  '%', 'ms', 's', 'sec', 'secs', 'us', 'ns', 'm', 'min', 'mins', 'h', 'hr', 'hrs', 'd',
+  'b', 'kb', 'mb', 'gb', 'tb', 'kib', 'mib', 'gib', 'k', 'x', 'px', 'rem', 'em', 'vh', 'vw',
+  'hz', 'khz', 'mhz', 'ghz', 'fps', 'rps', 'qps', 'tps'
+];
+
+const COMPARISON_UNIT_WORDS = new Set(COMPARISON_UNIT_SUFFIXES);
+
+const ATTACHED_METRIC_NUMBER_REGEX = new RegExp(
+  `^(?:[+-]?\\d+(?:\\.\\d+)*(?:${COMPARISON_UNIT_SUFFIXES.join('|')})?|v\\d+(?:\\.\\d+)*)$`,
+  'i'
+);
 
 function isShellStarterVerbLower(lower) {
   return (
@@ -720,6 +731,19 @@ function isFollowedByComparisonOpAt(text, pos, n) {
   let q = pos;
   while (q < n && /[ \t]/.test(text[q])) {
     q += 1;
+  }
+  if (q + 2 < n && text[q] === '<' && text[q + 1] === '/') {
+    const closeLim = Math.min(n, q + 32);
+    let c = q + 2;
+    while (c < closeLim && /[A-Za-z0-9-]/.test(text[c])) {
+      c += 1;
+    }
+    if (c > q + 2 && c < closeLim && text[c] === '>') {
+      q = c + 1;
+      while (q < n && /[ \t]/.test(text[q])) {
+        q += 1;
+      }
+    }
   }
   if (q >= n) {
     return false;
@@ -736,6 +760,52 @@ function isFollowedByComparisonOpAt(text, pos, n) {
     return d < n && /^(?:[+-]?\d|v\d)/i.test(text.slice(d, Math.min(n, d + 4)));
   }
   return false;
+}
+
+function startsCoordinatedComparisonAt(text, pos, n) {
+  let p = pos;
+  while (p < n && /[ \t]/.test(text[p])) {
+    p += 1;
+  }
+  if (p >= n) {
+    return false;
+  }
+  if (text[p] === '<' && p + 1 < n && /[A-Za-z]/.test(text[p + 1])) {
+    const tagLim = Math.min(n, p + 32);
+    let t = p + 1;
+    while (t < tagLim && /[A-Za-z0-9-]/.test(text[t])) {
+      t += 1;
+    }
+    if (t < tagLim && text[t] === '>') {
+      p = t + 1;
+      while (p < n && /[ \t]/.test(text[p])) {
+        p += 1;
+      }
+      if (p >= n) {
+        return false;
+      }
+    }
+  }
+  let wEnd = p;
+  const wLim = Math.min(n, p + 64);
+  while (wEnd < wLim && !/[\s;|&<>(),.;:!?]/.test(text[wEnd])) {
+    wEnd += 1;
+  }
+  if (wEnd === p) {
+    return false;
+  }
+  const lhs = text.slice(p, wEnd);
+  if (/["'\\=/]/.test(lhs) || lhs.startsWith('-')) {
+    return false;
+  }
+  const lhsLower = lhs.toLowerCase();
+  if (
+    (SHELL_KNOWN_LOWER_STARTERS.has(lhsLower) || SHELL_WRAPPER_WORD_SET.has(lhsLower)) &&
+    !VERSIONED_RUNTIME_NOUNS.has(lhsLower)
+  ) {
+    return false;
+  }
+  return isFollowedByComparisonOpAt(text, wEnd, n);
 }
 
 function isLikelyShellTokenAt(text, pos, n) {
@@ -783,8 +853,10 @@ function isProseNumericOrVersionComparison(
   isMultiCharRedir,
   text,
   nextPos,
+  segTokenCount,
   segHardStarterCount,
-  hasPriorComparisonContext
+  hasPriorComparisonContext,
+  skippedOpenTags
 ) {
   if (fdLen !== 0 || isMultiCharRedir || targetLastEscaped || /["'\\]/.test(targetRaw)) {
     return false;
@@ -813,14 +885,37 @@ function isProseNumericOrVersionComparison(
     return false;
   }
   const n = text.length;
+  const targetPunct = targetRaw.slice(targetClean.length);
+  const targetHasNonCommaPunct = targetPunct.length > 0 && targetPunct !== ',';
   let afterTargetPos = nextPos;
   while (afterTargetPos < n && /[ \t]/.test(text[afterTargetPos])) {
     afterTargetPos += 1;
   }
-  const targetLast = targetRaw[targetRaw.length - 1];
-  const targetEndsSentence =
-    (targetLast === '.' || targetLast === '!' || targetLast === '?') && targetClean !== targetRaw;
-  if (!targetEndsSentence && afterTargetPos < n && isLikelyShellTokenAt(text, afterTargetPos, n)) {
+  if (
+    targetPunct === '' &&
+    skippedOpenTags &&
+    afterTargetPos + 2 < n &&
+    text[afterTargetPos] === '<' &&
+    text[afterTargetPos + 1] === '/'
+  ) {
+    const closeLim = Math.min(n, afterTargetPos + 32);
+    let c = afterTargetPos + 2;
+    while (c < closeLim && /[A-Za-z0-9-]/.test(text[c])) {
+      c += 1;
+    }
+    if (
+      c > afterTargetPos + 2 &&
+      c < closeLim &&
+      text[c] === '>' &&
+      skippedOpenTags.has(text.slice(afterTargetPos + 2, c).toLowerCase())
+    ) {
+      afterTargetPos = c + 1;
+      while (afterTargetPos < n && /[ \t]/.test(text[afterTargetPos])) {
+        afterTargetPos += 1;
+      }
+    }
+  }
+  if (!targetHasNonCommaPunct && afterTargetPos < n && isLikelyShellTokenAt(text, afterTargetPos, n)) {
     return false;
   }
   const isRuntimeStarter = SHELL_KNOWN_LOWER_STARTERS.has(prevLower) || SHELL_WRAPPER_WORD_SET.has(prevLower);
@@ -834,25 +929,51 @@ function isProseNumericOrVersionComparison(
       return false;
     }
     let hasAffirmativeProseContext = hasPriorComparisonContext;
-    if (!hasAffirmativeProseContext && targetRaw.endsWith(',') && afterTargetPos < n) {
-      hasAffirmativeProseContext = !isLikelyShellTokenAt(text, afterTargetPos, n);
+    if (!hasAffirmativeProseContext && targetPunct === ',' && afterTargetPos < n) {
+      if (startsCoordinatedComparisonAt(text, afterTargetPos, n)) {
+        hasAffirmativeProseContext = true;
+      } else {
+        let cwEnd = afterTargetPos;
+        const cwLim = Math.min(n, afterTargetPos + 16);
+        while (cwEnd < cwLim && /[A-Za-z]/.test(text[cwEnd])) {
+          cwEnd += 1;
+        }
+        const cwLower = cwEnd > afterTargetPos ? text.slice(afterTargetPos, cwEnd).toLowerCase() : '';
+        if ((cwLower === 'and' || cwLower === 'or') && cwEnd < n && /[ \t]/.test(text[cwEnd])) {
+          hasAffirmativeProseContext = startsCoordinatedComparisonAt(text, cwEnd, n);
+        } else if (
+          segTokenCount === 2 &&
+          tokens.length >= 2 &&
+          !tokens[tokens.length - 2].wasQuoted &&
+          !tokens[tokens.length - 2].hasUnquotedTrailingPunct &&
+          SUBORDINATE_COMPARISON_INTRODUCERS.has(tokens[tokens.length - 2].trimmedClean.toLowerCase()) &&
+          !/[\r\n;|&).,;:!?]/.test(text[afterTargetPos]) &&
+          !isLikelyShellTokenAt(text, afterTargetPos, n)
+        ) {
+          hasAffirmativeProseContext = true;
+        }
+      }
     }
-    if (!hasAffirmativeProseContext && afterTargetPos < n) {
+    if (!hasAffirmativeProseContext && targetPunct === '' && afterTargetPos < n) {
       let wEnd = afterTargetPos;
       const wLimit = Math.min(n, afterTargetPos + 32);
       while (wEnd < wLimit && !/[\s;|&<>(),.;:!?]/.test(text[wEnd])) {
         wEnd += 1;
       }
-      if (wEnd > afterTargetPos) {
+      if (wEnd > afterTargetPos && wEnd < n && /[ \t]/.test(text[wEnd])) {
         const nextW = text.slice(afterTargetPos, wEnd);
-        if (!/["'\\=]/.test(nextW) && PROSE_POST_COMPARISON_WORDS.has(nextW.toLowerCase())) {
+        if (!/["'\\=]/.test(nextW)) {
+          const nextLower = nextW.toLowerCase();
           let afterConnPos = wEnd;
           while (afterConnPos < n && /[ \t]/.test(text[afterConnPos])) {
             afterConnPos += 1;
           }
-          if (
+          if (nextLower === 'and' || nextLower === 'or') {
+            hasAffirmativeProseContext = startsCoordinatedComparisonAt(text, afterConnPos, n);
+          } else if (
+            PROSE_PREDICATE_POST_COMPARISON_WORDS.has(nextLower) &&
             afterConnPos < n &&
-            !/[\r\n;|&)]/.test(text[afterConnPos]) &&
+            !/[\r\n;|&).,;:!?]/.test(text[afterConnPos]) &&
             !isLikelyShellTokenAt(text, afterConnPos, n)
           ) {
             hasAffirmativeProseContext = true;
@@ -863,11 +984,7 @@ function isProseNumericOrVersionComparison(
     if (!hasAffirmativeProseContext) {
       return false;
     }
-  } else if (
-    !/^(?:[+-]?\d+(?:\.\d+)*(?:%|ms|s|sec|secs|us|ns|m|min|mins|h|hr|hrs|d|b|kb|mb|gb|tb|kib|mib|gib|k|x|px|rem|em|vh|vw|hz|khz|mhz|ghz|fps|rps|qps|tps)?|v\d+(?:\.\d+)*)$/i.test(
-      targetClean
-    )
-  ) {
+  } else if (!ATTACHED_METRIC_NUMBER_REGEX.test(targetClean)) {
     return false;
   }
   return true;
@@ -896,6 +1013,7 @@ function parseShellClausesLinear(text) {
   let awaitingVersionRhs = false;
   let rhsCompletedComparison = false;
   let rhsCompletedVersionComparison = false;
+  let rhsCompletedUnitUsed = false;
   let afterComparisonConj = false;
   let tokenFollowsComparisonConj = false;
   let commaAfterAnyComparisonRhs = false;
@@ -910,6 +1028,7 @@ function parseShellClausesLinear(text) {
     awaitingVersionRhs = false;
     rhsCompletedComparison = false;
     rhsCompletedVersionComparison = false;
+    rhsCompletedUnitUsed = false;
     afterComparisonConj = false;
     tokenFollowsComparisonConj = false;
   };
@@ -927,6 +1046,7 @@ function parseShellClausesLinear(text) {
       awaitingVersionRhs = false;
       rhsCompletedComparison = false;
       rhsCompletedVersionComparison = false;
+      rhsCompletedUnitUsed = false;
       afterComparisonConj = false;
       tokenFollowsComparisonConj = false;
       if (current.tokens.length > 0 && !current.tokens[current.tokens.length - 1].hasUnquotedTrailingPunct) {
@@ -941,6 +1061,7 @@ function parseShellClausesLinear(text) {
     awaitingVersionRhs = Boolean(lhsTok && VERSIONED_RUNTIME_NOUNS.has(lhsTok.trimmedClean.toLowerCase()));
     rhsCompletedComparison = false;
     rhsCompletedVersionComparison = false;
+    rhsCompletedUnitUsed = false;
     afterComparisonConj = false;
     tokenFollowsComparisonConj = false;
   };
@@ -1160,11 +1281,12 @@ function parseShellClausesLinear(text) {
           i = opPos + 2;
           continue;
         }
+        const hasTagBoundaryBefore = opPos === 0 || /[\s([,;:"'>]/.test(text[opPos - 1]);
         if (
           opChar === '<' &&
           opPos + 1 < n &&
           /[A-Za-z/!?]/.test(text[opPos + 1]) &&
-          (opPos === 0 || /[\s([,;:"']/.test(text[opPos - 1]))
+          (hasTagBoundaryBefore || text[opPos + 1] === '/')
         ) {
           let tagEnd = -1;
           const limit = Math.min(n, opPos + 64);
@@ -1180,142 +1302,150 @@ function parseShellClausesLinear(text) {
           }
           if (tagEnd !== -1) {
             const tagInner = text.slice(opPos + 1, tagEnd);
-            const afterIdx = tagEnd + 1;
-            let targetProbe = afterIdx;
-            while (targetProbe < n && /[ \t]/.test(text[targetProbe])) {
-              targetProbe += 1;
-            }
-            const hasActiveStarter =
-              segHardStarterCount > 0 ||
-              pendingQuotedVerbIdx !== -1 ||
-              (pendingUnquotedVerbIdx !== -1 && !current.tokens[pendingUnquotedVerbIdx].hadSkippedComparison);
-            const isAutoOrSpecial =
-              tagInner.length > 0 &&
-              (tagInner[0] === '!' ||
-                tagInner[0] === '?' ||
-                (tagInner.length > 1 && tagInner[tagInner.length - 1] === '/') ||
-                /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(tagInner) ||
-                /^mailto:/i.test(tagInner));
-            let hasNoOutputTarget =
-              afterIdx >= n ||
-              /[;\r\n)}\]]/.test(text[afterIdx]) ||
-              (targetProbe > afterIdx && (targetProbe >= n || /[;)\]}|&<>\r\n]/.test(text[targetProbe])));
-            if (!hasNoOutputTarget && afterIdx < n && /[.,:!?]/.test(text[afterIdx])) {
-              if (afterIdx + 1 >= n || /[\s)\]}]/.test(text[afterIdx + 1])) {
-                if (text[afterIdx] === '.' || text[afterIdx] === '!' || text[afterIdx] === '?') {
-                  hasNoOutputTarget = true;
-                } else if (!hasActiveStarter) {
-                  let afterPunct = afterIdx + 1;
-                  while (afterPunct < n && /[ \t]/.test(text[afterPunct])) {
-                    afterPunct += 1;
-                  }
-                  if (afterPunct >= n || !isLikelyShellTokenAt(text, afterPunct, n)) {
-                    hasNoOutputTarget = true;
-                  }
-                }
-              }
-            }
             const isMatchedCloseTag =
               tagInner.length > 1 &&
               tagInner[0] === '/' &&
               /^\/[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) &&
               Boolean(skippedOpenTags?.has(tagInner.slice(1).toLowerCase()));
-            let isPairedHtmlOpenTag = false;
-            let isProsePlaceholderTag = false;
-            if (!isAutoOrSpecial && !hasNoOutputTarget && !isMatchedCloseTag && !hasActiveStarter) {
-              if (/^[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) && !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)) {
-                const tagLower = tagInner.toLowerCase();
-                if (getLastCloseTagPos(tagLower) > tagEnd) {
-                  let pairedTargetLooksShell = false;
-                  if (targetProbe > afterIdx && targetProbe < n) {
-                    pairedTargetLooksShell = isLikelyShellTokenAt(text, targetProbe, n);
+            if (!hasTagBoundaryBefore) {
+              if (isMatchedCloseTag) {
+                pendingSkippedAngleTag = true;
+                i = tagEnd + 1;
+                continue;
+              }
+            } else {
+              const afterIdx = tagEnd + 1;
+              let targetProbe = afterIdx;
+              while (targetProbe < n && /[ \t]/.test(text[targetProbe])) {
+                targetProbe += 1;
+              }
+              const hasActiveStarter =
+                segHardStarterCount > 0 ||
+                pendingQuotedVerbIdx !== -1 ||
+                (pendingUnquotedVerbIdx !== -1 && !current.tokens[pendingUnquotedVerbIdx].hadSkippedComparison);
+              const isAutoOrSpecial =
+                tagInner.length > 0 &&
+                (tagInner[0] === '!' ||
+                  tagInner[0] === '?' ||
+                  (tagInner.length > 1 && tagInner[tagInner.length - 1] === '/') ||
+                  /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(tagInner) ||
+                  /^mailto:/i.test(tagInner));
+              let hasNoOutputTarget =
+                afterIdx >= n ||
+                /[;\r\n)}\]]/.test(text[afterIdx]) ||
+                (targetProbe > afterIdx && (targetProbe >= n || /[;)\]}|&<>\r\n]/.test(text[targetProbe])));
+              if (!hasNoOutputTarget && afterIdx < n && /[.,:!?]/.test(text[afterIdx])) {
+                if (afterIdx + 1 >= n || /[\s)\]}]/.test(text[afterIdx + 1])) {
+                  if (text[afterIdx] === '.' || text[afterIdx] === '!' || text[afterIdx] === '?') {
+                    hasNoOutputTarget = true;
+                  } else if (!hasActiveStarter) {
+                    let afterPunct = afterIdx + 1;
+                    while (afterPunct < n && /[ \t]/.test(text[afterPunct])) {
+                      afterPunct += 1;
+                    }
+                    if (afterPunct >= n || !isLikelyShellTokenAt(text, afterPunct, n)) {
+                      hasNoOutputTarget = true;
+                    }
+                  }
+                }
+              }
+              let isPairedHtmlOpenTag = false;
+              let isProsePlaceholderTag = false;
+              if (!isAutoOrSpecial && !hasNoOutputTarget && !isMatchedCloseTag && !hasActiveStarter) {
+                if (/^[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) && !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)) {
+                  const tagLower = tagInner.toLowerCase();
+                  if (getLastCloseTagPos(tagLower) > tagEnd) {
+                    let pairedTargetLooksShell = false;
+                    if (targetProbe > afterIdx && targetProbe < n) {
+                      pairedTargetLooksShell = isLikelyShellTokenAt(text, targetProbe, n);
+                      if (!pairedTargetLooksShell) {
+                        let wEnd = targetProbe;
+                        const wLimit = Math.min(n, targetProbe + 64);
+                        while (wEnd < wLimit && !/[\s;|&<>()]/.test(text[wEnd])) {
+                          wEnd += 1;
+                        }
+                        const wClean = stripTrailingProsePunct(text.slice(targetProbe, wEnd));
+                        if (wClean && PROSE_POST_TAG_WORDS.has(wClean.toLowerCase())) {
+                          let afterW = wEnd;
+                          while (afterW < n && /[ \t]/.test(text[afterW])) {
+                            afterW += 1;
+                          }
+                          if (afterW < n && isLikelyShellTokenAt(text, afterW, n)) {
+                            pairedTargetLooksShell = true;
+                          }
+                        }
+                      }
+                    }
                     if (!pairedTargetLooksShell) {
-                      let wEnd = targetProbe;
-                      const wLimit = Math.min(n, targetProbe + 64);
-                      while (wEnd < wLimit && !/[\s;|&<>()]/.test(text[wEnd])) {
-                        wEnd += 1;
-                      }
-                      const wClean = stripTrailingProsePunct(text.slice(targetProbe, wEnd));
-                      if (wClean && PROSE_POST_TAG_WORDS.has(wClean.toLowerCase())) {
-                        let afterW = wEnd;
-                        while (afterW < n && /[ \t]/.test(text[afterW])) {
-                          afterW += 1;
-                        }
-                        if (afterW < n && isLikelyShellTokenAt(text, afterW, n)) {
-                          pairedTargetLooksShell = true;
-                        }
-                      }
+                      isPairedHtmlOpenTag = true;
                     }
                   }
-                  if (!pairedTargetLooksShell) {
-                    isPairedHtmlOpenTag = true;
-                  }
                 }
-              }
-              if (
-                !isPairedHtmlOpenTag &&
-                targetProbe > afterIdx &&
-                /^[a-z][a-z0-9-]*$/.test(tagInner) &&
-                !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)
-              ) {
-                let postEnd = targetProbe;
-                const postLimit = Math.min(n, targetProbe + 64);
-                while (postEnd < postLimit && !/[\s;|&<>()]/.test(text[postEnd])) {
-                  postEnd += 1;
-                }
-                const postRaw = text.slice(targetProbe, postEnd);
-                const postClean = stripTrailingProsePunct(postRaw);
                 if (
-                  postRaw.length > 0 &&
-                  !/["'\\=]/.test(postRaw) &&
-                  postClean.length > 0 &&
-                  PROSE_POST_TAG_WORDS.has(postClean.toLowerCase())
+                  !isPairedHtmlOpenTag &&
+                  targetProbe > afterIdx &&
+                  /^[a-z][a-z0-9-]*$/.test(tagInner) &&
+                  !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)
                 ) {
-                  if (/[.!?]$/.test(postRaw)) {
-                    isProsePlaceholderTag = true;
-                  } else {
-                    let afterPost = postEnd;
-                    while (afterPost < n && /[ \t]/.test(text[afterPost])) {
-                      afterPost += 1;
-                    }
-                    if (afterPost >= n || /[\r\n;|&)]/.test(text[afterPost])) {
+                  let postEnd = targetProbe;
+                  const postLimit = Math.min(n, targetProbe + 64);
+                  while (postEnd < postLimit && !/[\s;|&<>()]/.test(text[postEnd])) {
+                    postEnd += 1;
+                  }
+                  const postRaw = text.slice(targetProbe, postEnd);
+                  const postClean = stripTrailingProsePunct(postRaw);
+                  if (
+                    postRaw.length > 0 &&
+                    !/["'\\=]/.test(postRaw) &&
+                    postClean.length > 0 &&
+                    PROSE_POST_TAG_WORDS.has(postClean.toLowerCase())
+                  ) {
+                    if (/[.!?]$/.test(postRaw)) {
                       isProsePlaceholderTag = true;
-                    } else if (text[afterPost] === '>') {
-                      let qStart = afterPost + 1;
-                      while (qStart < n && /[ \t]/.test(text[qStart])) {
-                        qStart += 1;
-                      }
-                      let qEnd = qStart;
-                      const qLimit = Math.min(n, qStart + 64);
-                      while (qEnd < qLimit && !/[\s;|&<>()]/.test(text[qEnd])) {
-                        qEnd += 1;
-                      }
-                      if (qEnd > qStart && !/["'\\=]/.test(text.slice(qStart, qEnd))) {
-                        let afterQ = qEnd;
-                        while (afterQ < n && /[ \t]/.test(text[afterQ])) {
-                          afterQ += 1;
-                        }
-                        isProsePlaceholderTag = afterQ >= n || !isLikelyShellTokenAt(text, afterQ, n);
-                      }
-                    } else if (text[afterPost] === '<') {
-                      isProsePlaceholderTag = afterPost + 1 < n && /[a-z/]/.test(text[afterPost + 1]);
                     } else {
-                      isProsePlaceholderTag = !isLikelyShellTokenAt(text, afterPost, n);
+                      let afterPost = postEnd;
+                      while (afterPost < n && /[ \t]/.test(text[afterPost])) {
+                        afterPost += 1;
+                      }
+                      if (afterPost >= n || /[\r\n;|&)]/.test(text[afterPost])) {
+                        isProsePlaceholderTag = true;
+                      } else if (text[afterPost] === '>') {
+                        let qStart = afterPost + 1;
+                        while (qStart < n && /[ \t]/.test(text[qStart])) {
+                          qStart += 1;
+                        }
+                        let qEnd = qStart;
+                        const qLimit = Math.min(n, qStart + 64);
+                        while (qEnd < qLimit && !/[\s;|&<>()]/.test(text[qEnd])) {
+                          qEnd += 1;
+                        }
+                        if (qEnd > qStart && !/["'\\=]/.test(text.slice(qStart, qEnd))) {
+                          let afterQ = qEnd;
+                          while (afterQ < n && /[ \t]/.test(text[afterQ])) {
+                            afterQ += 1;
+                          }
+                          isProsePlaceholderTag = afterQ >= n || !isLikelyShellTokenAt(text, afterQ, n);
+                        }
+                      } else if (text[afterPost] === '<') {
+                        isProsePlaceholderTag = afterPost + 1 < n && /[a-z/]/.test(text[afterPost + 1]);
+                      } else {
+                        isProsePlaceholderTag = !isLikelyShellTokenAt(text, afterPost, n);
+                      }
                     }
                   }
                 }
               }
-            }
-            if (isAutoOrSpecial || hasNoOutputTarget || isMatchedCloseTag || isPairedHtmlOpenTag || isProsePlaceholderTag) {
-              if (isPairedHtmlOpenTag) {
-                if (!skippedOpenTags) {
-                  skippedOpenTags = new Set();
+              if (isAutoOrSpecial || hasNoOutputTarget || isMatchedCloseTag || isPairedHtmlOpenTag || isProsePlaceholderTag) {
+                if (isPairedHtmlOpenTag) {
+                  if (!skippedOpenTags) {
+                    skippedOpenTags = new Set();
+                  }
+                  skippedOpenTags.add(tagInner.toLowerCase());
                 }
-                skippedOpenTags.add(tagInner.toLowerCase());
+                pendingSkippedAngleTag = true;
+                i = tagEnd + 1;
+                continue;
               }
-              pendingSkippedAngleTag = true;
-              i = tagEnd + 1;
-              continue;
             }
           }
         }
@@ -1429,8 +1559,10 @@ function parseShellClausesLinear(text) {
           isMultiCharRedir,
           text,
           nextPos,
+          segTokenCount,
           segHardStarterCount,
-          hasPriorComparisonContext
+          hasPriorComparisonContext,
+          skippedOpenTags
         )
       ) {
         const lhsTok = current.tokens[current.tokens.length - 1];
@@ -1614,6 +1746,7 @@ function parseShellClausesLinear(text) {
     const wasAwaitingVersionRhs = awaitingVersionRhs;
     const prevRhsCompleted = rhsCompletedComparison;
     const prevRhsVersionCompleted = rhsCompletedVersionComparison;
+    const prevRhsUnitUsed = rhsCompletedUnitUsed;
     awaitingComparisonRhs = false;
     awaitingVersionRhs = false;
     if (tokObj.hasUnquotedTrailingPunct) {
@@ -1621,7 +1754,8 @@ function parseShellClausesLinear(text) {
       const unitAfterRhs =
         prevRhsCompleted &&
         !tokObj.wasQuoted &&
-        (unprotectedTailClean === '' || COMPARISON_UNIT_WORDS.has(unprotectedTailClean.toLowerCase()));
+        (unprotectedTailClean === '' ||
+          (!prevRhsUnitUsed && COMPARISON_UNIT_WORDS.has(unprotectedTailClean.toLowerCase())));
       resetSegmentState();
       if (strippedPunct === ',' && (wasAwaitingComparisonRhs || unitAfterRhs)) {
         commaAfterAnyComparisonRhs = true;
@@ -1635,21 +1769,25 @@ function parseShellClausesLinear(text) {
       if (wasAwaitingComparisonRhs) {
         rhsCompletedComparison = true;
         rhsCompletedVersionComparison = wasAwaitingVersionRhs;
+        rhsCompletedUnitUsed = false;
         afterComparisonConj = false;
         tokenFollowsComparisonConj = false;
         clearCommaComparisonState();
       } else if (prevRhsCompleted) {
-        if (!tokObj.wasQuoted && COMPARISON_UNIT_WORDS.has(tokLower)) {
+        if (!prevRhsUnitUsed && !tokObj.wasQuoted && COMPARISON_UNIT_WORDS.has(tokLower)) {
           rhsCompletedComparison = true;
           rhsCompletedVersionComparison = prevRhsVersionCompleted;
+          rhsCompletedUnitUsed = true;
         } else if (!tokObj.wasQuoted && (tokLower === 'and' || tokLower === 'or')) {
           rhsCompletedComparison = false;
           rhsCompletedVersionComparison = false;
+          rhsCompletedUnitUsed = false;
           afterComparisonConj = true;
           tokenFollowsComparisonConj = false;
         } else {
           rhsCompletedComparison = false;
           rhsCompletedVersionComparison = false;
+          rhsCompletedUnitUsed = false;
           afterComparisonConj = false;
           tokenFollowsComparisonConj = false;
         }

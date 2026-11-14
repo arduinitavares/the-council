@@ -279,9 +279,33 @@ const SHELL_GIT_SUBCOMMANDS = new Set([
   'clean',
   'reset',
   'checkout',
-  'switch'
+  'switch',
+  'init',
+  'clone',
+  'config',
+  'describe',
+  'reflog',
+  'shortlog',
+  'submodule',
+  'restore'
 ]);
-const SHELL_GO_SUBCOMMANDS = new Set(['test', 'run', 'build', 'vet', 'mod', 'generate']);
+const SHELL_GO_SUBCOMMANDS = new Set([
+  'test',
+  'run',
+  'build',
+  'vet',
+  'mod',
+  'generate',
+  'env',
+  'list',
+  'version',
+  'fmt',
+  'tool',
+  'clean',
+  'install',
+  'get',
+  'doc'
+]);
 const SHELL_MAKE_TARGETS = new Set(['test', 'check', 'build', 'all', 'clean', 'install', 'lint', 'fmt', 'ci', 'verify']);
 const SHELL_CONTROL_PREFIX_WORDS = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do']);
 const SPLIT_QUOTE_PROSE_STOPWORDS = new Set([
@@ -973,10 +997,17 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
   let idx = startIdx;
   let hasEnvPrefix = false;
   let hasWrapperPrefix = false;
-  const hasRedirection = startIdx === 0 ? clause.hasRedirection : Boolean(tokens[startIdx].precededByRedir);
+  let sawWrapperFlag = false;
+  let hasRedirection =
+    (startIdx === 0 && clause.hasRedirection) ||
+    Boolean(tokens[startIdx].precededByRedir) ||
+    Boolean(tokens[startIdx].followedByRedir);
 
   while (idx < tokens.length) {
     const tok = tokens[idx];
+    if (tok.precededByRedir || tok.followedByRedir) {
+      hasRedirection = true;
+    }
     if (idx + 1 < tokens.length && !tok.wasQuoted && SHELL_CONTROL_PREFIX_WORDS.has(tok.value.toLowerCase())) {
       idx += 1;
       continue;
@@ -991,6 +1022,7 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
       const nextLower = stripShellBinPrefix(tokens[idx + 1].trimmedClean).toLowerCase();
       if (
         !tok.wasQuoted ||
+        tokens[idx + 1].wasQuoted ||
         hasEnvPrefix ||
         hasRedirection ||
         isCompound ||
@@ -1001,6 +1033,9 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
         SHELL_COMPOUND_ZERO_ARG_VERBS.has(nextLower)
       ) {
         hasWrapperPrefix = true;
+        if (SHELL_UNAMBIGUOUS_WRAPPER_SET.has(strippedLower)) {
+          sawWrapperFlag = true;
+        }
         idx += 1;
         let hasCommandLookupFlag = false;
         const shortValueFlags = SHELL_WRAPPER_SHORT_VALUE_FLAGS.get(strippedLower);
@@ -1008,10 +1043,12 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
         while (idx < tokens.length) {
           const arg = tokens[idx].value;
           if (arg === '--') {
+            sawWrapperFlag = true;
             idx += 1;
             break;
           }
           if (arg.startsWith('--')) {
+            sawWrapperFlag = true;
             idx += 1;
             if (!arg.includes('=') && longValueFlags?.has(arg) && idx < tokens.length) {
               idx += 1;
@@ -1020,6 +1057,7 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
           }
           if (arg.startsWith('-') && arg.length > 1 && /[A-Za-z0-9]/.test(arg[1])) {
             const flagChar = arg[1];
+            sawWrapperFlag = true;
             if (strippedLower === 'command' && (arg.includes('v') || arg.includes('V'))) {
               hasCommandLookupFlag = true;
             }
@@ -1035,6 +1073,7 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
           return { matched: true, nextIdx: idx + 1, headIdx: idx };
         }
         if (strippedLower === 'timeout' && idx < tokens.length && /^\d+(?:\.\d+)?[smhd]?$/i.test(tokens[idx].value)) {
+          sawWrapperFlag = true;
           idx += 1;
         }
         continue;
@@ -1051,7 +1090,26 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
   const cmdRaw = stripShellBinPrefix(headTok.trimmedClean);
   const cmdLower = cmdRaw.toLowerCase();
   const remainingCount = tokens.length - 1 - idx;
-  const nextVal = remainingCount > 0 ? tokens[idx + 1].trimmedClean : '';
+  const nextTok = remainingCount > 0 ? tokens[idx + 1] : null;
+  const nextVal = nextTok ? nextTok.trimmedClean : '';
+  const nextLower = nextVal.toLowerCase();
+  for (let r = startIdx; r <= idx; r += 1) {
+    if (tokens[r].precededByRedir || tokens[r].followedByRedir) {
+      hasRedirection = true;
+      break;
+    }
+  }
+  if (
+    nextTok &&
+    !nextTok.hasTrailingProsePunct &&
+    nextTok.followedByRedir &&
+    (nextTok.wasQuoted ||
+      !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) ||
+      isRecognizedCliSubcommand(cmdLower, nextLower))
+  ) {
+    hasRedirection = true;
+  }
+  const hasStrongShellSyntax = hasEnvPrefix || sawWrapperFlag || hasRedirection;
 
   if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean) || SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.value)) {
     if (!strictProseMode || remainingCount > 0 || hasEnvPrefix || hasWrapperPrefix || hasRedirection) {
@@ -1076,16 +1134,19 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
   }
 
   if (SHELL_STRICT_CLI_VERBS.has(cmdLower)) {
-    if (
-      remainingCount >= 1 &&
+    const isQuotedHeadBlockedByProseStopword =
+      !hasStrongShellSyntax &&
+      nextTok !== null &&
       (headTok.raw.includes('"') || headTok.raw.includes("'") || headTok.raw.includes('\\')) &&
-      SPLIT_QUOTE_PROSE_STOPWORDS.has(nextVal.toLowerCase())
-    ) {
+      !nextTok.wasQuoted &&
+      SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) &&
+      !isRecognizedCliSubcommand(cmdLower, nextLower);
+    if (isQuotedHeadBlockedByProseStopword) {
       return { matched: false, nextIdx: Math.max(startIdx + 1, idx) };
     }
-    if (remainingCount >= 1 || hasRedirection || (isSubshellOrSubCmd && hasEnvPrefix)) {
+    if (remainingCount >= 1 || hasStrongShellSyntax || (isSubshellOrSubCmd && hasWrapperPrefix)) {
       if (strictProseMode && cmdLower === 'git' && !hasEnvPrefix && !hasWrapperPrefix && !hasRedirection) {
-        const matched = remainingCount >= 1 && (SHELL_GIT_SUBCOMMANDS.has(nextVal.toLowerCase()) || nextVal.startsWith('-'));
+        const matched = remainingCount >= 1 && (SHELL_GIT_SUBCOMMANDS.has(nextLower) || nextVal.startsWith('-'));
         return { matched, nextIdx: Math.max(startIdx + 1, idx + 1), headIdx: idx };
       }
       return { matched: true, nextIdx: idx + 1, headIdx: idx };
@@ -1094,11 +1155,18 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
   }
 
   if (cmdLower === 'make') {
-    if (remainingCount >= 1 && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || SHELL_MAKE_TARGETS.has(nextVal.toLowerCase()))) {
+    if (remainingCount >= 1 && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || SHELL_MAKE_TARGETS.has(nextLower))) {
       return { matched: true, nextIdx: idx + 1, headIdx: idx };
     }
-    if (isCompound || hasEnvPrefix || hasWrapperPrefix || hasRedirection || isSubshellOrSubCmd) {
-      const matched = remainingCount === 0 || !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextVal.toLowerCase());
+    if (hasStrongShellSyntax || isSubshellOrSubCmd) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+    if (isCompound || hasWrapperPrefix) {
+      const matched =
+        remainingCount === 0 ||
+        Boolean(nextTok?.wasQuoted) ||
+        SHELL_MAKE_TARGETS.has(nextLower) ||
+        !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower);
       return { matched, nextIdx: Math.max(startIdx + 1, idx + 1), headIdx: idx };
     }
     return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
@@ -1112,7 +1180,11 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
   }
 
   if (SHELL_FLAG_OR_PATH_CLI_VERBS.has(cmdLower)) {
-    if (remainingCount >= 1 && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || hasEnvPrefix || hasWrapperPrefix || hasRedirection)) {
+    if (
+      (remainingCount >= 1 && /^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal)) ||
+      hasStrongShellSyntax ||
+      (remainingCount >= 1 && hasWrapperPrefix)
+    ) {
       return { matched: true, nextIdx: idx + 1, headIdx: idx };
     }
     return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
@@ -1317,7 +1389,12 @@ function hasSplitOrConcatQuoteCommand(rawText, openIdx, closeIdx) {
   }
   const firstTailWordMatch = /^([^\s,;:.!?()[\]{}]+)/.exec(tailCandidate);
   const firstTailWord = firstTailWordMatch ? firstTailWordMatch[1].toLowerCase() : '';
-  if (SPLIT_QUOTE_PROSE_STOPWORDS.has(firstTailWord)) {
+  const tailStartsQuotedOrRedir = /^["'<>]/.test(tailCandidate);
+  if (
+    !tailStartsQuotedOrRedir &&
+    SPLIT_QUOTE_PROSE_STOPWORDS.has(firstTailWord) &&
+    !isRecognizedCliSubcommand(leadLower, firstTailWord)
+  ) {
     return { cmd: null, tokEnd };
   }
 
@@ -1550,6 +1627,30 @@ const DOCKER_SUBCOMMAND_SET = new Set([
   'version'
 ]);
 
+const SUBCOMMAND_STRICT_CLI_VERBS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'cargo', 'kubectl']);
+
+function isRecognizedCliSubcommand(cmdLower, argLower) {
+  if (!argLower) {
+    return false;
+  }
+  if (cmdLower === 'go') {
+    return SHELL_GO_SUBCOMMANDS.has(argLower);
+  }
+  if (cmdLower === 'git') {
+    return SHELL_GIT_SUBCOMMANDS.has(argLower);
+  }
+  if (cmdLower === 'make') {
+    return SHELL_MAKE_TARGETS.has(argLower);
+  }
+  if (cmdLower === 'docker') {
+    return DOCKER_SUBCOMMAND_SET.has(argLower);
+  }
+  if (SUBCOMMAND_STRICT_CLI_VERBS.has(cmdLower)) {
+    return PROSE_CLI_SUBCOMMAND_SET.has(argLower);
+  }
+  return false;
+}
+
 function isLikelyShellFileArg(val) {
   if (!val || typeof val !== 'string' || /\s/.test(val)) {
     return false;
@@ -1668,7 +1769,12 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           idx + 1 < tokens.length
         ) {
           const afterLower = stripShellBinPrefix(tokens[idx + 1].trimmedClean).toLowerCase();
-          if (!t.wasQuoted || !SPLIT_QUOTE_PROSE_STOPWORDS.has(afterLower)) {
+          if (
+            !t.wasQuoted ||
+            tokens[idx + 1].wasQuoted ||
+            !SPLIT_QUOTE_PROSE_STOPWORDS.has(afterLower) ||
+            SHELL_WRAPPER_WORD_SET.has(afterLower)
+          ) {
             if (SHELL_UNAMBIGUOUS_WRAPPER_SET.has(strippedLower)) {
               sawWrapperFlag = true;
             }
@@ -1711,11 +1817,10 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
             }
             if (hasCommandLookupFlag && idx < tokens.length) {
               const targetTok = tokens[idx];
-              const targetLower = stripShellBinPrefix(targetTok.trimmedClean).toLowerCase();
               if (
+                Boolean(targetTok.trimmedClean) &&
                 !targetTok.hasPaddingSpaces &&
-                !/\s/.test(targetTok.trimmedClean) &&
-                !SPLIT_QUOTE_PROSE_STOPWORDS.has(targetLower)
+                !/\s/.test(targetTok.trimmedClean)
               ) {
                 const snippet = stripTrailingProsePunct(
                   tokens
@@ -1760,8 +1865,31 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
 
       const headTok = tokens[idx];
       const remainingCount = tokens.length - 1 - idx;
-      const hasRedirection =
-        (k === 0 && clause.hasRedirection) || Boolean(tokens[k].precededByRedir) || Boolean(headTok.followedByRedir);
+      const cmdLower = stripShellBinPrefix(headTok.trimmedClean).toLowerCase();
+      const nextTok = remainingCount > 0 ? tokens[idx + 1] : null;
+      const nextVal = nextTok ? nextTok.trimmedClean : '';
+      const nextLower = nextVal.toLowerCase();
+      let hasRedirection = (k === 0 && clause.hasRedirection) || Boolean(headTok.followedByRedir);
+      if (!hasRedirection) {
+        for (let r = k; r <= idx; r += 1) {
+          if (tokens[r].precededByRedir || tokens[r].followedByRedir) {
+            hasRedirection = true;
+            break;
+          }
+        }
+      }
+      if (
+        !hasRedirection &&
+        nextTok &&
+        !nextTok.hasPaddingSpaces &&
+        !nextTok.hasTrailingProsePunct &&
+        nextTok.followedByRedir &&
+        (nextTok.wasQuoted ||
+          !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) ||
+          isRecognizedCliSubcommand(cmdLower, nextLower))
+      ) {
+        hasRedirection = true;
+      }
       const hasStrongShellPrefix = hasEnvPrefix || sawWrapperFlag || hasRedirection;
 
       if (headTok.hasPaddingSpaces || /\s/.test(headTok.trimmedClean)) {
@@ -1773,47 +1901,41 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
         continue;
       }
 
-      const nextTok = remainingCount > 0 ? tokens[idx + 1] : null;
-      const nextVal = nextTok ? nextTok.trimmedClean : '';
-      const nextLower = nextVal.toLowerCase();
-
-      if (headTok.wasQuoted || headTok.raw.includes('\\')) {
-        if (remainingCount < 1 && !hasStrongShellPrefix) {
-          k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
-          continue;
-        }
-        if (remainingCount >= 1 && SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower)) {
-          k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
-          continue;
-        }
+      if ((headTok.wasQuoted || headTok.raw.includes('\\')) && remainingCount < 1 && !hasStrongShellPrefix) {
+        k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+        continue;
       }
 
-      const nextArgOk = Boolean(
+      const isProseStopwordNext = Boolean(
         nextTok &&
-          !nextTok.hasPaddingSpaces &&
-          (!headTok.wasQuoted || !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower))
+          (headTok.wasQuoted || headTok.raw.includes('\\')) &&
+          !nextTok.wasQuoted &&
+          SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) &&
+          !isRecognizedCliSubcommand(cmdLower, nextLower)
       );
+      const nextArgOk = Boolean(nextTok && !nextTok.hasPaddingSpaces && !isProseStopwordNext);
 
-      const cmdLower = stripShellBinPrefix(headTok.trimmedClean).toLowerCase();
       let matched = false;
 
       if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean)) {
         matched = checkMode || remainingCount > 0 || hasStrongShellPrefix;
       } else if (cmdLower === 'go') {
-        matched = nextArgOk && SHELL_GO_SUBCOMMANDS.has(nextLower);
+        matched =
+          (nextArgOk && SHELL_GO_SUBCOMMANDS.has(nextLower)) ||
+          (hasStrongShellPrefix && (remainingCount === 0 || nextArgOk || headTok.followedByRedir));
       } else if (cmdLower === 'git') {
         matched =
           (nextArgOk && (SHELL_GIT_SUBCOMMANDS.has(nextLower) || /^-[A-Za-z0-9-]/.test(nextVal))) ||
-          (hasStrongShellPrefix && nextArgOk && !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower));
+          hasStrongShellPrefix;
       } else if (cmdLower === 'make') {
         matched =
           (nextArgOk && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || SHELL_MAKE_TARGETS.has(nextLower))) ||
-          (hasStrongShellPrefix && (remainingCount === 0 || (nextArgOk && !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower))));
+          hasStrongShellPrefix;
       } else if (cmdLower === 'cd') {
-        matched = nextArgOk && (/^(?:[-./~]|\.\.)/.test(nextVal) || hasStrongShellPrefix);
+        matched = (nextArgOk && /^(?:[-./~]|\.\.)/.test(nextVal)) || hasStrongShellPrefix;
       } else if (SHELL_ZERO_ARG_CLI_VERBS.has(cmdLower)) {
         if (hasStrongShellPrefix) {
-          matched = remainingCount === 0 || nextArgOk;
+          matched = true;
         } else if (checkMode && clauses.length === 1 && tokens.length === 1 && !headTok.wasQuoted && !headTok.hasTrailingProsePunct) {
           matched = true;
         } else if (nextArgOk) {
@@ -1866,9 +1988,11 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
       }
 
       if (matched) {
+        const includeNextInSnippet = Boolean(nextArgOk && !headTok.followedByRedir && !nextTok?.precededByRedir);
+        const snippetEnd = includeNextInSnippet ? Math.min(tokens.length, idx + 2) : idx + 1;
         const snippet = stripTrailingProsePunct(
           tokens
-            .slice(k, Math.min(tokens.length, idx + 2))
+            .slice(k, snippetEnd)
             .map((item) => item.raw)
             .join(' ')
         );
@@ -1881,7 +2005,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
             found.push(snippet);
           }
         }
-        k = Math.max(k + 1, idx + 2);
+        k = Math.max(k + 1, snippetEnd);
         continue;
       }
 
@@ -2866,9 +2990,11 @@ function buildBraceSequenceNode(inner) {
         for (let k = 0; k < padded.length; k += 1) {
           seq.push(getCharAtom(padded[k]));
         }
-        branches.push(seq.length === 1 ? seq[0] : { kind: 'seq', items: seq });
+        branches.push(
+          seq.length === 1 ? seq[0] : { kind: 'seq', items: seq, nullable: false, onlyLeafAtoms: true }
+        );
       }
-      return { kind: 'alt', branches };
+      return { kind: 'alt', branches, nullable: false, hasEmptyBranch: false };
     }
   }
   const digits = new Uint32Array(4);
@@ -2876,7 +3002,83 @@ function buildBraceSequenceNode(inner) {
   return { kind: 'bracket', mask: digits, ciMask: digits, canStartStem: true, canBodyStem: true, matchesDot: false };
 }
 
-const EMPTY_SEQ_NODE = Object.freeze({ kind: 'seq', items: Object.freeze([]) });
+const EMPTY_SEQ_NODE = Object.freeze({
+  kind: 'seq',
+  items: Object.freeze([]),
+  nullable: true,
+  onlyLeafAtoms: true
+});
+
+function isGlobAstNullable(node) {
+  if (!node) {
+    return false;
+  }
+  if (node === EMPTY_SEQ_NODE) {
+    return true;
+  }
+  if (node.kind === 'seq' || node.kind === 'alt') {
+    return Boolean(node.nullable);
+  }
+  if (node.kind === 'ext') {
+    return node.op === '?' || node.op === '*' || Boolean(node.nullable);
+  }
+  return false;
+}
+
+function finishGlobSeqNode(seqItems) {
+  if (seqItems.length === 0) {
+    return EMPTY_SEQ_NODE;
+  }
+  if (seqItems.length === 1) {
+    return seqItems[0];
+  }
+  const items = [];
+  let nullable = true;
+  let onlyLeafAtoms = true;
+  for (let i = 0; i < seqItems.length; i += 1) {
+    const item = seqItems[i];
+    if (item === EMPTY_SEQ_NODE || (item.kind === 'seq' && item.items.length === 0)) {
+      continue;
+    }
+    items.push(item);
+    if (!isGlobAstNullable(item)) {
+      nullable = false;
+    }
+    if (item.kind !== 'char' && item.kind !== 'bracket') {
+      onlyLeafAtoms = false;
+    }
+  }
+  if (items.length === 0) {
+    return EMPTY_SEQ_NODE;
+  }
+  if (items.length === 1) {
+    return items[0];
+  }
+  return { kind: 'seq', items, nullable, onlyLeafAtoms };
+}
+
+function canAbsorbBranchChild(topKind, builtOp, child) {
+  if (!child || !Array.isArray(child.branches)) {
+    return false;
+  }
+  if (topKind === 'brace' || builtOp === '@') {
+    return child.kind === 'alt' || (child.kind === 'ext' && child.op === '@');
+  }
+  if (builtOp === '?') {
+    return child.kind === 'alt' || (child.kind === 'ext' && (child.op === '@' || child.op === '?'));
+  }
+  if (builtOp === '+') {
+    return child.kind === 'alt' || (child.kind === 'ext' && (child.op === '@' || child.op === '+'));
+  }
+  if (builtOp === '*') {
+    return (
+      child.kind === 'alt' ||
+      (child.kind === 'ext' &&
+        (child.op === '@' || child.op === '?' || child.op === '+' || child.op === '*'))
+    );
+  }
+  return false;
+}
 
 function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob) {
   const n = value.length;
@@ -2887,92 +3089,148 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
   while (i < n || frames.length > 1) {
     const top = frames[frames.length - 1];
     if (frames.length > 1 && i >= top.stopIdx) {
-      const finishedBranch =
-        top.seqItems.length === 0
-          ? EMPTY_SEQ_NODE
-          : top.seqItems.length === 1
-            ? top.seqItems[0]
-            : { kind: 'seq', items: top.seqItems };
-      top.branches.push(finishedBranch);
+      top.branches.push(finishGlobSeqNode(top.seqItems));
       frames.pop();
       const parent = frames[frames.length - 1];
       let builtOp = top.op;
-      if (top.kind === 'ext' && builtOp === '+') {
-        const emptyCheckStack = [...top.branches];
-        while (emptyCheckStack.length > 0) {
-          const cur = emptyCheckStack.pop();
-          if (
-            cur === EMPTY_SEQ_NODE ||
-            (cur.kind === 'seq' && cur.items.length === 0) ||
-            (cur.kind === 'ext' && (cur.op === '?' || cur.op === '*'))
-          ) {
-            builtOp = '*';
-            break;
-          }
-          if ((cur.kind === 'alt' || (cur.kind === 'ext' && cur.op === '@')) && Array.isArray(cur.branches)) {
-            for (let cb = 0; cb < cur.branches.length; cb += 1) {
-              emptyCheckStack.push(cur.branches[cb]);
-            }
-          }
+      let anyNullable = false;
+      for (let b = 0; b < top.branches.length; b += 1) {
+        if (isGlobAstNullable(top.branches[b])) {
+          anyNullable = true;
+          break;
         }
       }
+      if (top.kind === 'ext' && builtOp === '+' && anyNullable) {
+        builtOp = '*';
+      }
+
       let builtBranches = top.branches;
+      let hasEmptyBranch = false;
+      let seenChars = null;
+      let nullable = top.kind === 'ext' ? builtOp === '?' || builtOp === '*' || anyNullable : anyNullable;
+
       if (top.kind !== 'ext' || builtOp !== '!') {
-        builtBranches = [];
-        let hasEmpty = false;
-        const seenChars = new Set();
+        let candidates = top.branches;
+        let hasSmallWrapper = false;
+        for (let b = 0; b < candidates.length; b += 1) {
+          const c = candidates[b];
+          if (canAbsorbBranchChild(top.kind, builtOp, c) && c.branches.length <= 8) {
+            hasSmallWrapper = true;
+            break;
+          }
+        }
+        if (hasSmallWrapper) {
+          const expanded = [];
+          let inheritedEmpty = false;
+          const work = [];
+          for (let b = candidates.length - 1; b >= 0; b -= 1) {
+            work.push(candidates[b]);
+          }
+          while (work.length > 0) {
+            const cur = work.pop();
+            if (canAbsorbBranchChild(top.kind, builtOp, cur) && cur.branches.length <= 8) {
+              if (cur.kind === 'ext' && (cur.op === '?' || cur.op === '*')) {
+                inheritedEmpty = true;
+              }
+              for (let cb = cur.branches.length - 1; cb >= 0; cb -= 1) {
+                work.push(cur.branches[cb]);
+              }
+            } else {
+              expanded.push(cur);
+            }
+          }
+          if (inheritedEmpty) {
+            expanded.push(EMPTY_SEQ_NODE);
+          }
+          candidates = expanded;
+        }
+
+        let bestIdx = -1;
+        let bestLen = -1;
+        for (let b = 0; b < candidates.length; b += 1) {
+          const cand = candidates[b];
+          if (canAbsorbBranchChild(top.kind, builtOp, cand) && cand.branches.length > bestLen) {
+            bestIdx = b;
+            bestLen = cand.branches.length;
+          }
+        }
+        if (bestIdx !== -1) {
+          const bestChild = candidates[bestIdx];
+          builtBranches = bestChild.branches;
+          hasEmptyBranch = Boolean(bestChild.hasEmptyBranch);
+          seenChars = bestChild.seenChars || null;
+        } else {
+          builtBranches = [];
+        }
+
+        const pushEmpty = () => {
+          if (!hasEmptyBranch) {
+            hasEmptyBranch = true;
+            builtBranches.push(EMPTY_SEQ_NODE);
+          }
+        };
         const pushBranch = (br) => {
           if (br === EMPTY_SEQ_NODE || (br.kind === 'seq' && br.items.length === 0)) {
-            if (!hasEmpty) {
-              hasEmpty = true;
-              builtBranches.push(EMPTY_SEQ_NODE);
-            }
+            pushEmpty();
             return;
           }
           if (br.kind === 'char') {
-            if (seenChars.has(br.code)) {
+            if (!seenChars) {
+              seenChars = new Set();
+            } else if (seenChars.has(br.code)) {
               return;
             }
             seenChars.add(br.code);
           }
           builtBranches.push(br);
         };
-        const stack = [];
-        for (let b = top.branches.length - 1; b >= 0; b -= 1) {
-          stack.push(top.branches[b]);
+
+        if (bestIdx !== -1) {
+          const bestChild = candidates[bestIdx];
+          if (bestChild.kind === 'ext' && (bestChild.op === '?' || bestChild.op === '*')) {
+            pushEmpty();
+          }
         }
-        while (stack.length > 0) {
-          const cur = stack.pop();
-          const canFlatten =
-            top.kind === 'brace' || builtOp === '@'
-              ? cur.kind === 'alt' || (cur.kind === 'ext' && cur.op === '@')
-              : builtOp === '?'
-                ? cur.kind === 'alt' || (cur.kind === 'ext' && (cur.op === '@' || cur.op === '?'))
-                : builtOp === '+'
-                  ? cur.kind === 'alt' || (cur.kind === 'ext' && (cur.op === '@' || cur.op === '+'))
-                  : builtOp === '*'
-                    ? cur.kind === 'alt' ||
-                      (cur.kind === 'ext' &&
-                        (cur.op === '@' || cur.op === '?' || cur.op === '+' || cur.op === '*'))
-                    : false;
-          if (canFlatten && Array.isArray(cur.branches)) {
-            if (cur.kind === 'ext' && (cur.op === '?' || cur.op === '*')) {
-              pushBranch(EMPTY_SEQ_NODE);
-            }
-            for (let cb = cur.branches.length - 1; cb >= 0; cb -= 1) {
-              stack.push(cur.branches[cb]);
-            }
+
+        for (let b = 0; b < candidates.length; b += 1) {
+          if (b === bestIdx) {
             continue;
           }
-          pushBranch(cur);
+          const br = candidates[b];
+          if (canAbsorbBranchChild(top.kind, builtOp, br)) {
+            if (br.kind === 'ext' && (br.op === '?' || br.op === '*')) {
+              pushEmpty();
+            }
+            const sub = br.branches;
+            for (let cb = 0; cb < sub.length; cb += 1) {
+              pushBranch(sub[cb]);
+            }
+          } else {
+            pushBranch(br);
+          }
         }
+      } else {
+        nullable = false;
       }
+
       const built =
         top.kind === 'brace' || (top.kind === 'ext' && builtOp === '@' && builtBranches.length === 1)
           ? builtBranches.length === 1
             ? builtBranches[0]
-            : { kind: 'alt', branches: builtBranches }
-          : { kind: 'ext', op: builtOp, branches: builtBranches };
+            : { kind: 'alt', branches: builtBranches, hasEmptyBranch, nullable, seenChars }
+          : {
+              kind: 'ext',
+              op: builtOp,
+              branches: builtBranches,
+              hasEmptyBranch,
+              nullable,
+              seenChars,
+              mIn1: -1,
+              mOut1: -1,
+              mIn2: -1,
+              mOut2: -1,
+              memoMap: null
+            };
       parent.seqItems.push(built);
       if (i === top.stopIdx) {
         i += 1;
@@ -2985,13 +3243,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
     }
 
     if (top.sep && value[i] === top.sep) {
-      const branchNode =
-        top.seqItems.length === 0
-          ? EMPTY_SEQ_NODE
-          : top.seqItems.length === 1
-            ? top.seqItems[0]
-            : { kind: 'seq', items: top.seqItems };
-      top.branches.push(branchNode);
+      top.branches.push(finishGlobSeqNode(top.seqItems));
       top.seqItems = [];
       i += 1;
       continue;
@@ -3048,8 +3300,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
     i += 1;
   }
 
-  const rootItems = frames[0].seqItems;
-  return rootItems.length === 1 ? rootItems[0] : { kind: 'seq', items: rootItems };
+  return finishGlobSeqNode(frames[0].seqItems);
 }
 
 function atomMatchesCode(atom, ch, caseInsensitive) {
@@ -3060,7 +3311,7 @@ function atomMatchesCode(atom, ch, caseInsensitive) {
   return ch < 128 && (mask[ch >> 5] & (1 << (ch & 31))) !== 0;
 }
 
-function stepTrieBitset(trie, srcBits, dstBits, atom) {
+function stepTrieSlab(trie, slab, srcOff, dstOff, atom) {
   const words = trie.wordCount;
   const edgeHead = trie.edgeHead;
   const edgeChar = trie.edgeChar;
@@ -3072,7 +3323,7 @@ function stepTrieBitset(trie, srcBits, dstBits, atom) {
   const mask = isChar ? null : (ci ? atom.ciMask : atom.mask);
 
   for (let w = 0; w < words; w += 1) {
-    let bits = srcBits[w];
+    let bits = slab[srcOff + w];
     while (bits !== 0) {
       const lsb = bits & -bits;
       const u = (w << 5) + (31 - Math.clz32(lsb));
@@ -3082,7 +3333,7 @@ function stepTrieBitset(trie, srcBits, dstBits, atom) {
       if (isChar) {
         for (let e = start; e < end; e += 1) {
           if (edgeChar[e] === charCode) {
-            dstBits[edgeNextWord[e]] |= edgeNextMask[e];
+            slab[dstOff + edgeNextWord[e]] |= edgeNextMask[e];
             break;
           }
         }
@@ -3090,7 +3341,7 @@ function stepTrieBitset(trie, srcBits, dstBits, atom) {
         for (let e = start; e < end; e += 1) {
           const ch = edgeChar[e];
           if (ch < 128 && (mask[ch >> 5] & (1 << (ch & 31))) !== 0) {
-            dstBits[edgeNextWord[e]] |= edgeNextMask[e];
+            slab[dstOff + edgeNextWord[e]] |= edgeNextMask[e];
           }
         }
       }
@@ -3098,90 +3349,11 @@ function stepTrieBitset(trie, srcBits, dstBits, atom) {
   }
 }
 
-function createEmptyNfaState(tries) {
-  return {
-    standalone: new Uint32Array(tries.standalone.wordCount),
-    dotfile: new Uint32Array(tries.dotfile.wordCount),
-    extTrie: new Uint32Array(tries.ext.wordCount),
-    envMask: 0,
-    stemFlags: 0
-  };
-}
-
-function copyNfaStateInto(dst, src) {
-  dst.standalone.set(src.standalone);
-  dst.dotfile.set(src.dotfile);
-  dst.extTrie.set(src.extTrie);
-  dst.envMask = src.envMask;
-  dst.stemFlags = src.stemFlags;
-}
-
-function clearNfaState(dst) {
-  dst.standalone.fill(0);
-  dst.dotfile.fill(0);
-  dst.extTrie.fill(0);
-  dst.envMask = 0;
-  dst.stemFlags = 0;
-}
-
-function orNfaStateInto(dst, src) {
-  for (let i = 0; i < dst.standalone.length; i += 1) dst.standalone[i] |= src.standalone[i];
-  for (let i = 0; i < dst.dotfile.length; i += 1) dst.dotfile[i] |= src.dotfile[i];
-  for (let i = 0; i < dst.extTrie.length; i += 1) dst.extTrie[i] |= src.extTrie[i];
-  dst.envMask |= src.envMask;
-  dst.stemFlags |= src.stemFlags;
-}
-
-function nfaStatesEqual(a, b) {
-  if (a.envMask !== b.envMask || a.stemFlags !== b.stemFlags) {
-    return false;
-  }
-  for (let i = 0; i < a.standalone.length; i += 1) if (a.standalone[i] !== b.standalone[i]) return false;
-  for (let i = 0; i < a.dotfile.length; i += 1) if (a.dotfile[i] !== b.dotfile[i]) return false;
-  for (let i = 0; i < a.extTrie.length; i += 1) if (a.extTrie[i] !== b.extTrie[i]) return false;
-  return true;
-}
-
-function stepNfaLeafInPlace(tries, src, dst, atom) {
-  clearNfaState(dst);
-  stepTrieBitset(tries.standalone, src.standalone, dst.standalone, atom);
-  stepTrieBitset(tries.dotfile, src.dotfile, dst.dotfile, atom);
-  stepTrieBitset(tries.ext, src.extTrie, dst.extTrie, atom);
-
-  const se = src.envMask;
-  if (se !== 0) {
-    let de = 0;
-    if ((se & 1) !== 0 && atomMatchesCode(atom, 46, false)) de |= 2;
-    if ((se & 2) !== 0 && atomMatchesCode(atom, 101, true)) de |= 4;
-    if ((se & 4) !== 0 && atomMatchesCode(atom, 110, true)) de |= 8;
-    if ((se & 8) !== 0 && atomMatchesCode(atom, 118, true)) de |= 16;
-    if ((se & 16) !== 0 && atomMatchesCode(atom, 46, false)) de |= 32;
-    if ((se & 96) !== 0 && atom.canBodyStem) de |= 64;
-    dst.envMask = de;
-  }
-
-  const sf = src.stemFlags;
-  if ((sf & STEM_HAS_CHAR) !== 0 && atom.matchesDot) {
-    dst.extTrie[0] |= 1;
-  }
-  let df = 0;
-  if ((sf & STEM_CAN_START) !== 0 && atom.matchesDot) {
-    df |= STEM_LEADING_DOT;
-  }
-  if ((sf & (STEM_CAN_START | STEM_LEADING_DOT)) !== 0 && atom.canStartStem) {
-    df |= STEM_HAS_CHAR;
-  }
-  if ((sf & STEM_HAS_CHAR) !== 0 && atom.canBodyStem) {
-    df |= STEM_HAS_CHAR;
-  }
-  dst.stemFlags = df;
-}
-
-function hasTrieAccept(trie, bits) {
+function hasTrieAcceptSlab(trie, slab, off) {
   const terminals = trie.terminals;
   const words = trie.wordCount;
   for (let w = 0; w < words; w += 1) {
-    let b = bits[w];
+    let b = slab[off + w];
     while (b !== 0) {
       const lsb = b & -b;
       const u = (w << 5) + (31 - Math.clz32(lsb));
@@ -3195,82 +3367,278 @@ function hasTrieAccept(trie, bits) {
 }
 
 function evalRootGlobAstIterative(rootNode, tries, patternLen = 64) {
-  const statePool = [];
-  const allocState = () => (statePool.length > 0 ? statePool.pop() : createEmptyNfaState(tries));
-  const freeState = (s) => {
-    if (s) {
-      statePool.push(s);
+  const sWords = tries.standalone.wordCount;
+  const dWords = tries.dotfile.wordCount;
+  const eWords = tries.ext.wordCount;
+  const dOff = sWords;
+  const eOff = sWords + dWords;
+  const metaOff = sWords + dWords + eWords;
+  const stride = metaOff + 1;
+
+  let slabCapSlots = Math.max(64, Math.min(2048, patternLen));
+  let slab = new Uint32Array(slabCapSlots * stride);
+  const freeSlots = [];
+  let nextSlot = 0;
+
+  const allocSlot = () => {
+    if (freeSlots.length > 0) {
+      return freeSlots.pop();
+    }
+    if (nextSlot >= slabCapSlots) {
+      const newCap = slabCapSlots * 2;
+      const grown = new Uint32Array(newCap * stride);
+      grown.set(slab);
+      slab = grown;
+      slabCapSlots = newCap;
+    }
+    const slot = nextSlot;
+    nextSlot += 1;
+    return slot;
+  };
+  const freeSlot = (slot) => {
+    if (slot >= 0) {
+      freeSlots.push(slot);
     }
   };
+  const clearSlot = (slot) => {
+    const base = slot * stride;
+    slab.fill(0, base, base + stride);
+  };
+  const copySlot = (dstSlot, srcSlot) => {
+    const dstBase = dstSlot * stride;
+    const srcBase = srcSlot * stride;
+    for (let k = 0; k < stride; k += 1) {
+      slab[dstBase + k] = slab[srcBase + k];
+    }
+  };
+  const orSlotInto = (dstSlot, srcSlot) => {
+    const dstBase = dstSlot * stride;
+    const srcBase = srcSlot * stride;
+    for (let k = 0; k < stride; k += 1) {
+      slab[dstBase + k] |= slab[srcBase + k];
+    }
+  };
+  const slotsEqual = (slotA, slotB) => {
+    const baseA = slotA * stride;
+    const baseB = slotB * stride;
+    for (let k = 0; k < stride; k += 1) {
+      if (slab[baseA + k] !== slab[baseB + k]) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const andNotSlotInto = (srcSlot, fedSlot, dstSlot) => {
+    const srcBase = srcSlot * stride;
+    const fedBase = fedSlot * stride;
+    const dstBase = dstSlot * stride;
+    let nonZero = false;
+    for (let k = 0; k < stride; k += 1) {
+      const diff = slab[srcBase + k] & ~slab[fedBase + k];
+      slab[dstBase + k] = diff;
+      if (diff !== 0) {
+        nonZero = true;
+      }
+    }
+    return nonZero;
+  };
+  const packSlotKey = (slot) => {
+    const base = slot * stride;
+    let out = '';
+    for (let k = 0; k < stride; k += 1) {
+      const v = slab[base + k];
+      out += String.fromCharCode(v & 0xffff, v >>> 16);
+    }
+    return out;
+  };
+  const stepLeafSlot = (srcSlot, dstSlot, atom) => {
+    const srcBase = srcSlot * stride;
+    const dstBase = dstSlot * stride;
+    slab.fill(0, dstBase, dstBase + stride);
+    stepTrieSlab(tries.standalone, slab, srcBase, dstBase, atom);
+    stepTrieSlab(tries.dotfile, slab, srcBase + dOff, dstBase + dOff, atom);
+    stepTrieSlab(tries.ext, slab, srcBase + eOff, dstBase + eOff, atom);
 
-  const initState = allocState();
-  clearNfaState(initState);
-  initState.standalone[0] = 1;
-  initState.dotfile[0] = 1;
-  initState.envMask = 1;
-  initState.stemFlags = STEM_CAN_START;
+    const srcMeta = slab[srcBase + metaOff];
+    const se = srcMeta & 0xff;
+    let de = 0;
+    if (se !== 0) {
+      if ((se & 1) !== 0 && atomMatchesCode(atom, 46, false)) de |= 2;
+      if ((se & 2) !== 0 && atomMatchesCode(atom, 101, true)) de |= 4;
+      if ((se & 4) !== 0 && atomMatchesCode(atom, 110, true)) de |= 8;
+      if ((se & 8) !== 0 && atomMatchesCode(atom, 118, true)) de |= 16;
+      if ((se & 16) !== 0 && atomMatchesCode(atom, 46, false)) de |= 32;
+      if ((se & 96) !== 0 && atom.canBodyStem) de |= 64;
+    }
 
-  let stepBudget = Math.max(16384, patternLen * 64);
+    const sf = srcMeta >>> 8;
+    if ((sf & STEM_HAS_CHAR) !== 0 && atom.matchesDot) {
+      slab[dstBase + eOff] |= 1;
+    }
+    let df = 0;
+    if ((sf & STEM_CAN_START) !== 0 && atom.matchesDot) {
+      df |= STEM_LEADING_DOT;
+    }
+    if ((sf & (STEM_CAN_START | STEM_LEADING_DOT)) !== 0 && atom.canStartStem) {
+      df |= STEM_HAS_CHAR;
+    }
+    if ((sf & STEM_HAS_CHAR) !== 0 && atom.canBodyStem) {
+      df |= STEM_HAS_CHAR;
+    }
+    slab[dstBase + metaOff] = de | (df << 8);
+  };
+
+  const initSlot = allocSlot();
+  clearSlot(initSlot);
+  const initBase = initSlot * stride;
+  slab[initBase] = 1;
+  slab[initBase + dOff] = 1;
+  slab[initBase + metaOff] = 1 | (STEM_CAN_START << 8);
+
+  let stepBudget = Math.max(65536, patternLen * 8);
   const frames = [];
-  let pendingResult = null;
+  let pendingResultSlot = -1;
+  let activeRepeatCount = 0;
+  let memoSlotsUsed = 0;
+  const MAX_MEMO_SLOTS = 4096;
+  let exhausted = false;
 
-  const pushNode = (node, stateIn) => {
-    const needsBase =
-      node.kind === 'ext' && (node.op === '?' || node.op === '*' || node.op === '!');
-    let baseCopy = null;
+  const pushNode = (node, stateInSlot, memoTargetNode = null, memoKeySlot = -1) => {
+    const needsBase = node.kind === 'ext' && (node.op === '?' || node.op === '*' || node.op === '!');
+    let baseSlot = -1;
     if (needsBase) {
-      baseCopy = allocState();
-      copyNfaStateInto(baseCopy, stateIn);
+      baseSlot = allocSlot();
+      copySlot(baseSlot, stateInSlot);
+    }
+    const isRepeatNode = node.kind === 'ext' && (node.op === '+' || node.op === '*');
+    if (isRepeatNode) {
+      activeRepeatCount += 1;
     }
     frames.push({
       kind: node.kind,
       node,
       index: 0,
-      curState: stateIn,
-      scratchState: null,
-      baseState: baseCopy,
-      accState: null,
-      prevPassAcc: null,
-      repeatLeft: node.kind === 'ext' && (node.op === '+' || node.op === '*') ? 32 : 0
+      curSlot: stateInSlot,
+      scratchSlot: -1,
+      scratchSlot2: -1,
+      baseSlot,
+      accSlot: -1,
+      fedSlot: -1,
+      deltaSlot: -1,
+      repeatLeft: isRepeatNode ? 64 : 0,
+      isRepeatNode,
+      memoTargetNode,
+      memoKeySlot
     });
   };
 
-  const popFrameWithResult = (f, resultState) => {
-    if (f.curState && f.curState !== resultState) freeState(f.curState);
-    if (f.scratchState && f.scratchState !== resultState) freeState(f.scratchState);
-    if (f.baseState && f.baseState !== resultState) freeState(f.baseState);
-    if (f.accState && f.accState !== resultState) freeState(f.accState);
-    if (f.prevPassAcc && f.prevPassAcc !== resultState) freeState(f.prevPassAcc);
+  const popFrameWithResult = (f, resultSlot) => {
+    if (f.memoTargetNode && f.memoKeySlot >= 0 && !exhausted) {
+      const mNode = f.memoTargetNode;
+      if (mNode.mIn1 < 0 && memoSlotsUsed + 2 <= MAX_MEMO_SLOTS) {
+        mNode.mIn1 = f.memoKeySlot;
+        f.memoKeySlot = -1;
+        mNode.mOut1 = allocSlot();
+        copySlot(mNode.mOut1, resultSlot);
+        memoSlotsUsed += 2;
+      } else if (mNode.mIn2 < 0 && memoSlotsUsed + 2 <= MAX_MEMO_SLOTS) {
+        mNode.mIn2 = f.memoKeySlot;
+        f.memoKeySlot = -1;
+        mNode.mOut2 = allocSlot();
+        copySlot(mNode.mOut2, resultSlot);
+        memoSlotsUsed += 2;
+      } else if ((!mNode.memoMap || mNode.memoMap.size < 24) && memoSlotsUsed + 1 <= MAX_MEMO_SLOTS) {
+        if (!mNode.memoMap) {
+          mNode.memoMap = new Map();
+        }
+        const key = packSlotKey(f.memoKeySlot);
+        if (!mNode.memoMap.has(key)) {
+          const outSlot = allocSlot();
+          copySlot(outSlot, resultSlot);
+          mNode.memoMap.set(key, outSlot);
+          memoSlotsUsed += 1;
+        }
+      }
+    }
+    if (f.isRepeatNode) {
+      activeRepeatCount -= 1;
+    }
+    if (f.curSlot >= 0 && f.curSlot !== resultSlot) freeSlot(f.curSlot);
+    if (f.scratchSlot >= 0 && f.scratchSlot !== resultSlot) freeSlot(f.scratchSlot);
+    if (f.scratchSlot2 >= 0 && f.scratchSlot2 !== resultSlot) freeSlot(f.scratchSlot2);
+    if (f.baseSlot >= 0 && f.baseSlot !== resultSlot) freeSlot(f.baseSlot);
+    if (f.accSlot >= 0 && f.accSlot !== resultSlot) freeSlot(f.accSlot);
+    if (f.fedSlot >= 0 && f.fedSlot !== resultSlot) freeSlot(f.fedSlot);
+    if (f.deltaSlot >= 0 && f.deltaSlot !== resultSlot) freeSlot(f.deltaSlot);
+    if (f.memoKeySlot >= 0 && f.memoKeySlot !== resultSlot) freeSlot(f.memoKeySlot);
     frames.pop();
-    pendingResult = resultState;
+    pendingResultSlot = resultSlot;
   };
 
-  pushNode(rootNode, initState);
+  const dispatchChildNode = (parentFrame, childNode) => {
+    const srcSlot = parentFrame.curSlot;
+    if (childNode.kind === 'ext' && activeRepeatCount > 0) {
+      let cachedSlot = -1;
+      if (childNode.mIn1 >= 0 && slotsEqual(childNode.mIn1, srcSlot)) {
+        cachedSlot = childNode.mOut1;
+      } else if (childNode.mIn2 >= 0 && slotsEqual(childNode.mIn2, srcSlot)) {
+        cachedSlot = childNode.mOut2;
+      } else if (childNode.memoMap !== null) {
+        const mapped = childNode.memoMap.get(packSlotKey(srcSlot));
+        if (mapped !== undefined) {
+          cachedSlot = mapped;
+        }
+      }
+      if (cachedSlot >= 0) {
+        if (parentFrame.kind === 'seq') {
+          copySlot(parentFrame.curSlot, cachedSlot);
+        } else {
+          orSlotInto(parentFrame.accSlot, cachedSlot);
+        }
+        parentFrame.index += 1;
+        return false;
+      }
+    }
+    const childIn = allocSlot();
+    copySlot(childIn, srcSlot);
+    let memoKeySlot = -1;
+    let memoTargetNode = null;
+    if (childNode.kind === 'ext' && activeRepeatCount > 0 && memoSlotsUsed < MAX_MEMO_SLOTS) {
+      memoTargetNode = childNode;
+      memoKeySlot = allocSlot();
+      copySlot(memoKeySlot, srcSlot);
+    }
+    pushNode(childNode, childIn, memoTargetNode, memoKeySlot);
+    return true;
+  };
+
+  pushNode(rootNode, initSlot);
 
   while (frames.length > 0) {
     if (--stepBudget <= 0) {
+      exhausted = true;
       break;
     }
     const f = frames[frames.length - 1];
 
-    if (pendingResult !== null) {
+    if (pendingResultSlot >= 0) {
       if (f.kind === 'seq') {
-        freeState(f.curState);
-        f.curState = pendingResult;
-        pendingResult = null;
+        freeSlot(f.curSlot);
+        f.curSlot = pendingResultSlot;
+        pendingResultSlot = -1;
         f.index += 1;
       } else {
-        orNfaStateInto(f.accState, pendingResult);
-        freeState(pendingResult);
-        pendingResult = null;
+        orSlotInto(f.accSlot, pendingResultSlot);
+        freeSlot(pendingResultSlot);
+        pendingResultSlot = -1;
         f.index += 1;
       }
     }
 
     if (f.kind === 'char' || f.kind === 'bracket') {
-      const out = allocState();
-      stepNfaLeafInPlace(tries, f.curState, out, f.node);
-      popFrameWithResult(f, out);
+      const outSlot = allocSlot();
+      stepLeafSlot(f.curSlot, outSlot, f.node);
+      popFrameWithResult(f, outSlot);
       continue;
     }
 
@@ -3284,88 +3652,159 @@ function evalRootGlobAstIterative(rootNode, tries, patternLen = 64) {
           continue;
         }
         if (item.kind === 'char' || item.kind === 'bracket') {
-          if (!f.scratchState) {
-            f.scratchState = allocState();
+          if (f.scratchSlot < 0) {
+            f.scratchSlot = allocSlot();
           }
-          stepNfaLeafInPlace(tries, f.curState, f.scratchState, item);
-          const tmp = f.curState;
-          f.curState = f.scratchState;
-          f.scratchState = tmp;
+          stepLeafSlot(f.curSlot, f.scratchSlot, item);
+          const tmp = f.curSlot;
+          f.curSlot = f.scratchSlot;
+          f.scratchSlot = tmp;
           f.index += 1;
-          if (f.index < items.length && items[f.index] === item && nfaStatesEqual(f.curState, f.scratchState)) {
+          if (f.index < items.length && items[f.index] === item && slotsEqual(f.curSlot, f.scratchSlot)) {
             while (f.index < items.length && items[f.index] === item) {
               f.index += 1;
             }
           }
-        } else {
-          const childIn = allocState();
-          copyNfaStateInto(childIn, f.curState);
-          pushNode(item, childIn);
+          continue;
+        }
+        if (item.kind === 'seq' && item.onlyLeafAtoms) {
+          if (f.scratchSlot < 0) {
+            f.scratchSlot = allocSlot();
+          }
+          const subItems = item.items;
+          for (let j = 0; j < subItems.length; j += 1) {
+            stepLeafSlot(f.curSlot, f.scratchSlot, subItems[j]);
+            const tmp = f.curSlot;
+            f.curSlot = f.scratchSlot;
+            f.scratchSlot = tmp;
+          }
+          if (subItems.length > 1) {
+            stepBudget -= subItems.length - 1;
+            if (stepBudget <= 0) {
+              exhausted = true;
+              break;
+            }
+          }
+          f.index += 1;
+          continue;
+        }
+        if (dispatchChildNode(f, item)) {
           stoppedForChild = true;
           break;
         }
+        if (--stepBudget <= 0) {
+          exhausted = true;
+          break;
+        }
+      }
+      if (exhausted) {
+        break;
       }
       if (!stoppedForChild) {
-        popFrameWithResult(f, f.curState);
+        popFrameWithResult(f, f.curSlot);
       }
       continue;
     }
 
     // 'alt' or 'ext'
     const branches = f.node.branches;
-    if (!f.accState) {
-      f.accState = allocState();
-      clearNfaState(f.accState);
+    if (f.accSlot < 0) {
+      f.accSlot = allocSlot();
+      clearSlot(f.accSlot);
+      if (f.isRepeatNode) {
+        f.fedSlot = allocSlot();
+        copySlot(f.fedSlot, f.curSlot);
+      }
     }
     if (f.index < branches.length) {
       const br = branches[f.index];
       if (br === EMPTY_SEQ_NODE || (br.kind === 'seq' && br.items.length === 0)) {
-        orNfaStateInto(f.accState, f.curState);
+        orSlotInto(f.accSlot, f.curSlot);
         f.index += 1;
         continue;
       }
       if (br.kind === 'char' || br.kind === 'bracket') {
-        if (!f.scratchState) {
-          f.scratchState = allocState();
+        if (f.scratchSlot < 0) {
+          f.scratchSlot = allocSlot();
         }
-        stepNfaLeafInPlace(tries, f.curState, f.scratchState, br);
-        orNfaStateInto(f.accState, f.scratchState);
+        stepLeafSlot(f.curSlot, f.scratchSlot, br);
+        orSlotInto(f.accSlot, f.scratchSlot);
         f.index += 1;
         continue;
       }
-      const childIn = allocState();
-      copyNfaStateInto(childIn, f.curState);
-      pushNode(br, childIn);
+      if (br.kind === 'seq' && br.onlyLeafAtoms) {
+        if (f.scratchSlot < 0) {
+          f.scratchSlot = allocSlot();
+        }
+        const subItems = br.items;
+        if (subItems.length === 1) {
+          stepLeafSlot(f.curSlot, f.scratchSlot, subItems[0]);
+          orSlotInto(f.accSlot, f.scratchSlot);
+        } else {
+          if (f.scratchSlot2 < 0) {
+            f.scratchSlot2 = allocSlot();
+          }
+          stepLeafSlot(f.curSlot, f.scratchSlot, subItems[0]);
+          let sA = f.scratchSlot;
+          let sB = f.scratchSlot2;
+          for (let j = 1; j < subItems.length; j += 1) {
+            stepLeafSlot(sA, sB, subItems[j]);
+            const tmp = sA;
+            sA = sB;
+            sB = tmp;
+          }
+          orSlotInto(f.accSlot, sA);
+          stepBudget -= subItems.length - 1;
+          if (stepBudget <= 0) {
+            exhausted = true;
+            break;
+          }
+        }
+        f.index += 1;
+        continue;
+      }
+      dispatchChildNode(f, br);
       continue;
     }
 
     const op = f.kind === 'ext' ? f.node.op : null;
     if (op === '+' || op === '*') {
-      if (!f.prevPassAcc) {
-        f.prevPassAcc = allocState();
-        clearNfaState(f.prevPassAcc);
+      if (f.deltaSlot < 0) {
+        f.deltaSlot = allocSlot();
       }
-      const changed = !nfaStatesEqual(f.accState, f.prevPassAcc);
-      if (changed && f.repeatLeft > 0) {
+      const hasDelta = andNotSlotInto(f.accSlot, f.fedSlot, f.deltaSlot);
+      if (hasDelta) {
+        if (f.repeatLeft <= 0) {
+          exhausted = true;
+          break;
+        }
         f.repeatLeft -= 1;
-        copyNfaStateInto(f.prevPassAcc, f.accState);
-        copyNfaStateInto(f.curState, f.accState);
+        orSlotInto(f.fedSlot, f.deltaSlot);
+        copySlot(f.curSlot, f.deltaSlot);
         f.index = 0;
         continue;
       }
     }
 
     if (op === '?' || op === '*') {
-      orNfaStateInto(f.accState, f.baseState);
+      orSlotInto(f.accSlot, f.baseSlot);
     } else if (op === '!') {
-      orNfaStateInto(f.accState, f.baseState);
-      f.accState.stemFlags |= STEM_HAS_CHAR;
+      orSlotInto(f.accSlot, f.baseSlot);
+      slab[f.accSlot * stride + metaOff] |= STEM_HAS_CHAR << 8;
     }
 
-    popFrameWithResult(f, f.accState);
+    popFrameWithResult(f, f.accSlot);
   }
 
-  return pendingResult || initState;
+  return {
+    slab,
+    stride,
+    metaOff,
+    dOff,
+    eOff,
+    resultSlot: pendingResultSlot >= 0 ? pendingResultSlot : initSlot,
+    exhausted
+  };
 }
 
 function doesRootNonStarGlobMatchFile(value, globInfo) {
@@ -3381,17 +3820,22 @@ function doesRootNonStarGlobMatchFile(value, globInfo) {
     globInfo.parenClose,
     globInfo.parenIsExtGlob
   );
-  const finalState = evalRootGlobAstIterative(ast, tries, value.length);
-  if ((finalState.envMask & 64) !== 0) {
+  const evalResult = evalRootGlobAstIterative(ast, tries, value.length);
+  if (evalResult.exhausted) {
     return true;
   }
-  if (hasTrieAccept(tries.standalone, finalState.standalone)) {
+  const { slab, stride, metaOff, dOff, eOff, resultSlot } = evalResult;
+  const base = resultSlot * stride;
+  if ((slab[base + metaOff] & 64) !== 0) {
     return true;
   }
-  if (hasTrieAccept(tries.dotfile, finalState.dotfile)) {
+  if (hasTrieAcceptSlab(tries.standalone, slab, base)) {
     return true;
   }
-  if (hasTrieAccept(tries.ext, finalState.extTrie)) {
+  if (hasTrieAcceptSlab(tries.dotfile, slab, base + dOff)) {
+    return true;
+  }
+  if (hasTrieAcceptSlab(tries.ext, slab, base + eOff)) {
     return true;
   }
   return false;

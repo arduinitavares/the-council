@@ -19,9 +19,11 @@ export const VALID_SELF_CONTAINED_PHASES = Object.freeze([
 
 const VALID_PHASE_SET = new Set(VALID_SELF_CONTAINED_PHASES);
 const EFFORT_SET = new Set(ALLOWED_EFFORTS);
-const URL_REGEX = /https?:\/\/[^\s"'`<>()[\]]+/gi;
+const URL_REGEX = /\b(?:https?|file):\/\/[^\s"'`<>()[\]]+/gi;
 const GLOB_REGEX = /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?])/g;
 const FILE_REGEX = /(?:^|[\s"'`(\[,;])(\.?\.?\/?(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|py|go|rs|sh|css|html|sql|txt|lock))(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const CHECK_COMMAND_OR_REPO_REGEX = /(?:`[^`]+`|\b(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl)\b(?:\s+[-/\w.]|$)|\b(?:entire|whole|across(?:\s+the)?)\s+(?:repo|repository|codebase|workspace)\b|\b(?:repo(?:sitory)?|codebase)\s+(?:check|scan|audit|wide)\b|\brepo-wide\b|\brun\s+(?:tests?|command|script)\b)/i;
+const CHECK_EXTERNAL_SOURCE_REGEX = /\b(?:rfc\s*\d+|iso[\s/-]*\d+|ietf|w3c|owasp|cve-\d{4}-\d+|mdn|openapi|external(?:\s+\w+)?|upstream(?:\s+\w+)?|remote(?:\s+\w+)?|third[- ]party(?:\s+\w+)?|(?:rest|http|graphql|vendor)\s+api)\b|(?:[a-z0-9-]+\.(?:org|io|dev|net|com|edu|gov)\b)/i;
 
 const IGNORED_SINGLE_SEGMENT_JS_NOUNS = new Set([
   'node.js',
@@ -58,8 +60,8 @@ const STATIC_CAPABILITY_CATALOG = Object.freeze({
   antigravity: Object.freeze({
     'gemini-4-argon': Object.freeze(['low', 'medium', 'high']),
     'gemini-4-carbon': Object.freeze(['low', 'medium', 'high']),
-    'claude-sonnet-5-5': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']),
-    'claude-opus-5-5': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max'])
+    'claude-sonnet-5-5': Object.freeze(['low', 'medium', 'high']),
+    'claude-opus-5-5': Object.freeze(['low', 'medium', 'high'])
   }),
   cursor: Object.freeze({
     'grok-4.7': Object.freeze(['low', 'medium', 'high', 'xhigh']),
@@ -210,12 +212,23 @@ function formatEvidenceFailure(detail, missingDependencies = []) {
   return {
     ready: false,
     reasonCode: 'evidence_access_failure',
-    reason: `Tool-free recovery refused (insufficient self-contained evidence: ${detail}).`,
+    vetoReason: detail,
+    reason: `Tool-free recovery refused (insufficient self-contained evidence: ${detail})`,
     missingDependencies
   };
 }
 
-function checkPhasePrerequisites({ phase, round, topic, proofs, candidate, previousCandidate, openObjections }) {
+function checkPhasePrerequisites({
+  phase,
+  round,
+  removesTools,
+  topic,
+  proofs,
+  candidate,
+  previousCandidate,
+  openObjections,
+  admittedProofs
+}) {
   if (phase === 'DELIBERATION') {
     if (round > 1) {
       if (!previousCandidate || !Array.isArray(openObjections) || openObjections.length === 0) {
@@ -243,15 +256,51 @@ function checkPhasePrerequisites({ phase, round, topic, proofs, candidate, previ
         ['candidate']
       );
     }
+    if (removesTools && (!Array.isArray(admittedProofs) || admittedProofs.length === 0)) {
+      return formatEvidenceFailure(
+        'VOTING tool-removing recovery requires admittedProofs',
+        ['admittedProofs']
+      );
+    }
     return null;
   }
   return formatEvidenceFailure(`unsupported recovery phase "${String(phase)}"`, [String(phase)]);
 }
 
-function collectPhasePromptTexts({ phase, topic, proofs, candidate, previousCandidate, openObjections }) {
+function appendProofTexts(list, texts) {
+  if (!Array.isArray(list)) return;
+  for (const proof of list) {
+    if (proof?.scope) texts.push(String(proof.scope));
+    if (proof?.statement) texts.push(String(proof.statement));
+    if (proof?.source) texts.push(String(proof.source));
+  }
+}
+
+function collectPhasePromptTexts({
+  phase,
+  topic,
+  clarifications,
+  proofs,
+  candidate,
+  previousCandidate,
+  openObjections,
+  admittedProofs
+}) {
   const texts = [];
   if (typeof topic === 'string' && topic.trim()) {
     texts.push(topic);
+  }
+  if (phase === 'DELIBERATION' && Array.isArray(clarifications)) {
+    for (const c of clarifications) {
+      if (typeof c === 'string' && c.trim()) {
+        texts.push(c);
+      } else if (c && typeof c === 'object') {
+        if (c.question) texts.push(String(c.question));
+        if (c.answer) texts.push(String(c.answer));
+        if (c.source) texts.push(String(c.source));
+        if (c.text) texts.push(String(c.text));
+      }
+    }
   }
   if (phase === 'DELIBERATION' && previousCandidate && typeof previousCandidate === 'object') {
     if (typeof previousCandidate.summary === 'string') {
@@ -280,14 +329,60 @@ function collectPhasePromptTexts({ phase, topic, proofs, candidate, previousCand
       }
     }
   }
-  if (Array.isArray(proofs)) {
-    for (const proof of proofs) {
-      if (proof?.scope) texts.push(String(proof.scope));
-      if (proof?.statement) texts.push(String(proof.statement));
-      if (proof?.source) texts.push(String(proof.source));
-    }
+  appendProofTexts(proofs, texts);
+  if (phase === 'VOTING') {
+    appendProofTexts(admittedProofs, texts);
   }
   return texts;
+}
+
+function augmentProofDependencies(proofList, deps) {
+  if (!Array.isArray(proofList)) return;
+  for (const proof of proofList) {
+    if (!proof || typeof proof !== 'object') continue;
+    const rawSource = typeof proof.source === 'string' ? proof.source.trim() : '';
+    const rawStatement = typeof proof.statement === 'string' ? proof.statement.trim() : '';
+    const sourceDeps = rawSource ? extractVerificationDependencies([rawSource]) : null;
+    const sourceHasConcreteFile = Boolean(
+      sourceDeps &&
+      sourceDeps.workspaceFileDeps.length > 0 &&
+      sourceDeps.workspaceBroadDeps.length === 0 &&
+      sourceDeps.externalDeps.length === 0
+    );
+
+    if (proof.kind === 'benchmark') {
+      if (
+        rawSource &&
+        !sourceHasConcreteFile &&
+        !deps.externalDeps.includes(rawSource) &&
+        !deps.workspaceBroadDeps.includes(rawSource)
+      ) {
+        deps.externalDeps.push(rawSource);
+      }
+      continue;
+    }
+
+    if (proof.kind === 'check') {
+      const sourceIsCommandOrRepo = !sourceHasConcreteFile && rawSource && CHECK_COMMAND_OR_REPO_REGEX.test(rawSource);
+      const statementIsCommandOrRepo = rawStatement && CHECK_COMMAND_OR_REPO_REGEX.test(rawStatement);
+      if (sourceIsCommandOrRepo || statementIsCommandOrRepo) {
+        const label = sourceIsCommandOrRepo ? rawSource : rawStatement.slice(0, 80);
+        if (label && !deps.workspaceBroadDeps.includes(label)) {
+          deps.workspaceBroadDeps.push(label);
+        }
+      }
+      if (
+        rawSource &&
+        !sourceHasConcreteFile &&
+        !sourceIsCommandOrRepo &&
+        !deps.externalDeps.includes(rawSource) &&
+        !deps.workspaceBroadDeps.includes(rawSource) &&
+        CHECK_EXTERNAL_SOURCE_REGEX.test(rawSource)
+      ) {
+        deps.externalDeps.push(rawSource);
+      }
+    }
+  }
 }
 
 function isValidEvidenceItem(item) {
@@ -362,11 +457,13 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     round = 1,
     errorClass = 'TimeoutError',
     topic = '',
+    clarifications = [],
     evidence = [],
     proofs = [],
     candidate = null,
     previousCandidate = null,
     openObjections = [],
+    admittedProofs = [],
     selfContainedInput = null,
     originalInvocationMeta = {}
   } = params;
@@ -386,11 +483,13 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     const prereqError = checkPhasePrerequisites({
       phase,
       round,
+      removesTools: false,
       topic,
       proofs,
       candidate,
       previousCandidate,
-      openObjections
+      openObjections,
+      admittedProofs
     });
     if (prereqError) {
       return prereqError;
@@ -402,11 +501,13 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
   const prereqError = checkPhasePrerequisites({
     phase,
     round,
+    removesTools: true,
     topic,
     proofs,
     candidate,
     previousCandidate,
-    openObjections
+    openObjections,
+    admittedProofs
   });
   if (prereqError) {
     return prereqError;
@@ -436,27 +537,20 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
   const texts = collectPhasePromptTexts({
     phase,
     topic,
+    clarifications,
     proofs,
     candidate,
     previousCandidate,
-    openObjections
+    openObjections,
+    admittedProofs
   });
   const deps = extractVerificationDependencies(texts);
 
-  // Spec §7 item 2: external `kind: 'benchmark'` sources in proofs must also be treated as
-  // external dependencies unless already listed as workspace/URL deps.
-  if (Array.isArray(proofs)) {
-    for (const proof of proofs) {
-      if (proof?.kind === 'benchmark' && typeof proof.source === 'string' && proof.source.trim()) {
-        const rawSource = proof.source.trim();
-        const norm = normalizeWorkspacePath(rawSource);
-        const alreadyFile = deps.workspaceFileDeps.some((f) => f.source === norm);
-        const alreadyExternal = deps.externalDeps.includes(rawSource);
-        if (!alreadyFile && !alreadyExternal) {
-          deps.externalDeps.push(rawSource);
-        }
-      }
-    }
+  // Spec §1 & §7 item 2: external `kind: 'benchmark'` sources and `kind: 'check'`
+  // command/repo/external claims in proofs & admittedProofs veto unattested recovery.
+  augmentProofDependencies(proofs, deps);
+  if (phase === 'VOTING') {
+    augmentProofDependencies(admittedProofs, deps);
   }
 
   // Spec §1 line 119: When `effectiveCwd` is attached in Round 1 DELIBERATION and
@@ -649,6 +743,97 @@ function formatEffectiveModelForHarness({
   return `${originalTrimmed} (${targetEffort})`;
 }
 
+function hasVerifiedCapabilityDescriptor(
+  verifiedCapabilities,
+  { harness, canonicalBase, targetEffort }
+) {
+  if (!verifiedCapabilities) {
+    return false;
+  }
+  const candidateHyphen = targetEffort ? `${canonicalBase}-${targetEffort}`.toLowerCase() : canonicalBase.toLowerCase();
+  const candidateParen = targetEffort ? `${canonicalBase} (${targetEffort})`.toLowerCase() : canonicalBase.toLowerCase();
+
+  if (Array.isArray(verifiedCapabilities) || verifiedCapabilities instanceof Set) {
+    for (const entry of verifiedCapabilities) {
+      const normalized = String(entry || '').trim().toLowerCase();
+      if (normalized === candidateHyphen || normalized === candidateParen) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (typeof verifiedCapabilities !== 'object') {
+    return false;
+  }
+
+  if (harness && verifiedCapabilities[harness] && typeof verifiedCapabilities[harness] === 'object') {
+    if (
+      hasVerifiedCapabilityDescriptor(verifiedCapabilities[harness], {
+        harness: '',
+        canonicalBase,
+        targetEffort
+      })
+    ) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(verifiedCapabilities.selectors) || verifiedCapabilities.selectors instanceof Set) {
+    for (const sel of verifiedCapabilities.selectors) {
+      const normalized = String(sel || '').trim().toLowerCase();
+      if (normalized === candidateHyphen || normalized === candidateParen) {
+        return true;
+      }
+    }
+  }
+
+  const modelsDesc = verifiedCapabilities.models;
+  if (Array.isArray(modelsDesc) || modelsDesc instanceof Set) {
+    for (const entry of modelsDesc) {
+      const normalized = String(entry || '').trim().toLowerCase();
+      if (normalized === candidateHyphen || normalized === candidateParen || normalized === canonicalBase.toLowerCase()) {
+        return true;
+      }
+    }
+  } else if (modelsDesc && typeof modelsDesc === 'object') {
+    const entry = modelsDesc[canonicalBase] ?? modelsDesc[canonicalBase.toLowerCase()];
+    if (entry === true) {
+      return true;
+    }
+    const efforts = Array.isArray(entry) ? entry : (Array.isArray(entry?.efforts) ? entry.efforts : null);
+    if (efforts && (!targetEffort || efforts.includes(targetEffort))) {
+      return true;
+    }
+  }
+
+  if (verifiedCapabilities[candidateHyphen] === true || verifiedCapabilities[candidateParen] === true) {
+    return true;
+  }
+
+  return false;
+}
+
+function buildUnsupportedResolution({
+  requestedModel = null,
+  requestedEffort = null,
+  retryEffortFallback = false,
+  errorCode = 'UNSUPPORTED_MODEL_EFFORT',
+  error
+}) {
+  return {
+    supported: false,
+    requestedModel,
+    requestedEffort,
+    effectiveModel: null,
+    effectiveEffort: null,
+    fallbackApplied: false,
+    provenance: retryEffortFallback ? 'unverified' : null,
+    errorCode,
+    error
+  };
+}
+
 /**
  * Resolve retry model and reasoning effort across harness static policies and
  * optional live CLI model catalogs, enforcing `CONFLICTING_MODEL_EFFORT` (when
@@ -663,7 +848,7 @@ function formatEffectiveModelForHarness({
  *   effectiveModel: string|null,
  *   effectiveEffort: string|null,
  *   fallbackApplied: boolean,
- *   provenance: 'live_cli_catalog'|'adapter_static_policy'|null,
+ *   provenance: 'live_cli_catalog'|'adapter_static_policy'|'unverified'|null,
  *   errorCode: string|null,
  *   error: string|null
  * }}
@@ -677,39 +862,27 @@ export function resolveRetryModelAndEffort(params = {}) {
     hasExplicitReasoningEffort = false,
     defaultEffort = 'high',
     retryEffortFallback = false,
-    capabilityCatalog = null
+    capabilityCatalog = null,
+    verifiedCapabilities = null
   } = params;
 
   const normalizedHarness = String(harness || '').trim().toLowerCase();
   const originalTrimmed = typeof model === 'string' ? model.trim() : '';
 
   if (!originalTrimmed) {
-    return {
-      supported: false,
-      requestedModel: null,
-      requestedEffort: null,
-      effectiveModel: null,
-      effectiveEffort: null,
-      fallbackApplied: false,
-      provenance: null,
-      errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+    return buildUnsupportedResolution({
+      retryEffortFallback,
       error: 'UNSUPPORTED_MODEL_EFFORT: Model identifier must be a non-empty string.'
-    };
+    });
   }
 
   const inline = detectInlineEffort(originalTrimmed);
   if (inline.invalidEffort !== null) {
-    return {
-      supported: false,
+    return buildUnsupportedResolution({
       requestedModel: originalTrimmed,
-      requestedEffort: null,
-      effectiveModel: null,
-      effectiveEffort: null,
-      fallbackApplied: false,
-      provenance: null,
-      errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+      retryEffortFallback,
       error: `UNSUPPORTED_MODEL_EFFORT: Unsupported inline reasoning effort "${inline.invalidEffort}" on model "${originalTrimmed}".`
-    };
+    });
   }
 
   const rawConfiguredEffort =
@@ -718,17 +891,11 @@ export function resolveRetryModelAndEffort(params = {}) {
   if (rawConfiguredEffort !== undefined && rawConfiguredEffort !== null && String(rawConfiguredEffort).trim() !== '') {
     normalizedConfiguredEffort = String(rawConfiguredEffort).trim().toLowerCase();
     if (!EFFORT_SET.has(normalizedConfiguredEffort)) {
-      return {
-        supported: false,
+      return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
-        requestedEffort: null,
-        effectiveModel: null,
-        effectiveEffort: null,
-        fallbackApplied: false,
-        provenance: null,
-        errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+        retryEffortFallback,
         error: `UNSUPPORTED_MODEL_EFFORT: Unsupported reasoningEffort "${rawConfiguredEffort}".`
-      };
+      });
     }
   }
 
@@ -742,17 +909,13 @@ export function resolveRetryModelAndEffort(params = {}) {
     normalizedConfiguredEffort &&
     inline.rawInlineEffort !== normalizedConfiguredEffort
   ) {
-    return {
-      supported: false,
+    return buildUnsupportedResolution({
       requestedModel: originalTrimmed,
       requestedEffort: inline.rawInlineEffort,
-      effectiveModel: null,
-      effectiveEffort: null,
-      fallbackApplied: false,
-      provenance: null,
+      retryEffortFallback,
       errorCode: 'CONFLICTING_MODEL_EFFORT',
       error: `CONFLICTING_MODEL_EFFORT: Model "${originalTrimmed}" declares inline effort "${inline.rawInlineEffort}" which conflicts with explicit reasoningEffort "${normalizedConfiguredEffort}".`
-    };
+    });
   }
 
   const normalizedDefault =
@@ -765,43 +928,25 @@ export function resolveRetryModelAndEffort(params = {}) {
   // Cursor / Composer special case: `composer-2.5` has NO effort levels (requested/effective = null).
   if (canonicalBase === 'composer-2.5') {
     if (normalizedHarness && normalizedHarness !== 'cursor' && normalizedHarness !== 'mock') {
-      return {
-        supported: false,
+      return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
-        requestedEffort: null,
-        effectiveModel: null,
-        effectiveEffort: null,
-        fallbackApplied: false,
-        provenance: null,
-        errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+        retryEffortFallback,
         error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" is not supported on harness "${normalizedHarness}".`
-      };
+      });
     }
     if (inline.hasInlineEffort || originalTrimmed.toLowerCase() !== 'composer-2.5') {
-      return {
-        supported: false,
+      return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
-        requestedEffort: null,
-        effectiveModel: null,
-        effectiveEffort: null,
-        fallbackApplied: false,
-        provenance: null,
-        errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+        retryEffortFallback,
         error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" does not accept inline reasoning effort ("${originalTrimmed}").`
-      };
+      });
     }
     if (retryEffortFallback === true && isExplicitSeatEffort && normalizedConfiguredEffort) {
-      return {
-        supported: false,
+      return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
-        requestedEffort: null,
-        effectiveModel: null,
-        effectiveEffort: null,
-        fallbackApplied: false,
-        provenance: null,
-        errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+        retryEffortFallback,
         error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" does not support explicit reasoningEffort "${normalizedConfiguredEffort}".`
-      };
+      });
     }
     return {
       supported: true,
@@ -851,18 +996,27 @@ export function resolveRetryModelAndEffort(params = {}) {
     if (matchedLive) {
       provenance = 'live_cli_catalog';
     } else if (normalizedHarness === 'antigravity') {
-      return {
-        supported: false,
+      return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
         requestedEffort,
-        effectiveModel: null,
-        effectiveEffort: null,
-        fallbackApplied: false,
-        provenance: null,
-        errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+        retryEffortFallback,
         error: `UNSUPPORTED_MODEL_EFFORT: Target fallback selector "${candidateHyphen}" for model "${originalTrimmed}" was not found in live CLI catalog.`
-      };
+      });
     }
+  }
+
+  if (
+    !provenance &&
+    hasVerifiedCapabilityDescriptor(verifiedCapabilities, {
+      harness: normalizedHarness,
+      canonicalBase,
+      targetEffort
+    })
+  ) {
+    provenance =
+      verifiedCapabilities?.source === 'live_cli_catalog'
+        ? 'live_cli_catalog'
+        : 'adapter_static_policy';
   }
 
   if (!provenance) {
@@ -872,43 +1026,28 @@ export function resolveRetryModelAndEffort(params = {}) {
       const harnessCatalog = STATIC_CAPABILITY_CATALOG[normalizedHarness];
       const allowedEfforts = harnessCatalog?.[canonicalBase];
       if (!Array.isArray(allowedEfforts)) {
-        return {
-          supported: false,
+        return buildUnsupportedResolution({
           requestedModel: originalTrimmed,
           requestedEffort,
-          effectiveModel: null,
-          effectiveEffort: null,
-          fallbackApplied: false,
-          provenance: null,
-          errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+          retryEffortFallback,
           error: `UNSUPPORTED_MODEL_EFFORT: Model "${originalTrimmed}" on harness "${normalizedHarness || 'unknown'}" has no verified effort capability without a live CLI catalog.`
-        };
+        });
       }
       if (!allowedEfforts.includes(targetEffort)) {
-        return {
-          supported: false,
+        return buildUnsupportedResolution({
           requestedModel: originalTrimmed,
           requestedEffort,
-          effectiveModel: null,
-          effectiveEffort: null,
-          fallbackApplied: false,
-          provenance: null,
-          errorCode: 'UNSUPPORTED_MODEL_EFFORT',
+          retryEffortFallback,
           error: `UNSUPPORTED_MODEL_EFFORT: Target effort "${targetEffort}" is not supported for "${canonicalBase}" on harness "${normalizedHarness}".`
-        };
+        });
       }
-      if (normalizedHarness === 'cursor' && !allowedEfforts.includes(requestedEffort)) {
-        return {
-          supported: false,
+      if ((normalizedHarness === 'cursor' || normalizedHarness === 'antigravity') && !allowedEfforts.includes(requestedEffort)) {
+        return buildUnsupportedResolution({
           requestedModel: originalTrimmed,
           requestedEffort,
-          effectiveModel: null,
-          effectiveEffort: null,
-          fallbackApplied: false,
-          provenance: null,
-          errorCode: 'UNSUPPORTED_MODEL_EFFORT',
-          error: `UNSUPPORTED_MODEL_EFFORT: Effort "${requestedEffort}" is not supported for "${canonicalBase}" on Cursor.`
-        };
+          retryEffortFallback,
+          error: `UNSUPPORTED_MODEL_EFFORT: Effort "${requestedEffort}" is not supported for "${canonicalBase}" on harness "${normalizedHarness}".`
+        });
       }
       provenance = 'adapter_static_policy';
     }
@@ -945,7 +1084,12 @@ export function resolveRetryModelAndEffort(params = {}) {
  * @param {Record<string, object|string[]>} [params.catalogByHarness]
  * @returns {{ valid: boolean, errors: string[], results: Record<string, object> }}
  */
-export function validateRetryFallbackCapability({ config = {}, catalogByHarness = {} } = {}) {
+export function validateRetryFallbackCapability({
+  config = {},
+  catalogByHarness = {},
+  verifiedCapabilitiesByHarness = {},
+  verifiedCapabilities = null
+} = {}) {
   const errors = [];
   const results = {};
 
@@ -990,7 +1134,13 @@ export function validateRetryFallbackCapability({ config = {}, catalogByHarness 
       explicitReasoningEffort,
       hasExplicitReasoningEffort,
       retryEffortFallback: true,
-      capabilityCatalog: catalogByHarness?.[harnessKey] ?? catalogByHarness?.[p.harness] ?? null
+      capabilityCatalog: catalogByHarness?.[harnessKey] ?? catalogByHarness?.[p.harness] ?? null,
+      verifiedCapabilities:
+        p.verifiedCapabilities ??
+        verifiedCapabilitiesByHarness?.[harnessKey] ??
+        verifiedCapabilitiesByHarness?.[p.harness] ??
+        verifiedCapabilities ??
+        null
     });
 
     results[entry.id] = resolution;
@@ -1035,11 +1185,13 @@ export function planParticipantRecovery(params = {}) {
     phase = 'DELIBERATION',
     round = 1,
     topic = '',
+    clarifications = [],
     evidence = [],
     proofs = [],
     candidate = null,
     previousCandidate = null,
     openObjections = [],
+    admittedProofs = [],
     selfContainedInput = null,
     originalInvocationMeta = {},
     harness,
@@ -1047,7 +1199,8 @@ export function planParticipantRecovery(params = {}) {
     reasoningEffort,
     hasExplicitReasoningEffort = false,
     retryEffortFallback = false,
-    capabilityCatalog = null
+    capabilityCatalog = null,
+    verifiedCapabilities = null
   } = params;
 
   const resolvedErrorClass =
@@ -1055,6 +1208,10 @@ export function planParticipantRecovery(params = {}) {
     (error?.code === 'HEADLESS_TOOL_DENIED' || error?.name === 'HeadlessToolDeniedError'
       ? 'HeadlessToolDeniedError'
       : error?.name || 'Error');
+  const primaryFaultReason =
+    typeof error?.message === 'string' && error.message.trim()
+      ? error.message.trim()
+      : resolvedErrorClass;
 
   // Step 1: non-retryable
   if (!isRetryable) {
@@ -1116,11 +1273,13 @@ export function planParticipantRecovery(params = {}) {
       round,
       errorClass: resolvedErrorClass,
       topic,
+      clarifications,
       evidence,
       proofs,
       candidate,
       previousCandidate,
       openObjections,
+      admittedProofs,
       selfContainedInput,
       originalInvocationMeta: {
         ...originalInvocationMeta,
@@ -1128,10 +1287,11 @@ export function planParticipantRecovery(params = {}) {
       }
     });
     if (!readiness.ready) {
+      const vetoDetail = readiness.vetoReason || readiness.reason;
       return {
         canRetry: false,
         terminationKind: 'evidence_access_failure',
-        reason: readiness.reason,
+        reason: `Tool-free recovery refused (insufficient self-contained evidence: ${vetoDetail}): ${primaryFaultReason}`,
         missingDependencies: readiness.missingDependencies,
         errorCode: null,
         setsToolFreeRecoveryUsed: false,
@@ -1157,7 +1317,8 @@ export function planParticipantRecovery(params = {}) {
       explicitReasoningEffort: reasoningEffort,
       hasExplicitReasoningEffort,
       retryEffortFallback: shouldApplyEffortFallback,
-      capabilityCatalog
+      capabilityCatalog,
+      verifiedCapabilities
     });
 
     if (shouldApplyEffortFallback && !modelResolution.supported) {

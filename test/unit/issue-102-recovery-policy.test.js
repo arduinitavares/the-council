@@ -36,6 +36,18 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         { source: 'foo.ts', startLine: 10, endLine: 20 }
       ]);
     });
+
+    it('extracts file:// URLs alongside http/https URLs without treating URL subpaths as workspace files', () => {
+      const deps = extractVerificationDependencies([
+        'Compare file:///opt/specs/policy.md and https://example.org/spec.'
+      ]);
+      assert.deepEqual(deps.externalDeps, [
+        'file:///opt/specs/policy.md',
+        'https://example.org/spec'
+      ]);
+      assert.deepEqual(deps.workspaceFileDeps, []);
+      assert.deepEqual(deps.workspaceBroadDeps, []);
+    });
   });
 
   describe('evaluateToolFreeEvidenceReadiness', () => {
@@ -271,6 +283,82 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         false
       );
     });
+
+    it('scans clarifications in Delib R1, enforces admittedProofs on tool-removing VOTING, and handles kind: check claims', () => {
+      // Clarifications file dependency rejects conceptualNoExternalVerification in Delib R1
+      const clarifFileBlocked = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Conceptual architecture question',
+        clarifications: [{ batch: 1, answer: 'Focus specifically on src/auth.js:10-20' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(clarifFileBlocked.ready, false);
+
+      // VOTING with removesTools: true refuses missing/empty admittedProofs
+      const votingMissingAdmitted = evaluateToolFreeEvidenceReadiness({
+        phase: 'VOTING',
+        round: 1,
+        errorClass: 'TimeoutError',
+        candidate: { round: 1, summary: 'Sum', clauses: [] },
+        admittedProofs: [],
+        selfContainedInput: {
+          phases: ['VOTING'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(votingMissingAdmitted.ready, false);
+
+      // VOTING with admittedProofs having kind: 'check' command/repo claim refuses tool-free recovery
+      const votingCmdCheck = evaluateToolFreeEvidenceReadiness({
+        phase: 'VOTING',
+        round: 1,
+        errorClass: 'TimeoutError',
+        candidate: { round: 1, summary: 'Sum', clauses: [] },
+        admittedProofs: [{ id: 'P1', kind: 'check', source: 'npm test', statement: 'Ran full test suite' }],
+        selfContainedInput: {
+          phases: ['VOTING'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(votingCmdCheck.ready, false);
+
+      // JUDGE_AUDIT_SYNTHESIS with kind: 'check' external source rejects conceptualNoExternalVerification
+      const checkExternal = evaluateToolFreeEvidenceReadiness({
+        phase: 'JUDGE_AUDIT_SYNTHESIS',
+        round: 1,
+        errorClass: 'TimeoutError',
+        proofs: [{ id: 'P1', kind: 'check', source: 'RFC 9110 Section 15', statement: 'HTTP status verification' }],
+        selfContainedInput: {
+          phases: ['JUDGE_AUDIT_SYNTHESIS'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(checkExternal.ready, false);
+
+      // VOTING with valid admittedProofs conceptual check & effectiveTools: 'read-only' succeeds
+      const votingConceptualOk = evaluateToolFreeEvidenceReadiness({
+        phase: 'VOTING',
+        round: 1,
+        errorClass: 'TimeoutError',
+        candidate: { round: 1, summary: 'Sum', clauses: [] },
+        admittedProofs: [{ id: 'P1', kind: 'check', source: 'Deterministic mock check', statement: 'Logical invariant holds' }],
+        selfContainedInput: {
+          phases: ['VOTING'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(votingConceptualOk.ready, true);
+    });
   });
 
   describe('planParticipantRecovery precedence & single tool-free limit', () => {
@@ -366,7 +454,10 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       });
       assert.equal(deniedUnattested.canRetry, false);
       assert.equal(deniedUnattested.terminationKind, 'evidence_access_failure');
-      assert.match(deniedUnattested.reason, /^Tool-free recovery refused \(insufficient self-contained evidence:/);
+      assert.match(
+        deniedUnattested.reason,
+        /^Tool-free recovery refused \(insufficient self-contained evidence: [^)]+\): Bash denied in headless mode$/
+      );
 
       // Denied WITH complete_artifact coverage -> approved tool-free retry + setsToolFreeRecoveryUsed
       const deniedAttested = planParticipantRecovery({
@@ -561,7 +652,77 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       assert.equal(capCodexMedium.fallbackApplied, true);
       assert.equal(capCodexMedium.provenance, 'adapter_static_policy');
 
-      // Unverified date-stamped claude-opus-5-5-20260501 fails UNSUPPORTED_MODEL_EFFORT without catalog
+      // Unverified date-stamped claude-opus-5-5-20260501 fails UNSUPPORTED_MODEL_EFFORT with provenance: 'unverified'
+      const unverifiedDirect = resolveRetryModelAndEffort({
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-20260501',
+        retryEffortFallback: true
+      });
+      assert.equal(unverifiedDirect.supported, false);
+      assert.equal(unverifiedDirect.errorCode, 'UNSUPPORTED_MODEL_EFFORT');
+      assert.equal(unverifiedDirect.provenance, 'unverified');
+
+      // Live catalog miss also reports provenance: 'unverified'
+      const liveMiss = resolveRetryModelAndEffort({
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-20260501-high',
+        retryEffortFallback: true,
+        capabilityCatalog: { selectors: ['gemini-4-argon-medium'], source: 'live_cli_catalog' }
+      });
+      assert.equal(liveMiss.supported, false);
+      assert.equal(liveMiss.provenance, 'unverified');
+
+      // Static Antigravity policy restricts claude-opus-5-5 / claude-sonnet-5-5 to low/medium/high (rejects xhigh/max)
+      for (const disallowed of ['claude-opus-5-5-xhigh', 'claude-sonnet-5-5-max']) {
+        const resDisallowed = resolveRetryModelAndEffort({
+          harness: 'antigravity',
+          model: disallowed,
+          retryEffortFallback: true
+        });
+        assert.equal(resDisallowed.supported, false);
+        assert.equal(resDisallowed.errorCode, 'UNSUPPORTED_MODEL_EFFORT');
+        assert.equal(resDisallowed.provenance, 'unverified');
+      }
+
+      // verifiedCapabilities descriptor permits date-stamped selector cleanly across validateRetryFallbackCapability and planParticipantRecovery
+      const verifiedDated = validateRetryFallbackCapability({
+        config: {
+          seats: [
+            {
+              id: 's1',
+              harness: 'antigravity',
+              model: 'claude-opus-5-5-20260501',
+              verifiedCapabilities: { selectors: ['claude-opus-5-5-20260501-medium'] }
+            }
+          ]
+        }
+      });
+      assert.equal(verifiedDated.valid, true);
+
+      const plannedWithVerified = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: new Error('Timed out'),
+        errorClass: 'TimeoutError',
+        isRetryable: true,
+        retries: 0,
+        maxRetries: 1,
+        remainingBudget: 50000,
+        minViable: 5000,
+        toolFreeRecoveryUsed: false,
+        originalAttemptTools: 'none',
+        phase: 'DELIBERATION',
+        round: 1,
+        topic: 'Conceptual question',
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-20260501',
+        retryEffortFallback: true,
+        verifiedCapabilities: { selectors: ['claude-opus-5-5-20260501-medium'] }
+      });
+      assert.equal(plannedWithVerified.canRetry, true);
+      assert.equal(plannedWithVerified.nextModel, 'claude-opus-5-5-20260501-medium');
+      assert.equal(plannedWithVerified.retryDiagnostics.capabilityProvenance, 'adapter_static_policy');
+
       const unverifiedDated = validateRetryFallbackCapability({
         config: {
           seats: [{ id: 's1', harness: 'antigravity', model: 'claude-opus-5-5-20260501' }]

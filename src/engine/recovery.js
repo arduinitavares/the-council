@@ -701,6 +701,12 @@ const PROSE_POST_COMPARISON_WORDS = new Set([
   'until', 'before', 'after', 'for', 'in', 'with', 'because', 'since'
 ]);
 
+const COMPARISON_UNIT_WORDS = new Set([
+  'ms', 's', 'sec', 'secs', 'us', 'ns', 'm', 'min', 'mins', 'h', 'hr', 'hrs', 'd',
+  'b', 'kb', 'mb', 'gb', 'tb', 'kib', 'mib', 'gib', 'hz', 'khz', 'mhz', 'ghz',
+  'fps', 'rps', 'qps', 'tps'
+]);
+
 function isShellStarterVerbLower(lower) {
   return (
     SHELL_SPLIT_QUOTE_VERBS.has(lower) ||
@@ -778,7 +784,7 @@ function isProseNumericOrVersionComparison(
   text,
   nextPos,
   segHardStarterCount,
-  clauseHasPriorComparison
+  hasPriorComparisonContext
 ) {
   if (fdLen !== 0 || isMultiCharRedir || targetLastEscaped || /["'\\]/.test(targetRaw)) {
     return false;
@@ -827,7 +833,7 @@ function isProseNumericOrVersionComparison(
     ) {
       return false;
     }
-    let hasAffirmativeProseContext = clauseHasPriorComparison;
+    let hasAffirmativeProseContext = hasPriorComparisonContext;
     if (!hasAffirmativeProseContext && targetRaw.endsWith(',') && afterTargetPos < n) {
       hasAffirmativeProseContext = !isLikelyShellTokenAt(text, afterTargetPos, n);
     }
@@ -886,21 +892,57 @@ function parseShellClausesLinear(text) {
   let segHardStarterCount = 0;
   let pendingQuotedVerbIdx = -1;
   let pendingUnquotedVerbIdx = -1;
-  let clauseHasPriorComparison = false;
+  let awaitingComparisonRhs = false;
+  let awaitingVersionRhs = false;
+  let rhsCompletedComparison = false;
+  let rhsCompletedVersionComparison = false;
+  let afterComparisonConj = false;
+  let tokenFollowsComparisonConj = false;
+  let commaAfterAnyComparisonRhs = false;
+  let commaAfterVersionRhs = false;
+  let commaConjReady = false;
   const resetSegmentState = () => {
     segTokenCount = 0;
     segHardStarterCount = 0;
     pendingQuotedVerbIdx = -1;
     pendingUnquotedVerbIdx = -1;
+    awaitingComparisonRhs = false;
+    awaitingVersionRhs = false;
+    rhsCompletedComparison = false;
+    rhsCompletedVersionComparison = false;
+    afterComparisonConj = false;
+    tokenFollowsComparisonConj = false;
+  };
+  const clearCommaComparisonState = () => {
+    commaAfterAnyComparisonRhs = false;
+    commaAfterVersionRhs = false;
+    commaConjReady = false;
   };
   const markSegmentRedir = (targetEndsSentence) => {
+    clearCommaComparisonState();
     if (targetEndsSentence) {
       resetSegmentState();
-    } else if (current.tokens.length > 0 && !current.tokens[current.tokens.length - 1].hasUnquotedTrailingPunct) {
-      segHardStarterCount += 1;
-      pendingQuotedVerbIdx = -1;
-      pendingUnquotedVerbIdx = -1;
+    } else {
+      awaitingComparisonRhs = false;
+      awaitingVersionRhs = false;
+      rhsCompletedComparison = false;
+      rhsCompletedVersionComparison = false;
+      afterComparisonConj = false;
+      tokenFollowsComparisonConj = false;
+      if (current.tokens.length > 0 && !current.tokens[current.tokens.length - 1].hasUnquotedTrailingPunct) {
+        segHardStarterCount += 1;
+        pendingQuotedVerbIdx = -1;
+        pendingUnquotedVerbIdx = -1;
+      }
     }
+  };
+  const noteSkippedComparison = (lhsTok) => {
+    awaitingComparisonRhs = true;
+    awaitingVersionRhs = Boolean(lhsTok && VERSIONED_RUNTIME_NOUNS.has(lhsTok.trimmedClean.toLowerCase()));
+    rhsCompletedComparison = false;
+    rhsCompletedVersionComparison = false;
+    afterComparisonConj = false;
+    tokenFollowsComparisonConj = false;
   };
   const getLastCloseTagPos = (tagLower) => {
     if (lastCloseTagPosMap === undefined) {
@@ -943,7 +985,7 @@ function parseShellClausesLinear(text) {
     pendingSkippedAngleTag = false;
     skippedOpenTags = null;
     resetSegmentState();
-    clauseHasPriorComparison = false;
+    clearCommaComparisonState();
   };
 
   while (i < n) {
@@ -1088,26 +1130,33 @@ function parseShellClausesLinear(text) {
       const opChar = text[opPos];
       if (fdLen === 0) {
         if (opPos + 1 < n && text[opPos + 1] === '=') {
-          if (current.tokens.length > 0) {
-            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          const lhsTok = current.tokens.length > 0 ? current.tokens[current.tokens.length - 1] : null;
+          if (lhsTok) {
+            lhsTok.hadSkippedComparison = true;
           }
-          clauseHasPriorComparison = true;
+          noteSkippedComparison(lhsTok);
           i = opPos + (opPos + 2 < n && text[opPos + 2] === '>' ? 3 : 2);
           continue;
         }
         if (opChar === '>' && opPos > 0 && (text[opPos - 1] === '=' || text[opPos - 1] === '-')) {
-          if (current.tokens.length > 0) {
-            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          let lhsTok = current.tokens.length > 0 ? current.tokens[current.tokens.length - 1] : null;
+          if (lhsTok) {
+            lhsTok.hadSkippedComparison = true;
+            if ((lhsTok.raw === '-' || lhsTok.raw === '=') && !lhsTok.wasQuoted && current.tokens.length >= 2) {
+              lhsTok = current.tokens[current.tokens.length - 2];
+              lhsTok.hadSkippedComparison = true;
+            }
           }
-          clauseHasPriorComparison = true;
+          noteSkippedComparison(lhsTok);
           i = opPos + 1;
           continue;
         }
         if (opChar === '<' && opPos + 1 < n && text[opPos + 1] === '-') {
-          if (current.tokens.length > 0) {
-            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          const lhsTok = current.tokens.length > 0 ? current.tokens[current.tokens.length - 1] : null;
+          if (lhsTok) {
+            lhsTok.hadSkippedComparison = true;
           }
-          clauseHasPriorComparison = true;
+          noteSkippedComparison(lhsTok);
           i = opPos + 2;
           continue;
         }
@@ -1366,6 +1415,10 @@ function parseShellClausesLinear(text) {
       }
       const targetLastEscaped = hasOddPrecedingBackslashes(targetRaw, targetRaw.length - 1);
       const targetClean = targetLastEscaped ? targetRaw : stripTrailingProsePunct(targetRaw);
+      const hasPriorComparisonContext =
+        tokenFollowsComparisonConj ||
+        (commaAfterVersionRhs && segTokenCount === 1) ||
+        (commaConjReady && segTokenCount === 2);
       if (
         isProseNumericOrVersionComparison(
           current.tokens,
@@ -1377,11 +1430,12 @@ function parseShellClausesLinear(text) {
           text,
           nextPos,
           segHardStarterCount,
-          clauseHasPriorComparison
+          hasPriorComparisonContext
         )
       ) {
-        current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
-        clauseHasPriorComparison = true;
+        const lhsTok = current.tokens[current.tokens.length - 1];
+        lhsTok.hadSkippedComparison = true;
+        noteSkippedComparison(lhsTok);
         i = opPos + 1;
         continue;
       }
@@ -1540,6 +1594,7 @@ function parseShellClausesLinear(text) {
       followedByRedir: false
     };
     const tokIdx = current.tokens.length;
+    const isArrowPrefixToken = !wasQuoted && (raw === '-' || raw === '=') && i < n && text[i] === '>';
     if (pendingQuotedVerbIdx !== -1) {
       if (!tokObj.wasQuoted && PROSE_LIST_FOLLOWERS.has(tokObj.trimmedClean.toLowerCase())) {
         pendingQuotedVerbIdx = -1;
@@ -1548,17 +1603,84 @@ function parseShellClausesLinear(text) {
         pendingQuotedVerbIdx = -1;
       }
     }
-    if (pendingUnquotedVerbIdx !== -1) {
+    if (pendingUnquotedVerbIdx !== -1 && !isArrowPrefixToken) {
       if (!current.tokens[pendingUnquotedVerbIdx].hadSkippedComparison) {
         segHardStarterCount += 1;
       }
       pendingUnquotedVerbIdx = -1;
     }
     current.tokens.push(tokObj);
+    const wasAwaitingComparisonRhs = awaitingComparisonRhs;
+    const wasAwaitingVersionRhs = awaitingVersionRhs;
+    const prevRhsCompleted = rhsCompletedComparison;
+    const prevRhsVersionCompleted = rhsCompletedVersionComparison;
+    awaitingComparisonRhs = false;
+    awaitingVersionRhs = false;
     if (tokObj.hasUnquotedTrailingPunct) {
+      const strippedPunct = unprotectedTail.slice(unprotectedTailClean.length);
+      const unitAfterRhs =
+        prevRhsCompleted &&
+        !tokObj.wasQuoted &&
+        (unprotectedTailClean === '' || COMPARISON_UNIT_WORDS.has(unprotectedTailClean.toLowerCase()));
       resetSegmentState();
-    } else {
+      if (strippedPunct === ',' && (wasAwaitingComparisonRhs || unitAfterRhs)) {
+        commaAfterAnyComparisonRhs = true;
+        commaAfterVersionRhs = wasAwaitingVersionRhs || (unitAfterRhs && prevRhsVersionCompleted);
+        commaConjReady = false;
+      } else {
+        clearCommaComparisonState();
+      }
+    } else if (!isArrowPrefixToken) {
       const tokLower = stripShellBinPrefix(tokObj.trimmedClean).toLowerCase();
+      if (wasAwaitingComparisonRhs) {
+        rhsCompletedComparison = true;
+        rhsCompletedVersionComparison = wasAwaitingVersionRhs;
+        afterComparisonConj = false;
+        tokenFollowsComparisonConj = false;
+        clearCommaComparisonState();
+      } else if (prevRhsCompleted) {
+        if (!tokObj.wasQuoted && COMPARISON_UNIT_WORDS.has(tokLower)) {
+          rhsCompletedComparison = true;
+          rhsCompletedVersionComparison = prevRhsVersionCompleted;
+        } else if (!tokObj.wasQuoted && (tokLower === 'and' || tokLower === 'or')) {
+          rhsCompletedComparison = false;
+          rhsCompletedVersionComparison = false;
+          afterComparisonConj = true;
+          tokenFollowsComparisonConj = false;
+        } else {
+          rhsCompletedComparison = false;
+          rhsCompletedVersionComparison = false;
+          afterComparisonConj = false;
+          tokenFollowsComparisonConj = false;
+        }
+      } else if (afterComparisonConj) {
+        afterComparisonConj = false;
+        tokenFollowsComparisonConj = !tokObj.wasQuoted;
+      } else {
+        tokenFollowsComparisonConj = false;
+      }
+
+      if (segTokenCount === 0) {
+        if (commaAfterAnyComparisonRhs && !tokObj.wasQuoted && (tokLower === 'and' || tokLower === 'or')) {
+          commaConjReady = true;
+          commaAfterVersionRhs = false;
+          commaAfterAnyComparisonRhs = false;
+        } else {
+          commaConjReady = false;
+          commaAfterAnyComparisonRhs = false;
+          if (tokObj.wasQuoted) {
+            commaAfterVersionRhs = false;
+          }
+        }
+      } else if (segTokenCount === 1) {
+        commaAfterVersionRhs = false;
+        if (commaConjReady && tokObj.wasQuoted) {
+          commaConjReady = false;
+        }
+      } else {
+        clearCommaComparisonState();
+      }
+
       const isVerb =
         SHELL_SPLIT_QUOTE_VERBS.has(tokLower) ||
         SHELL_FLAG_OR_PATH_CLI_VERBS.has(tokLower) ||

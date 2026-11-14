@@ -8070,5 +8070,296 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         }
       }
     });
+
+    it('ReReview-102 Round 18 fix: expires prose comparison context at sentence boundaries while preserving comma-separated version lists', async () => {
+      const sampleAuthProof = {
+        id: 'P1',
+        seatId: 's1',
+        round: 1,
+        kind: 'claim',
+        source: 'src/auth.js',
+        statement: 'Token expiry verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+      const defaultCovered = ['src/auth.js', 'README'];
+
+      function buildReadinessInputs({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = []
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications: [],
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: defaultCovered.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: defaultCovered.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        };
+      }
+
+      async function executePhaseEngine({ phase, errorClass, topic = 'Inspect src/auth.js.', s1Proof = null }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (
+            (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') ||
+            (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2')
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault(ctx.seat.id);
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) return s1Proof;
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('s1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications: [],
+            maxClarificationBatches: 0,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: defaultCovered.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'R18 sentence-boundary regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: defaultCovered.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+        await engine.run();
+        return { targetCalls };
+      }
+
+      const readinessPhaseCases = [
+        ['DELIBERATION', 1, {}],
+        ['DELIBERATION', 2, { priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, { proofs: [sampleAuthProof] }],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, { proofs: [sampleAuthProof], priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['VOTING', 1, { candidate: sampleCandidate, admittedProofs: [sampleAuthProof] }]
+      ];
+
+      function evaluateCheckProofReadiness(checkProof, phaseName, round, errorClass) {
+        const extra =
+          phaseName === 'DELIBERATION'
+            ? { priorProofs: [checkProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }
+            : phaseName === 'JUDGE_AUDIT_SYNTHESIS' && round === 1
+              ? { proofs: [checkProof] }
+              : phaseName === 'JUDGE_AUDIT_SYNTHESIS'
+                ? { proofs: [checkProof], priorProofs: [checkProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }
+                : { candidate: sampleCandidate, admittedProofs: [checkProof] };
+        return evaluateToolFreeEvidenceReadiness(buildReadinessInputs({ phase: phaseName, round, errorClass, ...extra }));
+      }
+
+      const mustRefuseTopics = [
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify node > 22',
+        'Inspect src/auth.js. Requires Node >= 22. Verify node > 22.',
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify python < 3.12',
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify git > 2',
+        'Inspect src/auth.js. Requires Node >= 22. node > 22',
+        'Inspect src/auth.js. Ensure latency < 20ms! Verify node > 22',
+        'Inspect src/auth.js. Is latency < 20ms? Verify node > 22',
+        'Inspect src/auth.js. Note latency < 20ms: Verify node > 22',
+        'Inspect src/auth.js. Ensure latency < 20ms, Verify node > 22',
+        'Inspect src/auth.js. Requires Node >= 22, Verify node > 22',
+        'Inspect src/auth.js. Ensure latency < 20ms and verify node > 22',
+        'Inspect src/auth.js. Ensure latency < 20ms, node > 22'
+      ];
+
+      for (const topic of mustRefuseTopics) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.ok(deps.workspaceBroadDeps.length >= 1, `Expected broad dep for topic: ${topic}`);
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          for (const [phase, round, extra] of readinessPhaseCases) {
+            const verdict = evaluateToolFreeEvidenceReadiness(
+              buildReadinessInputs({ phase, round, errorClass, topic, ...extra })
+            );
+            assert.equal(verdict.ready, false, `${phase} R${round}/${errorClass} must refuse: ${topic}`);
+            assert.equal(verdict.reasonCode, 'evidence_access_failure');
+          }
+          for (const enginePhase of allFivePhases) {
+            const run = await executePhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(run.targetCalls.length, 1, `Engine ${enginePhase}/${errorClass} must refuse: ${topic}`);
+          }
+        }
+      }
+
+      const r18CheckTexts = [
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify node > 22',
+        'Inspect src/auth.js. Requires Node >= 22. Verify node > 22.',
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify python < 3.12',
+        'Inspect src/auth.js. Ensure latency < 20ms. Verify git > 2'
+      ];
+      for (const text of r18CheckTexts) {
+        for (const [field, checkSource, checkStatement] of [
+          ['statement', 'src/auth.js', text],
+          ['source', text, 'Checked src/auth.js']
+        ]) {
+          const checkDeps = extractVerificationDependencies([checkSource, checkStatement]);
+          assert.ok(checkDeps.workspaceBroadDeps.length >= 1, `Expected broad dep for kind:check ${field}: ${text}`);
+          const checkProof = {
+            id: 'P1',
+            seatId: 's1',
+            round: 1,
+            scope: 'Verify workspace evidence',
+            kind: 'check',
+            source: checkSource,
+            statement: checkStatement
+          };
+          for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+            for (const [phaseName, round] of [
+              ['DELIBERATION', 2],
+              ['JUDGE_AUDIT_SYNTHESIS', 1],
+              ['JUDGE_AUDIT_SYNTHESIS', 2],
+              ['VOTING', 1]
+            ]) {
+              const verdict = evaluateCheckProofReadiness(checkProof, phaseName, round, errorClass);
+              assert.equal(verdict.ready, false, `kind:check ${field}: ${phaseName} R${round}/${errorClass} must refuse: ${text}`);
+              assert.equal(verdict.reasonCode, 'evidence_access_failure');
+            }
+            for (const enginePhase of ['R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS_R1', 'JUDGE_AUDIT_SYNTHESIS_R2', 'VOTING']) {
+              const run = await executePhaseEngine({ phase: enginePhase, errorClass, s1Proof: checkProof });
+              assert.equal(run.targetCalls.length, 1, `kind:check ${field}: engine ${enginePhase}/${errorClass} must refuse: ${text}`);
+            }
+          }
+        }
+      }
+
+      const positiveProseControls = [
+        'Inspect src/auth.js. Target Node >= 22, node > 22, python < 3.12.',
+        'Inspect src/auth.js. Target Node >= 22, node > 22, and python < 3.12.',
+        'Inspect src/auth.js. Target Node >= 22, python < 3.12.',
+        'Inspect src/auth.js. Requires node >= 22 and python < 3.12.',
+        'Inspect src/auth.js. Ensure latency < 20ms, memory < 512MB, and python < 3.12.',
+        'Inspect src/auth.js. Ensure latency < 20ms and python < 3.12.',
+        'Inspect src/auth.js. Ensure git -> main and python < 3.12.'
+      ];
+      for (const proseTopic of positiveProseControls) {
+        const deps = extractVerificationDependencies([proseTopic]);
+        assert.deepEqual(deps.workspaceBroadDeps, [], `Expected 0 broad deps for prose control: ${proseTopic}`);
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          for (const [phase, round, extra] of readinessPhaseCases) {
+            const verdict = evaluateToolFreeEvidenceReadiness(
+              buildReadinessInputs({ phase, round, errorClass, topic: proseTopic, ...extra })
+            );
+            assert.equal(verdict.ready, true, `${phase} R${round}/${errorClass} must permit prose control: ${proseTopic}`);
+          }
+          for (const phase of allFivePhases) {
+            const run = await executePhaseEngine({ phase, errorClass, topic: proseTopic });
+            assert.equal(run.targetCalls.length, 2, `Prose control must allow retry (${phase}/${errorClass}): ${proseTopic}`);
+            assert.equal(run.targetCalls[1].tools, 'none');
+            assert.equal(run.targetCalls[1].cwd, undefined);
+          }
+        }
+      }
+
+      extractVerificationDependencies(['Ensure latency < 20ms. Target Node >= 22, node > 22, python < 3.12.']);
+      for (const [label, payload] of [
+        ['r18-sentence-latency-48k', 'Ensure latency < 20ms. '.repeat(2087).slice(0, 48000)],
+        ['r18-comma-versions-48k', 'Target Node >= 22, node > 22, python < 3.12. '.repeat(1091).slice(0, 48000)]
+      ]) {
+        assert.ok(Buffer.byteLength(payload, 'utf8') >= 48000, `Expected >=48KB for ${label}`);
+        const t0 = performance.now();
+        const deps = extractVerificationDependencies([payload]);
+        const elapsedMs = performance.now() - t0;
+        assert.ok(elapsedMs < 20, `Expected <20ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
+        assert.deepEqual(deps.workspaceBroadDeps, [], `Expected 0 broad deps for ${label}`);
+      }
+    });
   });
 });

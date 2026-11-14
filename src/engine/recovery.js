@@ -183,6 +183,38 @@ const STATIC_CAPABILITY_CATALOG = Object.freeze({
   })
 });
 
+function isExplicitlyDelimitedMatch(sourceText, offset, matchLength) {
+  if (typeof sourceText !== 'string' || typeof offset !== 'number' || offset <= 0) {
+    return false;
+  }
+  const open = sourceText[offset - 1];
+  const close = sourceText[offset + matchLength];
+  return (
+    (open === '`' && close === '`') ||
+    (open === '"' && close === '"') ||
+    (open === "'" && close === "'") ||
+    (open === '<' && close === '>') ||
+    (open === '(' && close === ')') ||
+    (open === '[' && close === ']')
+  );
+}
+
+function stripTrailingProsePunctuation(rawToken, sourceText, offset) {
+  if (isExplicitlyDelimitedMatch(sourceText, offset, rawToken.length)) {
+    return rawToken;
+  }
+  if (
+    offset === 0 &&
+    typeof sourceText === 'string' &&
+    rawToken.length === sourceText.length &&
+    /[?#=]/.test(rawToken) &&
+    !rawToken.endsWith('.')
+  ) {
+    return rawToken;
+  }
+  return rawToken.replace(/[.,;:!?)]+$/, '');
+}
+
 function collectStrings(value, out) {
   if (typeof value === 'string') {
     if (value.trim()) {
@@ -429,8 +461,10 @@ export function extractVerificationDependencies(inputs) {
   for (const text of strings) {
     // 1. Extract external URI scheme URLs first and mask them so URL paths
     //    or embedded standard tokens are not misclassified or duplicated.
-    let masked = text.replace(URL_REGEX, (rawUrl) => {
-      const cleaned = rawUrl.replace(/[.,;:!?)]+$/, '');
+    let masked = text.replace(URL_REGEX, (rawUrl, ...args) => {
+      const offset = args[args.length - 2];
+      const sourceStr = args[args.length - 1];
+      const cleaned = stripTrailingProsePunctuation(rawUrl, sourceStr, offset);
       const urlKey = `url:${cleaned}`;
       if (cleaned && !seenExternal.has(urlKey)) {
         seenExternal.add(urlKey);
@@ -443,13 +477,13 @@ export function extractVerificationDependencies(inputs) {
     masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
 
     // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`),
-    //    leaving unprefixed bare domains with trailing slashes intact for external domain detection.
+    //    leaving unprefixed bare domains with trailing slashes or wildcards intact for external detection.
     masked = masked.replace(GLOB_REGEX, (full, candidate) => {
       const cleanedCandidate = candidate.includes('*') ? candidate.replace(/\.(?=$)/, '') : candidate;
       const hasRelativePrefix = cleanedCandidate.startsWith('./') || cleanedCandidate.startsWith('../');
       const trimmed = cleanedCandidate.replace(/^\.\//, '');
       const firstSeg = trimmed.split('/')[0];
-      if (!hasRelativePrefix && !cleanedCandidate.includes('*') && isRecognizedBareDomain(firstSeg)) {
+      if (!hasRelativePrefix && !cleanedCandidate.startsWith('/') && isRecognizedBareDomain(firstSeg)) {
         return full;
       }
       const looksBroad = trimmed.includes('*')
@@ -492,8 +526,10 @@ export function extractVerificationDependencies(inputs) {
 
     // 5. Extract named external standards/identifiers and bare external domains/endpoints
     //    across remaining text before removing version tokens so `OpenAPI 3.1.0` stays intact.
-    masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd) => {
-      const normalized = rawStd.replace(/[.,;:!?)]+$/, '').replace(/\s+/g, ' ').trim();
+    masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd, ...args) => {
+      const offset = args[args.length - 2];
+      const sourceStr = args[args.length - 1];
+      const normalized = stripTrailingProsePunctuation(rawStd, sourceStr, offset).replace(/\s+/g, ' ').trim();
       if (!normalized || isSemanticVersionToken(normalized)) {
         return rawStd;
       }

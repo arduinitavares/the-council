@@ -1909,5 +1909,228 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         assert.ok(elapsedMs < 50, `Expected linear scan <50ms, took ${elapsedMs.toFixed(2)}ms`);
       }
     });
+
+    it('ReReview-102 Round 3 fixes: preserves punctuation in explicitly delimited or standalone endpoints/URLs and keeps unprefixed domain wildcards external', async () => {
+      function params(topic, sources = [], cwd = '/repo', errorClass = 'TimeoutError', extra = {}) {
+        return {
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass,
+          topic,
+          evidence: sources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete content for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: sources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: cwd },
+          ...extra
+        };
+      }
+
+      // 1. Delimited endpoint & URL trailing punctuation preservation across all symmetric delimiter pairs
+      const bareEndpoint = 'example.com/api?token=abc!';
+      const bareStripped = 'example.com/api?token=abc';
+      for (const wrapped of [
+        `\`${bareEndpoint}\``,
+        `"${bareEndpoint}"`,
+        `'${bareEndpoint}'`,
+        `<${bareEndpoint}>`,
+        `(${bareEndpoint})`,
+        `[${bareEndpoint}]`
+      ]) {
+        const topic = `Inspect src/auth.js and ${wrapped}.`;
+        assert.deepEqual(extractVerificationDependencies([topic]), {
+          workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: [bareEndpoint]
+        });
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const incomplete = evaluateToolFreeEvidenceReadiness(
+            params(topic, ['src/auth.js', bareStripped], '/repo', errorClass)
+          );
+          assert.equal(incomplete.ready, false, `Expected refusal for ${wrapped} when covered only with ${bareStripped} (${errorClass})`);
+          assert.equal(incomplete.reasonCode, 'evidence_access_failure');
+
+          const complete = evaluateToolFreeEvidenceReadiness(
+            params(topic, ['src/auth.js', bareEndpoint], '/repo', errorClass)
+          );
+          assert.equal(complete.ready, true, `Expected ready=true for ${wrapped} with exact ${bareEndpoint} (${errorClass})`);
+        }
+      }
+
+      // Delimited full-scheme URL punctuation preservation
+      const fullUrl = 'https://example.com/api?token=abc!';
+      const fullUrlStripped = 'https://example.com/api?token=abc';
+      const urlTopic = `Inspect src/auth.js and \`${fullUrl}\`.`;
+      assert.deepEqual(extractVerificationDependencies([urlTopic]), {
+        workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+        workspaceBroadDeps: [],
+        externalDeps: [fullUrl]
+      });
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(params(urlTopic, ['src/auth.js', fullUrlStripped], '/repo')).ready,
+        false
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(params(urlTopic, ['src/auth.js', fullUrl], '/repo')).ready,
+        true
+      );
+
+      // Standalone structured proof.source punctuation preservation across JUDGE_AUDIT_SYNTHESIS & VOTING
+      const proofList = [
+        {
+          id: 'P1',
+          round: 1,
+          seatId: 's1',
+          status: 'admitted',
+          kind: 'citation',
+          source: bareEndpoint,
+          statement: 'Verified response from `example.com/api?token=abc!`'
+        }
+      ];
+      for (const phaseCheck of [
+        { phase: 'JUDGE_AUDIT_SYNTHESIS', extra: { proofs: proofList } },
+        {
+          phase: 'VOTING',
+          extra: {
+            proofs: proofList,
+            admittedProofs: proofList,
+            candidate: {
+              summary: 'Summary',
+              clauses: [{ id: 'C1', context: 'API', conclusion: 'Valid', citedProofIds: ['P1'] }]
+            }
+          }
+        }
+      ]) {
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params('Verify `example.com/api?token=abc!` behavior', [bareStripped], '/repo', 'TimeoutError', {
+              phase: phaseCheck.phase,
+              ...phaseCheck.extra
+            })
+          ).ready,
+          false,
+          `${phaseCheck.phase} must refuse mismatched stripped proof.source coverage`
+        );
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params('Verify `example.com/api?token=abc!` behavior', [bareEndpoint], '/repo', 'TimeoutError', {
+              phase: phaseCheck.phase,
+              ...phaseCheck.extra
+            })
+          ).ready,
+          true,
+          `${phaseCheck.phase} must allow exact proof.source coverage`
+        );
+      }
+
+      // Runtime CouncilEngine end-to-end refusal across Deliberation, Judging & Voting with bareStripped coverage only
+      const mock = new MockAdapter();
+      let s1DelibCalls = 0;
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's1') {
+          s1DelibCalls += 1;
+          throw new TimeoutError('Delib timeout', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
+        }
+        return origProof(ctx);
+      };
+      const engine = new CouncilEngine(
+        {
+          topic: 'Inspect src/auth.js and `example.com/api?token=abc!` for correctness',
+          minQuorum: 2,
+          maxRounds: 1,
+          maxRetriesPerSeat: 1,
+          cwd: '/repo',
+          evidence: [
+            { id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export const ok = true;' },
+            { id: 'E2', label: 'Wrong Endpoint', source: bareStripped, text: 'wrong endpoint body' }
+          ],
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Mismatched endpoint test',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: [
+              { source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' },
+              { source: bareStripped, evidenceId: 'E2', coverage: 'complete_artifact' }
+            ]
+          },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
+            { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+          ]
+        },
+        { harnessResolver: () => mock }
+      );
+      await engine.run();
+      assert.equal(s1DelibCalls, 1, 'CouncilEngine must refuse tool-free retry when coverage omits trailing ! inside backticks');
+
+      // Unquoted prose sentence punctuation must still be stripped cleanly
+      assert.deepEqual(extractVerificationDependencies(['He asked: "Verify example.com/api?token=abc."']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.com/api?token=abc']
+      });
+      assert.deepEqual(extractVerificationDependencies(['Verify example.com/api?version=2.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.com/api?version=2']
+      });
+
+      // 2. Minor 2: Unprefixed domain wildcard stays externalDep; explicit relative ./ globs remain workspaceBroadDeps
+      assert.deepEqual(extractVerificationDependencies(['Inspect src/auth.js and example.com/api*.']), {
+        workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.com/api*']
+      });
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params('Inspect src/auth.js and example.com/api*', ['src/auth.js'], '/repo', errorClass)
+          ).ready,
+          false
+        );
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params('Inspect src/auth.js and example.com/api*', ['src/auth.js', 'example.com/api'], '/repo', errorClass)
+          ).ready,
+          false
+        );
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params('Inspect src/auth.js and example.com/api*', ['src/auth.js', 'example.com/api*'], '/repo', errorClass)
+          ).ready,
+          true
+        );
+      }
+
+      for (const [input, expectedBroad] of [
+        ['./example.com/api*', 'example.com/api*'],
+        ['./example.dev/', 'example.dev/'],
+        ['./example.dev/*', 'example.dev/*'],
+        ['./site.io/**', 'site.io/**']
+      ]) {
+        assert.deepEqual(extractVerificationDependencies([`Inspect ${input}.`]), {
+          workspaceFileDeps: [],
+          workspaceBroadDeps: [expectedBroad],
+          externalDeps: []
+        });
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(params(`Inspect ${input}`, [expectedBroad], '/repo')).ready,
+          false
+        );
+      }
+    });
   });
 });

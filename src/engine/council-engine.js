@@ -18,10 +18,22 @@
 
 import { createInitialCouncilState, activeSeats } from '../machine/state.js';
 import { transitionCouncil } from '../machine/reducer.js';
-import { validateProof } from '../proofs/validator.js';
+import {
+  validateProof,
+  normalizeTrustedInvocationCitations,
+  validateCitationFields
+} from '../proofs/validator.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
-import { HarnessAdapter, HarnessError, InvalidResponseError } from '../harness/adapter.js';
+import {
+  HarnessAdapter,
+  HarnessError,
+  InvalidResponseError,
+  HeadlessToolDeniedError,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX,
+  resolveAttemptExecutionWorkspace
+} from '../harness/adapter.js';
 import { MockAdapter } from '../harness/mock.js';
 import {
   downshiftEffort,
@@ -29,6 +41,7 @@ import {
   extractCanonicalBaseModel,
   parseModelAndEffort
 } from '../harness/cli-runner.js';
+import { planParticipantRecovery } from './recovery.js';
 
 const DEFAULT_TIMEOUT_RESOLVER = new HarnessAdapter();
 
@@ -486,6 +499,8 @@ export class CouncilEngine {
     this._publishedConfigClarificationCount = 0;
     this._acceptedSeatsByRound = new Map();
     this._dynamicSeatConfigs = new Map();
+    this._seatToolFreeUsed = new Map();
+    this.catalogByHarness = options.catalogByHarness || this.config.catalogByHarness || {};
     this.aborted = Boolean(this.signal?.aborted);
     this._defaultMockAdapter = null;
 
@@ -608,7 +623,7 @@ export class CouncilEngine {
         const seatVotingModel = seat.votingModel;
         const seatDisableHooks = seat.disableHooks !== undefined ? seat.disableHooks : this.config.disableHooks;
         const seatIgnoreUserConfig = seat.ignoreUserConfig !== undefined ? seat.ignoreUserConfig : this.config.ignoreUserConfig;
-        const seatCwd = seat.cwd !== undefined ? seat.cwd : this.config.cwd;
+        const seatCwd = [seat.cwd, this.config.cwd].find((c) => typeof c === 'string' && c.trim())?.trim();
         this._step({
           type: 'ADD_SEAT',
           seat: {
@@ -760,7 +775,7 @@ export class CouncilEngine {
     if (/timed?\s*out/i.test(combined)) {
       return 'fault_timeout';
     }
-    if (/\b429\b|\bquota\b|rate[\s_-]*limit|pool[\s_]+exhausted|resource_exhausted/i.test(combined)) {
+    if (PROVIDER_HTTP_429_REGEX.test(combined) || /\bquota\b|rate[\s_-]*limit|pool[\s_]+exhausted|resource_exhausted/i.test(combined)) {
       return 'fault_quota';
     }
     return 'fault';
@@ -769,17 +784,25 @@ export class CouncilEngine {
   /**
    * Resolves the canonical HarnessError class name for a fault.
    * @param {unknown} error
-   * @returns {'TimeoutError' | 'QuotaExhaustionError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'HarnessError'}
+   * @returns {'TimeoutError' | 'QuotaExhaustionError' | 'HeadlessToolDeniedError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'HarnessError'}
    */
   _classifyErrorClass(error) {
     const knownClasses = new Set([
       'TimeoutError',
       'QuotaExhaustionError',
+      'HeadlessToolDeniedError',
       'HarnessExecutionError',
       'InvalidResponseError',
       'AuthenticationError',
       'HarnessError'
     ]);
+    if (
+      error instanceof HeadlessToolDeniedError ||
+      error?.name === 'HeadlessToolDeniedError' ||
+      error?.code === 'HEADLESS_TOOL_DENIED'
+    ) {
+      return 'HeadlessToolDeniedError';
+    }
     if (error instanceof HarnessError && typeof error.name === 'string' && knownClasses.has(error.name)) {
       return /** @type {any} */ (error.name);
     }
@@ -798,7 +821,7 @@ export class CouncilEngine {
     const msg = error instanceof Error ? error.message : String(error || '');
     const stderr = error && typeof error === 'object' && typeof error.stderr === 'string' ? error.stderr : '';
     const combined = `${msg}\n${stderr}`;
-    if (/\b(?:401|403)\b|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key/i.test(combined)) {
+    if (PROVIDER_HTTP_AUTH_REGEX.test(combined) || /unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key/i.test(combined)) {
       return 'AuthenticationError';
     }
     if (/invalid\s+proof|violates.*schema|failed\s+to\s+parse|candidate\s+guard|unknown\s+vote/i.test(combined)) {
@@ -845,30 +868,319 @@ export class CouncilEngine {
     return reason;
   }
 
+  _resolveConfigParticipant(role, participantId) {
+    if (role === 'judge') {
+      return this.config?.judge || null;
+    }
+    return (
+      (this.config?.seats || []).find((s) => s.id === participantId) ||
+      this._dynamicSeatConfigs?.get(participantId) ||
+      null
+    );
+  }
+
+  _collectForbiddenWorkspaceRoots(invocationMeta, participant) {
+    const candidates = [
+      ...(Array.isArray(invocationMeta?.forbiddenWorkspaceRoots) ? invocationMeta.forbiddenWorkspaceRoots : []),
+      invocationMeta?.configuredWorkspaceCwd,
+      participant?.cwd,
+      this.config?.cwd
+    ];
+    const seen = new Set();
+    const roots = [];
+    for (const item of candidates) {
+      if (typeof item === 'string' && item.trim()) {
+        const trimmed = item.trim();
+        if (!seen.has(trimmed)) {
+          seen.add(trimmed);
+          roots.push(trimmed);
+        }
+      }
+    }
+    return roots;
+  }
+
+  _seedAttemptInvocationMeta({ role, phase, participant, tools, cwd, attemptContext, adapter }) {
+    const resolved = resolveAttemptExecutionWorkspace({
+      role,
+      phase,
+      participant,
+      state: this.state,
+      config: this.config,
+      tools,
+      cwd,
+      callerContext: attemptContext,
+      adapter
+    });
+    const seeded = {
+      trustedEphemeralRoots: [],
+      forbiddenWorkspaceRoots: [],
+      ...resolved
+    };
+    attemptContext._invocationMeta = seeded;
+    return {
+      ...seeded,
+      trustedEphemeralRoots: [...(seeded.trustedEphemeralRoots || [])],
+      forbiddenWorkspaceRoots: [...(seeded.forbiddenWorkspaceRoots || [])]
+    };
+  }
+
+  _normalizeAndValidateProof(proofInput, invocationMeta, participant) {
+    const normalized = normalizeTrustedInvocationCitations(proofInput, invocationMeta);
+    const forbiddenWorkspaceRoots = this._collectForbiddenWorkspaceRoots(invocationMeta, participant);
+    const validation = validateProof(normalized, { forbiddenWorkspaceRoots });
+    return {
+      valid: validation.valid,
+      errors: validation.errors,
+      proof: normalized
+    };
+  }
+
+  _normalizeAndValidateVote(voteResult, invocationMeta, participant) {
+    const normalized = normalizeTrustedInvocationCitations(voteResult, invocationMeta);
+    const forbiddenWorkspaceRoots = this._collectForbiddenWorkspaceRoots(invocationMeta, participant);
+    const fields = [
+      { label: 'vote.reason', text: normalized?.reason },
+      { label: 'vote.objectionReason', text: normalized?.objectionReason },
+      { label: 'vote.note', text: normalized?.note }
+    ].filter((field) => typeof field.text === 'string' && field.text.trim());
+    const citationRes = validateCitationFields(fields, { forbiddenWorkspaceRoots });
+    return {
+      valid: citationRes.valid,
+      errors: citationRes.errors,
+      vote: normalized
+    };
+  }
+
+  _normalizeAndValidateJudge(judgeResult, invocationMeta, participant) {
+    const normalized = normalizeTrustedInvocationCitations(judgeResult, invocationMeta);
+    const forbiddenWorkspaceRoots = this._collectForbiddenWorkspaceRoots(invocationMeta, participant);
+    const fields = [];
+    const summaryText = normalized?.summary ?? normalized?.candidate?.summary;
+    if (typeof summaryText === 'string' && summaryText.trim()) {
+      fields.push({ label: 'judge.summary', text: summaryText });
+    }
+    const clauses = Array.isArray(normalized?.clauses)
+      ? normalized.clauses
+      : Array.isArray(normalized?.candidate?.clauses)
+      ? normalized.candidate.clauses
+      : [];
+    clauses.forEach((clause, idx) => {
+      if (typeof clause?.id === 'string' && clause.id.trim()) {
+        fields.push({ label: `judge.clauses[${idx}].id`, text: clause.id });
+      }
+      if (typeof clause?.context === 'string' && clause.context.trim()) {
+        fields.push({ label: `judge.clauses[${idx}].context`, text: clause.context });
+      }
+      if (typeof clause?.conclusion === 'string' && clause.conclusion.trim()) {
+        fields.push({ label: `judge.clauses[${idx}].conclusion`, text: clause.conclusion });
+      }
+    });
+    const decisions = Array.isArray(normalized?.proofDecisions)
+      ? normalized.proofDecisions.map((dec, idx) => [String(idx), dec])
+      : normalized?.proofDecisions && typeof normalized.proofDecisions === 'object'
+      ? Object.entries(normalized.proofDecisions)
+      : [];
+    decisions.forEach(([key, dec]) => {
+      if (typeof dec?.note === 'string' && dec.note.trim()) {
+        fields.push({ label: `judge.proofDecisions[${key}].note`, text: dec.note });
+      }
+      if (typeof dec?.statement === 'string' && dec.statement.trim()) {
+        fields.push({ label: `judge.proofDecisions[${key}].statement`, text: dec.statement });
+      }
+    });
+    const citationRes = validateCitationFields(fields, { forbiddenWorkspaceRoots });
+    return {
+      valid: citationRes.valid,
+      errors: citationRes.errors,
+      judgeResult: normalized
+    };
+  }
+
+  _applyRetryConfig(targetConfig, plan) {
+    if (!targetConfig || !plan || !plan.canRetry) return;
+    targetConfig.tools = plan.nextTools;
+    if (plan.nextTools === 'none' || !plan.nextCwd) {
+      delete targetConfig.cwd;
+    } else {
+      targetConfig.cwd = plan.nextCwd;
+    }
+    if (plan.nextModel) {
+      targetConfig.model = plan.nextModel;
+    }
+    if (plan.nextReasoningEffort === null || plan.nextReasoningEffort === undefined) {
+      delete targetConfig.reasoningEffort;
+    } else {
+      targetConfig.reasoningEffort = plan.nextReasoningEffort;
+    }
+  }
+
+  _formatTerminalRecoveryReason(plan, { role = 'seat', retries = 0, maxRetries = this.config.maxRetriesPerSeat, elapsedMs = 0, totalBudgetMs = 0 } = {}) {
+    if (!plan) return '';
+    if (plan.terminationKind === 'budget_exhausted') {
+      const label = role === 'judge' ? 'judge' : 'seat';
+      return `Exhausted total ${label} phase time budget (${elapsedMs ?? 0}ms >= ${totalBudgetMs ?? 0}ms): ${plan.primaryReason}`;
+    }
+    if (role !== 'judge' && plan.terminationKind === 'retries_exhausted' && retries > 0) {
+      return `Exhausted retries (${retries}/${maxRetries}): ${plan.primaryReason}`;
+    }
+    if (
+      plan.terminationKind === 'evidence_access_failure' ||
+      plan.terminationKind === 'tool_free_already_used' ||
+      plan.terminationKind === 'unsupported_fallback'
+    ) {
+      return plan.reason || plan.primaryReason;
+    }
+    return plan.primaryReason || plan.reason || 'Recovery declined';
+  }
+
+  _planParticipantRecovery({
+    participant,
+    role = 'seat',
+    phase,
+    round,
+    error,
+    retries,
+    maxRetries = this.config.maxRetriesPerSeat,
+    remainingBudget,
+    totalBudgetMs,
+    toolFreeRecoveryUsed,
+    originalInvocationMeta = null,
+    originalAttemptTools,
+    previousCandidate = null,
+    currentModel,
+    currentReasoningEffort
+  } = {}) {
+    const errorClass = this._classifyErrorClass(error);
+    const faultStatus = this._classifyFaultStatus(error);
+    const isRetryable = this._isRetryableError(error);
+    const primaryReason = this._formatFaultReason(error);
+    const currentRound = round ?? this.state.round ?? 1;
+    const effectivePhase = phase || this.state.phase || 'DELIBERATION';
+    const effectiveRetries = retries ?? participant?.retries ?? 0;
+
+    if (role === 'seat' && (!participant || participant.status === 'excused')) {
+      return {
+        canRetry: false,
+        terminationKind: 'non_retryable',
+        reason: primaryReason,
+        primaryReason,
+        errorCode: null,
+        setsToolFreeRecoveryUsed: false,
+        retryDiagnostics: null,
+        errorClass,
+        faultStatus,
+        isRetryable,
+        retries: effectiveRetries
+      };
+    }
+
+    const minViable =
+      typeof totalBudgetMs === 'number' && totalBudgetMs > 0
+        ? Math.min(5000, Math.floor(totalBudgetMs * 0.1))
+        : 0;
+    const configParticipant = this._resolveConfigParticipant(role, participant?.id);
+    const hasExplicitReasoningEffort = Boolean(
+      configParticipant?._explicitReasoningEffort ?? participant?._explicitReasoningEffort
+    );
+    const harness = participant?.harness || configParticipant?.harness;
+    const rawModel = currentModel ?? participant?.model ?? configParticipant?.model;
+    const parsedModel = parseModelAndEffort(rawModel);
+    const resolvedEffort =
+      currentReasoningEffort !== undefined
+        ? currentReasoningEffort
+        : participant?.reasoningEffort !== undefined
+        ? participant.reasoningEffort
+        : parsedModel.effort ?? null;
+
+    const effectiveMeta = originalInvocationMeta || {
+      effectiveTools: originalAttemptTools ?? participant?.tools,
+      effectiveCwd: participant?.tools === 'none' ? undefined : participant?.cwd ?? this.config?.cwd
+    };
+    const roundProofs = (this.state.proofs || []).filter((p) => p.round === currentRound);
+    const admittedProofs = (this.state.proofs || []).filter(
+      (p) => p.status === 'admitted' || p.status === 'partially_admitted'
+    );
+    const openObjections = (this.state.objections || []).filter((o) => o.status === 'open');
+    const toolFreeKey = `${currentRound}:${effectivePhase}:${participant?.id || 'judge'}`;
+    const usedToolFree =
+      toolFreeRecoveryUsed !== undefined
+        ? Boolean(toolFreeRecoveryUsed)
+        : Boolean(this._seatToolFreeUsed?.get(toolFreeKey));
+
+    const plan = planParticipantRecovery({
+      participantId: participant?.id || 'judge',
+      role,
+      error,
+      errorClass,
+      isRetryable,
+      retries: effectiveRetries,
+      maxRetries,
+      remainingBudget: typeof remainingBudget === 'number' ? remainingBudget : Infinity,
+      minViable,
+      toolFreeRecoveryUsed: usedToolFree,
+      originalAttemptTools: originalAttemptTools ?? effectiveMeta?.effectiveTools ?? participant?.tools,
+      phase: effectivePhase,
+      round: currentRound,
+      topic: this.state.topic,
+      clarifications: this.state.clarifications || [],
+      evidence: this.state.evidence || [],
+      proofs: roundProofs,
+      candidate: effectivePhase === 'VOTING' ? this.state.candidate : null,
+      previousCandidate:
+        previousCandidate ?? (effectivePhase === 'DELIBERATION' && currentRound > 1 ? this.state.candidate : null),
+      openObjections,
+      admittedProofs,
+      selfContainedInput: this.config.selfContainedInput,
+      originalInvocationMeta: effectiveMeta,
+      harness,
+      model: rawModel,
+      reasoningEffort: resolvedEffort,
+      hasExplicitReasoningEffort,
+      retryEffortFallback: Boolean(this.config.retryEffortFallback),
+      capabilityCatalog: this.catalogByHarness?.[harness] || null
+    });
+
+    return {
+      ...plan,
+      errorClass,
+      faultStatus,
+      isRetryable,
+      primaryReason,
+      retries: effectiveRetries,
+      toolFreeKey
+    };
+  }
+
   /**
    * Evaluates whether a seat fault can be retried within retry-cap and phase budget limits.
    * @private
    */
   _evaluateSeatFaultRetryability(seat, error, options = {}) {
-    const retries = seat ? seat.retries : 0;
-    const isRetryable = this._isRetryableError(error);
-    const remainingBudget = options.remainingBudget;
-    const totalSeatBudgetMs = options.totalSeatBudgetMs;
-    const minViableBudgetMs =
-      typeof totalSeatBudgetMs === 'number' && totalSeatBudgetMs > 0
-        ? Math.min(5000, Math.floor(totalSeatBudgetMs * 0.1))
-        : 0;
-    const budgetExhausted =
-      typeof remainingBudget === 'number' &&
-      (remainingBudget <= 0 || remainingBudget < minViableBudgetMs);
-    const canRetry = Boolean(
-      seat &&
-        seat.status !== 'excused' &&
-        isRetryable &&
-        retries < this.config.maxRetriesPerSeat &&
-        !budgetExhausted
-    );
-    return { retries, isRetryable, budgetExhausted, canRetry };
+    const plan = this._planParticipantRecovery({
+      participant: seat,
+      role: 'seat',
+      phase: options.phase || this.state.phase || 'DELIBERATION',
+      round: options.round ?? this.state.round ?? 1,
+      error,
+      retries: options.retries ?? (seat ? seat.retries : 0),
+      maxRetries: options.maxRetries ?? this.config.maxRetriesPerSeat,
+      remainingBudget: options.remainingBudget,
+      totalBudgetMs: options.totalSeatBudgetMs,
+      toolFreeRecoveryUsed: options.toolFreeRecoveryUsed,
+      originalInvocationMeta: options.originalInvocationMeta,
+      originalAttemptTools: options.originalAttemptTools,
+      previousCandidate: options.previousCandidate,
+      currentModel: options.currentModel,
+      currentReasoningEffort: options.currentReasoningEffort
+    });
+    return {
+      retries: plan.retries,
+      isRetryable: plan.isRetryable,
+      budgetExhausted: plan.terminationKind === 'budget_exhausted',
+      canRetry: plan.canRetry,
+      plan
+    };
   }
 
   /**
@@ -1033,36 +1345,37 @@ export class CouncilEngine {
     if (this.isCompleted()) {
       return { action: 'skipped' };
     }
-    const errorClass = this._classifyErrorClass(error);
-    const reason = this._formatFaultReason(error);
-    const faultStatus = this._classifyFaultStatus(error);
     const seat = (this.state.seats || []).find((s) => s.id === seatId);
-    const { retries, isRetryable, budgetExhausted, canRetry } = this._evaluateSeatFaultRetryability(
-      seat,
-      error,
-      options
-    );
+    const { retries, canRetry, plan } = this._evaluateSeatFaultRetryability(seat, error, options);
+    const errorClass = plan.errorClass;
+    const reason = plan.primaryReason;
+    const faultStatus = plan.faultStatus;
 
     this.telemetry.emitSeatTelemetry(seatId, faultStatus, { reason, errorClass });
     this.telemetry.emitSeatFault(seatId, reason, retries);
     this._step({ type: 'SEAT_FAULT', seatId, reason, status: faultStatus, errorClass }, true);
 
     if (canRetry) {
-      this._step({ type: 'RETRY_SEAT', seatId }, true);
-      return { action: 'retried', retries: seat.retries + 1 };
-    } else {
-      let excuseReason;
-      if (budgetExhausted) {
-        excuseReason = `Exhausted total seat phase time budget (${options.seatElapsedMs ?? 0}ms >= ${options.totalSeatBudgetMs ?? 0}ms): ${reason}`;
-      } else if (isRetryable && retries > 0) {
-        excuseReason = `Exhausted retries (${retries}/${this.config.maxRetriesPerSeat}): ${reason}`;
-      } else {
-        excuseReason = reason;
+      if (plan.setsToolFreeRecoveryUsed && plan.toolFreeKey && options.consumeToolFreeFlag !== false) {
+        this._seatToolFreeUsed.set(plan.toolFreeKey, true);
       }
+      this._step(
+        { type: 'RETRY_SEAT', seatId, retryDiagnostics: plan.retryDiagnostics || null },
+        true
+      );
+      return { action: 'retried', retries: seat.retries + 1, plan };
+    } else {
+      const excuseReason = this._formatTerminalRecoveryReason(plan, {
+        role: 'seat',
+        retries,
+        maxRetries: options.maxRetries ?? this.config.maxRetriesPerSeat,
+        elapsedMs: options.seatElapsedMs ?? 0,
+        totalBudgetMs: options.totalSeatBudgetMs ?? 0
+      });
       this._step({ type: 'EXCUSE_SEAT', seatId, reason: excuseReason, errorClass }, true);
       const locked = (this.state.objections || []).filter((o) => o.seatId === seatId && o.status === 'preserved_excused').length;
       this.telemetry.emitSeatExcused(seatId, excuseReason, locked);
-      return { action: 'excused', lockedObjections: locked };
+      return { action: 'excused', lockedObjections: locked, plan };
     }
   }
 
@@ -1074,6 +1387,7 @@ export class CouncilEngine {
     if (this.isCompleted()) {
       return { round: this.state.round, phase: this.state.phase, verdict: this.state.verdict };
     }
+    const previousCandidate = this.state.candidate;
 
     if (
       !this._configClarificationsPublished &&
@@ -1188,7 +1502,12 @@ export class CouncilEngine {
         skipped: false,
         excused: seat.status === 'excused',
         committed: false,
-        needsValidation: false
+        needsValidation: false,
+        originalInvocationMeta: null,
+        invocationMeta: null,
+        originalAttemptTools: currentSeatConfig.tools,
+        toolFreeRecoveryUsed: false,
+        retryDiagnostics: null
       };
     });
 
@@ -1199,20 +1518,25 @@ export class CouncilEngine {
         if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
         slot.needsValidation = false;
 
-        const validation = validateProof(slot.proofInput);
-        if (!validation.valid) {
+        const check = this._normalizeAndValidateProof(
+          slot.proofInput,
+          slot.invocationMeta || slot.originalInvocationMeta,
+          slot.currentSeatConfig || slot.seat
+        );
+        if (!check.valid) {
           slot.error = new InvalidResponseError(
-            `Invalid proof from seat ${slot.seat.id}: ${validation.errors.join('; ')}`,
+            `Invalid proof from seat ${slot.seat.id}: ${check.errors.join('; ')}`,
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model,
-              validationErrors: validation.errors
+              model: slot.currentSeatConfig?.model || slot.seat.model,
+              validationErrors: check.errors
             }
           );
           slot.proofInput = null;
           continue;
         }
+        slot.proofInput = check.proof;
 
         const submitEvent = {
           type: 'SUBMIT_PROOF',
@@ -1230,7 +1554,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.isRebuttal ? slot.currentSeatConfig.model : slot.seat.model
+              model: slot.currentSeatConfig?.model || slot.seat.model
             }
           );
           slot.proofInput = null;
@@ -1261,23 +1585,40 @@ export class CouncilEngine {
 
       this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
+      let callContext = null;
       try {
         const callSeat = slot.isRebuttal ? slot.currentSeatConfig : slot.seat;
         const callTools = slot.isRebuttal ? slot.currentSeatConfig.tools : slot.seat.tools;
-        const callContext = slot.isRebuttal
+        callContext = slot.isRebuttal
           ? {
               rebuttalMode: true,
               mode: 'rebuttal',
               tools: callTools,
+              ...(callSeat.cwd !== undefined && callTools !== 'none' ? { cwd: callSeat.cwd } : {}),
               signal: delibWaveSignal,
+              retryDiagnostics: null,
               ...(slot.currentSeatConfig.reasoningEffort
                 ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                 : {})
             }
           : {
               tools: callTools,
-              signal: delibWaveSignal
+              ...(callSeat.cwd !== undefined && callTools !== 'none' ? { cwd: callSeat.cwd } : {}),
+              signal: delibWaveSignal,
+              retryDiagnostics: null
             };
+        slot.originalInvocationMeta = this._seedAttemptInvocationMeta({
+          role: 'seat',
+          phase: 'DELIBERATION',
+          participant: callSeat,
+          tools: callTools,
+          cwd: callTools === 'none' ? undefined : callSeat.cwd,
+          attemptContext: callContext,
+          adapter: slot.harness
+        });
+        slot.originalAttemptTools = slot.originalInvocationMeta.effectiveTools;
+        const initialMetaRef = slot.originalInvocationMeta;
+        callContext._invocationMeta = initialMetaRef;
         const delibCallExtras = slot.isRebuttal
           ? {
               rebuttalMode: true,
@@ -1289,33 +1630,26 @@ export class CouncilEngine {
               signal: delibWaveSignal,
               context: callContext
             };
+        const execArgs = {
+          seat: callSeat,
+          soul: slot.seat.soul,
+          round: currentRound,
+          phase: 'DELIBERATION',
+          state: this.state,
+          topic: this.state.topic,
+          timeoutMs: slot.turnTimeoutMs,
+          tools: callTools,
+          ...(callTools !== 'none' && callSeat.cwd !== undefined ? { cwd: callSeat.cwd } : {}),
+          retryDiagnostics: null,
+          _invocationMeta: initialMetaRef,
+          telemetry: this.telemetry,
+          ...delibCallExtras
+        };
         let proofInput;
         if (typeof slot.harness.executeSeatProof === 'function') {
-          proofInput = await slot.harness.executeSeatProof({
-            seat: callSeat,
-            soul: slot.seat.soul,
-            round: currentRound,
-            phase: 'DELIBERATION',
-            state: this.state,
-            topic: this.state.topic,
-            timeoutMs: slot.turnTimeoutMs,
-            tools: callTools,
-            telemetry: this.telemetry,
-            ...delibCallExtras
-          });
+          proofInput = await slot.harness.executeSeatProof(execArgs);
         } else if (typeof slot.harness.executeSeat === 'function') {
-          proofInput = await slot.harness.executeSeat({
-            seat: callSeat,
-            soul: slot.seat.soul,
-            round: currentRound,
-            phase: 'DELIBERATION',
-            state: this.state,
-            topic: this.state.topic,
-            timeoutMs: slot.turnTimeoutMs,
-            tools: callTools,
-            telemetry: this.telemetry,
-            ...delibCallExtras
-          });
+          proofInput = await slot.harness.executeSeat(execArgs);
         } else {
           throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatProof or executeSeat`);
         }
@@ -1334,6 +1668,10 @@ export class CouncilEngine {
           return;
         }
         slot.seatElapsedMs += Date.now() - t0;
+        slot.invocationMeta =
+          execArgs._invocationMeta && execArgs._invocationMeta !== initialMetaRef
+            ? execArgs._invocationMeta
+            : callContext._invocationMeta || slot.originalInvocationMeta;
         slot.proofInput = proofInput;
         slot.error = null;
         slot.needsValidation = true;
@@ -1367,15 +1705,24 @@ export class CouncilEngine {
         slot.needsValidation = false;
 
         const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-        const minViable =
-          typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
-            ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
-            : 0;
-        const willExcuseImmediately =
-          !this._isRetryableError(err) ||
-          (slot.seat.retries || 0) >= this.config.maxRetriesPerSeat ||
-          remainingBudget <= 0 ||
-          remainingBudget < minViable;
+        const recoveryPlan = this._planParticipantRecovery({
+          participant: slot.currentSeatConfig || slot.seat,
+          role: 'seat',
+          phase: 'DELIBERATION',
+          round: currentRound,
+          error: err,
+          retries: slot.seat.retries || 0,
+          maxRetries: this.config.maxRetriesPerSeat,
+          remainingBudget,
+          totalBudgetMs: slot.totalSeatBudgetMs,
+          toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+          originalInvocationMeta: slot.originalInvocationMeta,
+          originalAttemptTools: slot.originalAttemptTools,
+          previousCandidate,
+          currentModel: slot.currentSeatConfig?.model,
+          currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
+        });
+        const willExcuseImmediately = !recoveryPlan.canRetry;
         if (willExcuseImmediately) {
           unrecoverableDelibFaults += 1;
           if (
@@ -1409,14 +1756,18 @@ export class CouncilEngine {
           }
 
           const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-          const isTimeout =
-            this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
-            this._classifyErrorClass(slot.error) === 'TimeoutError';
-
           const faultOptions = {
+            phase: 'DELIBERATION',
+            round: currentRound,
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
-            totalSeatBudgetMs: slot.totalSeatBudgetMs
+            totalSeatBudgetMs: slot.totalSeatBudgetMs,
+            toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+            originalInvocationMeta: slot.originalInvocationMeta,
+            originalAttemptTools: slot.originalAttemptTools,
+            previousCandidate,
+            currentModel: slot.currentSeatConfig?.model,
+            currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
           };
           if (this._willSeatFaultExcuseAndCollapseQuorum(slot.seat.id, slot.error, faultOptions)) {
             this._commitDelibSlots(delibSlots, { preCollapse: true });
@@ -1435,18 +1786,17 @@ export class CouncilEngine {
             continue;
           }
 
+          const plan = faultRes.plan;
+          if (plan?.setsToolFreeRecoveryUsed) {
+            slot.toolFreeRecoveryUsed = true;
+          }
+          slot.retryDiagnostics = plan?.retryDiagnostics || null;
           slot.turnTimeoutMs = Math.min(slot.baseTimeoutMs, 90000, Math.max(1, remainingBudget));
-          const effectiveRetryTools = isTimeout
-            ? 'none'
-            : (slot.currentSeatConfig.tools !== undefined ? slot.currentSeatConfig.tools : 'read-only');
           slot.currentSeatConfig = {
             ...slot.currentSeatConfig,
-            retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
-            tools: effectiveRetryTools,
-            ...(effectiveRetryTools === 'none' && slot.currentSeatConfig.cwd !== undefined
-              ? { cwd: undefined }
-              : {})
+            retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1
           };
+          this._applyRetryConfig(slot.currentSeatConfig, plan);
           retryBatch.push(slot);
         }
 
@@ -1473,23 +1823,46 @@ export class CouncilEngine {
             return;
           }
 
-          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking', {
+            retryDiagnostics: slot.retryDiagnostics || null
+          });
           const retryT0 = Date.now();
+          let retryContext = null;
           try {
-            const retryContext = slot.isRebuttal
+            retryContext = slot.isRebuttal
               ? {
                   rebuttalMode: true,
                   mode: 'rebuttal',
                   tools: slot.currentSeatConfig.tools,
+                  ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+                    ? { cwd: slot.currentSeatConfig.cwd }
+                    : {}),
                   signal: delibRetrySignal,
+                  retryDiagnostics: slot.retryDiagnostics || null,
                   ...(slot.currentSeatConfig.reasoningEffort
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
                 }
               : {
                   tools: slot.currentSeatConfig.tools,
-                  signal: delibRetrySignal
+                  ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+                    ? { cwd: slot.currentSeatConfig.cwd }
+                    : {}),
+                  signal: delibRetrySignal,
+                  retryDiagnostics: slot.retryDiagnostics || null,
+                  ...(slot.currentSeatConfig.reasoningEffort
+                    ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
+                    : {})
                 };
+            const retryInitialMetaRef = this._seedAttemptInvocationMeta({
+              role: 'seat',
+              phase: 'DELIBERATION',
+              participant: slot.currentSeatConfig,
+              tools: slot.currentSeatConfig.tools,
+              cwd: slot.currentSeatConfig.tools === 'none' ? undefined : slot.currentSeatConfig.cwd,
+              attemptContext: retryContext,
+              adapter: slot.harness
+            });
             const delibRetryExtras = slot.isRebuttal
               ? {
                   rebuttalMode: true,
@@ -1501,33 +1874,28 @@ export class CouncilEngine {
                   signal: delibRetrySignal,
                   context: retryContext
                 };
+            const retryExecArgs = {
+              seat: slot.currentSeatConfig,
+              soul: slot.currentSeatConfig.soul,
+              round: currentRound,
+              phase: 'DELIBERATION',
+              state: this.state,
+              topic: this.state.topic,
+              timeoutMs: slot.turnTimeoutMs,
+              tools: slot.currentSeatConfig.tools,
+              ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+                ? { cwd: slot.currentSeatConfig.cwd }
+                : {}),
+              retryDiagnostics: slot.retryDiagnostics || null,
+              _invocationMeta: retryInitialMetaRef,
+              telemetry: this.telemetry,
+              ...delibRetryExtras
+            };
             let proofInput;
             if (typeof slot.harness.executeSeatProof === 'function') {
-              proofInput = await slot.harness.executeSeatProof({
-                seat: slot.currentSeatConfig,
-                soul: slot.currentSeatConfig.soul,
-                round: currentRound,
-                phase: 'DELIBERATION',
-                state: this.state,
-                topic: this.state.topic,
-                timeoutMs: slot.turnTimeoutMs,
-                tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry,
-                ...delibRetryExtras
-              });
+              proofInput = await slot.harness.executeSeatProof(retryExecArgs);
             } else if (typeof slot.harness.executeSeat === 'function') {
-              proofInput = await slot.harness.executeSeat({
-                seat: slot.currentSeatConfig,
-                soul: slot.currentSeatConfig.soul,
-                round: currentRound,
-                phase: 'DELIBERATION',
-                state: this.state,
-                topic: this.state.topic,
-                timeoutMs: slot.turnTimeoutMs,
-                tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry,
-                ...delibRetryExtras
-              });
+              proofInput = await slot.harness.executeSeat(retryExecArgs);
             }
             if (this.signal?.aborted) {
               this.aborted = true;
@@ -1544,6 +1912,10 @@ export class CouncilEngine {
               return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
+            slot.invocationMeta =
+              retryExecArgs._invocationMeta && retryExecArgs._invocationMeta !== retryInitialMetaRef
+                ? retryExecArgs._invocationMeta
+                : retryContext._invocationMeta || retryInitialMetaRef;
             slot.proofInput = proofInput;
             slot.error = null;
             slot.needsValidation = true;
@@ -1577,16 +1949,25 @@ export class CouncilEngine {
             slot.needsValidation = false;
 
             const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-            const minViable =
-              typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
-                ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
-                : 0;
             const currentSeatRetries = slot.currentSeatConfig.retries || 0;
-            const willExcuseOnRetry =
-              !this._isRetryableError(retryErr) ||
-              currentSeatRetries >= this.config.maxRetriesPerSeat ||
-              remainingBudget <= 0 ||
-              remainingBudget < minViable;
+            const retryRecoveryPlan = this._planParticipantRecovery({
+              participant: slot.currentSeatConfig || slot.seat,
+              role: 'seat',
+              phase: 'DELIBERATION',
+              round: currentRound,
+              error: retryErr,
+              retries: currentSeatRetries,
+              maxRetries: this.config.maxRetriesPerSeat,
+              remainingBudget,
+              totalBudgetMs: slot.totalSeatBudgetMs,
+              toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+              originalInvocationMeta: slot.originalInvocationMeta,
+              originalAttemptTools: slot.originalAttemptTools,
+              previousCandidate,
+              currentModel: slot.currentSeatConfig?.model,
+              currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
+            });
+            const willExcuseOnRetry = !retryRecoveryPlan.canRetry;
             if (willExcuseOnRetry) {
               unrecoverableRetryFaults += 1;
               if (
@@ -1622,6 +2003,7 @@ export class CouncilEngine {
     // 3. JUDGING (Audit proofs and synthesize candidate)
     this._step({ type: 'START_JUDGING' }, true);
     const judge = this.state.judge;
+    let judgeToolFreeRecoveryUsed = false;
     this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
     const judgeHarness = this.harnessResolver(judge.harness);
     const configJudge = this.config.judge || {};
@@ -1674,6 +2056,9 @@ export class CouncilEngine {
     let judgeRoundRetries = 0;
     let judgeExecuted = false;
     let judgeElapsedMs = 0;
+    let judgeOriginalInvocationMeta = null;
+    let judgeOriginalAttemptTools = null;
+    let judgeRetryDiagnostics = null;
     let currentJudgeConfig = { ...mergedJudge };
     let currentJudgeTimeoutMs = initialJudgeTimeoutMs;
 
@@ -1684,40 +2069,57 @@ export class CouncilEngine {
       }
       const { signal: judgeSignal } = this._createWaveController();
       const judgeT0 = Date.now();
+      let judgeContext = null;
       try {
-        const judgeContext = {
+        judgeContext = {
           tools: currentJudgeConfig.tools,
-          signal: judgeSignal
+          ...(currentJudgeConfig.tools !== 'none' && currentJudgeConfig.cwd !== undefined
+            ? { cwd: currentJudgeConfig.cwd }
+            : {}),
+          signal: judgeSignal,
+          retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
+          ...(currentJudgeConfig.reasoningEffort ? { reasoningEffort: currentJudgeConfig.reasoningEffort } : {})
+        };
+        const judgeInitialMetaRef = this._seedAttemptInvocationMeta({
+          role: 'judge',
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          participant: currentJudgeConfig,
+          tools: currentJudgeConfig.tools,
+          cwd: currentJudgeConfig.tools === 'none' ? undefined : currentJudgeConfig.cwd,
+          attemptContext: judgeContext,
+          adapter: judgeHarness
+        });
+        if (judgeRoundRetries === 0 && judgeOriginalInvocationMeta === null) {
+          judgeOriginalInvocationMeta = {
+            ...judgeInitialMetaRef,
+            trustedEphemeralRoots: [...(judgeInitialMetaRef.trustedEphemeralRoots || [])],
+            forbiddenWorkspaceRoots: [...(judgeInitialMetaRef.forbiddenWorkspaceRoots || [])]
+          };
+          judgeOriginalAttemptTools = judgeInitialMetaRef.effectiveTools;
+        }
+        const judgeExecArgs = {
+          judge: currentJudgeConfig,
+          round: currentRound,
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          proofs: roundProofs,
+          state: this.state,
+          topic: this.state.topic,
+          timeoutMs: currentJudgeTimeoutMs,
+          tools: currentJudgeConfig.tools,
+          ...(currentJudgeConfig.tools !== 'none' && currentJudgeConfig.cwd !== undefined
+            ? { cwd: currentJudgeConfig.cwd }
+            : {}),
+          retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
+          _invocationMeta: judgeInitialMetaRef,
+          telemetry: this.telemetry,
+          signal: judgeSignal,
+          context: judgeContext
         };
         let synthesisResult;
         if (typeof judgeHarness.executeJudgeAuditAndSynthesis === 'function') {
-          synthesisResult = await judgeHarness.executeJudgeAuditAndSynthesis({
-            judge: currentJudgeConfig,
-            round: currentRound,
-            phase: 'JUDGE_AUDIT_SYNTHESIS',
-            proofs: roundProofs,
-            state: this.state,
-            topic: this.state.topic,
-            timeoutMs: currentJudgeTimeoutMs,
-            tools: currentJudgeConfig.tools,
-            telemetry: this.telemetry,
-            signal: judgeSignal,
-            context: judgeContext
-          });
+          synthesisResult = await judgeHarness.executeJudgeAuditAndSynthesis(judgeExecArgs);
         } else if (typeof judgeHarness.executeJudge === 'function') {
-          synthesisResult = await judgeHarness.executeJudge({
-            judge: currentJudgeConfig,
-            round: currentRound,
-            phase: 'JUDGE_AUDIT_SYNTHESIS',
-            proofs: roundProofs,
-            state: this.state,
-            topic: this.state.topic,
-            timeoutMs: currentJudgeTimeoutMs,
-            tools: currentJudgeConfig.tools,
-            telemetry: this.telemetry,
-            signal: judgeSignal,
-            context: judgeContext
-          });
+          synthesisResult = await judgeHarness.executeJudge(judgeExecArgs);
         } else {
           throw new Error(`Harness for "${judge.harness}" does not implement executeJudgeAuditAndSynthesis or executeJudge`);
         }
@@ -1732,6 +2134,25 @@ export class CouncilEngine {
           break;
         }
 
+        const judgeInvocationMeta =
+          judgeExecArgs._invocationMeta && judgeExecArgs._invocationMeta !== judgeInitialMetaRef
+            ? judgeExecArgs._invocationMeta
+            : judgeContext._invocationMeta || judgeInitialMetaRef;
+        const judgeValidation = this._normalizeAndValidateJudge(
+          synthesisResult,
+          judgeInvocationMeta,
+          currentJudgeConfig
+        );
+        if (!judgeValidation.valid) {
+          throw new InvalidResponseError(`Invalid Judge output: ${judgeValidation.errors.join('; ')}`, {
+            harness: judge.harness,
+            seatId: judge.id,
+            model: currentJudgeConfig.model || judge.model,
+            validationErrors: judgeValidation.errors
+          });
+        }
+        synthesisResult = judgeValidation.judgeResult;
+
         this._step({
           type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
           summary: synthesisResult ? synthesisResult.summary : undefined,
@@ -1743,7 +2164,7 @@ export class CouncilEngine {
           throw new InvalidResponseError(this.state.lastTransition.message, {
             harness: judge.harness,
             seatId: judge.id,
-            model: judge.model
+            model: currentJudgeConfig.model || judge.model
           });
         }
 
@@ -1768,31 +2189,57 @@ export class CouncilEngine {
                 : Date.now() - judgeT0);
         judgeElapsedMs += attemptDuration;
         const remainingJudgeBudget = judgeBudgetMs - judgeElapsedMs;
-        const judgeBudgetExhausted =
-          remainingJudgeBudget <= 0 || remainingJudgeBudget < minViableJudgeBudgetMs;
+        const plan = this._planParticipantRecovery({
+          participant: currentJudgeConfig,
+          role: 'judge',
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: currentRound,
+          error: err,
+          retries: judgeRoundRetries,
+          maxRetries: maxJudgeRetries,
+          remainingBudget: remainingJudgeBudget,
+          totalBudgetMs: judgeBudgetMs,
+          toolFreeRecoveryUsed: judgeToolFreeRecoveryUsed,
+          originalInvocationMeta: judgeOriginalInvocationMeta,
+          originalAttemptTools: judgeOriginalAttemptTools,
+          previousCandidate,
+          currentModel: currentJudgeConfig.model,
+          currentReasoningEffort: currentJudgeConfig.reasoningEffort
+        });
 
-        const errorClass = this._classifyErrorClass(err);
-        const errorMsg = this._formatFaultReason(err);
-        const faultStatus = this._classifyFaultStatus(err);
-        const isTimeout = faultStatus === 'fault_timeout' || errorClass === 'TimeoutError';
-        const isRetryable = this._isRetryableError(err);
+        const errorClass = plan.errorClass;
+        const errorMsg = plan.primaryReason;
+        const faultStatus = plan.faultStatus;
         this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg, errorClass });
         this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass }, true);
 
-        if (isRetryable && judgeRoundRetries < maxJudgeRetries && !judgeBudgetExhausted) {
+        if (plan.canRetry) {
           judgeRoundRetries += 1;
-          this._step({ type: 'RETRY_JUDGE' }, true);
+          if (plan.setsToolFreeRecoveryUsed) {
+            judgeToolFreeRecoveryUsed = true;
+          }
+          judgeRetryDiagnostics = plan.retryDiagnostics || null;
+          this._step({ type: 'RETRY_JUDGE', retryDiagnostics: judgeRetryDiagnostics }, true);
           currentJudgeConfig = {
             ...currentJudgeConfig,
-            ...this.state.judge,
-            ...(isTimeout ? { tools: 'none' } : { tools: currentJudgeConfig.tools })
+            retries: this.state.judge.retries,
+            status: this.state.judge.status,
+            activeRetryDiagnostics: this.state.judge.activeRetryDiagnostics,
+            retryDiagnosticsHistory: this.state.judge.retryDiagnosticsHistory
           };
+          this._applyRetryConfig(currentJudgeConfig, plan);
           currentJudgeTimeoutMs = Math.min(baseJudgeTimeoutMs, 90000, remainingJudgeBudget);
-          this.telemetry.emitSeatTelemetry(judge.id, 'thinking');
+          this.telemetry.emitSeatTelemetry(judge.id, 'thinking', {
+            retryDiagnostics: judgeRetryDiagnostics
+          });
         } else {
-          const terminalReason = judgeBudgetExhausted
-            ? `Exhausted total judge phase time budget (${judgeElapsedMs}ms >= ${judgeBudgetMs}ms): ${errorMsg}`
-            : errorMsg;
+          const terminalReason = this._formatTerminalRecoveryReason(plan, {
+            role: 'judge',
+            retries: judgeRoundRetries,
+            maxRetries: maxJudgeRetries,
+            elapsedMs: judgeElapsedMs,
+            totalBudgetMs: judgeBudgetMs
+          });
           this._step(
             {
               type: 'JUDGE_FAULT',
@@ -1852,9 +2299,13 @@ export class CouncilEngine {
         tools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
         votingTools: votingSeat.tools !== undefined ? votingSeat.tools : 'none',
         votingTimeoutMs: initialVoteTimeoutMs,
+        ...(votingSeat.tools === 'none' || votingSeat.tools === undefined ? { cwd: undefined } : {}),
         ...(votingSeat.preserveVotingEffort !== undefined ? { preserveVotingEffort: votingSeat.preserveVotingEffort } : {}),
         ...(votingSeat.reasoningEffort ? { reasoningEffort: votingSeat.reasoningEffort } : {})
       };
+      if (effectiveVotingSeat.tools === 'none') {
+        delete effectiveVotingSeat.cwd;
+      }
 
       return {
         index,
@@ -1871,7 +2322,12 @@ export class CouncilEngine {
         skipped: false,
         excused: seat.status === 'excused',
         committed: false,
-        needsValidation: false
+        needsValidation: false,
+        originalInvocationMeta: null,
+        invocationMeta: null,
+        originalAttemptTools: effectiveVotingSeat.tools,
+        toolFreeRecoveryUsed: false,
+        retryDiagnostics: null
       };
     });
 
@@ -1882,6 +2338,26 @@ export class CouncilEngine {
         if (!slot.needsValidation || slot.skipped || slot.excused || slot.committed || slot.error) continue;
         slot.needsValidation = false;
 
+        const citationCheck = this._normalizeAndValidateVote(
+          slot.voteResult,
+          slot.invocationMeta || slot.originalInvocationMeta,
+          slot.currentSeatConfig || slot.seat
+        );
+        if (!citationCheck.valid) {
+          slot.error = new InvalidResponseError(
+            `Invalid vote citation from seat ${slot.seat.id}: ${citationCheck.errors.join('; ')}`,
+            {
+              harness: slot.seat.harness,
+              seatId: slot.seat.id,
+              model: slot.currentSeatConfig?.model || slot.seat.model,
+              validationErrors: citationCheck.errors
+            }
+          );
+          slot.voteResult = null;
+          continue;
+        }
+        slot.voteResult = citationCheck.vote;
+
         const voteOutcome = slot.voteResult?.vote;
         if (voteOutcome !== 'accept' && voteOutcome !== 'object') {
           slot.error = new InvalidResponseError(
@@ -1889,7 +2365,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.seat.model
+              model: slot.currentSeatConfig?.model || slot.seat.model
             }
           );
           slot.voteResult = null;
@@ -1927,7 +2403,7 @@ export class CouncilEngine {
             {
               harness: slot.seat.harness,
               seatId: slot.seat.id,
-              model: slot.seat.model
+              model: slot.currentSeatConfig?.model || slot.seat.model
             }
           );
           slot.voteResult = null;
@@ -1958,43 +2434,57 @@ export class CouncilEngine {
 
       this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
       const t0 = Date.now();
+      let voteContext = null;
       try {
-        const voteContext = {
+        voteContext = {
           tools: slot.currentSeatConfig.tools,
+          ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+            ? { cwd: slot.currentSeatConfig.cwd }
+            : {}),
           signal: voteWaveSignal,
+          retryDiagnostics: null,
           ...(slot.currentSeatConfig.reasoningEffort
             ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
             : {})
         };
+        const initialMetaRef = this._seedAttemptInvocationMeta({
+          role: 'seat',
+          phase: 'VOTING',
+          participant: slot.currentSeatConfig,
+          tools: slot.currentSeatConfig.tools,
+          cwd: slot.currentSeatConfig.tools === 'none' ? undefined : slot.currentSeatConfig.cwd,
+          attemptContext: voteContext,
+          adapter: slot.seatHarness
+        });
+        slot.originalInvocationMeta = {
+          ...initialMetaRef,
+          trustedEphemeralRoots: [...(initialMetaRef.trustedEphemeralRoots || [])],
+          forbiddenWorkspaceRoots: [...(initialMetaRef.forbiddenWorkspaceRoots || [])]
+        };
+        slot.originalAttemptTools = slot.originalInvocationMeta.effectiveTools;
+        const voteExecArgs = {
+          seat: slot.currentSeatConfig,
+          soul: slot.seat.soul,
+          candidate: this.state.candidate,
+          round: currentRound,
+          phase: 'VOTING',
+          state: this.state,
+          timeoutMs: slot.turnTimeoutMs,
+          tools: slot.currentSeatConfig.tools,
+          ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+            ? { cwd: slot.currentSeatConfig.cwd }
+            : {}),
+          retryDiagnostics: null,
+          _invocationMeta: initialMetaRef,
+          telemetry: this.telemetry,
+          signal: voteWaveSignal,
+          context: voteContext
+        };
         let voteResult;
         if (typeof slot.seatHarness.executeSeatVote === 'function') {
-          voteResult = await slot.seatHarness.executeSeatVote({
-            seat: slot.currentSeatConfig,
-            soul: slot.seat.soul,
-            candidate: this.state.candidate,
-            round: currentRound,
-            phase: 'VOTING',
-            state: this.state,
-            timeoutMs: slot.turnTimeoutMs,
-            tools: slot.currentSeatConfig.tools,
-            telemetry: this.telemetry,
-            signal: voteWaveSignal,
-            context: voteContext
-          });
+          voteResult = await slot.seatHarness.executeSeatVote(voteExecArgs);
         } else if (typeof slot.seatHarness.executeSeat === 'function') {
-          voteResult = await slot.seatHarness.executeSeat({
-            seat: slot.currentSeatConfig,
-            soul: slot.seat.soul,
-            candidate: this.state.candidate,
-            round: currentRound,
-            phase: 'VOTING',
-            state: this.state,
-            timeoutMs: slot.turnTimeoutMs,
-            tools: slot.currentSeatConfig.tools,
-            telemetry: this.telemetry,
-            signal: voteWaveSignal,
-            context: voteContext
-          });
+          voteResult = await slot.seatHarness.executeSeat(voteExecArgs);
         } else {
           throw new Error(`Harness for "${slot.seat.harness}" does not implement executeSeatVote or executeSeat`);
         }
@@ -2013,6 +2503,10 @@ export class CouncilEngine {
           return;
         }
         slot.seatElapsedMs += Date.now() - t0;
+        slot.invocationMeta =
+          voteExecArgs._invocationMeta && voteExecArgs._invocationMeta !== initialMetaRef
+            ? voteExecArgs._invocationMeta
+            : voteContext._invocationMeta || slot.originalInvocationMeta;
         slot.voteResult = voteResult;
         slot.error = null;
         slot.needsValidation = true;
@@ -2046,17 +2540,26 @@ export class CouncilEngine {
         slot.needsValidation = false;
 
         const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-        const minViable =
-          typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
-            ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
-            : 0;
         const liveSeat = (this.state.seats || []).find((s) => s.id === slot.seat.id);
         const currentRetries = liveSeat ? liveSeat.retries : (slot.seat.retries || 0);
-        const willExcuseImmediately =
-          !this._isRetryableError(err) ||
-          currentRetries >= this.config.maxRetriesPerSeat ||
-          remainingBudget <= 0 ||
-          remainingBudget < minViable;
+        const voteRecoveryPlan = this._planParticipantRecovery({
+          participant: slot.currentSeatConfig || slot.seat,
+          role: 'seat',
+          phase: 'VOTING',
+          round: currentRound,
+          error: err,
+          retries: currentRetries,
+          maxRetries: this.config.maxRetriesPerSeat,
+          remainingBudget,
+          totalBudgetMs: slot.totalSeatBudgetMs,
+          toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+          originalInvocationMeta: slot.originalInvocationMeta,
+          originalAttemptTools: slot.originalAttemptTools,
+          previousCandidate,
+          currentModel: slot.currentSeatConfig?.model,
+          currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
+        });
+        const willExcuseImmediately = !voteRecoveryPlan.canRetry;
         if (willExcuseImmediately) {
           unrecoverableVoteFaults += 1;
           if (
@@ -2090,14 +2593,18 @@ export class CouncilEngine {
           }
 
           const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-          const isTimeout =
-            this._classifyFaultStatus(slot.error) === 'fault_timeout' ||
-            this._classifyErrorClass(slot.error) === 'TimeoutError';
-
           const faultOptions = {
+            phase: 'VOTING',
+            round: currentRound,
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
-            totalSeatBudgetMs: slot.totalSeatBudgetMs
+            totalSeatBudgetMs: slot.totalSeatBudgetMs,
+            toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+            originalInvocationMeta: slot.originalInvocationMeta,
+            originalAttemptTools: slot.originalAttemptTools,
+            previousCandidate,
+            currentModel: slot.currentSeatConfig?.model,
+            currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
           };
           if (this._willSeatFaultExcuseAndCollapseQuorum(slot.seat.id, slot.error, faultOptions)) {
             this._commitVoteSlots(voteSlots, { preCollapse: true });
@@ -2116,17 +2623,19 @@ export class CouncilEngine {
             continue;
           }
 
+          const plan = faultRes.plan;
+          if (plan?.setsToolFreeRecoveryUsed) {
+            slot.toolFreeRecoveryUsed = true;
+          }
+          slot.retryDiagnostics = plan?.retryDiagnostics || null;
           slot.turnTimeoutMs = Math.min(slot.baseVoteTimeoutMs, 90000, Math.max(1, remainingBudget));
-          const effectiveRetryTools = isTimeout
-            ? 'none'
-            : (slot.currentSeatConfig.tools !== undefined ? slot.currentSeatConfig.tools : 'none');
           slot.currentSeatConfig = {
             ...slot.currentSeatConfig,
             retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
-            tools: effectiveRetryTools,
-            votingTools: effectiveRetryTools,
             votingTimeoutMs: slot.turnTimeoutMs
           };
+          this._applyRetryConfig(slot.currentSeatConfig, plan);
+          slot.currentSeatConfig.votingTools = slot.currentSeatConfig.tools;
           retryBatch.push(slot);
         }
 
@@ -2153,45 +2662,55 @@ export class CouncilEngine {
             return;
           }
 
-          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking');
+          this.telemetry.emitSeatTelemetry(slot.seat.id, 'thinking', {
+            retryDiagnostics: slot.retryDiagnostics || null
+          });
           const retryT0 = Date.now();
+          let voteRetryContext = null;
           try {
-            const voteRetryContext = {
+            voteRetryContext = {
               tools: slot.currentSeatConfig.tools,
+              ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+                ? { cwd: slot.currentSeatConfig.cwd }
+                : {}),
               signal: voteRetrySignal,
+              retryDiagnostics: slot.retryDiagnostics || null,
               ...(slot.currentSeatConfig.reasoningEffort
                 ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                 : {})
             };
+            const retryInitialMetaRef = this._seedAttemptInvocationMeta({
+              role: 'seat',
+              phase: 'VOTING',
+              participant: slot.currentSeatConfig,
+              tools: slot.currentSeatConfig.tools,
+              cwd: slot.currentSeatConfig.tools === 'none' ? undefined : slot.currentSeatConfig.cwd,
+              attemptContext: voteRetryContext,
+              adapter: slot.seatHarness
+            });
+            const voteRetryExecArgs = {
+              seat: slot.currentSeatConfig,
+              soul: slot.seat.soul,
+              candidate: this.state.candidate,
+              round: currentRound,
+              phase: 'VOTING',
+              state: this.state,
+              timeoutMs: slot.turnTimeoutMs,
+              tools: slot.currentSeatConfig.tools,
+              ...(slot.currentSeatConfig.tools !== 'none' && slot.currentSeatConfig.cwd !== undefined
+                ? { cwd: slot.currentSeatConfig.cwd }
+                : {}),
+              retryDiagnostics: slot.retryDiagnostics || null,
+              _invocationMeta: retryInitialMetaRef,
+              telemetry: this.telemetry,
+              signal: voteRetrySignal,
+              context: voteRetryContext
+            };
             let voteResult;
             if (typeof slot.seatHarness.executeSeatVote === 'function') {
-              voteResult = await slot.seatHarness.executeSeatVote({
-                seat: slot.currentSeatConfig,
-                soul: slot.seat.soul,
-                candidate: this.state.candidate,
-                round: currentRound,
-                phase: 'VOTING',
-                state: this.state,
-                timeoutMs: slot.turnTimeoutMs,
-                tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry,
-                signal: voteRetrySignal,
-                context: voteRetryContext
-              });
+              voteResult = await slot.seatHarness.executeSeatVote(voteRetryExecArgs);
             } else if (typeof slot.seatHarness.executeSeat === 'function') {
-              voteResult = await slot.seatHarness.executeSeat({
-                seat: slot.currentSeatConfig,
-                soul: slot.seat.soul,
-                candidate: this.state.candidate,
-                round: currentRound,
-                phase: 'VOTING',
-                state: this.state,
-                timeoutMs: slot.turnTimeoutMs,
-                tools: slot.currentSeatConfig.tools,
-                telemetry: this.telemetry,
-                signal: voteRetrySignal,
-                context: voteRetryContext
-              });
+              voteResult = await slot.seatHarness.executeSeat(voteRetryExecArgs);
             }
             if (this.signal?.aborted) {
               this.aborted = true;
@@ -2208,6 +2727,10 @@ export class CouncilEngine {
               return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
+            slot.invocationMeta =
+              voteRetryExecArgs._invocationMeta && voteRetryExecArgs._invocationMeta !== retryInitialMetaRef
+                ? voteRetryExecArgs._invocationMeta
+                : voteRetryContext._invocationMeta || retryInitialMetaRef;
             slot.voteResult = voteResult;
             slot.error = null;
             slot.needsValidation = true;
@@ -2241,16 +2764,25 @@ export class CouncilEngine {
             slot.needsValidation = false;
 
             const remainingBudget = slot.totalSeatBudgetMs - slot.seatElapsedMs;
-            const minViable =
-              typeof slot.totalSeatBudgetMs === 'number' && slot.totalSeatBudgetMs > 0
-                ? Math.min(5000, Math.floor(slot.totalSeatBudgetMs * 0.1))
-                : 0;
             const currentSeatRetries = slot.currentSeatConfig.retries || 0;
-            const willExcuseOnVoteRetry =
-              !this._isRetryableError(retryErr) ||
-              currentSeatRetries >= this.config.maxRetriesPerSeat ||
-              remainingBudget <= 0 ||
-              remainingBudget < minViable;
+            const voteRetryPlan = this._planParticipantRecovery({
+              participant: slot.currentSeatConfig || slot.seat,
+              role: 'seat',
+              phase: 'VOTING',
+              round: currentRound,
+              error: retryErr,
+              retries: currentSeatRetries,
+              maxRetries: this.config.maxRetriesPerSeat,
+              remainingBudget,
+              totalBudgetMs: slot.totalSeatBudgetMs,
+              toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
+              originalInvocationMeta: slot.originalInvocationMeta,
+              originalAttemptTools: slot.originalAttemptTools,
+              previousCandidate,
+              currentModel: slot.currentSeatConfig?.model,
+              currentReasoningEffort: slot.currentSeatConfig?.reasoningEffort
+            });
+            const willExcuseOnVoteRetry = !voteRetryPlan.canRetry;
             if (willExcuseOnVoteRetry) {
               unrecoverableVoteRetryFaults += 1;
               if (

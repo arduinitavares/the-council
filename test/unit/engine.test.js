@@ -18,6 +18,14 @@ import {
   TimeoutError
 } from '../../src/harness/adapter.js';
 
+const CONCEPTUAL_SELF_CONTAINED = {
+  kind: 'full_context',
+  label: 'Hermetic conceptual unit test context',
+  phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+  roundScope: 'all_rounds',
+  conceptualNoExternalVerification: true
+};
+
 describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
   describe('Config Validation & Resolution', () => {
     it('validates a correct configuration object', () => {
@@ -362,6 +370,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           topic: 'Timeout Fault Classification',
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           seats: [
             { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
             { id: 's2', harness: 'mock', model: 'm', soul: 'S2' },
@@ -489,6 +498,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           topic: 'Timeout vs Quota Collision Test',
           minQuorum: 2,
           maxRetriesPerSeat: 0,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: { id: 'judge-quota-auditor', harness: 'mock', model: 'm', soul: 'J' },
           seats: [
             { id: 's1', harness: 'mock', model: 'm', soul: 'S1' },
@@ -954,6 +964,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           topic: 'Retry bounding check',
           maxRounds: 1,
           minQuorum: 2,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -1092,6 +1103,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           topic: 'Voting retry bounding check',
           maxRounds: 1,
           minQuorum: 2,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -1182,6 +1194,7 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           timeoutMs: 120000,
           votingTimeoutMs: 90000,
           totalSeatBudgetMs: 80000, // Smaller than 120000 and 90000 -> must clamp initial attempts to 80000!
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: {
             id: 'judge-1',
             harness: 'mock',

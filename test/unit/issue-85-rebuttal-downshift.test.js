@@ -1026,6 +1026,23 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
             minQuorum: 2,
             maxRetriesPerSeat: 1,
             cwd: tmpDir,
+            evidence: [
+              {
+                id: 'E1',
+                label: 'Round 1 workspace snapshot',
+                source: 'rebuttal-context.md',
+                text: 'Self-contained workspace snapshot for Round 2 rebuttal timeout retry test.'
+              }
+            ],
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Self-contained Round 2 rebuttal fixture',
+              phases: ['DELIBERATION'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: [
+                { source: 'rebuttal-context.md', evidenceId: 'E1', coverage: 'complete_artifact' }
+              ]
+            },
             judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
             seats: [
               { id: 'seat-a', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Seat A' },

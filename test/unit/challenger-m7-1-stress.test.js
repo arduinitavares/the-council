@@ -218,6 +218,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 4,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual cumulative budget test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -225,6 +232,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
               harness: 'mock',
               model: 'grok-4.7-xhigh',
               soul: 'Skeptic',
+              tools: 'none',
               timeoutMs: 120000,
               totalSeatBudgetMs: 100000
             },
@@ -290,6 +298,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual budget math test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             // Branch A: baseTimeoutMs is smallest (25000 < 90000 < remaining 90000)
@@ -385,6 +400,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual tool-loop test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -464,6 +486,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual voting override test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {

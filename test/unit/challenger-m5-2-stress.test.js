@@ -518,6 +518,13 @@ describe('Adversarial Stress Test: Milestone M5 Voting Optimization & Effort Dow
           minQuorum: 2,
           maxRetriesPerSeat: 1,
           totalSeatBudgetMs: 300000,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual voting retry test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {

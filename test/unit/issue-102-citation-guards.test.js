@@ -13,6 +13,8 @@ import {
   formatJudgePrompt,
   STANDARD_SOULS
 } from '../../src/seats/soul.js';
+import { CouncilEngine } from '../../src/engine/council-engine.js';
+import { MockAdapter } from '../../src/harness/mock.js';
 
 describe('Issue #102 Task 2: Portable citation normalization, forbidden path/artifact guards & read caps', () => {
   it('strips ONLY valid relative subpaths under trustedEphemeralRoots while leaving .. traversal, .council, and untrusted temp/host paths for rejection', () => {
@@ -222,5 +224,156 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
       tools: 'read-only'
     });
     assert.match(pJudgePriorOnly, /0 local workspace reads/i);
+  });
+
+  it('CouncilEngine rejects leaked forbidden/temp/.council citations in Deliberation, Vote, and Judge via retryable InvalidResponseError and normalizes trusted ephemeral subpaths cleanly', async () => {
+    const trustedRoot = path.join(os.tmpdir(), 'council-trusted-cwd-integration');
+    const forbiddenRoot = '/Users/private/secret-workspace';
+    const untrustedTmp = path.join(os.tmpdir(), 'untrusted-sandbox-leak');
+    const mock = new MockAdapter();
+    let delibCalls = 0;
+    let judgeCalls = 0;
+    let voteCalls = 0;
+
+    const origProof = mock.executeSeatProof.bind(mock);
+    mock.executeSeatProof = async (ctx) => {
+      if (ctx.seat.id === 's1') {
+        delibCalls += 1;
+        // Simulate isolated cwd adapter metadata on each fresh attempt
+        ctx._invocationMeta = {
+          ...(ctx._invocationMeta || {}),
+          trustedEphemeralRoots: [trustedRoot],
+          forbiddenWorkspaceRoots: [forbiddenRoot]
+        };
+        if (ctx.round === 1 && delibCalls === 1) {
+          return {
+            scope: 'auth-middleware',
+            kind: 'check',
+            statement: `Read ${forbiddenRoot}/leak.js before reasoning`,
+            source: 'local verification'
+          };
+        }
+        return {
+          scope: 'auth-middleware',
+          kind: 'check',
+          statement: `Verified ${path.join(trustedRoot, 'src/auth.js:12')} cleanly`,
+          source: 'direct tool observation'
+        };
+      }
+      return origProof(ctx);
+    };
+
+    const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+    mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+      judgeCalls += 1;
+      ctx._invocationMeta = {
+        ...(ctx._invocationMeta || {}),
+        trustedEphemeralRoots: [trustedRoot],
+        forbiddenWorkspaceRoots: [forbiddenRoot]
+      };
+      const base = await origJudge(ctx);
+      if (judgeCalls === 1) {
+        return {
+          ...base,
+          summary: `Judge accidentally leaked ${forbiddenRoot}/secret.md in summary`,
+          clauses: [{ id: 'C1', context: 'ctx', conclusion: 'ok' }],
+          proofDecisions: base.proofDecisions
+        };
+      }
+      if (judgeCalls === 2) {
+        return {
+          ...base,
+          summary: 'Clean summary',
+          clauses: [{ id: 'C1', context: 'ctx', conclusion: `Clause leaked .council/ledger.json` }],
+          proofDecisions: [
+            {
+              proofId: base.proofDecisions?.[0]?.proofId || 'P1',
+              status: 'admitted',
+              note: `Also saw ${path.join(trustedRoot, 'src/clean.js')}`
+            }
+          ]
+        };
+      }
+      return {
+        ...base,
+        summary: `Judge verified ${path.join(trustedRoot, 'src/auth.js:12')}`,
+        clauses: (base.clauses || []).map((c, idx) =>
+          idx === 0
+            ? {
+                ...c,
+                context: 'Auth guard',
+                conclusion: `${c.conclusion} (normalized ${path.join(trustedRoot, 'src/auth.js:12')})`
+              }
+            : c
+        )
+      };
+    };
+
+    const origVote = mock.executeSeatVote.bind(mock);
+    mock.executeSeatVote = async (ctx) => {
+      if (ctx.seat.id === 's1') {
+        voteCalls += 1;
+        ctx._invocationMeta = {
+          ...(ctx._invocationMeta || {}),
+          trustedEphemeralRoots: [trustedRoot],
+          forbiddenWorkspaceRoots: [forbiddenRoot]
+        };
+        if (ctx.round === 1 && voteCalls === 1) {
+          return {
+            vote: 'accept',
+            reason: `Confirmed via ${forbiddenRoot}/private/file.js`,
+            note: 'ok'
+          };
+        }
+        if (ctx.round === 1 && voteCalls === 2) {
+          const s1Proof = (ctx.state?.proofs || []).find((p) => p.seatId === 's1' && p.round === 1);
+          return {
+            vote: 'object',
+            proofId: s1Proof?.id || 'P1',
+            reason: `Confirmed via ${path.join(trustedRoot, 'src/auth.js:12')}`,
+            note: 'Normalized portable citation'
+          };
+        }
+        return { vote: 'accept' };
+      }
+      return origVote(ctx);
+    };
+
+    const engine = new CouncilEngine(
+      {
+        topic: 'Verify citation guards across all phases',
+        minQuorum: 2,
+        maxRounds: 2,
+        maxRetriesPerSeat: 2,
+        cwd: forbiddenRoot,
+        judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-5.4 (high)', maxRetries: 2 },
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only', cwd: forbiddenRoot },
+          { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' }
+        ]
+      },
+      { harnessResolver: () => mock }
+    );
+
+    const result = await engine.run();
+    assert.equal(result.ok, true, `Expected council to succeed after retryable InvalidResponseError retries; got ${JSON.stringify(result.verdict)}`);
+    assert.equal(delibCalls, 3, '2 attempts in Round 1 (1 leaked + 1 normalized) plus 1 attempt in Round 2');
+    assert.equal(judgeCalls, 4, '3 attempts in Round 1 (2 leaked + 1 clean) plus 1 attempt in Round 2');
+    assert.equal(voteCalls, 3, '2 attempts in Round 1 (1 leaked + 1 normalized object) plus 1 attempt in Round 2');
+
+    // Ensure normalized relative citation survived into committed state without trustedRoot prefix
+    const p1 = engine.state.proofs.find((p) => p.seatId === 's1' && p.round === 1);
+    assert.ok(p1, 's1 proof should be committed');
+    assert.ok(!p1.statement.includes(trustedRoot), 'trustedEphemeralRoot prefix must be stripped');
+    assert.match(p1.statement, /src\/auth\.js:12/);
+
+    // Ensure Judge & Vote retry diagnostics recorded InvalidResponseError retries and normalized objections
+    assert.equal(engine.state.judge.retryDiagnosticsHistory.length >= 2, true);
+    assert.ok(!engine.state.candidate.summary.includes(trustedRoot));
+    const s1Objection = (engine.state.objections || []).find((o) => o.seatId === 's1' && o.round === 1);
+    assert.ok(s1Objection, 's1 Round 1 normalized objection should be persisted');
+    assert.ok(!s1Objection.reason.includes(forbiddenRoot));
+    assert.ok(!s1Objection.reason.includes(trustedRoot));
+    assert.match(s1Objection.reason, /src\/auth\.js:12/);
   });
 });

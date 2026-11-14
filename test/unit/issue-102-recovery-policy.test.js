@@ -7,10 +7,18 @@ import {
   validateRetryFallbackCapability,
   planParticipantRecovery,
   resolveConfig,
-  validateConfig
+  validateConfig,
+  CouncilEngine
 } from '../../src/engine/index.js';
 import { transitionCouncil } from '../../src/machine/reducer.js';
 import { createInitialCouncilState } from '../../src/machine/state.js';
+import { MockAdapter } from '../../src/harness/mock.js';
+import {
+  HeadlessToolDeniedError,
+  TimeoutError,
+  InvalidResponseError,
+  QuotaExhaustionError
+} from '../../src/harness/adapter.js';
 
 describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Retry Diagnostics', () => {
   describe('extractVerificationDependencies', () => {
@@ -887,6 +895,264 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       assert.equal(state.phase, 'completed');
       assert.equal(state.judge.activeRetryDiagnostics, null);
       assert.equal(state.judge.retryDiagnosticsHistory.length, 2);
+    });
+  });
+
+  describe('CouncilEngine runtime integration', () => {
+    it('refuses HeadlessToolDeniedError (exitCode 0) when unattested and preserves valid sibling proofs on quorum collapse (#95)', async () => {
+      const mock = new MockAdapter();
+      let s2Calls = 0;
+
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's2') {
+          s2Calls += 1;
+          throw new HeadlessToolDeniedError('Tool permission prompt blocked', {
+            harness: 'codex',
+            seatId: 's2',
+            exitCode: 0,
+            isRetryable: true
+          });
+        }
+        return origProof(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Audit src/engine/council-engine.js:120 for quorum collapse invariants',
+          minQuorum: 2,
+          maxRounds: 1,
+          maxRetriesPerSeat: 2,
+          cwd: '/tmp/live-workspace-102',
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'read-only' }
+          ]
+        },
+        { harnessResolver: () => mock }
+      );
+
+      const result = await engine.run();
+      assert.equal(result.ok, false);
+      assert.equal(result.verdict.kind, 'Dissent Report (Below Quorum)');
+      assert.equal(s2Calls, 1, 'Unattested workspace seat must not enter tool-free retry after HeadlessToolDeniedError');
+      const s2 = engine.state.seats.find((s) => s.id === 's2');
+      assert.equal(s2.status, 'excused');
+      assert.match(s2.excusedReason, /insufficient self-contained evidence/i);
+      assert.ok(
+        engine.state.proofs.some((p) => p.seatId === 's1' && p.round === 1),
+        'Valid sibling proof from s1 must be conserved before quorum-collapse excusal (#95)'
+      );
+    });
+
+    it('initRoster ignores empty seat.cwd so config.cwd protects seat against unattested TimeoutError fallback', async () => {
+      const mock = new MockAdapter();
+      let s1Calls = 0;
+
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's1') {
+          s1Calls += 1;
+          throw new TimeoutError('Seat timed out after 1000ms', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
+        }
+        return origProof(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Check docs/spec.md for workspace verification rules',
+          minQuorum: 2,
+          maxRounds: 1,
+          maxRetriesPerSeat: 2,
+          cwd: '/tmp/global-live-cwd',
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' },
+            { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+          ]
+        },
+        { harnessResolver: () => mock }
+      );
+
+      // Simulate empty seat.cwd reaching initRoster directly (e.g. programmatically constructed seat object)
+      engine.config = {
+        ...engine.config,
+        seats: engine.config.seats.map((s) => (s.id === 's1' ? { ...s, cwd: '' } : s))
+      };
+      engine.initRoster();
+
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+      assert.equal(s1Calls, 1, 'Seat with empty string cwd inheriting config.cwd must not fall back tool-free on unattested topic');
+      const s1 = engine.state.seats.find((s) => s.id === 's1');
+      assert.equal(s1.cwd, '/tmp/global-live-cwd');
+      assert.equal(s1.status, 'excused');
+      assert.match(s1.excusedReason, /insufficient self-contained evidence/i);
+    });
+
+    it('allows at most ONE tool-free recovery per phase when selfContainedInput is present, while keeping multi-retry for votingTools none', async () => {
+      const mock = new MockAdapter();
+      const s1DelibContexts = [];
+      let s1VoteCalls = 0;
+
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's1') {
+          s1DelibContexts.push({ tools: ctx.tools, cwd: ctx.cwd, retryDiagnostics: ctx.retryDiagnostics ?? null });
+          if (s1DelibContexts.length === 1) {
+            throw new TimeoutError('Initial read-only timeout', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
+          }
+          throw new InvalidResponseError('Malformed JSON on tool-free retry', { harness: 'codex', seatId: 's1' });
+        }
+        return origProof(ctx);
+      };
+
+      const origVote = mock.executeSeatVote.bind(mock);
+      mock.executeSeatVote = async (ctx) => {
+        if (ctx.seat.id === 's3') {
+          s1VoteCalls += 1;
+          if (s1VoteCalls <= 2) {
+            throw new InvalidResponseError(`Transient parse failure #${s1VoteCalls}`, { harness: 'codex', seatId: 's3' });
+          }
+        }
+        return origVote(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Evaluate src/auth.js tradeoff design',
+          evidence: [
+            {
+              id: 'E1',
+              label: 'src/auth.js complete source',
+              source: 'src/auth.js',
+              text: '[E1] Full inline snapshot of src/auth.js lines 1-50'
+            }
+          ],
+          minQuorum: 2,
+          maxRounds: 1,
+          maxRetriesPerSeat: 3,
+          cwd: '/tmp/live-workspace-102',
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Embedded inline spec',
+            phases: ['DELIBERATION'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: [
+              { source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' }
+            ]
+          },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' },
+            { id: 's3', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S3', tools: 'none', votingTools: 'none' }
+          ]
+        },
+        { harnessResolver: () => mock }
+      );
+
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+      assert.equal(s1DelibContexts.length, 2, 'Should stop after single tool-free retry instead of burning remaining maxRetriesPerSeat=3');
+      assert.equal(s1DelibContexts[0].tools, 'read-only');
+      assert.equal(s1DelibContexts[0].retryDiagnostics, null);
+      assert.equal(s1DelibContexts[1].tools, 'none');
+      assert.equal(s1DelibContexts[1].cwd, undefined);
+      assert.equal(s1DelibContexts[1].retryDiagnostics?.attempt, 1);
+
+      const s1 = engine.state.seats.find((s) => s.id === 's1');
+      assert.equal(s1.status, 'excused');
+      assert.match(s1.excusedReason, /Tool-free recovery already used/i);
+
+      // s3 started voting natively with votingTools: 'none' so normal multi-retry (2 failures + 1 success = 3 calls) is preserved
+      assert.equal(s1VoteCalls, 3);
+      const s3 = engine.state.seats.find((s) => s.id === 's3');
+      assert.equal(s3.status, 'accepted');
+    });
+
+    it('applies opt-in retryEffortFallback with composer-2.5 null effort, skips downshift on QuotaExhaustionError, and ignores PID 429/401/403 noise', async () => {
+      const mock = new MockAdapter();
+      const s1Contexts = [];
+      const s2Contexts = [];
+      const s3Contexts = [];
+
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's1') {
+          s1Contexts.push({ model: ctx.model, reasoningEffort: ctx.reasoningEffort, tools: ctx.tools, retryDiagnostics: ctx.retryDiagnostics });
+          if (s1Contexts.length === 1) {
+            throw new TimeoutError('Timeout on gpt-5.4 high', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
+          }
+        } else if (ctx.seat.id === 's2') {
+          s2Contexts.push({ model: ctx.model, reasoningEffort: ctx.reasoningEffort, retryDiagnostics: ctx.retryDiagnostics });
+          if (s2Contexts.length === 1) {
+            throw new TimeoutError('Timeout on composer-2.5', { timeoutMs: 1000, harness: 'cursor', seatId: 's2' });
+          }
+        } else if (ctx.seat.id === 's3') {
+          s3Contexts.push({ model: ctx.model, retryDiagnostics: ctx.retryDiagnostics });
+          if (s3Contexts.length === 1) {
+            throw new QuotaExhaustionError('Rate limited 429', { harness: 'codex', seatId: 's3' });
+          }
+        } else if (ctx.seat.id === 's4-pid') {
+          throw new Error('(node:429) (node:401) (node:403) ExperimentalWarning: noisy runtime diagnostic');
+        }
+        return origProof(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Conceptual architecture verification',
+          minQuorum: 3,
+          maxRounds: 1,
+          maxRetriesPerSeat: 1,
+          retryEffortFallback: true,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Inline spec',
+            phases: ['DELIBERATION'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'cursor', model: 'composer-2.5', soul: 'S2', tools: 'none' },
+            { id: 's3', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S3', tools: 'none' },
+            { id: 's4-pid', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S4', tools: 'none' }
+          ]
+        },
+        {
+          harnessResolver: () => mock,
+          catalogByHarness: {
+            codex: ['gpt-5.4 (high)', 'gpt-5.4 (medium)'],
+            cursor: ['composer-2.5']
+          }
+        }
+      );
+
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // Wave 0 has null retryDiagnostics; Retry 1 carries structured retryDiagnostics + effort downshift for explicit high
+      assert.equal(s1Contexts[0].retryDiagnostics, null);
+      assert.equal(s1Contexts[1].tools, 'none');
+      assert.equal(s1Contexts[1].retryDiagnostics?.attempt, 1);
+      assert.equal(s1Contexts[1].retryDiagnostics?.fallbackApplied, true);
+      assert.equal(s1Contexts[1].retryDiagnostics?.effectiveEffort, 'medium');
+
+      // composer-2.5 must never receive an invented reasoningEffort
+      assert.equal(s2Contexts[0].retryDiagnostics, null);
+      assert.equal(s2Contexts[1].retryDiagnostics?.effectiveEffort, null);
+      assert.equal(s2Contexts[1].retryDiagnostics?.fallbackApplied, false);
+
+      // QuotaExhaustionError must preserve requested effort (fallbackApplied: false)
+      assert.equal(s3Contexts[0].retryDiagnostics, null);
+      assert.equal(s3Contexts[1].retryDiagnostics?.fallbackApplied, false);
+      assert.equal(s3Contexts[1].retryDiagnostics?.effectiveEffort, 'high');
+
+      // PID numbers 429 / 401 / 403 must NOT classify as QuotaExhaustionError or AuthenticationError
+      const s4 = engine.state.seats.find((s) => s.id === 's4-pid');
+      assert.notEqual(s4.status, 'fault_quota', 'PID 429 must never trigger fault_quota');
+      assert.equal(engine._classifyErrorClass(new Error('(node:429) (node:401) (node:403) Warning')), 'HarnessExecutionError');
     });
   });
 });

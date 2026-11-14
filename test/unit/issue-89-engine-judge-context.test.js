@@ -1013,6 +1013,13 @@ describe('Issue #89: Engine Judge Context, Cancellation Forwarding, Phase Timeou
           minQuorum: 2,
           maxRetriesPerSeat: 0,
           maxRetriesPerJudge: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual judge retry context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'custom', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             { id: 's1', harness: 'custom', model: 'gpt-6-astra (max)', soul: 'Seat 1' },

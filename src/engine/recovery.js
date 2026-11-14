@@ -19,8 +19,11 @@ export const VALID_SELF_CONTAINED_PHASES = Object.freeze([
 
 const VALID_PHASE_SET = new Set(VALID_SELF_CONTAINED_PHASES);
 const EFFORT_SET = new Set(ALLOWED_EFFORTS);
-const URL_REGEX =
-  /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]][^\s"'`<>[\]]*/gi;
+const ENDPOINT_BALANCED_TAIL_SOURCE = '(?:[^\\s"\'`<>\\[\\]]|\\[[^\\s"\'`<>\\[\\]]*\\])*';
+const URL_REGEX = new RegExp(
+  `\\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\\+srv)?|grpc|s3|gs):\\/\\/[^\\s"'\`<>()[\\]]${ENDPOINT_BALANCED_TAIL_SOURCE}`,
+  'gi'
+);
 const EXPLICIT_DELIMITED_TOKEN_REGEX = /(?:`[^`\s]+`|"[^"\s]+"|'[^'\s]+'|<[^<>\s]+>)/g;
 const BROAD_RUN_SCAN_REGEX = /[^\s"'`<>;]+/g;
 const DIRECTORY_CANDIDATE_REGEX = /^(?:\.\.?\/|\/)?(?:[A-Za-z0-9_.-]+\/)+$/;
@@ -50,13 +53,11 @@ const BARE_DOMAIN_EXACT_REGEX = new RegExp(
 const BARE_DOMAIN_LOOKBEHIND_SOURCE = '(?<![A-Za-z0-9_/$-]|(?<!\\.)\\.)';
 const BARE_DOMAIN_HOST_SOURCE = `(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}`;
 const BARE_DOMAIN_WITH_SUFFIX_REGEX = new RegExp(
-  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{1,5})?[/?#][^\\s"'` +
-    '`<>\\[\\]]*',
+  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{1,5})?[/?#]${ENDPOINT_BALANCED_TAIL_SOURCE}`,
   'gi'
 );
 const BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE =
-  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{2,5})?(?:[/?#][^\\s"'` +
-  '`<>\\[\\]]*)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
+  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{2,5})?(?:[/?#]${ENDPOINT_BALANCED_TAIL_SOURCE})?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])`;
 
 const KNOWN_STANDALONE_EXTENSIONLESS_FILES = new Set([
   'Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'Jenkinsfile',
@@ -151,7 +152,25 @@ const NAMED_EXTERNAL_STANDARD_REGEX = new RegExp(
   `\\b(?:RFC[\\s-]*\\d+|ISO(?:\\/IEC)?[\\s-]*\\d+(?:[-:]\\d+)*|CVE-\\d{4}-\\d+|CWE-\\d+|IEEE[\\s-]*\\d+(?:\\.\\d+)*|NIST[\\s-]+(?:SP[\\s-]+)?\\d+(?:[-.]\\d+)*|FIPS[\\s-]*\\d+(?:-\\d+)?|POSIX(?:\\.\\d+(?:-\\d+)?)?|BCP[\\s-]*\\d+|ECMA-\\d+|OWASP(?:\\s+(?:ASVS|Top\\s+\\d+|SAMM))?|W3C(?:\\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\\s+\\d+(?:\\.\\d+)*)?)\\b`,
   'gi'
 );
-const CHECK_COMMAND_OR_REPO_REGEX = /(?:`[^`]+`|\b(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl)\b(?:\s+[-/\w.]|$)|\b(?:entire|whole|across(?:\s+the)?)\s+(?:repo|repository|codebase|workspace)\b|\b(?:repo(?:sitory)?|codebase)\s+(?:check|scan|audit|wide)\b|\brepo-wide\b|\brun\s+(?:tests?|command|script)\b)/i;
+const CLI_COMMAND_VERB_SOURCE =
+  '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|uname|cat|ls|whoami|printenv|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+const QUOTED_STRICT_CLI_VERB_SOURCE =
+  '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\\s+test|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|uname|cat|ls|whoami|printenv|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+const CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
+  '(?:' +
+    '`[^`]+`' +
+    `|"(?:\\.\\/[^"\\s]+|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\b[^"]*))"` +
+    `|'(?:\\.\\/[^'\\s]+|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\b[^']*))'` +
+    `|(?:["'])\\s*(?:make|head|tail|find|stat|ps|df|du|env|which)\\b\\s*(?:-[A-Za-z0-9]+|[./~]|$)[^"']*["']` +
+    `|\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)` +
+    '|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])' +
+    '|\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b' +
+    '|\\b(?:repo(?:sitory)?|codebase)\\s+(?:check|scan|audit|wide)\\b' +
+    '|\\brepo-wide\\b' +
+    '|\\brun\\s+(?:tests?|command|script)\\b' +
+    ')',
+  'i'
+);
 const CHECK_EXTERNAL_SOURCE_REGEX = new RegExp(
   `\\b(?:rfc\\s*\\d+|iso[\\s/-]*\\d+|ietf|w3c|owasp|cve-\\d{4}-\\d+|mdn|openapi|external(?:\\s+\\w+)?|upstream(?:\\s+\\w+)?|remote(?:\\s+\\w+)?|third[- ]party(?:\\s+\\w+)?|(?:rest|http|graphql|vendor)\\s+api)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE}`,
   'i'
@@ -541,6 +560,27 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   return 'leave';
 }
 
+function inspectNonStarGlob(value) {
+  const hasCharClass = CHAR_CLASS_GLOB_TEST_REGEX.test(value);
+  const hasBraceList = BRACE_LIST_GLOB_TEST_REGEX.test(value);
+  const hasExtGlob = EXT_GLOB_TEST_REGEX.test(value);
+  const hasQuestionGlob = value.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(value);
+  return {
+    hasNonStarGlob: hasCharClass || hasBraceList || hasExtGlob || hasQuestionGlob,
+    hasBraceList,
+    hasExtGlob
+  };
+}
+
+function replaceNonStarGlobGroups(value) {
+  return value
+    .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
+    .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
+    .replace(BRACE_LIST_GLOB_REPLACE_REGEX, 'x')
+    .replace(EXT_GLOB_REPLACE_REGEX, 'x')
+    .replace(/\?+/g, 'x');
+}
+
 function extractBroadFromSubSpan(run, subStart, subEnd) {
   const s = run.slice(subStart, subEnd);
   const m = s.length;
@@ -620,26 +660,20 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
   if (trimmed.includes('*')) {
     looksBroad = hasRelativePrefix || trimmed.includes('/') || trimmed.includes('.');
   } else if (trimmed.endsWith('/')) {
+    const { hasNonStarGlob } = inspectNonStarGlob(candidate);
+    const skeleton = hasNonStarGlob ? replaceNonStarGlobGroups(candidate) : candidate;
     looksBroad =
-      DIRECTORY_CANDIDATE_REGEX.test(candidate) &&
-      trimmed.length > 1 &&
-      /[A-Za-z0-9_-]/.test(trimmed);
+      DIRECTORY_CANDIDATE_REGEX.test(skeleton) &&
+      skeleton.length > 1 &&
+      /[A-Za-z0-9_-]/.test(skeleton);
   } else if (hasRelativePrefix || trimmed.includes('/')) {
     const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
-    const hasCharClass = CHAR_CLASS_GLOB_TEST_REGEX.test(candidateBase);
-    const hasBraceList = BRACE_LIST_GLOB_TEST_REGEX.test(candidateBase);
-    const hasExtGlob = EXT_GLOB_TEST_REGEX.test(candidateBase);
-    const hasQuestionGlob = candidateBase.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(candidateBase);
-    if (hasCharClass || hasBraceList || hasExtGlob || hasQuestionGlob) {
-      const skeleton = candidateBase
-        .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
-        .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
-        .replace(BRACE_LIST_GLOB_REPLACE_REGEX, 'x')
-        .replace(EXT_GLOB_REPLACE_REGEX, 'x')
-        .replace(/\?+/g, 'x');
+    const { hasNonStarGlob, hasBraceList, hasExtGlob } = inspectNonStarGlob(candidateBase);
+    if (hasNonStarGlob) {
+      const skeleton = replaceNonStarGlobGroups(candidateBase);
       looksBroad =
         NON_STAR_PATH_SKELETON_REGEX.test(skeleton) &&
-        classifyFileCandidate(skeleton) === 'file';
+        (hasExtGlob || hasBraceList || classifyFileCandidate(skeleton) === 'file');
     }
   }
 
@@ -1164,13 +1198,54 @@ function augmentProofDependencies(proofList, deps) {
 
     if (proof.kind === 'check') {
       // Check command/repo patterns against originalSource BEFORE delimiter unwrapping so
-      // backticked commands (e.g. `` `ls` ``, `` `cat README` ``) preserve their command veto.
+      // quoted/backticked commands (e.g. `` `ls` ``, `"uname -a"`, `'cat README'`) preserve their command veto.
+      const trimmedOriginalSource = originalSource ? originalSource.trim() : '';
+      const isQuoteOrBacktickWrapped = Boolean(
+        trimmedOriginalSource.length >= 2 &&
+          ((trimmedOriginalSource.startsWith('"') && trimmedOriginalSource.endsWith('"')) ||
+            (trimmedOriginalSource.startsWith("'") && trimmedOriginalSource.endsWith("'")) ||
+            (trimmedOriginalSource.startsWith('`') && trimmedOriginalSource.endsWith('`')))
+      );
+      const sourceTextToInspect = unwrappedSource || trimmedOriginalSource;
+      const sourceIsPureNamedStandard = (() => {
+        if (!sourceTextToInspect || CHECK_COMMAND_OR_REPO_REGEX.test(sourceTextToInspect)) {
+          return false;
+        }
+        const singleDeps = extractVerificationDependencies([sourceTextToInspect]);
+        return (
+          singleDeps.workspaceFileDeps.length === 0 &&
+          singleDeps.workspaceBroadDeps.length === 0 &&
+          singleDeps.externalDeps.length === 1 &&
+          singleDeps.externalDeps[0].toLowerCase() === sourceTextToInspect.trim().toLowerCase()
+        );
+      })();
+      const hasCliOperatorOrFlagInSource = Boolean(
+        sourceTextToInspect &&
+          /(?:&&|\|\||[;|><]|\s-{1,2}[A-Za-z0-9]|\$\(|\.\.?\/[^\s]+\.(?:sh|bash|zsh|ps1|bat|cmd)\b)/i.test(
+            sourceTextToInspect
+          )
+      );
+      const isSourceCliInvocation = Boolean(
+        sourceTextToInspect &&
+          /^(?:pwd|env|ps|df|du|id|which|echo|printf|find|head|tail|stat|diff|sort|cut|file|command)\b(?:\s+|$)/i.test(
+            sourceTextToInspect.trim()
+          )
+      );
+      const isExecutableScriptSource = Boolean(
+        trimmedOriginalSource &&
+          ((isQuoteOrBacktickWrapped && /^\.\//.test(sourceTextToInspect.trim())) ||
+            /^\.\.?\/[^\s]+\.(?:sh|bash|zsh|ps1|bat|cmd)$/i.test(sourceTextToInspect.trim()))
+      );
       const sourceIsCommandOrRepo =
-        !sourceHasConcreteFile &&
-        !sourceIsSingleExternalEndpoint &&
         Boolean(originalSource) &&
-        (CHECK_COMMAND_OR_REPO_REGEX.test(originalSource) ||
-          (Boolean(unwrappedSource) && CHECK_COMMAND_OR_REPO_REGEX.test(unwrappedSource)));
+        (isExecutableScriptSource ||
+          (!sourceHasConcreteFile &&
+            !sourceIsSingleExternalEndpoint &&
+            (CHECK_COMMAND_OR_REPO_REGEX.test(originalSource) ||
+              (Boolean(unwrappedSource) && CHECK_COMMAND_OR_REPO_REGEX.test(unwrappedSource)) ||
+              isSourceCliInvocation ||
+              ((isQuoteOrBacktickWrapped || hasCliOperatorOrFlagInSource) &&
+                !sourceIsPureNamedStandard))));
       const statementMatch = [rawStatement, rawAdmittedStatement].find(
         (s) => s && CHECK_COMMAND_OR_REPO_REGEX.test(s)
       );

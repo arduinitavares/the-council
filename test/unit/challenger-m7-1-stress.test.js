@@ -703,7 +703,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
       }
     });
 
-    it('4.2 caps local reads to 3–5 targeted spot-checks when hasWorkspaceCwd && resolvedEvidence.length > 0', () => {
+    it('4.2 caps local reads to 3–5 targeted spot-checks when hasWorkspaceCwd && resolvedEvidence.length > 0 (with path-citing Judge proofs, and 0 reads without)', () => {
       const delibPrompt = formatDeliberationPrompt({
         soul: 'Impartial Auditor',
         seat: { id: 's1', tools: 'read-only' },
@@ -716,7 +716,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
         judge: { id: 'j1', soul: 'Impartial Judge' },
         topic: 'Targeted read bounds',
         round: 1,
-        proofs: [],
+        proofs: [{ id: 'P1', kind: 'citation', source: 'kernel/arch.md:1', statement: 'Preemption timer interval is 10ms.' }],
         evidence: testEvidence,
         cwd: '/Users/aaat/projects/target-repo'
       });
@@ -724,6 +724,17 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
       for (const prompt of [delibPrompt, judgePrompt]) {
         assert.match(prompt, /at most 3–5 targeted reads/);
       }
+
+      const judgeZeroReadsPrompt = formatJudgePrompt({
+        judge: { id: 'j1', soul: 'Impartial Judge' },
+        topic: 'Targeted read bounds',
+        round: 1,
+        proofs: [],
+        evidence: testEvidence,
+        cwd: '/Users/aaat/projects/target-repo'
+      });
+      assert.match(judgeZeroReadsPrompt, /use 0 local workspace reads/);
+      assert.doesNotMatch(judgeZeroReadsPrompt, /at most 3–5 targeted reads/);
     });
 
     it('4.3 frames evidence as attributed & challengeable baseline context across all prompts', () => {

@@ -463,5 +463,62 @@ describe('Issue #96: Isolated Relative-"." Workspace Contract & Anti-Baiting Pro
       assert.match(judgeUncited, /0 local workspace reads/);
       assert.match(judgeUncited, /do NOT reopen or re-audit Prior-Round Admitted Proofs/i);
     });
+
+    it('ReReview-102 Round 23 fixes: aligns Judge read-budget citation detection for extensionless/dotfile/range paths and ignores baseline evidence', () => {
+      const workspaceCwd = '/tmp/r23-council-ws';
+
+      for (const source of [
+        'Makefile:12',
+        'Makefile',
+        'Dockerfile',
+        'Containerfile',
+        'CMakeLists',
+        '.env:3',
+        '.env',
+        '.env.local',
+        '.flake8',
+        'configure:10',
+        'README:10',
+        'src/engine/',
+        'src/**/*.js',
+        'file:///tmp/r23-council-ws/src/index.js',
+        'foo:10-20'
+      ]) {
+        const prompt = formatJudgePrompt({
+          judge: { id: 'judge-96', cwd: workspaceCwd },
+          topic: 'Audit workspace build/env behavior',
+          round: 1,
+          proofs: [{ id: 'P1', kind: 'check', scope: 'Build', source, statement: `Inspect ${source}` }],
+          tools: 'read-only'
+        });
+        assert.match(prompt, /3.?5 targeted reads/, `Expected 3-5 targeted reads for proof source ${JSON.stringify(source)}`);
+        assert.doesNotMatch(prompt, /0 local workspace reads/, `Did not expect 0 local workspace reads for ${JSON.stringify(source)}`);
+      }
+
+      const judgeEvidenceIgnored = formatJudgePrompt({
+        judge: { id: 'judge-96', cwd: workspaceCwd },
+        topic: 'Conceptual architecture tradeoff',
+        round: 2,
+        previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+        evidence: [{ id: 'E1', label: 'Prior file', source: 'src/old.js:1', text: 'export const old = 1;' }],
+        priorAdmittedProofs: [{ id: 'P0', round: 1, source: 'src/old.js:1', statement: 'Old', status: 'admitted' }],
+        openObjections: [{
+          id: 'O1',
+          seatId: 's2',
+          proofId: 'P0',
+          reason: 'Scope disagreement on Node.js v22.1.0 pros/cons, test/prod, cmd/ctrl, read/write/execute, and openapi.org/v1/spec.json'
+        }],
+        proofs: [{
+          id: 'P1',
+          kind: 'derivation',
+          scope: 'Logic',
+          source: 'https://example.com/a/b.js',
+          statement: 'SECURITY: TLS 1.3 NOTICE on Node.js v22.1.0 without local files'
+        }],
+        tools: 'read-only'
+      });
+      assert.match(judgeEvidenceIgnored, /0 local workspace reads/);
+      assert.doesNotMatch(judgeEvidenceIgnored, /3.?5 targeted/);
+    });
   });
 });

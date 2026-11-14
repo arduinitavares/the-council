@@ -10,6 +10,7 @@
  */
 
 import { VALID_PROOF_KINDS } from '../types.js';
+import { extractVerificationDependencies } from '../engine/recovery.js';
 
 /**
  * Catalog of standard pre-configured Souls for diverse model temperaments.
@@ -210,25 +211,40 @@ const ISOLATED_WORKSPACE_PATH_DIRECTIVE =
 const CLARIFICATION_WORKSPACE_DIRECTIVE =
   'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy (and .codegraph-free) when ".council" or ".codegraph" exists on the host); prefer native read/search tools (Read/read_file, Glob, Grep, LS) over headless Bash or codegraph CLI invocations whenever native tools suffice, passing only "."-relative paths (or an absolute path strictly inside your current isolated workspace directory if a native tool schema requires one). If no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS. Keep any referenced paths portable and repository-relative only (never echo temporary copy directory names, raw temp paths, or host repository paths).';
 
-const WORKSPACE_PATH_SLASH_RE =
-  /(?:^|[\s"'`(\[{:])(?:\.?\.?\/(?:[A-Za-z0-9_.\[\]-]+\/)*[A-Za-z0-9_.\[\]-]+|(?:src|test|tests|lib|bin|docs|doc|scripts|configs|config|skills|packages|apps|cmd|internal|pkg|drivers|kernel|include)\/[A-Za-z0-9_.\[\]-]+(?:\/[A-Za-z0-9_.\[\]-]+)*|(?:[A-Za-z0-9_.-]+\/){2,}[A-Za-z0-9_.\[\]-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.(?:js|mjs|cjs|ts|tsx|jsx|json|jsonl|md|mdx|txt|ya?ml|toml|ini|cfg|conf|env|lock|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|css|scss|html|xml|svg|sql|csv|log|proto|graphql|wasm|map|vue|svelte))(?::\d+(?:-\d+)?)?(?=$|[\s"'`),.\]}:;?!])/i;
-
-const WORKSPACE_ROOT_FILE_RE =
-  /(?:^|[\s"'`(\[{:])[A-Za-z0-9_.-]+\.(?:js|mjs|cjs|ts|tsx|jsx|json|jsonl|md|mdx|txt|ya?ml|toml|ini|cfg|conf|env|lock|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|css|scss|html|xml|svg|sql|csv|log|proto|graphql|wasm|map|vue|svelte)(?::\d+(?:-\d+)?)?(?=$|[\s"'`),.\]}:;?!])/i;
-
-function textCitesWorkspacePath(text) {
-  if (typeof text !== 'string' || !text.trim()) return false;
-  // Ignore external URLs (http/https/psql/etc.) while retaining file:// and repo-relative paths.
-  const withoutUrls = text.replace(/\b(?!file:\/\/)[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
-  return WORKSPACE_PATH_SLASH_RE.test(withoutUrls) || WORKSPACE_ROOT_FILE_RE.test(withoutUrls);
-}
-
-function itemsCiteWorkspacePath(items, keys) {
-  if (!Array.isArray(items) || items.length === 0) return false;
-  return items.some((item) =>
-    item &&
-    typeof item === 'object' &&
-    keys.some((k) => textCitesWorkspacePath(item[k]))
+function judgeItemsCiteWorkspacePath(proofs, openObjections) {
+  const texts = [];
+  const structuredSources = [];
+  if (Array.isArray(proofs)) {
+    for (const p of proofs) {
+      if (!p || typeof p !== 'object') continue;
+      if (typeof p.source === 'string' && p.source.trim()) structuredSources.push(p.source);
+      if (typeof p.statement === 'string' && p.statement.trim()) texts.push(p.statement);
+      if (typeof p.scope === 'string' && p.scope.trim()) texts.push(p.scope);
+    }
+  }
+  if (Array.isArray(openObjections)) {
+    for (const o of openObjections) {
+      if (!o || typeof o !== 'object') continue;
+      if (typeof o.reason === 'string' && o.reason.trim()) texts.push(o.reason);
+    }
+  }
+  if (texts.length === 0 && structuredSources.length === 0) {
+    return false;
+  }
+  if ([...structuredSources, ...texts].some((s) => /\bfile:\/\/\S+/i.test(s))) {
+    return true;
+  }
+  const deps = extractVerificationDependencies(texts, { structuredSources });
+  if (deps.workspaceFileDeps.length > 0) {
+    return true;
+  }
+  return deps.workspaceBroadDeps.some(
+    (dep) =>
+      typeof dep === 'string' &&
+      dep.length > 0 &&
+      !/\s/.test(dep) &&
+      !/^(?:\d*[<>]|&>|\$\(|`)/.test(dep) &&
+      (dep.endsWith('/') || /[*?[\]{}]/.test(dep))
   );
 }
 
@@ -710,11 +726,8 @@ export function formatJudgePrompt({
   ];
 
   if (resolvedTools === 'read-only') {
-    const hasCitedWorkspacePaths =
-      itemsCiteWorkspacePath(proofs, ['source', 'statement', 'scope']) ||
-      itemsCiteWorkspacePath(resolvedOpenObjections, ['reason']);
-    const hasEvidenceWorkspacePaths = itemsCiteWorkspacePath(resolvedEvidence, ['source']);
-    const shouldAllowSpotCheckReads = hasCitedWorkspacePaths || hasEvidenceWorkspacePaths;
+    const hasCitedWorkspacePaths = judgeItemsCiteWorkspacePath(proofs, resolvedOpenObjections);
+    const shouldAllowSpotCheckReads = hasCitedWorkspacePaths;
 
     const judgeEvidenceGuidance = resolvedEvidence.length > 0
       ? (hasWorkspaceCwd

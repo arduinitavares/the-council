@@ -22,8 +22,17 @@ const EFFORT_SET = new Set(ALLOWED_EFFORTS);
 const URL_REGEX =
   /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]][^\s"'`<>[\]]*/gi;
 const EXPLICIT_DELIMITED_TOKEN_REGEX = /(?:`[^`\s]+`|"[^"\s]+"|'[^'\s]+'|<[^<>\s]+>)/g;
-const GLOB_REGEX =
-  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`()[\],;*]*\*[^\s"'`()[\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const BROAD_RUN_SCAN_REGEX = /[^\s"'`<>;]+/g;
+const DIRECTORY_CANDIDATE_REGEX = /^(?:\.\.?\/|\/)?(?:[A-Za-z0-9_.-]+\/)+$/;
+const NON_STAR_PATH_SKELETON_REGEX =
+  /^(?:\.\.?\/|\/)?\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\/\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*$/;
+const CHAR_CLASS_GLOB_REPLACE_REGEX = /\[[^[\]\s]+\]/g;
+const BRACE_LIST_GLOB_REPLACE_REGEX = /\{[^{},\s]+(?:,[^{},\s]+)+\}/g;
+const EXT_GLOB_REPLACE_REGEX = /[@+?!]\([^()\s]+\)/g;
+const CHAR_CLASS_GLOB_TEST_REGEX = /\[[^[\]\s]+\]/;
+const BRACE_LIST_GLOB_TEST_REGEX = /\{[^{},\s]+(?:,[^{},\s]+)+\}/;
+const EXT_GLOB_TEST_REGEX = /[@+?!]\([^()\s]+\)/;
+const QUERY_PARAM_ASSIGN_REGEX = /\?[^?/\s=]*=/;
 
 const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
   'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'mil', 'int',
@@ -532,6 +541,185 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   return 'leave';
 }
 
+function extractBroadFromSubSpan(run, subStart, subEnd) {
+  const s = run.slice(subStart, subEnd);
+  const m = s.length;
+  if (m === 0 || (!s.includes('*') && !s.includes('/') && !s.includes('?'))) {
+    return null;
+  }
+
+  const pairOf = new Int32Array(m).fill(-1);
+  const parenStack = [];
+  const bracketStack = [];
+  for (let i = 0; i < m; i += 1) {
+    const ch = s[i];
+    if (ch === '(') {
+      parenStack.push(i);
+    } else if (ch === ')' && parenStack.length > 0) {
+      const open = parenStack.pop();
+      pairOf[open] = i;
+      pairOf[i] = open;
+    } else if (ch === '[') {
+      bracketStack.push(i);
+    } else if (ch === ']' && bracketStack.length > 0) {
+      const open = bracketStack.pop();
+      pairOf[open] = i;
+      pairOf[i] = open;
+    }
+  }
+
+  const hasStar = s.includes('*');
+  let lo = 0;
+  let hi = m;
+  let strippedBangQuestionColon = false;
+
+  while (lo < hi) {
+    const last = s[hi - 1];
+    if (last === '!' || last === '?' || last === ':') {
+      strippedBangQuestionColon = true;
+      hi -= 1;
+      continue;
+    }
+    if (last === '.' && hi - lo > 1 && (hasStar || !strippedBangQuestionColon)) {
+      hi -= 1;
+      continue;
+    }
+    const first = s[lo];
+    if ((first === '(' || first === '[') && pairOf[lo] === hi - 1) {
+      lo += 1;
+      hi -= 1;
+      continue;
+    }
+    if ((first === '(' || first === '[') && (pairOf[lo] === -1 || pairOf[lo] >= hi)) {
+      lo += 1;
+      continue;
+    }
+    if ((last === ')' || last === ']') && (pairOf[hi - 1] === -1 || pairOf[hi - 1] < lo)) {
+      hi -= 1;
+      continue;
+    }
+    break;
+  }
+
+  if (lo >= hi) {
+    return null;
+  }
+
+  const candidate = s.slice(lo, hi);
+  const hasRelativePrefix = candidate.startsWith('./') || candidate.startsWith('../');
+  const trimmed = candidate.replace(/^\.\//, '');
+  if (!trimmed) {
+    return null;
+  }
+  const firstSeg = trimmed.split('/')[0];
+  if (!hasRelativePrefix && !candidate.startsWith('/') && isRecognizedBareDomainAuthority(firstSeg, true)) {
+    return null;
+  }
+
+  let looksBroad = false;
+  if (trimmed.includes('*')) {
+    looksBroad = hasRelativePrefix || trimmed.includes('/') || trimmed.includes('.');
+  } else if (trimmed.endsWith('/')) {
+    looksBroad =
+      DIRECTORY_CANDIDATE_REGEX.test(candidate) &&
+      trimmed.length > 1 &&
+      /[A-Za-z0-9_-]/.test(trimmed);
+  } else if (hasRelativePrefix || trimmed.includes('/')) {
+    const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
+    const hasCharClass = CHAR_CLASS_GLOB_TEST_REGEX.test(candidateBase);
+    const hasBraceList = BRACE_LIST_GLOB_TEST_REGEX.test(candidateBase);
+    const hasExtGlob = EXT_GLOB_TEST_REGEX.test(candidateBase);
+    const hasQuestionGlob = candidateBase.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(candidateBase);
+    if (hasCharClass || hasBraceList || hasExtGlob || hasQuestionGlob) {
+      const skeleton = candidateBase
+        .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
+        .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
+        .replace(BRACE_LIST_GLOB_REPLACE_REGEX, 'x')
+        .replace(EXT_GLOB_REPLACE_REGEX, 'x')
+        .replace(/\?+/g, 'x');
+      looksBroad =
+        NON_STAR_PATH_SKELETON_REGEX.test(skeleton) &&
+        classifyFileCandidate(skeleton) === 'file';
+    }
+  }
+
+  if (!looksBroad) {
+    return null;
+  }
+
+  return {
+    trimmed,
+    maskStart: subStart + lo,
+    maskEnd: subStart + hi
+  };
+}
+
+function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps) {
+  return masked.replace(BROAD_RUN_SCAN_REGEX, (run) => {
+    if (!run.includes('*') && !run.includes('/') && !run.includes('?')) {
+      return run;
+    }
+
+    const runLen = run.length;
+    const braceCloseAt = new Int32Array(runLen).fill(-1);
+    const braceStack = [];
+    for (let j = 0; j < runLen; j += 1) {
+      const ch = run[j];
+      if (ch === '{') {
+        braceStack.push(j);
+      } else if (ch === '}' && braceStack.length > 0) {
+        braceCloseAt[braceStack.pop()] = j;
+      }
+    }
+
+    const hits = [];
+    let activeBraceDepth = 0;
+    let subStart = 0;
+    for (let j = 0; j < runLen; j += 1) {
+      const ch = run[j];
+      if (ch === '{' && braceCloseAt[j] !== -1) {
+        activeBraceDepth += 1;
+      } else if (ch === '}' && activeBraceDepth > 0) {
+        activeBraceDepth -= 1;
+      } else if (ch === ',' && activeBraceDepth === 0) {
+        if (j > subStart) {
+          const hit = extractBroadFromSubSpan(run, subStart, j);
+          if (hit) hits.push(hit);
+        }
+        subStart = j + 1;
+      } else if (ch === ']' && j + 1 < runLen && run[j + 1] === '(' && activeBraceDepth === 0) {
+        const splitPos = j + 1;
+        if (splitPos > subStart) {
+          const hit = extractBroadFromSubSpan(run, subStart, splitPos);
+          if (hit) hits.push(hit);
+        }
+        subStart = splitPos;
+      }
+    }
+    if (runLen > subStart) {
+      const hit = extractBroadFromSubSpan(run, subStart, runLen);
+      if (hit) hits.push(hit);
+    }
+
+    if (hits.length === 0) {
+      return run;
+    }
+
+    let out = '';
+    let cursor = 0;
+    for (const { trimmed, maskStart, maskEnd } of hits) {
+      if (!seenBroad.has(trimmed)) {
+        seenBroad.add(trimmed);
+        workspaceBroadDeps.push(trimmed);
+      }
+      out += run.slice(cursor, maskStart) + ' '.repeat(maskEnd - maskStart);
+      cursor = maskEnd;
+    }
+    out += run.slice(cursor);
+    return out;
+  });
+}
+
 /**
  * Extract workspace file references, broad directory/glob exploration patterns,
  * and external URLs/standards/domains from prompt/topic/candidate/proof text inputs.
@@ -636,29 +824,9 @@ export function extractVerificationDependencies(inputs, options = {}) {
     // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction.
     masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
 
-    // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`),
+    // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`, `src/*[0-9].js`),
     //    leaving unprefixed bare domains with trailing slashes or wildcards intact for external detection.
-    masked = masked.replace(GLOB_REGEX, (full, candidate) => {
-      const cleanedCandidate = candidate.includes('*') ? candidate.replace(/\.(?=$)/, '') : candidate;
-      const hasRelativePrefix = cleanedCandidate.startsWith('./') || cleanedCandidate.startsWith('../');
-      const trimmed = cleanedCandidate.replace(/^\.\//, '');
-      const firstSeg = trimmed.split('/')[0];
-      if (!hasRelativePrefix && !cleanedCandidate.startsWith('/') && isRecognizedBareDomainAuthority(firstSeg, true)) {
-        return full;
-      }
-      const looksBroad = trimmed.includes('*')
-        ? (trimmed.includes('/') || trimmed.includes('.'))
-        : (trimmed.endsWith('/') && trimmed.length > 1 && /[A-Za-z0-9_-]/.test(trimmed));
-      if (!looksBroad) {
-        return full;
-      }
-      if (!seenBroad.has(trimmed)) {
-        seenBroad.add(trimmed);
-        workspaceBroadDeps.push(trimmed);
-      }
-      const idx = full.indexOf(cleanedCandidate);
-      return `${full.slice(0, idx)}${' '.repeat(cleanedCandidate.length)}${full.slice(idx + cleanedCandidate.length)}`;
-    });
+    masked = extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps);
 
     // 4. Extract concrete workspace files BEFORE named external standards so file paths like
     //    `src/openapi.js` or `docs/rfc9110.md` are recorded as files and masked from standard matching.

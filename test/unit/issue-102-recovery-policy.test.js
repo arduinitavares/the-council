@@ -3319,5 +3319,235 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         assert.ok(elapsedMs < 25, `Expected <25ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
       }
     });
+
+    it('ReReview-102 Round 7 fix: preserves character-class, bracketed, brace, extglob, and wildcard workspace globs while keeping 48KB delimiter scans linear', async () => {
+      // 1. Direct extractVerificationDependencies assertions across glob & non-glob shapes
+      const expectedGlobCases = [
+        ['Inspect src/auth.js and src/*[0-9].js', ['src/*[0-9].js']],
+        ['Inspect src/auth.js and src/**/[ab].js', ['src/**/[ab].js']],
+        ['Inspect src/auth.js and [a-z]*.js', ['[a-z]*.js']],
+        ['Inspect src/auth.js and (src/*[0-9].js).', ['src/*[0-9].js']],
+        ['Inspect src/auth.js and [src/**/[ab].js]!', ['src/**/[ab].js']],
+        ['Inspect src/auth.js and `src/*[0-9].js`', ['src/*[0-9].js']],
+        ['Inspect src/auth.js and src/@(a|b)/*.js', ['src/@(a|b)/*.js']],
+        ['Inspect src/auth.js and src/*.{js,ts}', ['src/*.{js,ts}']],
+        ['Inspect src/auth.js and src/[ab].js', ['src/[ab].js']],
+        ['Inspect src/auth.js and src/{a,b}.js', ['src/{a,b}.js']],
+        ['Inspect src/auth.js and src/auth?.js', ['src/auth?.js']],
+        ['See [glob](src/*[0-9].js) and [file](src/auth.js)', ['src/*[0-9].js']],
+        ['Inspect src/auth.js and src/*[[:digit:]].js', ['src/*[[:digit:]].js']]
+      ];
+
+      for (const [text, expectedBroad] of expectedGlobCases) {
+        assert.deepEqual(
+          extractVerificationDependencies([text]),
+          {
+            workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+            workspaceBroadDeps: expectedBroad,
+            externalDeps: []
+          },
+          `Expected broad workspace deps ${JSON.stringify(expectedBroad)} for: ${text}`
+        );
+      }
+
+      // Non-glob prose/citations/brackets must NOT trigger false-positive broad workspace deps
+      assert.deepEqual(
+        extractVerificationDependencies([
+          'Verify **[E1]** and *(note)* and [E1]/[E2] and seats[0].key in src/auth.js?'
+        ]),
+        {
+          workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: []
+        }
+      );
+
+      // 2. Readiness & full mocked CouncilEngine refusal matrix across all 4 phases x both error classes
+      const globTopics = [
+        { token: 'src/*[0-9].js', expectedBroad: 'src/*[0-9].js' },
+        { token: 'src/**/[ab].js', expectedBroad: 'src/**/[ab].js' },
+        { token: '`src/*[0-9].js`', expectedBroad: 'src/*[0-9].js' },
+        { token: '(src/**/[ab].js).', expectedBroad: 'src/**/[ab].js' },
+        { token: 'src/[ab].js', expectedBroad: 'src/[ab].js' }
+      ];
+
+      function buildReadinessParams(topic, errorClass, coveredSources) {
+        return {
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass,
+          topic,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        };
+      }
+
+      async function runGlobPhaseEngineCase({ phase, errorClass, topic, coveredSources }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s2');
+            }
+          }
+          return origProof(ctx);
+        };
+
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (phase === 'JUDGE_AUDIT_SYNTHESIS' && ctx.round === 1) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('judge');
+            }
+          }
+          return origJudge(ctx);
+        };
+
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications: [],
+            maxClarificationBatches: 0,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Glob matrix check',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              {
+                id: 's1',
+                harness: 'codex',
+                model: 'gpt-6-astra (high)',
+                soul: 'S1',
+                tools: 'read-only',
+                votingTools: 'read-only',
+                cwd: '/repo'
+              },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        await engine.run();
+        return { engine, targetCalls };
+      }
+
+      for (const { token, expectedBroad } of globTopics) {
+        const topic = `Inspect src/auth.js and ${token}`;
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const verdict = evaluateToolFreeEvidenceReadiness(
+            buildReadinessParams(topic, errorClass, ['src/auth.js'])
+          );
+          assert.equal(verdict.ready, false, `Readiness must refuse ${token} under ${errorClass}`);
+          assert.equal(verdict.reasonCode, 'evidence_access_failure');
+          assert.ok(
+            verdict.missingDependencies.includes(expectedBroad),
+            `Expected missingDependencies to include ${expectedBroad}, got ${JSON.stringify(verdict.missingDependencies)}`
+          );
+
+          for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+            const run = await runGlobPhaseEngineCase({
+              phase,
+              errorClass,
+              topic,
+              coveredSources: ['src/auth.js']
+            });
+            assert.equal(
+              run.targetCalls.length,
+              1,
+              `${phase}/${errorClass} must refuse tool-free retry for uncovered glob ${token}`
+            );
+            assert.equal(run.targetCalls[0].tools, 'read-only');
+            assert.equal(run.targetCalls[0].cwd, '/repo');
+          }
+        }
+      }
+
+      // 3. Adversarial 48KB linear-time delimiter & glob probes (< 25ms)
+      extractVerificationDependencies(['warmup src/*[0-9].js src/**/[ab].js']);
+      for (const [label, payload, expectedBroad] of [
+        ['nested-parens-48k', '('.repeat(24000) + ')'.repeat(24000), []],
+        ['wrapped-glob-48k', '('.repeat(24000) + 'src/*[0-9].js' + ')'.repeat(24000), ['src/*[0-9].js']],
+        ['open-brackets-glob-48k', '['.repeat(48000) + 'src/*[0-9].js', ['src/*[0-9].js']],
+        ['unclosed-brace-commas-48k', '{' + 'a,'.repeat(24000) + '/b.js', null],
+        ['repeated-questions-48k', '?'.repeat(48000) + 'a/b.js', null]
+      ]) {
+        const t0 = performance.now();
+        const deps = extractVerificationDependencies([payload]);
+        const elapsedMs = performance.now() - t0;
+        assert.ok(elapsedMs < 25, `Expected <25ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
+        if (expectedBroad !== null) {
+          assert.deepEqual(deps.workspaceBroadDeps, expectedBroad, `Unexpected broad deps for ${label}`);
+        }
+      }
+    });
   });
 });

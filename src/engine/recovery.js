@@ -158,15 +158,202 @@ const SHELL_EXEC_SCRIPT_TOKEN_REGEX =
   /^\.\.?\/(?:[^\s]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s]*\/)?(?:gradlew|mvnw|configure))(?:\s|$)/i;
 const REPO_WIDE_OR_RUN_PHRASE_SOURCE =
   '(?:\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b|\\b(?:repo(?:sitory)?|codebase)\\s+(?:check|scan|audit|wide)\\b|\\brepo-wide\\b|\\brun\\s+(?:tests?|command|script)\\b)';
-const QUOTED_COMMAND_CONTENT_REGEX = new RegExp(
-  `^(?:${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+.*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S.*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~]).*)$`,
-  'is'
-);
-const REPO_WIDE_OR_RUN_PHRASE_REGEX = new RegExp(REPO_WIDE_OR_RUN_PHRASE_SOURCE, 'i');
-const UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
-  `(?:\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
+const QUOTED_COMMAND_HEAD_REGEX = new RegExp(
+  `^(?:/usr/local/bin/|/usr/bin/|/bin/)?(?:${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s|[<>]|$)|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\s+\\S|\\s*[<>])|(?:make|head|tail|find|stat|ps|df|du|env|which|command|type)\\s+(?:-[A-Za-z0-9-]+|[./~])|make\\s+(?:test|check|build|all|clean|install|lint)(?:\\s|$)|cd\\s+(?:[-./~]|\\.\\.)\\S*)`,
   'i'
 );
+const QUOTED_COMPOUND_OR_PREFIXED_CMD_REGEX =
+  /^(?:make(?:\s|[<>]|$)|cd\s+\S|(?:pwd|id|true|false)(?:\s|[<>]|$))/i;
+const SHELL_ENV_ASSIGN_PREFIX_REGEX =
+  /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\\.|[^\s;'"|&()])*\s+/;
+const SHELL_WRAPPER_WORD_SET = new Set([
+  'env',
+  'command',
+  'builtin',
+  'time',
+  'nohup',
+  'nice',
+  'sudo',
+  'exec',
+  'setsid',
+  'stdbuf',
+  'timeout'
+]);
+const REPO_WIDE_OR_RUN_PHRASE_REGEX = new RegExp(REPO_WIDE_OR_RUN_PHRASE_SOURCE, 'i');
+const UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
+  `(?:\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|\\$\\([^)\\n]+\\)|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
+  'i'
+);
+
+function matchesQuotedCommandAt(clause, pos, allowPrefixedOrCompoundVerbs) {
+  const head = clause.slice(pos, pos + 1024);
+  if (!head) {
+    return false;
+  }
+  if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(head) || QUOTED_COMMAND_HEAD_REGEX.test(head)) {
+    return true;
+  }
+  if (allowPrefixedOrCompoundVerbs && QUOTED_COMPOUND_OR_PREFIXED_CMD_REGEX.test(head)) {
+    return true;
+  }
+  return false;
+}
+
+function isSingleQuotedCommandClause(rawClause, isCompound) {
+  if (!rawClause) {
+    return false;
+  }
+  let end = rawClause.length;
+  while (end > 0 && /[\s)}]/.test(rawClause[end - 1])) {
+    end -= 1;
+  }
+  let pos = 0;
+  while (pos < end) {
+    const c = rawClause[pos];
+    if (/\s/.test(c) || c === '(') {
+      pos += 1;
+      continue;
+    }
+    if (c === '{' && pos + 1 < end && /\s/.test(rawClause[pos + 1])) {
+      pos += 2;
+      continue;
+    }
+    break;
+  }
+  if (pos >= end) {
+    return false;
+  }
+  const clause = rawClause.slice(pos, end);
+  const len = clause.length;
+  const hasRedirection = /[<>]/.test(clause);
+  let idx = 0;
+  let peeledPrefix = false;
+
+  while (idx < len) {
+    while (idx < len && /\s/.test(clause[idx])) {
+      idx += 1;
+    }
+    if (idx >= len) {
+      break;
+    }
+    if (matchesQuotedCommandAt(clause, idx, isCompound || peeledPrefix || hasRedirection)) {
+      return true;
+    }
+    const rest = clause.slice(idx, idx + 1024);
+    const envMatch = SHELL_ENV_ASSIGN_PREFIX_REGEX.exec(rest);
+    if (envMatch) {
+      idx += envMatch[0].length;
+      peeledPrefix = true;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
+      let k = idx + rest.indexOf('=') + 1;
+      while (k < len && !/\s/.test(clause[k])) {
+        if (clause[k] === "'") {
+          const nextQ = clause.indexOf("'", k + 1);
+          k = nextQ === -1 ? len : nextQ + 1;
+        } else if (clause[k] === '"') {
+          k += 1;
+          while (k < len && clause[k] !== '"') {
+            k += clause[k] === '\\' ? 2 : 1;
+          }
+          if (k < len) k += 1;
+        } else {
+          k += clause[k] === '\\' ? 2 : 1;
+        }
+      }
+      if (k < len && /\s/.test(clause[k])) {
+        idx = k + 1;
+        peeledPrefix = true;
+        continue;
+      }
+      break;
+    }
+    const wordMatch = /^(?:\/usr\/local\/bin\/|\/usr\/bin\/|\/bin\/)?([A-Za-z0-9_-]+)\s+/.exec(rest);
+    if (!wordMatch) {
+      break;
+    }
+    const wordLower = wordMatch[1].toLowerCase();
+    if (!SHELL_WRAPPER_WORD_SET.has(wordLower)) {
+      break;
+    }
+    idx += wordMatch[0].length;
+    peeledPrefix = true;
+    while (idx < len) {
+      while (idx < len && /\s/.test(clause[idx])) {
+        idx += 1;
+      }
+      const flagSlice = clause.slice(idx, idx + 256);
+      if (flagSlice.startsWith('--')) {
+        const eqOrSp = /^--[A-Za-z0-9_-]*(?:=\S*)?\s+/.exec(flagSlice);
+        if (!eqOrSp) break;
+        idx += eqOrSp[0].length;
+        if (flagSlice.startsWith('-- ')) break;
+        continue;
+      }
+      if (flagSlice.startsWith('-') && flagSlice.length > 1 && /[A-Za-z0-9]/.test(flagSlice[1])) {
+        const shortFlag = /^-[A-Za-z0-9]+\s+/.exec(flagSlice);
+        if (!shortFlag) break;
+        const flagTok = shortFlag[0].trim();
+        idx += shortFlag[0].length;
+        if (
+          (wordLower === 'nice' && flagTok === '-n') ||
+          (wordLower === 'env' && (flagTok === '-u' || flagTok === '-C' || flagTok === '-S')) ||
+          (wordLower === 'sudo' && (flagTok === '-u' || flagTok === '-g')) ||
+          (wordLower === 'timeout' && (flagTok === '-s' || flagTok === '-k'))
+        ) {
+          const argMatch = /^\S+\s+/.exec(clause.slice(idx, idx + 256));
+          if (argMatch) idx += argMatch[0].length;
+        }
+        continue;
+      }
+      break;
+    }
+    if (wordLower === 'timeout') {
+      const durMatch = /^\d+(?:\.\d+)?[smhd]?\s+/i.exec(clause.slice(idx, idx + 64));
+      if (durMatch) {
+        idx += durMatch[0].length;
+      }
+    }
+  }
+  return false;
+}
+
+function isQuotedCommandOrRepoContent(inner) {
+  if (!inner) {
+    return false;
+  }
+  if (!/[\s;|&><()$=/]/.test(inner)) {
+    return /^(?:uname|ls|whoami|printenv)$/i.test(inner) || /\brepo-wide\b/i.test(inner);
+  }
+  if (REPO_WIDE_OR_RUN_PHRASE_REGEX.test(inner)) {
+    return true;
+  }
+  let subSearch = 0;
+  while (subSearch < inner.length) {
+    const dollarOpen = inner.indexOf('$(', subSearch);
+    if (dollarOpen === -1) {
+      break;
+    }
+    const closeParen = inner.indexOf(')', dollarOpen + 2);
+    if (closeParen === -1) {
+      break;
+    }
+    const subBody = inner.slice(dollarOpen + 2, closeParen).trim();
+    if (subBody && (isQuotedCommandOrRepoContent(subBody) || isSingleQuotedCommandClause(subBody, true))) {
+      return true;
+    }
+    subSearch = closeParen + 1;
+  }
+  const clauses = inner.split(/&&|\|\||[;|\n]/);
+  const isCompound = clauses.length > 1;
+  for (let c = 0; c < clauses.length; c += 1) {
+    if (isSingleQuotedCommandClause(clauses[c], isCompound)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function hasCheckCommandOrRepoDependency(rawText) {
   if (!rawText || typeof rawText !== 'string') {
@@ -194,7 +381,16 @@ function hasCheckCommandOrRepoDependency(rawText) {
     }
     let closeIdx = -1;
     if (ch === '"') {
-      closeIdx = rawText.indexOf('"', i + 1);
+      for (let k = i + 1; k < n; k += 1) {
+        if (rawText[k] === '\\') {
+          k += 1;
+          continue;
+        }
+        if (rawText[k] === '"') {
+          closeIdx = k;
+          break;
+        }
+      }
       if (closeIdx === -1) {
         noMoreDouble = true;
         continue;
@@ -217,12 +413,7 @@ function hasCheckCommandOrRepoDependency(rawText) {
     }
 
     const inner = rawText.slice(i + 1, closeIdx).trim();
-    if (
-      inner &&
-      (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner) ||
-        QUOTED_COMMAND_CONTENT_REGEX.test(inner) ||
-        REPO_WIDE_OR_RUN_PHRASE_REGEX.test(inner))
-    ) {
+    if (inner && isQuotedCommandOrRepoContent(inner)) {
       return true;
     }
     masked += rawText.slice(cursor, i) + ' '.repeat(closeIdx - i + 1);
@@ -622,10 +813,21 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   return 'leave';
 }
 
+function hasPotentialBroadSyntax(str) {
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str[i];
+    if (ch === '*' || ch === '/' || ch === '?' || ch === '[' || ch === '{' || ch === '(') {
+      return true;
+    }
+  }
+  return false;
+}
+
 function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
   const len = str.length;
   const closeAt = new Int32Array(len).fill(-1);
   let hasCharClass = false;
+  let hasMultiMatchCharClass = false;
   let segStart = 0;
 
   while (segStart < len) {
@@ -634,23 +836,45 @@ function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
       segEnd = len;
     }
     let scanStart = segStart;
-    if (
-      allowLeadingOuterBrackets &&
-      segStart === 0 &&
-      segEnd >= 2 &&
-      str[0] === '[' &&
-      str[1] === '['
-    ) {
-      let k = 1;
-      while (k + 1 < segEnd && str[k + 1] === '[') {
-        k += 1;
+    if (allowLeadingOuterBrackets && segStart === 0 && segEnd >= 2) {
+      let p = 0;
+      while (p < segEnd && str[p] === '(') {
+        p += 1;
       }
-      if (k + 1 < segEnd) {
-        const afterRun = str[k + 1];
-        if (afterRun === ':' || afterRun === '.' || afterRun === '=' || afterRun === ']') {
-          scanStart = k - 1;
+      if (p < segEnd && str[p] === '[') {
+        let k = p;
+        while (k + 1 < segEnd && str[k + 1] === '[') {
+          k += 1;
+        }
+        const leadBracketCount = k - p + 1;
+        if (leadBracketCount >= 2) {
+          if (k + 1 < segEnd) {
+            const afterRun = str[k + 1];
+            if (afterRun === ':' || afterRun === '.' || afterRun === '=' || afterRun === ']') {
+              scanStart = k - 1;
+            } else {
+              scanStart = k;
+            }
+          }
         } else {
-          scanStart = k;
+          let innerOpen = -1;
+          let firstClose = -1;
+          for (let q = p + 1; q < segEnd; q += 1) {
+            const qc = str[q];
+            if (qc === '[' && innerOpen === -1) {
+              innerOpen = q;
+            } else if (qc === ']') {
+              const initLit =
+                q === p + 1 || (q === p + 2 && (str[p + 1] === '!' || str[p + 1] === '^'));
+              if (!initLit) {
+                firstClose = q;
+                break;
+              }
+            }
+          }
+          if (innerOpen !== -1 && firstClose !== -1 && str.indexOf(']', firstClose + 1) !== -1) {
+            scanStart = p + 1;
+          }
         }
       }
     }
@@ -685,6 +909,9 @@ function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
         }
         closeAt[openIdx] = i;
         hasCharClass = true;
+        if (i - openIdx > 2) {
+          hasMultiMatchCharClass = true;
+        }
         openIdx = -1;
       }
     }
@@ -692,7 +919,84 @@ function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
     segStart = segEnd + 1;
   }
 
-  return { closeAt, hasCharClass };
+  return { closeAt, hasCharClass, hasMultiMatchCharClass };
+}
+
+function sampleCharFromBracket(value, openIdx, closeIdx) {
+  let idx = openIdx + 1;
+  if (idx < closeIdx && (value[idx] === '!' || value[idx] === '^')) {
+    return 'x';
+  }
+  if (idx + 3 < closeIdx && value[idx] === '[' && value[idx + 1] === ':') {
+    const classSlice = value.slice(idx + 2, Math.min(closeIdx, idx + 16));
+    if (classSlice.startsWith('digit:') || classSlice.startsWith('xdigit:')) {
+      return '0';
+    }
+    return 'a';
+  }
+  const ch = idx < closeIdx ? value[idx] : 'x';
+  return /[A-Za-z0-9_.-]/.test(ch) ? ch : 'x';
+}
+
+function buildGlobSample(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob) {
+  const n = value.length;
+  const stack = [];
+  let curOut = '';
+  let i = 0;
+
+  while (i < n) {
+    if (bracketClose[i] !== -1) {
+      curOut += sampleCharFromBracket(value, i, bracketClose[i]);
+      i = bracketClose[i] + 1;
+      continue;
+    }
+    if (braceClose[i] !== -1) {
+      if (braceIsSeq[i] === 1) {
+        const inner = value.slice(i + 1, braceClose[i]);
+        const dotDotIdx = inner.indexOf('..');
+        curOut += dotDotIdx > 0 ? inner.slice(0, dotDotIdx) : inner;
+        i = braceClose[i] + 1;
+        continue;
+      }
+      stack.push({ closeIdx: braceClose[i], sep: ',', parentOut: curOut });
+      curOut = '';
+      i += 1;
+      continue;
+    }
+    if (i + 1 < n && parenClose[i + 1] !== -1 && parenIsExtGlob[i + 1] === 1) {
+      stack.push({ closeIdx: parenClose[i + 1], sep: '|', parentOut: curOut });
+      curOut = '';
+      i += 2;
+      continue;
+    }
+    if (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (i === top.closeIdx) {
+        stack.pop();
+        curOut = top.parentOut + (curOut || 'x');
+        i += 1;
+        continue;
+      }
+      if (value[i] === top.sep) {
+        if (curOut.length > 0) {
+          stack.pop();
+          curOut = top.parentOut + curOut;
+          i = top.closeIdx + 1;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+    }
+    curOut += value[i];
+    i += 1;
+  }
+
+  while (stack.length > 0) {
+    const top = stack.pop();
+    curOut = top.parentOut + (curOut || 'x');
+  }
+  return curOut;
 }
 
 function analyzeNonStarGlob(value) {
@@ -700,16 +1004,23 @@ function analyzeNonStarGlob(value) {
     return {
       hasNonStarGlob: false,
       hasCharClass: false,
+      hasMultiMatchCharClass: false,
       hasBraceList: false,
       hasExtGlob: false,
       hasQuestionGlob: false,
-      skeleton: value
+      skeleton: value,
+      sample: value
     };
   }
 
   const n = value.length;
-  const { closeAt: bracketClose, hasCharClass } = findSegmentCharClasses(value, false);
+  const {
+    closeAt: bracketClose,
+    hasCharClass,
+    hasMultiMatchCharClass
+  } = findSegmentCharClasses(value, false);
   const braceClose = new Int32Array(n).fill(-1);
+  const braceIsSeq = new Uint8Array(n);
   const parenClose = new Int32Array(n).fill(-1);
   const parenIsExtGlob = new Uint8Array(n);
 
@@ -752,6 +1063,9 @@ function analyzeNonStarGlob(value) {
           BRACE_SEQ_CONTENT_REGEX.test(value.slice(topBrace.open + 1, i));
         if (!crossed && (topBrace.commaCount >= 1 || isSeqBrace)) {
           braceClose[topBrace.open] = i;
+          if (isSeqBrace) {
+            braceIsSeq[topBrace.open] = 1;
+          }
           hasBraceList = true;
         }
       }
@@ -799,25 +1113,33 @@ function analyzeNonStarGlob(value) {
     i += 1;
   }
 
+  let sample =
+    !value.includes('/') && (hasCharClass || hasBraceList || hasExtGlob)
+      ? buildGlobSample(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob)
+      : value;
+
   const hasQuestionGlob = skeleton.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(value);
   if (hasQuestionGlob) {
     skeleton = skeleton.replace(/\?+/g, 'x');
+    sample = sample.replace(/\?+/g, 'x');
   }
 
   return {
     hasNonStarGlob: hasCharClass || hasBraceList || hasExtGlob || hasQuestionGlob,
     hasCharClass,
+    hasMultiMatchCharClass,
     hasBraceList,
     hasExtGlob,
     hasQuestionGlob,
-    skeleton
+    skeleton,
+    sample
   };
 }
 
 function extractBroadFromSubSpan(run, subStart, subEnd) {
   const s = run.slice(subStart, subEnd);
   const m = s.length;
-  if (m === 0 || (!s.includes('*') && !s.includes('/') && !s.includes('?'))) {
+  if (m === 0 || !hasPotentialBroadSyntax(s)) {
     return null;
   }
 
@@ -907,14 +1229,38 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
       DIRECTORY_CANDIDATE_REGEX.test(resolvedSkeleton) &&
       resolvedSkeleton.length > 1 &&
       /[A-Za-z0-9_-]/.test(resolvedSkeleton);
-  } else if (hasRelativePrefix || trimmed.includes('/')) {
+  } else {
     const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
-    const { hasNonStarGlob, hasCharClass, hasBraceList, hasExtGlob, skeleton } =
-      analyzeNonStarGlob(candidateBase);
-    if (hasNonStarGlob) {
-      looksBroad =
-        NON_STAR_PATH_SKELETON_REGEX.test(skeleton) &&
-        (hasCharClass || hasExtGlob || hasBraceList || classifyFileCandidate(skeleton) === 'file');
+    const {
+      hasNonStarGlob,
+      hasCharClass,
+      hasMultiMatchCharClass,
+      hasBraceList,
+      hasExtGlob,
+      hasQuestionGlob,
+      skeleton,
+      sample
+    } = analyzeNonStarGlob(candidateBase);
+    if (hasNonStarGlob && NON_STAR_PATH_SKELETON_REGEX.test(skeleton)) {
+      if (hasRelativePrefix || trimmed.includes('/')) {
+        looksBroad =
+          hasCharClass ||
+          hasExtGlob ||
+          hasBraceList ||
+          classifyFileCandidate(skeleton) === 'file';
+      } else if (
+        hasMultiMatchCharClass ||
+        hasExtGlob ||
+        hasBraceList ||
+        hasQuestionGlob
+      ) {
+        const sampleDecision = classifyFileCandidate(sample);
+        const skeletonDecision = classifyFileCandidate(skeleton);
+        looksBroad =
+          sampleDecision === 'file' ||
+          sampleDecision === 'mask_only' ||
+          skeletonDecision === 'file';
+      }
     }
   }
 
@@ -931,28 +1277,60 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
 
 function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps) {
   return masked.replace(BROAD_RUN_SCAN_REGEX, (run) => {
-    if (!run.includes('*') && !run.includes('/') && !run.includes('?')) {
+    if (!hasPotentialBroadSyntax(run)) {
       return run;
     }
 
     const runLen = run.length;
     const { closeAt: charClassCloseAt } = findSegmentCharClasses(run, true);
     const braceCloseAt = new Int32Array(runLen).fill(-1);
+    const isClosingBrace = new Uint8Array(runLen);
+    const extParenCloseAt = new Int32Array(runLen).fill(-1);
+    const isClosingExtParen = new Uint8Array(runLen);
     const braceStack = [];
+    const parenStack = [];
+
     for (let j = 0; j < runLen; j += 1) {
       if (charClassCloseAt[j] !== -1) {
         j = charClassCloseAt[j];
+        continue;
       }
       const ch = run[j];
       if (ch === '{') {
         braceStack.push(j);
       } else if (ch === '}' && braceStack.length > 0) {
-        braceCloseAt[braceStack.pop()] = j;
+        const openBrace = braceStack.pop();
+        let crossed = false;
+        while (parenStack.length > 0 && parenStack[parenStack.length - 1].open > openBrace) {
+          parenStack.pop();
+          crossed = true;
+        }
+        if (!crossed) {
+          braceCloseAt[openBrace] = j;
+          isClosingBrace[j] = 1;
+        }
+      } else if (ch === '(') {
+        const prev = j > 0 ? run[j - 1] : '';
+        const isExt =
+          prev === '@' || prev === '+' || prev === '?' || prev === '!' || prev === '*';
+        parenStack.push({ open: j, isExt });
+      } else if (ch === ')' && parenStack.length > 0) {
+        const topParen = parenStack.pop();
+        let crossed = false;
+        while (braceStack.length > 0 && braceStack[braceStack.length - 1] > topParen.open) {
+          braceStack.pop();
+          crossed = true;
+        }
+        if (!crossed && topParen.isExt && j > topParen.open + 1) {
+          extParenCloseAt[topParen.open] = j;
+          isClosingExtParen[j] = 1;
+        }
       }
     }
 
     const hits = [];
     let activeBraceDepth = 0;
+    let activeExtParenDepth = 0;
     let subStart = 0;
     for (let j = 0; j < runLen; j += 1) {
       if (charClassCloseAt[j] !== -1) {
@@ -961,15 +1339,25 @@ function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps)
       const ch = run[j];
       if (ch === '{' && braceCloseAt[j] !== -1) {
         activeBraceDepth += 1;
-      } else if (ch === '}' && activeBraceDepth > 0) {
+      } else if (ch === '}' && isClosingBrace[j] === 1 && activeBraceDepth > 0) {
         activeBraceDepth -= 1;
-      } else if (ch === ',' && activeBraceDepth === 0) {
+      } else if (ch === '(' && extParenCloseAt[j] !== -1) {
+        activeExtParenDepth += 1;
+      } else if (ch === ')' && isClosingExtParen[j] === 1 && activeExtParenDepth > 0) {
+        activeExtParenDepth -= 1;
+      } else if (ch === ',' && activeBraceDepth === 0 && activeExtParenDepth === 0) {
         if (j > subStart) {
           const hit = extractBroadFromSubSpan(run, subStart, j);
           if (hit) hits.push(hit);
         }
         subStart = j + 1;
-      } else if (ch === ']' && j + 1 < runLen && run[j + 1] === '(' && activeBraceDepth === 0) {
+      } else if (
+        ch === ']' &&
+        j + 1 < runLen &&
+        run[j + 1] === '(' &&
+        activeBraceDepth === 0 &&
+        activeExtParenDepth === 0
+      ) {
         const splitPos = j + 1;
         if (splitPos > subStart) {
           const hit = extractBroadFromSubSpan(run, subStart, splitPos);

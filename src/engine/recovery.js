@@ -20,9 +20,10 @@ export const VALID_SELF_CONTAINED_PHASES = Object.freeze([
 const VALID_PHASE_SET = new Set(VALID_SELF_CONTAINED_PHASES);
 const EFFORT_SET = new Set(ALLOWED_EFFORTS);
 const URL_REGEX =
-  /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]]+/gi;
+  /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]][^\s"'`<>[\]]*/gi;
+const EXPLICIT_DELIMITED_TOKEN_REGEX = /(?:`[^`\s]+`|"[^"\s]+"|'[^'\s]+'|<[^<>\s]+>)/g;
 const GLOB_REGEX =
-  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`()[\],;*]*\*[^\s"'`()[\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
 
 const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
   'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'mil', 'int',
@@ -41,12 +42,12 @@ const BARE_DOMAIN_LOOKBEHIND_SOURCE = '(?<![A-Za-z0-9_/$-]|(?<!\\.)\\.)';
 const BARE_DOMAIN_HOST_SOURCE = `(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}`;
 const BARE_DOMAIN_WITH_SUFFIX_REGEX = new RegExp(
   `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{1,5})?[/?#][^\\s"'` +
-    '`<>()\\[\\]]*',
+    '`<>\\[\\]]*',
   'gi'
 );
 const BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE =
   `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{2,5})?(?:[/?#][^\\s"'` +
-  '`<>()\\[\\]]*)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
+  '`<>\\[\\]]*)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
 
 const KNOWN_STANDALONE_EXTENSIONLESS_FILES = new Set([
   'Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'Jenkinsfile',
@@ -207,20 +208,67 @@ function isExplicitlyDelimitedMatch(sourceText, offset, matchLength) {
   );
 }
 
-function stripTrailingProsePunctuation(rawToken, sourceText, offset) {
+function isSingleExternalEndpointToken(value) {
+  if (typeof value !== 'string' || !value || /\s/.test(value)) {
+    return false;
+  }
+  const isValidUrlToken =
+    isUrlExternalSource(value) && !/^[a-z][a-z0-9+.-]*:\/\/$/i.test(value);
+  if (isValidUrlToken) {
+    return true;
+  }
+  return Boolean(parseBareDomainEndpoint(value));
+}
+
+function cleanProseEndpointToken(rawToken, sourceText, offset) {
+  if (!rawToken) {
+    return '';
+  }
   if (isExplicitlyDelimitedMatch(sourceText, offset, rawToken.length)) {
     return rawToken;
+  }
+  let openParens = 0;
+  let closeParens = 0;
+  for (let i = 0; i < rawToken.length; i += 1) {
+    const ch = rawToken[i];
+    if (ch === '(') {
+      openParens += 1;
+    } else if (ch === ')') {
+      closeParens += 1;
+    }
   }
   if (
     offset === 0 &&
     typeof sourceText === 'string' &&
     rawToken.length === sourceText.length &&
     /[/?#=]/.test(rawToken) &&
-    !rawToken.endsWith('.')
+    !rawToken.endsWith('.') &&
+    closeParens <= openParens
   ) {
     return rawToken;
   }
-  return rawToken.replace(/[.,;:!?)]+$/, '');
+
+  let end = rawToken.length;
+  const hasLeadingOpenParen =
+    offset > 0 && typeof sourceText === 'string' && sourceText[offset - 1] === '(';
+
+  while (end > 0) {
+    const ch = rawToken[end - 1];
+    if (ch === ')' && closeParens > openParens) {
+      closeParens -= 1;
+      end -= 1;
+      if (hasLeadingOpenParen && closeParens === openParens) {
+        break;
+      }
+      continue;
+    }
+    if (ch === '.' || ch === ',' || ch === ';' || ch === ':' || ch === '!' || ch === '?') {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+  return rawToken.slice(0, end);
 }
 
 function unwrapStructuredSource(rawValue) {
@@ -513,9 +561,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
     if (!unwrapped) {
       continue;
     }
-    const isValidUrlToken =
-      isUrlExternalSource(unwrapped) && !/^[a-z][a-z0-9+.-]*:\/\/$/i.test(unwrapped);
-    if (!/\s/.test(unwrapped) && (isValidUrlToken || Boolean(parseBareDomainEndpoint(unwrapped)))) {
+    if (isSingleExternalEndpointToken(unwrapped)) {
       const extKey = canonicalizeExternalDepKey(unwrapped);
       if (!seenExternal.has(extKey)) {
         seenExternal.add(extKey);
@@ -527,18 +573,45 @@ export function extractVerificationDependencies(inputs, options = {}) {
   }
 
   for (const text of strings) {
+    // 0. Extract explicitly delimited single-token external URLs/endpoints first so
+    //    embedded parentheses, brackets, `..`, and trailing punctuation stay verbatim.
+    let masked = text.replace(EXPLICIT_DELIMITED_TOKEN_REGEX, (fullMatch, offset, sourceStr) => {
+      const endOffset = offset + fullMatch.length;
+      const prevChar = offset > 0 ? sourceStr[offset - 1] : '';
+      const nextChar = endOffset < sourceStr.length ? sourceStr[endOffset] : '';
+      if (
+        (prevChar && /[A-Za-z0-9_/-]/.test(prevChar)) ||
+        (nextChar && /[A-Za-z0-9_/-]/.test(nextChar))
+      ) {
+        return fullMatch;
+      }
+      const inner = fullMatch.slice(1, -1);
+      if (!isSingleExternalEndpointToken(inner)) {
+        return fullMatch;
+      }
+      const key = canonicalizeExternalDepKey(inner);
+      if (!seenExternal.has(key)) {
+        seenExternal.add(key);
+        externalDeps.push(inner);
+      }
+      return ' '.repeat(fullMatch.length);
+    });
+
     // 1a. Extract external URI scheme URLs first and mask them so URL paths
     //     or embedded standard tokens are not misclassified or duplicated.
-    let masked = text.replace(URL_REGEX, (rawUrl, ...args) => {
+    masked = masked.replace(URL_REGEX, (rawUrl, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];
-      const cleaned = stripTrailingProsePunctuation(rawUrl, sourceStr, offset);
+      const cleaned = cleanProseEndpointToken(rawUrl, sourceStr, offset);
+      if (!cleaned || /^[a-z][a-z0-9+.-]*:\/\/$/i.test(cleaned)) {
+        return rawUrl;
+      }
       const urlKey = `url:${cleaned}`;
-      if (cleaned && !seenExternal.has(urlKey)) {
+      if (!seenExternal.has(urlKey)) {
         seenExternal.add(urlKey);
         externalDeps.push(cleaned);
       }
-      return ' '.repeat(rawUrl.length);
+      return ' '.repeat(cleaned.length) + rawUrl.slice(cleaned.length);
     });
 
     // 1b. Extract bare external endpoints with path/query/hash suffixes (and optional port)
@@ -547,7 +620,8 @@ export function extractVerificationDependencies(inputs, options = {}) {
     masked = masked.replace(BARE_DOMAIN_WITH_SUFFIX_REGEX, (rawDomain, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];
-      const normalized = stripTrailingProsePunctuation(rawDomain, sourceStr, offset).trim();
+      const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
+      const normalized = cleaned.trim();
       if (!normalized || isSemanticVersionToken(normalized) || !parseBareDomainEndpoint(normalized)) {
         return rawDomain;
       }
@@ -556,7 +630,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
         seenExternal.add(domainKey);
         externalDeps.push(normalized);
       }
-      return ' '.repeat(rawDomain.length);
+      return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
     });
 
     // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction.
@@ -615,7 +689,8 @@ export function extractVerificationDependencies(inputs, options = {}) {
     masked = masked.replace(BARE_DOMAIN_ENDPOINT_REGEX, (rawDomain, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];
-      const normalized = stripTrailingProsePunctuation(rawDomain, sourceStr, offset).trim();
+      const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
+      const normalized = cleaned.trim();
       if (!normalized || isSemanticVersionToken(normalized)) {
         return rawDomain;
       }
@@ -624,7 +699,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
         seenExternal.add(domainKey);
         externalDeps.push(normalized);
       }
-      return ' '.repeat(rawDomain.length);
+      return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
     });
 
     // 5b. Extract named external standards/identifiers across remaining non-domain text
@@ -632,7 +707,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
     masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];
-      const normalized = stripTrailingProsePunctuation(rawStd, sourceStr, offset).replace(/\s+/g, ' ').trim();
+      const normalized = cleanProseEndpointToken(rawStd, sourceStr, offset).replace(/\s+/g, ' ').trim();
       if (!normalized || isSemanticVersionToken(normalized)) {
         return rawStd;
       }
@@ -881,54 +956,74 @@ function augmentProofDependencies(proofList, deps) {
   if (!Array.isArray(proofList)) return;
   for (const proof of proofList) {
     if (!proof || typeof proof !== 'object') continue;
-    const rawSource = unwrapStructuredSource(proof.source);
+    const originalSource = typeof proof.source === 'string' ? proof.source.trim() : '';
+    const unwrappedSource = unwrapStructuredSource(originalSource);
     const rawStatement = typeof proof.statement === 'string' ? proof.statement.trim() : '';
     const rawAdmittedStatement =
       typeof proof.judgeAdmittedStatement === 'string' ? proof.judgeAdmittedStatement.trim() : '';
-    const sourceDeps = rawSource
-      ? extractVerificationDependencies([], { structuredSources: [rawSource] })
+    const sourceDeps = originalSource
+      ? extractVerificationDependencies([], { structuredSources: [originalSource] })
       : null;
+    const isSingleTokenSource = Boolean(unwrappedSource && !/\s/.test(unwrappedSource));
     const sourceHasConcreteFile = Boolean(
+      isSingleTokenSource &&
       sourceDeps &&
-      sourceDeps.workspaceFileDeps.length > 0 &&
+      sourceDeps.workspaceFileDeps.length === 1 &&
       sourceDeps.workspaceBroadDeps.length === 0 &&
       sourceDeps.externalDeps.length === 0
+    );
+    const sourceIsSingleExternalEndpoint = Boolean(
+      isSingleTokenSource &&
+      sourceDeps &&
+      sourceDeps.externalDeps.length === 1 &&
+      sourceDeps.workspaceFileDeps.length === 0 &&
+      sourceDeps.workspaceBroadDeps.length === 0 &&
+      isSingleExternalEndpointToken(unwrappedSource)
     );
 
     if (proof.kind === 'benchmark') {
       if (
-        rawSource &&
+        unwrappedSource &&
         !sourceHasConcreteFile &&
-        !deps.externalDeps.some((d) => externalSourcesMatch(d, rawSource)) &&
-        !deps.workspaceBroadDeps.includes(rawSource)
+        !deps.externalDeps.some((d) => externalSourcesMatch(d, unwrappedSource)) &&
+        !deps.workspaceBroadDeps.includes(unwrappedSource) &&
+        !deps.workspaceBroadDeps.includes(originalSource)
       ) {
-        deps.externalDeps.push(rawSource);
+        deps.externalDeps.push(unwrappedSource);
       }
       continue;
     }
 
     if (proof.kind === 'check') {
-      const sourceIsCommandOrRepo = !sourceHasConcreteFile && rawSource && CHECK_COMMAND_OR_REPO_REGEX.test(rawSource);
+      // Check command/repo patterns against originalSource BEFORE delimiter unwrapping so
+      // backticked commands (e.g. `` `ls` ``, `` `cat README` ``) preserve their command veto.
+      const sourceIsCommandOrRepo =
+        !sourceHasConcreteFile &&
+        !sourceIsSingleExternalEndpoint &&
+        Boolean(originalSource) &&
+        (CHECK_COMMAND_OR_REPO_REGEX.test(originalSource) ||
+          (Boolean(unwrappedSource) && CHECK_COMMAND_OR_REPO_REGEX.test(unwrappedSource)));
       const statementMatch = [rawStatement, rawAdmittedStatement].find(
         (s) => s && CHECK_COMMAND_OR_REPO_REGEX.test(s)
       );
       const statementIsCommandOrRepo = Boolean(statementMatch);
       if (sourceIsCommandOrRepo || statementIsCommandOrRepo) {
-        const label = sourceIsCommandOrRepo ? rawSource : statementMatch.slice(0, 80);
+        const label = sourceIsCommandOrRepo ? originalSource : statementMatch.slice(0, 80);
         if (label && !deps.workspaceBroadDeps.includes(label)) {
           deps.workspaceBroadDeps.push(label);
         }
       }
       if (
-        rawSource &&
+        unwrappedSource &&
         !sourceHasConcreteFile &&
         !sourceIsCommandOrRepo &&
         (!sourceDeps || sourceDeps.externalDeps.length === 0) &&
-        !deps.externalDeps.some((d) => externalSourcesMatch(d, rawSource)) &&
-        !deps.workspaceBroadDeps.includes(rawSource) &&
-        CHECK_EXTERNAL_SOURCE_REGEX.test(rawSource)
+        !deps.externalDeps.some((d) => externalSourcesMatch(d, unwrappedSource)) &&
+        !deps.workspaceBroadDeps.includes(unwrappedSource) &&
+        !deps.workspaceBroadDeps.includes(originalSource) &&
+        CHECK_EXTERNAL_SOURCE_REGEX.test(unwrappedSource)
       ) {
-        deps.externalDeps.push(rawSource);
+        deps.externalDeps.push(unwrappedSource);
       }
     }
   }

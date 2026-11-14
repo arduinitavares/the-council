@@ -680,17 +680,17 @@ export class CouncilEngine {
       let extraMeta = {};
       if (typeof item === 'object' && item !== null) {
         if (typeof item.answer === 'string' && item.answer.trim()) {
-          answer = item.answer.trim();
+          answer = item.answer.trimEnd();
         } else if (typeof item.label === 'string' && typeof item.text === 'string') {
-          answer = `[${item.label.trim()}] (Source: ${String(item.source || '').trim()}): ${item.text.trim()}`;
+          answer = `[${item.label.trim()}] (Source: ${String(item.source || '').trim()}): ${item.text.trimEnd()}`;
         } else {
           answer = String(item);
         }
         if (Number.isInteger(item.batch) && item.batch >= 1) extraMeta.batch = item.batch;
-        if (typeof item.question === 'string' && item.question.trim()) extraMeta.question = item.question.trim();
+        if (typeof item.question === 'string' && item.question.trim()) extraMeta.question = item.question.trimEnd();
         if (typeof item.label === 'string' && item.label.trim()) extraMeta.label = item.label.trim();
         if (typeof item.source === 'string' && item.source.trim()) extraMeta.source = item.source.trim();
-        if (typeof item.text === 'string' && item.text.trim()) extraMeta.text = item.text.trim();
+        if (typeof item.text === 'string' && item.text.trim()) extraMeta.text = item.text.trimEnd();
       } else {
         answer = String(item);
       }
@@ -1213,7 +1213,12 @@ export class CouncilEngine {
       phase: effectivePhase,
       round: currentRound,
       topic: this.state.topic,
-      clarifications: this.state.clarifications || [],
+      clarifications:
+        this.state.clarifications && this.state.clarifications.length > 0
+          ? this.state.clarifications
+          : !this._configClarificationsPublished && Array.isArray(this.config.clarifications)
+            ? this.config.clarifications
+            : [],
       evidence: this.state.evidence || [],
       proofs: roundProofs,
       priorProofs,

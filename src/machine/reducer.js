@@ -220,12 +220,12 @@ export function transitionCouncil(state, event) {
       }
       const entry = {
         batch: Number.isInteger(event.batch) && event.batch >= 1 ? event.batch : state.clarificationBatch,
-        answer: String(event.answer).trim()
+        answer: String(event.answer).trimEnd()
       };
-      if (typeof event.question === 'string' && event.question.trim()) entry.question = event.question.trim();
+      if (typeof event.question === 'string' && event.question.trim()) entry.question = event.question.trimEnd();
       if (typeof event.label === 'string' && event.label.trim()) entry.label = event.label.trim();
       if (typeof event.source === 'string' && event.source.trim()) entry.source = event.source.trim();
-      if (typeof event.text === 'string' && event.text.trim()) entry.text = event.text.trim();
+      if (typeof event.text === 'string' && event.text.trim()) entry.text = event.text.trimEnd();
       next.clarifications.push(entry);
       activeSeats(next).forEach((s) => {
         s.status = 'idle';

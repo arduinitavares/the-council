@@ -86,17 +86,17 @@ export function createInitialCouncilState(config = {}) {
 
   const clarifications = (Array.isArray(cfg.clarifications) ? cfg.clarifications : []).map((item, idx) => {
     if (typeof item === 'string') {
-      return { batch: idx + 1, answer: item.trim() };
+      return { batch: idx + 1, answer: item.trimEnd() };
     }
     const labelStr = typeof item?.label === 'string' ? item.label.trim() : '';
     const sourceStr = typeof item?.source === 'string' ? item.source.trim() : '';
-    const textStr = typeof item?.text === 'string' ? item.text.trim() : '';
+    const textStr = typeof item?.text === 'string' && item.text.trim() ? item.text.trimEnd() : '';
     const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
-    const answer = hasAnswer ? item.answer.trim() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
+    const answer = hasAnswer ? item.answer.trimEnd() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
     return {
       batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
       answer,
-      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trimEnd() } : {}),
       ...(labelStr ? { label: labelStr } : {}),
       ...(sourceStr ? { source: sourceStr } : {}),
       ...(textStr ? { text: textStr } : {})

@@ -396,6 +396,65 @@ const SPLIT_QUOTE_PROSE_STOPWORDS = new Set([
   'matches'
 ]);
 
+const EXPLICIT_SHELL_FENCE_LANGS = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'shell',
+  'console',
+  'sh-session',
+  'shellsession',
+  'shell-session',
+  'terminal',
+  'fish',
+  'ksh',
+  'dash',
+  'ash',
+  'posh',
+  'csh',
+  'tcsh',
+  'pwsh',
+  'powershell',
+  'ps1',
+  'cmd',
+  'bat',
+  'batch',
+  'dos',
+  'mksh',
+  'yash',
+  'osh',
+  'nushell',
+  'elvish',
+  'xonsh'
+]);
+
+function isExplicitShellFenceInfo(infoString) {
+  if (!infoString || typeof infoString !== 'string') {
+    return false;
+  }
+  let s = infoString.trim();
+  if (!s) {
+    return false;
+  }
+  if (s.startsWith('{')) {
+    s = s.slice(1).trimStart();
+  }
+  if (s.startsWith('.')) {
+    s = s.slice(1);
+  }
+  const tokMatch = /^[A-Za-z0-9_+-]+/.exec(s);
+  if (!tokMatch) {
+    return false;
+  }
+  let lang = tokMatch[0].toLowerCase();
+  if (lang.startsWith('language-')) {
+    lang = lang.slice(9);
+  } else if (lang.startsWith('lang-')) {
+    lang = lang.slice(5);
+  }
+  return EXPLICIT_SHELL_FENCE_LANGS.has(lang);
+}
+
 function isHorizontalWsCode(cc) {
   return cc === 32 || cc === 9 || cc === 13 || cc === 11 || cc === 12;
 }
@@ -1954,28 +2013,17 @@ function parseShellClausesLinear(text, options = {}) {
     const indentCols = lineStartHere ? lineCol - lineBaseCol : 0;
 
     if (inMarkdownCodeFence && fenceBqDepth > 0 && lineStartHere && lineBqDepth < fenceBqDepth) {
-      if (ch === '>' && indentCols <= 3 && (i + 1 >= n || (text[i + 1] !== '>' && text[i + 1] !== '&' && text[i + 1] !== '|'))) {
-        let nextCol = lineCol + 1;
-        let nextBaseCol = nextCol;
-        let nextPos = i + 1;
-        if (nextPos < n) {
-          const post = text.charCodeAt(nextPos);
-          if (post === 32) {
-            nextCol += 1;
-            nextBaseCol = nextCol;
-            nextPos += 1;
-          } else if (post === 9) {
-            nextBaseCol = nextCol + 1;
-            nextCol += 4 - (nextCol & 3);
-            nextPos += 1;
-          }
+      if (lineBqDepth === 0) {
+        const bqCheck = consumeBlockquotePrefixesAtLineStart(text, wsStart, n, fenceBqDepth);
+        if (bqCheck.count === fenceBqDepth) {
+          lineBqDepth = bqCheck.count;
+          lineCol = bqCheck.col;
+          lineBaseCol = bqCheck.baseCol;
+          atMarkdownLineStart = true;
+          clearOpenTagsAtWhitespace = false;
+          i = bqCheck.pos;
+          continue;
         }
-        lineBqDepth += 1;
-        lineCol = nextCol;
-        lineBaseCol = nextBaseCol;
-        atMarkdownLineStart = true;
-        i = nextPos;
-        continue;
       }
       inMarkdownCodeFence = false;
       fenceCharCode = 0;
@@ -3592,21 +3640,17 @@ function stripBlockquoteFenceContainer(slice, fenceBqDepth) {
   if (!slice || fenceBqDepth <= 0) {
     return slice;
   }
-  const firstNl = slice.indexOf('\n');
-  if (firstNl === -1) {
-    return slice;
-  }
   const slen = slice.length;
-  let out = slice.slice(0, firstNl + 1);
-  let pos = firstNl + 1;
+  const parts = [];
+  let pos = 0;
   while (pos < slen) {
     const lineEnd = slice.indexOf('\n', pos);
     const end = lineEnd === -1 ? slen : lineEnd + 1;
     const stripped = consumeBlockquotePrefixesAtLineStart(slice, pos, end, fenceBqDepth);
-    out += slice.slice(stripped.pos, end);
+    parts.push(slice.slice(stripped.pos, end));
     pos = end;
   }
-  return out;
+  return parts.join('');
 }
 
 function findMatchingBacktickSpan(text, openPos, n, btState) {
@@ -3706,10 +3750,12 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
         openLineEnd += 1;
       }
       if (!hasBtOnInfoLine && openLineEnd < n) {
+        const fenceInfo = text.slice(runEnd, openLineEnd).trim();
         let prevLineEnd = openLineEnd;
         let pos = openLineEnd;
         if (text.charCodeAt(pos) === 13) pos += 1;
         if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
+        const bodyStart = pos;
         while (pos < n) {
           let contentPos = pos;
           let lineCol = 0;
@@ -3718,7 +3764,16 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
             const bqRes = consumeBlockquotePrefixesAtLineStart(text, pos, n, fenceBqDepth);
             if (bqRes.count < fenceBqDepth) {
               const closeAt = Math.max(runEnd - 1, prevLineEnd - 1);
-              return { matched: true, innerStart: runEnd, innerEnd: prevLineEnd, closeEnd: closeAt, runEnd, fenceBqDepth };
+              return {
+                matched: true,
+                isFence: true,
+                fenceInfo,
+                innerStart: Math.min(bodyStart, prevLineEnd),
+                innerEnd: prevLineEnd,
+                closeEnd: closeAt,
+                runEnd,
+                fenceBqDepth
+              };
             }
             contentPos = bqRes.pos;
             lineCol = bqRes.col;
@@ -3741,7 +3796,16 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
                 tail += 1;
               }
               if (tail >= n || text.charCodeAt(tail) === 10 || text.charCodeAt(tail) === 13) {
-                return { matched: true, innerStart: runEnd, innerEnd: prevLineEnd, closeEnd: ce - 1, runEnd, fenceBqDepth };
+                return {
+                  matched: true,
+                  isFence: true,
+                  fenceInfo,
+                  innerStart: Math.min(bodyStart, prevLineEnd),
+                  innerEnd: prevLineEnd,
+                  closeEnd: ce - 1,
+                  runEnd,
+                  fenceBqDepth
+                };
               }
             }
           }
@@ -3752,7 +3816,16 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
           if (pos < n && text.charCodeAt(pos) === 13) pos += 1;
           if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
         }
-        return { matched: true, innerStart: runEnd, innerEnd: n, closeEnd: n - 1, runEnd, fenceBqDepth };
+        return {
+          matched: true,
+          isFence: true,
+          fenceInfo,
+          innerStart: Math.min(bodyStart, n),
+          innerEnd: n,
+          closeEnd: n - 1,
+          runEnd,
+          fenceBqDepth
+        };
       }
     }
   }
@@ -3797,6 +3870,16 @@ function scanShellCommandTextInner(text, options = {}) {
   if (!text || typeof text !== 'string') {
     return false;
   }
+  if (!options.skipCodeFences && (text.indexOf('```') !== -1 || text.indexOf('~~~') !== -1)) {
+    const fenced = extractAndMaskMarkdownCodeFences(text, {
+      checkMode: Boolean(options.checkMode),
+      stopOnFirst: true
+    });
+    if (fenced.fenceDeps.length > 0) {
+      return true;
+    }
+    text = fenced.maskedText;
+  }
   if (REPO_WIDE_OR_RUN_PHRASE_REGEX.test(text)) {
     return true;
   }
@@ -3830,6 +3913,9 @@ function scanShellCommandTextInner(text, options = {}) {
         if (!btMatch.matched) {
           i = btMatch.runEnd - 1;
           continue;
+        }
+        if (btMatch.isFence && isExplicitShellFenceInfo(btMatch.fenceInfo)) {
+          return true;
         }
         const btInner = btNorm.slice(btMatch.innerStart, btMatch.innerEnd).trim();
         if (btInner) {
@@ -3900,7 +3986,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     rawText.indexOf('`') === -1 &&
     rawText.indexOf('./') === -1 &&
     rawText.indexOf('../') === -1
-      ? trimLeadingHorizontalWs(rawText)
+      ? rawText
       : null;
   if (delimCacheKey !== null && activeReadinessCache.delimSpans.has(delimCacheKey)) {
     return activeReadinessCache.delimSpans.get(delimCacheKey);
@@ -3922,18 +4008,46 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
       matchedDeps.push(dep);
     }
   };
-  const evalAndMaskSpan = (spanStart, innerStart, innerEnd, closeIdx, isBacktick, fenceBqDepth = 0) => {
+  const evalAndMaskSpan = (
+    spanStart,
+    innerStart,
+    innerEnd,
+    closeIdx,
+    isBacktick,
+    fenceBqDepth = 0,
+    isFence = false,
+    fenceInfo = ''
+  ) => {
     const rawInnerSlice = rawText.slice(innerStart, innerEnd);
     const inner = (fenceBqDepth > 0
       ? stripBlockquoteFenceContainer(rawInnerSlice, fenceBqDepth)
       : rawInnerSlice
     ).trim();
-    if (inner) {
+    if (isFence && isExplicitShellFenceInfo(fenceInfo)) {
+      let picked = fenceInfo;
+      if (inner) {
+        const lines = inner.split(/\r?\n/);
+        let firstNonComment = '';
+        let firstNonEmpty = '';
+        for (let li = 0; li < lines.length; li += 1) {
+          const t = lines[li].trim();
+          if (!t) continue;
+          if (!firstNonEmpty) firstNonEmpty = t;
+          if (!t.startsWith('#')) {
+            firstNonComment = t;
+            break;
+          }
+        }
+        picked = firstNonComment || firstNonEmpty || fenceInfo;
+      }
+      pushMatched(picked);
+      if (stopOnFirst) return true;
+    } else if (inner) {
       if (isBacktick && !includeBackticks) {
         pushMatched(inner);
         if (stopOnFirst) return true;
       } else {
-        const innerEvalKey = `${isBacktick ? '1:' : '0:'}${inner}`;
+        const innerEvalKey = `${isBacktick ? '1:' : '0:'}${isFence ? 'F:' : ''}${inner}`;
         let didMatchInner = innerEvalCache ? innerEvalCache.get(innerEvalKey) : undefined;
         if (didMatchInner === undefined) {
           const isSafeEndpoint =
@@ -4001,7 +4115,18 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
         scan = rawText.indexOf('`', btMatch.runEnd);
         continue;
       }
-      if (evalAndMaskSpan(scan, btMatch.innerStart, btMatch.innerEnd, btMatch.closeEnd, true, btMatch.fenceBqDepth || 0)) {
+      if (
+        evalAndMaskSpan(
+          scan,
+          btMatch.innerStart,
+          btMatch.innerEnd,
+          btMatch.closeEnd,
+          true,
+          btMatch.fenceBqDepth || 0,
+          Boolean(btMatch.isFence),
+          btMatch.fenceInfo || ''
+        )
+      ) {
         return -2;
       }
       if (btMatch.closeEnd >= endQuote) {
@@ -4031,7 +4156,18 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
         i = btMatch.runEnd - 1;
         continue;
       }
-      if (evalAndMaskSpan(i, btMatch.innerStart, btMatch.innerEnd, btMatch.closeEnd, true, btMatch.fenceBqDepth || 0)) {
+      if (
+        evalAndMaskSpan(
+          i,
+          btMatch.innerStart,
+          btMatch.innerEnd,
+          btMatch.closeEnd,
+          true,
+          btMatch.fenceBqDepth || 0,
+          Boolean(btMatch.isFence),
+          btMatch.fenceInfo || ''
+        )
+      ) {
         return { matchedDeps, remainder: rawText };
       }
       i = btMatch.closeEnd;
@@ -4164,6 +4300,309 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     activeReadinessCache.delimSpans.set(delimCacheKey, finalResult);
   }
   return finalResult;
+}
+
+function appendMaskedPreserveNewlines(outParts, text, start, end) {
+  let segStart = start;
+  while (segStart < end) {
+    const nl = text.indexOf('\n', segStart);
+    if (nl === -1 || nl >= end) {
+      const len = end - segStart;
+      if (len > 0) {
+        outParts.push(' '.repeat(len));
+      }
+      break;
+    }
+    const cr = nl > segStart && text.charCodeAt(nl - 1) === 13 ? 1 : 0;
+    const wsLen = nl - cr - segStart;
+    if (wsLen > 0) {
+      outParts.push(' '.repeat(wsLen));
+    }
+    outParts.push(cr ? '\r\n' : '\n');
+    segStart = nl + 1;
+  }
+}
+
+function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFirst = false } = {}) {
+  if (!rawText || typeof rawText !== 'string') {
+    return { fenceDeps: [], maskedText: rawText || '' };
+  }
+  if (rawText.indexOf('```') === -1 && rawText.indexOf('~~~') === -1) {
+    return { fenceDeps: [], maskedText: rawText };
+  }
+
+  const n = rawText.length;
+  const fenceDeps = [];
+  const seenFence = new Set();
+  const pushFenceDep = (dep) => {
+    const clean = typeof dep === 'string' ? dep.trim() : '';
+    if (clean && !seenFence.has(clean)) {
+      seenFence.add(clean);
+      fenceDeps.push(clean);
+    }
+  };
+  let maskedParts = null;
+  let maskCursor = 0;
+  let lineStart = 0;
+
+  while (lineStart < n) {
+    const rawNl = rawText.indexOf('\n', lineStart);
+    const rawLineEnd = rawNl === -1 ? n : rawNl;
+    const lineEnd = rawLineEnd > lineStart && rawText.charCodeAt(rawLineEnd - 1) === 13 ? rawLineEnd - 1 : rawLineEnd;
+    const nextLineStart = rawLineEnd < n ? rawLineEnd + 1 : n;
+
+    const bqOpen = consumeBlockquotePrefixesAtLineStart(rawText, lineStart, lineEnd, n);
+    let p = bqOpen.pos;
+    let col = bqOpen.col;
+    let baseCol = bqOpen.baseCol;
+    while (p < lineEnd && (col - baseCol) <= 3) {
+      const cc = rawText.charCodeAt(p);
+      if (cc === 32) {
+        col += 1;
+        p += 1;
+      } else if (cc === 9) {
+        col += 4 - (col & 3);
+        p += 1;
+      } else {
+        break;
+      }
+    }
+    if ((col - baseCol) > 3 || p >= lineEnd) {
+      lineStart = nextLineStart;
+      continue;
+    }
+    let fenceListIndent = 0;
+    let fc = rawText.charCodeAt(p);
+    if (fc !== 96 && fc !== 126) {
+      let mEnd = -1;
+      if (fc === 45 || fc === 43 || fc === 42) {
+        mEnd = p + 1;
+      } else if (fc >= 48 && fc <= 57) {
+        let dEnd = p + 1;
+        while (dEnd < lineEnd && dEnd - p < 9) {
+          const dc = rawText.charCodeAt(dEnd);
+          if (dc >= 48 && dc <= 57) {
+            dEnd += 1;
+          } else {
+            break;
+          }
+        }
+        if (dEnd < lineEnd && (rawText.charCodeAt(dEnd) === 46 || rawText.charCodeAt(dEnd) === 41)) {
+          mEnd = dEnd + 1;
+        }
+      }
+      if (mEnd !== -1 && mEnd < lineEnd && isSpaceOrTabCode(rawText.charCodeAt(mEnd))) {
+        const mWidth = mEnd - p;
+        let lp = mEnd;
+        let lCol = col + mWidth;
+        while (lp < lineEnd) {
+          const lcc = rawText.charCodeAt(lp);
+          if (lcc === 32) {
+            lCol += 1;
+            lp += 1;
+          } else if (lcc === 9) {
+            lCol += 4 - (lCol & 3);
+            lp += 1;
+          } else {
+            break;
+          }
+        }
+        const spacesAfterMarker = lCol - (col + mWidth);
+        if (lp < lineEnd && spacesAfterMarker >= 1 && spacesAfterMarker <= 4) {
+          fenceListIndent = lCol - baseCol;
+          baseCol = lCol;
+          p = lp;
+          col = lCol;
+          fc = rawText.charCodeAt(p);
+        }
+      }
+    }
+    if (fc !== 96 && fc !== 126) {
+      lineStart = nextLineStart;
+      continue;
+    }
+    let fEnd = p + 1;
+    while (fEnd < lineEnd && rawText.charCodeAt(fEnd) === fc) {
+      fEnd += 1;
+    }
+    const fenceLen = fEnd - p;
+    if (fenceLen < 3) {
+      lineStart = nextLineStart;
+      continue;
+    }
+    if (fc === 96) {
+      let hasBtOnInfo = false;
+      for (let q = fEnd; q < lineEnd; q += 1) {
+        if (rawText.charCodeAt(q) === 96) {
+          hasBtOnInfo = true;
+          break;
+        }
+      }
+      if (hasBtOnInfo) {
+        lineStart = nextLineStart;
+        continue;
+      }
+    }
+
+    const fenceInfo = rawText.slice(fEnd, lineEnd).trim();
+    const isShellFence = isExplicitShellFenceInfo(fenceInfo);
+    const fenceOpenSummary = rawText.slice(p, lineEnd).trim() || (fc === 96 ? '```' : '~~~');
+    const fenceBqDepth = bqOpen.count;
+    const bodyLines = [];
+    let fenceCloseMaskEnd = rawLineEnd;
+    let afterFenceLineStart = nextLineStart;
+    let scanStart = nextLineStart;
+
+    while (scanStart < n) {
+      const sNl = rawText.indexOf('\n', scanStart);
+      const sRawEnd = sNl === -1 ? n : sNl;
+      const sLineEnd = sRawEnd > scanStart && rawText.charCodeAt(sRawEnd - 1) === 13 ? sRawEnd - 1 : sRawEnd;
+      const sNext = sRawEnd < n ? sRawEnd + 1 : n;
+
+      let contentPos = scanStart;
+      let lineCol = 0;
+      let lineBaseCol = 0;
+      if (fenceBqDepth > 0) {
+        const bqRes = consumeBlockquotePrefixesAtLineStart(rawText, scanStart, sLineEnd, fenceBqDepth);
+        if (bqRes.count < fenceBqDepth) {
+          afterFenceLineStart = scanStart;
+          break;
+        }
+        contentPos = bqRes.pos;
+        lineCol = bqRes.col;
+        lineBaseCol = bqRes.baseCol;
+      }
+
+      if (fenceListIndent > 0) {
+        let blankPos = contentPos;
+        while (blankPos < sLineEnd && isSpaceOrTabCode(rawText.charCodeAt(blankPos))) {
+          blankPos += 1;
+        }
+        if (blankPos === sLineEnd) {
+          bodyLines.push('');
+          fenceCloseMaskEnd = sRawEnd;
+          afterFenceLineStart = sNext;
+          scanStart = sNext;
+          continue;
+        }
+        let lPos = contentPos;
+        let lCol2 = lineCol;
+        while (lPos < sLineEnd && (lCol2 - lineBaseCol) < fenceListIndent) {
+          const lcc = rawText.charCodeAt(lPos);
+          if (lcc === 32) {
+            lCol2 += 1;
+            lPos += 1;
+          } else if (lcc === 9) {
+            lCol2 += 4 - (lCol2 & 3);
+            lPos += 1;
+          } else {
+            break;
+          }
+        }
+        if ((lCol2 - lineBaseCol) < fenceListIndent) {
+          afterFenceLineStart = scanStart;
+          break;
+        }
+        contentPos = lPos;
+        lineBaseCol += fenceListIndent;
+        lineCol = lCol2;
+      }
+
+      let cp = contentPos;
+      let cCol = lineCol;
+      while (cp < sLineEnd && (cCol - lineBaseCol) <= 3) {
+        const cc = rawText.charCodeAt(cp);
+        if (cc === 32) {
+          cCol += 1;
+          cp += 1;
+        } else if (cc === 9) {
+          cCol += 4 - (cCol & 3);
+          cp += 1;
+        } else {
+          break;
+        }
+      }
+      let isCloseFence = false;
+      if ((cCol - lineBaseCol) <= 3 && cp < sLineEnd && rawText.charCodeAt(cp) === fc) {
+        let ce = cp + 1;
+        while (ce < sLineEnd && rawText.charCodeAt(ce) === fc) {
+          ce += 1;
+        }
+        if (ce - cp >= fenceLen) {
+          let tail = ce;
+          while (tail < sLineEnd && isSpaceOrTabCode(rawText.charCodeAt(tail))) {
+            tail += 1;
+          }
+          if (tail === sLineEnd) {
+            isCloseFence = true;
+          }
+        }
+      }
+      if (isCloseFence) {
+        fenceCloseMaskEnd = sRawEnd;
+        afterFenceLineStart = sNext;
+        break;
+      }
+
+      bodyLines.push(rawText.slice(contentPos, sLineEnd));
+      fenceCloseMaskEnd = sRawEnd;
+      afterFenceLineStart = sNext;
+      scanStart = sNext;
+    }
+
+    if (isShellFence) {
+      let firstNonComment = '';
+      let firstNonEmpty = '';
+      for (let bi = 0; bi < bodyLines.length; bi += 1) {
+        const t = bodyLines[bi].trim();
+        if (!t) continue;
+        if (!firstNonEmpty) firstNonEmpty = t;
+        if (!t.startsWith('#')) {
+          firstNonComment = t;
+          break;
+        }
+      }
+      pushFenceDep(firstNonComment || firstNonEmpty || fenceOpenSummary);
+      if (stopOnFirst) {
+        return { fenceDeps, maskedText: rawText };
+      }
+    } else {
+      const trimmedBody = bodyLines.join('\n').trim();
+      if (trimmedBody && !(typeof isSingleExternalEndpointToken === 'function' && isSingleExternalEndpointToken(trimmedBody))) {
+        const bodyMatched =
+          SHELL_UNQUOTED_SCRIPT_CMD_REGEX.test(trimmedBody) ||
+          (checkMode && UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(trimmedBody)) ||
+          scanShellCommandText(trimmedBody, { skipCodeFences: true }) ||
+          scanDelimitedShellSpans(trimmedBody, {
+            includeBackticks: true,
+            includeBareScript: checkMode,
+            stopOnFirst: true
+          }).matchedDeps.length > 0;
+        if (bodyMatched) {
+          pushFenceDep(trimmedBody);
+          if (stopOnFirst) {
+            return { fenceDeps, maskedText: rawText };
+          }
+        }
+      }
+    }
+
+    if (!maskedParts) maskedParts = [];
+    if (lineStart > maskCursor) {
+      maskedParts.push(rawText.slice(maskCursor, lineStart));
+    }
+    appendMaskedPreserveNewlines(maskedParts, rawText, lineStart, fenceCloseMaskEnd);
+    maskCursor = fenceCloseMaskEnd;
+    lineStart = afterFenceLineStart;
+  }
+
+  if (!maskedParts) {
+    return { fenceDeps, maskedText: rawText };
+  }
+  if (maskCursor < n) {
+    maskedParts.push(rawText.slice(maskCursor));
+  }
+  return { fenceDeps, maskedText: maskedParts.join('') };
 }
 
 const PROSE_STRICT_CLI_VERB_SET = new Set([
@@ -4762,9 +5201,17 @@ function extractProseCommandAndRepoDeps(rawText) {
     }
   };
 
-  let outerText = rawText;
-  if (rawText.includes('$(')) {
-    const normDollar = normalizeInlineEscapedQuotes(rawText);
+  const { fenceDeps, maskedText } = extractAndMaskMarkdownCodeFences(rawText, {
+    checkMode: false,
+    stopOnFirst: false
+  });
+  for (let i = 0; i < fenceDeps.length; i += 1) {
+    addDep(fenceDeps[i]);
+  }
+
+  let outerText = maskedText;
+  if (maskedText.includes('$(')) {
+    const normDollar = normalizeInlineEscapedQuotes(maskedText);
     const { closedFrames, topLevelClosed } = findClosedCommandSubstitutions(normDollar);
     for (let f = 0; f < closedFrames.length; f += 1) {
       const frame = closedFrames[f];
@@ -4784,7 +5231,7 @@ function extractProseCommandAndRepoDeps(rawText) {
     }
   }
 
-  const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
+  const { matchedDeps, remainder } = scanDelimitedShellSpans(maskedText, {
     includeBackticks: true,
     includeBareScript: false,
     stopOnFirst: false
@@ -4820,9 +5267,17 @@ function hasCheckCommandOrRepoDependency(rawText) {
     return true;
   }
 
-  let outerText = rawText;
-  if (rawText.includes('$(')) {
-    const normDollar = normalizeInlineEscapedQuotes(rawText);
+  const { fenceDeps, maskedText } = extractAndMaskMarkdownCodeFences(rawText, {
+    checkMode: true,
+    stopOnFirst: true
+  });
+  if (fenceDeps.length > 0) {
+    return true;
+  }
+
+  let outerText = maskedText;
+  if (maskedText.includes('$(')) {
+    const normDollar = normalizeInlineEscapedQuotes(maskedText);
     const { closedFrames, topLevelClosed } = findClosedCommandSubstitutions(normDollar);
     for (let f = 0; f < closedFrames.length; f += 1) {
       const frame = closedFrames[f];
@@ -4841,7 +5296,7 @@ function hasCheckCommandOrRepoDependency(rawText) {
     }
   }
 
-  const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
+  const { matchedDeps, remainder } = scanDelimitedShellSpans(maskedText, {
     includeBackticks: false,
     includeBareScript: true,
     stopOnFirst: true
@@ -7490,12 +7945,19 @@ function collectPhasePromptTexts({
         if (c.label) texts.push(String(c.label));
         if (c.text) texts.push(String(c.text));
         if (c.answer) {
-          const rawAnswer = String(c.answer).trim();
-          const syntheticDiscoveryAnswer =
+          const rawAnswer = String(c.answer).trimEnd();
+          const syntheticDiscoveryAnswerTrimEnd =
+            typeof c.label === 'string' && typeof c.text === 'string'
+              ? `[${c.label.trim()}] (Source: ${String(c.source || '').trim()}): ${c.text.trimEnd()}`
+              : null;
+          const syntheticDiscoveryAnswerTrim =
             typeof c.label === 'string' && typeof c.text === 'string'
               ? `[${c.label.trim()}] (Source: ${String(c.source || '').trim()}): ${c.text.trim()}`
               : null;
-          if (!syntheticDiscoveryAnswer || rawAnswer !== syntheticDiscoveryAnswer) {
+          if (
+            !syntheticDiscoveryAnswerTrimEnd ||
+            (rawAnswer !== syntheticDiscoveryAnswerTrimEnd && rawAnswer !== syntheticDiscoveryAnswerTrim)
+          ) {
             texts.push(String(c.answer));
           }
         }

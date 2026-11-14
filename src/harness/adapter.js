@@ -3,7 +3,18 @@
  * ESM Module (Node >= 22). Zero external dependencies.
  */
 
-import { parseModelAndEffort, recordProviderCall, normalizeProviderTrace } from './cli-runner.js';
+import {
+  parseModelAndEffort,
+  recordProviderCall,
+  normalizeProviderTrace,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX
+} from './cli-runner.js';
+
+export {
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX
+};
 
 export const EFFORT_TIMEOUT_MAP = Object.freeze({
   max: 240000,
@@ -103,13 +114,13 @@ export class HarnessExecutionError extends HarnessError {
       isQuotaFault: false,
       isRetryable: Boolean(options.isRetryable)
     });
-    this.exitCode = options.exitCode ?? null;
-    this.stderr = options.stderr || '';
+    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
+    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
     if (options.code) {
       this.code = options.code;
     }
-    if (options.trace) {
-      this.trace = options.trace;
+    if (options.trace || options.cause?.trace) {
+      this.trace = options.trace || options.cause.trace;
     }
   }
 }
@@ -149,6 +160,45 @@ export class AuthenticationError extends HarnessError {
       isQuotaFault: false,
       isRetryable: false
     });
+    if (options.exitCode !== undefined) {
+      this.exitCode = options.exitCode;
+    }
+    if (options.stderr !== undefined) {
+      this.stderr = options.stderr;
+    }
+    if (options.trace) {
+      this.trace = options.trace;
+    }
+  }
+}
+
+/**
+ * Thrown when headless CLI execution rejects or denies requested tools/actions.
+ */
+export class HeadlessToolDeniedError extends HarnessError {
+  /**
+   * @param {string} message
+   * @param {Object} [options]
+   */
+  constructor(message, options = {}) {
+    super(message, {
+      ...options,
+      isQuotaFault: false,
+      isRetryable: options.isRetryable !== undefined ? Boolean(options.isRetryable) : true
+    });
+    this.code = options.code || 'HEADLESS_TOOL_DENIED';
+    this.deniedActions = Array.isArray(options.deniedActions) ? options.deniedActions : [];
+    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
+    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
+    this.trace = options.trace ?? options.cause?.trace ?? null;
+    const finishedReason = options.finishedReason ?? options.cause?.finishedReason;
+    if (typeof finishedReason === 'string' && finishedReason) {
+      this.finishedReason = finishedReason;
+    }
+    const envelopeError = options.envelopeError ?? options.cause?.envelopeError;
+    if (typeof envelopeError === 'string' && envelopeError) {
+      this.envelopeError = envelopeError;
+    }
   }
 }
 
@@ -183,6 +233,82 @@ export class AbortError extends HarnessError {
  */
 export function createAbortError(message = 'The operation was aborted', options = {}) {
   return new AbortError(message, options);
+}
+
+/**
+ * Resolves effective tools and workspace cwd for a single participant invocation
+ * using the canonical precedence shared across all harness adapters and the engine.
+ *
+ * @param {Object} [options]
+ * @returns {{ effectiveTools: string, configuredWorkspaceCwd: string|undefined, effectiveCwd: string|undefined }}
+ */
+export function resolveAttemptExecutionWorkspace({
+  role = 'seat',
+  phase = 'DELIBERATION',
+  participant,
+  seat,
+  judge,
+  state = {},
+  config,
+  tools,
+  cwd,
+  callerContext,
+  context,
+  adapter
+} = {}) {
+  const actor = participant ?? seat ?? judge ?? {};
+  const ctx = callerContext ?? context;
+  const isVoting = phase === 'VOTING' || phase === 'confirming';
+  let effectiveTools;
+  if (tools === 'none' || ctx?.tools === 'none') {
+    effectiveTools = 'none';
+  } else if (role === 'judge') {
+    effectiveTools = tools ?? ctx?.tools ?? actor?.tools ?? config?.tools ?? 'read-only';
+  } else {
+    effectiveTools =
+      tools ??
+      ctx?.tools ??
+      (isVoting ? actor?.votingTools ?? actor?.tools : actor?.tools) ??
+      config?.tools ??
+      'read-only';
+  }
+
+  const configuredWorkspaceCwd = [
+    cwd,
+    ctx?.cwd,
+    actor?.cwd,
+    state?.cwd,
+    adapter?.cwd,
+    adapter?.config?.cwd,
+    config?.cwd
+  ]
+    .find((c) => typeof c === 'string' && c.trim())
+    ?.trim();
+
+  const effectiveCwd = effectiveTools === 'none' ? undefined : configuredWorkspaceCwd;
+  return { effectiveTools, configuredWorkspaceCwd, effectiveCwd };
+}
+
+/**
+ * Resolves attempt workspace settings, mutates `callerContext._invocationMeta` in place,
+ * and returns the shared reference along with `retryDiagnostics`.
+ *
+ * @param {Object} [params]
+ * @returns {{ effectiveTools: string, configuredWorkspaceCwd: string|undefined, effectiveCwd: string|undefined, invocationMeta: Object, retryDiagnostics: Object|null }}
+ */
+export function captureAttemptInvocationMeta(params = {}) {
+  const workspace = resolveAttemptExecutionWorkspace(params);
+  const callerContext = params.callerContext;
+  const invocationMeta =
+    callerContext && typeof callerContext === 'object'
+      ? (callerContext._invocationMeta ||= {})
+      : {};
+  Object.assign(invocationMeta, workspace);
+  return {
+    ...workspace,
+    invocationMeta,
+    retryDiagnostics: callerContext?.retryDiagnostics || null
+  };
 }
 
 // ============================================================================
@@ -554,7 +680,7 @@ export class HarnessAdapter {
     }
 
     const msg = error?.message || String(error);
-    const raw = `${msg} ${error?.stderr || ''}`;
+    const raw = [msg, error?.stderr, error?.envelopeError].filter(Boolean).join(' ');
 
     // Cancellation / AbortSignal guard (non-retryable)
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
@@ -588,6 +714,23 @@ export class HarnessAdapter {
       });
     }
 
+    // Headless tool denial guard
+    if (error?.name === 'HeadlessToolDeniedError' || error?.code === 'HEADLESS_TOOL_DENIED') {
+      return new HeadlessToolDeniedError(msg, {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
+        stderr: error?.stderr || '',
+        deniedActions: error?.deniedActions ?? error?.trace?.deniedActions,
+        trace: error?.trace || null,
+        finishedReason: error?.finishedReason ?? error?.trace?.finishedReason,
+        envelopeError: error?.envelopeError ?? error?.trace?.envelopeError,
+        isRetryable: error?.isRetryable !== undefined ? Boolean(error.isRetryable) : true,
+        cause: error
+      });
+    }
+
     // Timeout pattern
     if (
       error?.name === 'TimeoutError' ||
@@ -604,20 +747,26 @@ export class HarnessAdapter {
       });
     }
 
-    // Authentication / HTTP 401/403 pattern
-    if (/\b(?:401|403)\b|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key/i.test(raw)) {
+    // Authentication / PID-safe HTTP 401/403 pattern
+    if (
+      PROVIDER_HTTP_AUTH_REGEX.test(raw) ||
+      /\b(?:unauthenticated|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key|permission_denied)\b/i.test(
+        raw
+      )
+    ) {
       return new AuthenticationError(msg, {
         harness: this.name,
         seatId: context.seatId,
         model: context.model,
         exitCode: error?.exitCode ?? error?.code ?? error?.status ?? null,
         stderr: error?.stderr || '',
+        trace: error?.trace || null,
         cause: error
       });
     }
 
-    // Common HTTP 429 / Quota pattern
-    if (/\b429\b|\bquota\b|rate[\s_-]*limit|resource_exhausted/i.test(raw)) {
+    // Common PID-safe HTTP 429 / Quota pattern
+    if (PROVIDER_HTTP_429_REGEX.test(raw) || /\bquota\b|rate[\s_-]*limit|resource_exhausted/i.test(raw)) {
       return new QuotaExhaustionError(msg, {
         harness: this.name,
         seatId: context.seatId,
@@ -626,13 +775,13 @@ export class HarnessAdapter {
       });
     }
 
-    // Process execution error
-    if (error?.code || error?.status || error?.exitCode) {
+    // Process execution error (preserving numeric exitCode 0)
+    if (error?.code || error?.status || typeof error?.exitCode === 'number') {
       return new HarnessExecutionError(msg, {
         harness: this.name,
         seatId: context.seatId,
         model: context.model,
-        exitCode: error.exitCode || error.code || error.status,
+        exitCode: error.exitCode ?? error.code ?? error.status ?? null,
         stderr: error.stderr || '',
         trace: error?.trace || null,
         cause: error

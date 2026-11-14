@@ -825,7 +825,7 @@ describe('Issue #90 — Harness Subprocess Cancellation & Isolation', () => {
         await runCursorCli({ model: 'grok-4.7-high', prompt: 'p', cwd: cleanRepo, exec: mockExec });
 
         for (const seen of observedCwds) {
-          assert.equal(seen, cleanRepo);
+          assert.equal(seen, fs.realpathSync(cleanRepo));
         }
       } finally {
         fs.rmSync(cleanRepo, { recursive: true, force: true });

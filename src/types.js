@@ -142,12 +142,32 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxRetriesPerSeat: 1
 });
 
+/**
+ * Known harness error classifications.
+ * @readonly
+ * @type {readonly string[]}
+ */
+export const ERROR_CLASSES = Object.freeze([
+  'HarnessError',
+  'QuotaExhaustionError',
+  'TimeoutError',
+  'HarnessExecutionError',
+  'InvalidResponseError',
+  'AuthenticationError',
+  'AbortError',
+  'HeadlessToolDeniedError'
+]);
+
 // ============================================================================
 // JSDOC DOMAIN CONTRACTS
 // ============================================================================
 
 /**
  * @typedef {'codex' | 'antigravity' | 'cursor' | 'mock' | string} HarnessType
+ */
+
+/**
+ * @typedef {'HarnessError' | 'QuotaExhaustionError' | 'TimeoutError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'AbortError' | 'HeadlessToolDeniedError' | string} ErrorClass
  */
 
 /**
@@ -291,6 +311,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {number} [timeoutMs] - Optional global execution timeout in ms.
  * @property {number} [maxConcurrentSeats] - Max concurrent seats during deliberation/voting.
  * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
+ * @property {boolean} [retryEffortFallback] - Enable automatic effort/model downgrade recovery on retries.
+ * @property {boolean} [selfContainedInput] - Mark input packet as self-contained without repo reads.
  * @property {EvidenceItem[]} [evidence] - Pre-collected grounded evidence items passed to seats and judge.
  * @property {Clarification[]} [clarifications] - Pre-supplied clarification answers broadcast to seats and judge.
  * @property {Partial<Judge>} [judge] - Optional judge configuration.

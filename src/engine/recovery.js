@@ -129,8 +129,9 @@ const IGNORED_DOMAIN_TLDS = new Set([
 ]);
 const FILE_CANDIDATE_REGEX =
   /(^|[\s"'`(\[,;])((?:\.\.?\/|\/)?\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\/\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*)(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const BARE_DOMAIN_ENDPOINT_REGEX = new RegExp(BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE, 'gi');
 const NAMED_EXTERNAL_STANDARD_REGEX = new RegExp(
-  `(?:\\b(?:RFC[\\s-]*\\d+|ISO(?:\\/IEC)?[\\s-]*\\d+(?:[-:]\\d+)*|CVE-\\d{4}-\\d+|CWE-\\d+|IEEE[\\s-]*\\d+(?:\\.\\d+)*|NIST[\\s-]+(?:SP[\\s-]+)?\\d+(?:[-.]\\d+)*|FIPS[\\s-]*\\d+(?:-\\d+)?|POSIX(?:\\.\\d+(?:-\\d+)?)?|BCP[\\s-]*\\d+|ECMA-\\d+|OWASP(?:\\s+(?:ASVS|Top\\s+\\d+|SAMM))?|W3C(?:\\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\\s+\\d+(?:\\.\\d+)*)?)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE})`,
+  `\\b(?:RFC[\\s-]*\\d+|ISO(?:\\/IEC)?[\\s-]*\\d+(?:[-:]\\d+)*|CVE-\\d{4}-\\d+|CWE-\\d+|IEEE[\\s-]*\\d+(?:\\.\\d+)*|NIST[\\s-]+(?:SP[\\s-]+)?\\d+(?:[-.]\\d+)*|FIPS[\\s-]*\\d+(?:-\\d+)?|POSIX(?:\\.\\d+(?:-\\d+)?)?|BCP[\\s-]*\\d+|ECMA-\\d+|OWASP(?:\\s+(?:ASVS|Top\\s+\\d+|SAMM))?|W3C(?:\\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\\s+\\d+(?:\\.\\d+)*)?)\\b`,
   'gi'
 );
 const CHECK_COMMAND_OR_REPO_REGEX = /(?:`[^`]+`|\b(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl)\b(?:\s+[-/\w.]|$)|\b(?:entire|whole|across(?:\s+the)?)\s+(?:repo|repository|codebase|workspace)\b|\b(?:repo(?:sitory)?|codebase)\s+(?:check|scan|audit|wide)\b|\brepo-wide\b|\brun\s+(?:tests?|command|script)\b)/i;
@@ -524,8 +525,25 @@ export function extractVerificationDependencies(inputs) {
       return `${lead}${' '.repeat(full.length - lead.length)}`;
     });
 
-    // 5. Extract named external standards/identifiers and bare external domains/endpoints
-    //    across remaining text before removing version tokens so `OpenAPI 3.1.0` stays intact.
+    // 5a. Extract complete bare external domains/endpoints BEFORE named standards so
+    //     standard-prefixed hosts like `openapi.org/api*` or `ietf.org/api*` are not split.
+    masked = masked.replace(BARE_DOMAIN_ENDPOINT_REGEX, (rawDomain, ...args) => {
+      const offset = args[args.length - 2];
+      const sourceStr = args[args.length - 1];
+      const normalized = stripTrailingProsePunctuation(rawDomain, sourceStr, offset).trim();
+      if (!normalized || isSemanticVersionToken(normalized)) {
+        return rawDomain;
+      }
+      const domainKey = canonicalizeExternalDepKey(normalized);
+      if (!seenExternal.has(domainKey)) {
+        seenExternal.add(domainKey);
+        externalDeps.push(normalized);
+      }
+      return ' '.repeat(rawDomain.length);
+    });
+
+    // 5b. Extract named external standards/identifiers across remaining non-domain text
+    //     before version tokens are ignored so `OpenAPI 3.1.0` stays intact.
     masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];

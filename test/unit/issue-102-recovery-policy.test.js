@@ -2132,5 +2132,201 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         );
       }
     });
+
+    it('ReReview-102 Round 4 fix: extracts complete standard-prefixed bare domains and wildcard endpoints before embedded standard names', async () => {
+      function params(
+        topic,
+        coveredSources = [],
+        effectiveCwd = '/repo',
+        errorClass = 'TimeoutError',
+        phase = 'DELIBERATION',
+        round = 1
+      ) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete content for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd }
+        };
+      }
+
+      const cases = [
+        ['openapi.org/api*', 'OpenAPI'],
+        ['ietf.org/api*', 'IETF'],
+        ['rfc9110.com/api*', 'RFC 9110'],
+        ['w3c.org/TR/CSP3', 'W3C'],
+        ['owasp.org/Top10', 'OWASP'],
+        ['mdn.dev/docs*', 'MDN'],
+        ['posix.org/spec*', 'POSIX'],
+        ['ieee802.org/11*', 'IEEE 802'],
+        ['iso27001.org/controls*', 'ISO 27001'],
+        ['fips140.org/annex*', 'FIPS 140'],
+        ['bcp14.org/keywords*', 'BCP 14'],
+        ['ecma-262.org/sec*', 'ECMA-262'],
+        ['cwe-79.org/xss*', 'CWE-79'],
+        ['cve-2026-1234.org/advisory*', 'CVE-2026-1234'],
+        ['openapi.org', 'OpenAPI'],
+        ['docs.openapi.org/spec/rfc9110', 'RFC 9110']
+      ];
+
+      for (const [endpoint, wrongStd] of cases) {
+        const topic = `Inspect src/auth.js and ${endpoint}.`;
+        assert.deepEqual(extractVerificationDependencies([topic]), {
+          workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: [endpoint]
+        });
+
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const wrongRes = evaluateToolFreeEvidenceReadiness(
+            params(topic, ['src/auth.js', wrongStd], '/repo', errorClass)
+          );
+          assert.equal(wrongRes.ready, false, `Expected refusal for ${endpoint} covered only with ${wrongStd} (${errorClass})`);
+          assert.equal(wrongRes.reasonCode, 'evidence_access_failure');
+
+          const exactRes = evaluateToolFreeEvidenceReadiness(
+            params(topic, ['src/auth.js', endpoint], '/repo', errorClass)
+          );
+          assert.equal(exactRes.ready, true, `Expected ready=true for ${endpoint} with exact coverage (${errorClass})`);
+        }
+      }
+
+      assert.deepEqual(
+        extractVerificationDependencies([
+          'Verify src/openapi.js against OpenAPI 3.1.0, `openapi.org/api*!`, ietf.org/api*, and ISO/IEC 27001.'
+        ]),
+        {
+          workspaceFileDeps: [{ source: 'src/openapi.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: ['openapi.org/api*!', 'ietf.org/api*', 'OpenAPI 3.1.0', 'ISO/IEC 27001']
+        }
+      );
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        const wrongMock = new MockAdapter();
+        let wrongCalls = 0;
+        const origWrongProof = wrongMock.executeSeatProof.bind(wrongMock);
+        wrongMock.executeSeatProof = async (ctx) => {
+          if (ctx.seat.id === 's1') {
+            wrongCalls += 1;
+            throw errorClass === 'TimeoutError'
+              ? new TimeoutError('Delib timeout', { timeoutMs: 1000, harness: 'codex', seatId: 's1' })
+              : new HeadlessToolDeniedError('Tool denied', {
+                  harness: 'codex',
+                  seatId: 's1',
+                  exitCode: 0,
+                  isRetryable: true
+                });
+          }
+          return origWrongProof(ctx);
+        };
+
+        const refusedEngine = new CouncilEngine(
+          {
+            topic: 'Inspect src/auth.js and openapi.org/api*.',
+            minQuorum: 2,
+            maxRounds: 1,
+            maxRetriesPerSeat: 1,
+            cwd: '/repo',
+            evidence: [
+              { id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export const ok = true;' },
+              { id: 'E2', label: 'Standard', source: 'OpenAPI', text: 'General OpenAPI summary' }
+            ],
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Wrong standard coverage for endpoint',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: [
+                { source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' },
+                { source: 'OpenAPI', evidenceId: 'E2', coverage: 'complete_artifact' }
+              ]
+            },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+              { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => wrongMock }
+        );
+        await refusedEngine.run();
+        assert.equal(wrongCalls, 1, `CouncilEngine must refuse tool-free retry under ${errorClass} when covered only with OpenAPI`);
+        const refusedS1 = refusedEngine.state.seats.find((s) => s.id === 's1');
+        assert.equal(refusedS1.status, 'excused');
+        assert.match(String(refusedS1.excusedReason || ''), /evidence_access_failure|insufficient self-contained evidence/i);
+
+        const rightMock = new MockAdapter();
+        const rightCalls = [];
+        const origRightProof = rightMock.executeSeatProof.bind(rightMock);
+        rightMock.executeSeatProof = async (ctx) => {
+          if (ctx.seat.id === 's1') {
+            rightCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (rightCalls.length === 1) {
+              throw errorClass === 'TimeoutError'
+                ? new TimeoutError('Delib timeout', { timeoutMs: 1000, harness: 'codex', seatId: 's1' })
+                : new HeadlessToolDeniedError('Tool denied', {
+                    harness: 'codex',
+                    seatId: 's1',
+                    exitCode: 0,
+                    isRetryable: true
+                  });
+            }
+          }
+          return origRightProof(ctx);
+        };
+
+        const allowedEngine = new CouncilEngine(
+          {
+            topic: 'Inspect src/auth.js and openapi.org/api*.',
+            minQuorum: 2,
+            maxRounds: 1,
+            maxRetriesPerSeat: 1,
+            cwd: '/repo',
+            evidence: [
+              { id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export const ok = true;' },
+              { id: 'E2', label: 'Endpoint', source: 'openapi.org/api*', text: 'Complete endpoint snapshot' }
+            ],
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Exact endpoint coverage',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: [
+                { source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' },
+                { source: 'openapi.org/api*', evidenceId: 'E2', coverage: 'complete_artifact' }
+              ]
+            },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+              { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => rightMock }
+        );
+        await allowedEngine.run();
+        assert.equal(rightCalls.length, 2, `CouncilEngine must permit one bounded tool-free retry under ${errorClass} with exact openapi.org/api* coverage`);
+        assert.equal(rightCalls[0].tools, 'read-only');
+        assert.equal(rightCalls[0].cwd, '/repo');
+        assert.equal(rightCalls[1].tools, 'none');
+        assert.equal(rightCalls[1].cwd, undefined);
+      }
+    });
   });
 });

@@ -205,10 +205,32 @@ export const ANTI_CHEATING_RULE =
   'STRICT ANTI-CHEATING RULE: Never read, grep, or inspect ".council/" (including ".council/runs/", ".council/telemetry/", ".council/runs/latest.js", "latest.js", "*.meta.json", "*.events.jsonl", "telemetry-summary.*", run snapshots, or telemetry files). Isolated workspace copies already omit ".council/" physically, so NEVER pass ".council", "latest.js", "*.meta.json", "*.events.jsonl", or "telemetry-summary.*" in CLI flags, negative globs or exclude pathspecs, or tool/MCP search queries. Accessing ".council/" or passing those patterns violates blind deliberation independence and immediately invalidates your turn.';
 
 const ISOLATED_WORKSPACE_PATH_DIRECTIVE =
-  'Inspect workspace files strictly via relative paths rooted at "." (your current working directory is already the attached workspace, materialized as an isolated .council-free workspace copy when ".council" exists on the host). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths to shell, file, or search tools—even when an absolute host path appears verbatim in the Topic Handoff, Clarifications, or [E#] baseline evidence—because accessing host workspace roots triggers FORBIDDEN_STATE_ACCESS.';
+  'Inspect workspace files via relative paths rooted at "." (your current working directory is already the attached workspace, materialized as an isolated .council-free workspace copy (and .codegraph-free) when ".council" or ".codegraph" exists on the host). Prefer native read/search tools (Read/read_file, Glob, Grep, LS) over headless Bash or codegraph CLI invocations whenever native tools suffice; if a native read/search tool schema strictly requires an absolute path, pass only a path strictly inside your current isolated workspace directory. NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths to shell, file, or search tools—even when an absolute host path appears verbatim in the Topic Handoff, Clarifications, or [E#] baseline evidence—because accessing host workspace roots triggers FORBIDDEN_STATE_ACCESS. In all final citations (proof "source"/"statement", vote "reason", Judge "summary"/"clauses"/"proofDecisions"), cite portable repository-relative paths only—NEVER cite temporary copy directory names, raw temp filesystem paths, or host repository paths.';
 
 const CLARIFICATION_WORKSPACE_DIRECTIVE =
-  'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files strictly via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy when ".council" exists on the host); if no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS.';
+  'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy (and .codegraph-free) when ".council" or ".codegraph" exists on the host); prefer native read/search tools (Read/read_file, Glob, Grep, LS) over headless Bash or codegraph CLI invocations whenever native tools suffice, passing only "."-relative paths (or an absolute path strictly inside your current isolated workspace directory if a native tool schema requires one). If no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS. Keep any referenced paths portable and repository-relative only (never echo temporary copy directory names, raw temp paths, or host repository paths).';
+
+const WORKSPACE_PATH_SLASH_RE =
+  /(?:^|[\s"'`(\[{:])(?:\.?\.?\/(?:[A-Za-z0-9_.\[\]-]+\/)*[A-Za-z0-9_.\[\]-]+|(?:src|test|tests|lib|bin|docs|doc|scripts|configs|config|skills|packages|apps|cmd|internal|pkg|drivers|kernel|include)\/[A-Za-z0-9_.\[\]-]+(?:\/[A-Za-z0-9_.\[\]-]+)*|(?:[A-Za-z0-9_.-]+\/){2,}[A-Za-z0-9_.\[\]-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.(?:js|mjs|cjs|ts|tsx|jsx|json|jsonl|md|mdx|txt|ya?ml|toml|ini|cfg|conf|env|lock|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|css|scss|html|xml|svg|sql|csv|log|proto|graphql|wasm|map|vue|svelte))(?::\d+(?:-\d+)?)?(?=$|[\s"'`),.\]}:;?!])/i;
+
+const WORKSPACE_ROOT_FILE_RE =
+  /(?:^|[\s"'`(\[{:])[A-Za-z0-9_.-]+\.(?:js|mjs|cjs|ts|tsx|jsx|json|jsonl|md|mdx|txt|ya?ml|toml|ini|cfg|conf|env|lock|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|css|scss|html|xml|svg|sql|csv|log|proto|graphql|wasm|map|vue|svelte)(?::\d+(?:-\d+)?)?(?=$|[\s"'`),.\]}:;?!])/i;
+
+function textCitesWorkspacePath(text) {
+  if (typeof text !== 'string' || !text.trim()) return false;
+  // Ignore external URLs (http/https/psql/etc.) while retaining file:// and repo-relative paths.
+  const withoutUrls = text.replace(/\b(?!file:\/\/)[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
+  return WORKSPACE_PATH_SLASH_RE.test(withoutUrls) || WORKSPACE_ROOT_FILE_RE.test(withoutUrls);
+}
+
+function itemsCiteWorkspacePath(items, keys) {
+  if (!Array.isArray(items) || items.length === 0) return false;
+  return items.some((item) =>
+    item &&
+    typeof item === 'object' &&
+    keys.some((k) => textCitesWorkspacePath(item[k]))
+  );
+}
 
 const CLARIFICATION_TOOL_FREE_DIRECTIVE =
   'Do not invoke any tools (no shell, file reads, or web searches) on this clarification turn. Inspect only the provided Topic Handoff.';
@@ -380,8 +402,15 @@ export function formatDeliberationPrompt({
         : `\nPre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: Use these items as shared baseline evidence so you do not need to re-fetch or re-read facts already excerpted here. [E#] items are auditable: if you can prove from a primary source or exact line citation that an [E#] summary is incomplete or imprecise, explicitly state the qualification, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
     : '';
 
+  const isRoundTwoPlusOrRebuttal = isRebuttal || resolvedRound > 1;
+  const delibReadCapDirective = isRoundTwoPlusOrRebuttal
+    ? 'Cap local workspace reads to at most 3–5 targeted reads focused strictly on Unresolved Objections without re-inspecting settled clauses.'
+    : (resolvedEvidence.length > 0
+        ? 'Cap local workspace reads to at most 5–8 targeted reads overall (and at most 3–5 additional targeted reads for claims not already covered by [E#]).'
+        : 'Cap local workspace reads to at most 5–8 targeted reads.');
+
   const deliberationToolDirective = hasWorkspaceCwd
-    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement".${evidenceGuidance}
+    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Before submitting your proof, verify claims against sources (specifications, benchmarks, codebase, or documentation) and cite the exact inspected sources in your proof "source" and "statement". ${delibReadCapDirective}${evidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
     : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Before submitting your proof, verify claims against sources (Pre-Gathered Baseline Evidence packet, authoritative specifications, benchmarks, web search (if needed for external facts), or analytical/mathematical derivation) and cite the exact sources in your proof "source" and "statement".${evidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
@@ -501,13 +530,13 @@ export function formatVotingPrompt({
     : '';
 
   const votingToolDirective = hasWorkspaceCwd
-    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
+    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. Cap local file reads to at most 3–5 targeted spot-check reads within ".". If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
     : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Verify disputed candidate clauses or cited proof sources against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations before casting your vote. If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
 
   const toolFreeVotingDirective =
-    'Do not invoke any tools during confirmation voting. Evaluate the Candidate Clauses strictly against the audited Proofs provided above and return your JSON vote immediately.';
+    'Do not invoke any tools during confirmation voting. Evaluate the Candidate Clauses strictly against the audited Proofs provided above and return your JSON vote immediately. No local file reads are permitted.';
 
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
@@ -681,13 +710,24 @@ export function formatJudgePrompt({
   ];
 
   if (resolvedTools === 'read-only') {
+    const hasCitedWorkspacePaths =
+      itemsCiteWorkspacePath(proofs, ['source', 'statement', 'scope']) ||
+      itemsCiteWorkspacePath(resolvedOpenObjections, ['reason']);
+    const hasEvidenceWorkspacePaths = itemsCiteWorkspacePath(resolvedEvidence, ['source']);
+    const shouldAllowSpotCheckReads = hasCitedWorkspacePaths || hasEvidenceWorkspacePaths;
+
     const judgeEvidenceGuidance = resolvedEvidence.length > 0
       ? (hasWorkspaceCwd
-          ? ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first; avoid re-reading excerpted files, and cap local file spot-checks to at most 3–5 targeted reads so you finish well within your turn timeout, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`
+          ? (shouldAllowSpotCheckReads
+              ? ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first; avoid re-reading excerpted files, and cap local file spot-checks to at most 3–5 targeted reads so you finish well within your turn timeout, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`
+              : ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
           : ` Pre-Gathered Baseline Evidence (Attributed & Challengeable) is provided above in [E1]–[E${resolvedEvidence.length}]: audit and cite baseline evidence first. When a seat relies on a supplied [E#] baseline item that turns out to have a minor secondary imprecision, prefer partially_admitted (excising or qualifying the imprecise phrase via admittedStatement / note) rather than binary rejected if the proof's core argument remains valid, and avoid speculative local filesystem grepping unless the topic explicitly names local repository files.`)
       : '';
+    const judgeSpotCheckBudget = shouldAllowSpotCheckReads
+      ? ' Cap local workspace spot-check reads to at most 3–5 targeted reads covering concrete workspace paths cited in current-round Submitted Proofs for Auditing or Unresolved Open Objections (do NOT reopen or re-audit Prior-Round Admitted Proofs).'
+      : ' Neither current-round Submitted Proofs for Auditing nor Unresolved Open Objections cite workspace files, so use 0 local workspace reads (do NOT reopen or re-audit Prior-Round Admitted Proofs).';
     const judgeToolGuidance = hasWorkspaceCwd
-      ? `4. Spot-check proof sources: You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
+      ? `4. Spot-check proof sources: You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Spot-check submitted proof sources and citations using your read-only tools to verify that cited documents and specifications substantiate the submitted assertions before admitting them.${judgeSpotCheckBudget}${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
       : `4. Spot-check proof sources: You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Spot-check submitted proof sources and citations against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations to verify that cited sources substantiate the submitted assertions before admitting them.${judgeEvidenceGuidance} Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
     judgeDirectives.push(judgeToolGuidance);
   } else {

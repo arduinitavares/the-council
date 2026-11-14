@@ -338,4 +338,130 @@ describe('Issue #96: Isolated Relative-"." Workspace Contract & Anti-Baiting Pro
       assert.match(ANTI_CHEATING_RULE, /tool\/MCP|MCP|search queries/i);
     });
   });
+
+  describe('(e) Issue #102 .codegraph-free copy notice, native tool preference, anti-temp-path rules, and phase read caps', () => {
+    it('explains .codegraph-free copy, prefers native read/search tools over headless Bash/codegraph, and forbids temp dir/host paths in final citations', () => {
+      const clarifyPrompt = formatClarificationPrompt({
+        soul,
+        seat: { ...baseSeat, tools: 'read-only' },
+        topic: 'Inspect src/index.js',
+        batch: 1,
+        maxBatches: 1,
+        cwd: secretHostPath
+      });
+      const delibPrompt = formatDeliberationPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath },
+        topic: 'Inspect src/index.js',
+        round: 1,
+        maxRounds: 3,
+        tools: 'read-only'
+      });
+      const votePrompt = formatVotingPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath, votingTools: 'read-only' },
+        candidate: { round: 1, summary: 'S', clauses: [] },
+        admittedProofs: [],
+        tools: 'read-only'
+      });
+      const judgePrompt = formatJudgePrompt({
+        judge: { id: 'judge-96', model: 'gpt-6-astra', cwd: secretHostPath },
+        topic: 'Audit src/index.js',
+        round: 1,
+        proofs: [{ id: 'P1', kind: 'citation', scope: 'Core', source: 'src/index.js:1', statement: 'Exported' }],
+        tools: 'read-only'
+      });
+
+      for (const [label, prompt] of [
+        ['formatClarificationPrompt', clarifyPrompt],
+        ['formatDeliberationPrompt', delibPrompt],
+        ['formatVotingPrompt', votePrompt],
+        ['formatJudgePrompt', judgePrompt]
+      ]) {
+        assert.match(prompt, /\.codegraph-free/i, `${label} must note .codegraph-free workspace copy`);
+        assert.match(prompt, /Read\/read_file.*Glob.*Grep.*LS/i, `${label} must allow native read/search tools`);
+        assert.match(prompt, /Bash.*codegraph/i, `${label} must discourage headless Bash/codegraph CLI when native tools suffice`);
+        assert.match(prompt, /repository-relative/i, `${label} must require portable repository-relative citations`);
+        assert.match(prompt, /temporary copy directory names|raw temp/i, `${label} must forbid temp dir names/paths in citations`);
+        assert.ok(!prompt.includes(secretHostPath), `${label} must not leak host cwd`);
+      }
+    });
+
+    it('emits bounded phase read caps (5-8 R1, 3-5 R2+/Vote/Judge cited, 0 Judge uncited) without reopening prior-round proofs', () => {
+      const delibR1 = formatDeliberationPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath },
+        topic: 'Inspect src/index.js',
+        round: 1,
+        maxRounds: 3,
+        tools: 'read-only'
+      });
+      assert.match(delibR1, /5.?8 targeted reads/);
+
+      const delibR2 = formatDeliberationPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath },
+        topic: 'Rebuttal',
+        round: 2,
+        maxRounds: 3,
+        rebuttalMode: true,
+        previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P1', reason: 'Dispute src/index.js:10' }],
+        tools: 'read-only'
+      });
+      assert.match(delibR2, /3.?5 targeted reads/);
+      assert.match(delibR2, /Unresolved Objections/);
+
+      const voteReadOnly = formatVotingPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath, votingTools: 'read-only' },
+        candidate: { round: 1, summary: 'S', clauses: [] },
+        admittedProofs: [],
+        tools: 'read-only'
+      });
+      assert.match(voteReadOnly, /3.?5 targeted spot-check reads/);
+
+      const voteNone = formatVotingPrompt({
+        soul,
+        seat: { ...baseSeat, cwd: secretHostPath, votingTools: 'none' },
+        candidate: { round: 1, summary: 'S', clauses: [] },
+        admittedProofs: [],
+        tools: 'none'
+      });
+      assert.match(voteNone, /No local file reads are permitted/);
+
+      const judgeCitedProof = formatJudgePrompt({
+        judge: { id: 'judge-96', cwd: secretHostPath },
+        topic: 'Audit',
+        round: 1,
+        proofs: [{ id: 'P1', kind: 'citation', scope: 'Core', source: 'src/index.js:5', statement: 'Verified' }],
+        tools: 'read-only'
+      });
+      assert.match(judgeCitedProof, /3.?5 targeted reads/);
+
+      const judgeCitedObjection = formatJudgePrompt({
+        judge: { id: 'judge-96', cwd: secretHostPath },
+        topic: 'Audit',
+        round: 2,
+        previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P0', reason: 'Dispute src/engine/council-engine.js:42' }],
+        proofs: [{ id: 'P1', kind: 'derivation', scope: 'Logic', source: 'internal reasoning', statement: 'Concept' }],
+        tools: 'read-only'
+      });
+      assert.match(judgeCitedObjection, /3.?5 targeted reads/);
+
+      const judgeUncited = formatJudgePrompt({
+        judge: { id: 'judge-96', cwd: secretHostPath },
+        topic: 'Audit',
+        round: 2,
+        previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+        priorAdmittedProofs: [{ id: 'P0', round: 1, source: 'src/old.js:1', statement: 'Old', status: 'admitted' }],
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P0', reason: 'Scope disagreement' }],
+        proofs: [{ id: 'P1', kind: 'derivation', scope: 'Logic', source: 'internal reasoning', statement: 'Concept' }],
+        tools: 'read-only'
+      });
+      assert.match(judgeUncited, /0 local workspace reads/);
+      assert.match(judgeUncited, /do NOT reopen or re-audit Prior-Round Admitted Proofs/i);
+    });
+  });
 });

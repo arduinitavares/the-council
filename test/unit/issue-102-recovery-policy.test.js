@@ -2328,5 +2328,527 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         assert.equal(rightCalls[1].cwd, undefined);
       }
     });
+
+    it('ReReview-102 Round 5 fixes: preserves embedded .. in bare endpoints, literal punctuation in structured proof/clarification sources, and port-qualified wildcard endpoints', async () => {
+      function makeReadinessParams({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass = 'TimeoutError',
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        candidate = null,
+        previousCandidate = null,
+        openObjections = [],
+        admittedProofs = [],
+        coveredSources = ['src/auth.js'],
+        effectiveCwd = '/repo'
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          candidate,
+          previousCandidate,
+          openObjections,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd }
+        };
+      }
+
+      async function runPhaseEngineCase({
+        phase,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        s1Proof = null,
+        coveredSources = []
+      }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s2');
+            }
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) {
+            return s1Proof;
+          }
+          return origProof(ctx);
+        };
+
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (phase === 'JUDGE_AUDIT_SYNTHESIS' && ctx.round === 1) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('judge');
+            }
+          }
+          return origJudge(ctx);
+        };
+
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications,
+            maxClarificationBatches: clarifications.length,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Phase matrix check',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              {
+                id: 's1',
+                harness: 'codex',
+                model: 'gpt-6-astra (high)',
+                soul: 'S1',
+                tools: 'read-only',
+                votingTools: 'read-only',
+                cwd: '/repo'
+              },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        await engine.run();
+        return { engine, targetCalls };
+      }
+
+      // 1. Finding 1 (Important): Embedded `..` in bare endpoints must NOT be truncated before extraction.
+      const embeddedDotCases = [
+        { input: 'Inspect src/auth.js and `openapi.org/api?token=a..b`.', expected: 'openapi.org/api?token=a..b' },
+        { input: 'Inspect src/auth.js and openapi.org/api?token=a..b.', expected: 'openapi.org/api?token=a..b' },
+        { input: 'Check src/auth.js and example.com/v1..v2/spec*.', expected: 'example.com/v1..v2/spec*' },
+        { input: 'Inspect src/auth.js. Wait...openapi.org/api?token=a..b', expected: 'openapi.org/api?token=a..b' }
+      ];
+      for (const { input, expected } of embeddedDotCases) {
+        assert.deepEqual(extractVerificationDependencies([input]), {
+          workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: [expected]
+        });
+      }
+
+      assert.deepEqual(extractVerificationDependencies(['Check openapi.org/api...']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['openapi.org/api']
+      });
+      assert.deepEqual(extractVerificationDependencies(['Check `openapi.org/api...`']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['openapi.org/api...']
+      });
+
+      const dotTopic = 'Inspect src/auth.js and `openapi.org/api?token=a..b`.';
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        const truncatedRes = evaluateToolFreeEvidenceReadiness(
+          makeReadinessParams({
+            errorClass,
+            topic: dotTopic,
+            coveredSources: ['src/auth.js', 'openapi.org/api?token=a']
+          })
+        );
+        assert.equal(truncatedRes.ready, false);
+        assert.equal(truncatedRes.reasonCode, 'evidence_access_failure');
+        assert.ok(truncatedRes.missingDependencies.includes('openapi.org/api?token=a..b'));
+
+        const exactRes = evaluateToolFreeEvidenceReadiness(
+          makeReadinessParams({
+            errorClass,
+            topic: dotTopic,
+            coveredSources: ['src/auth.js', 'openapi.org/api?token=a..b']
+          })
+        );
+        assert.equal(exactRes.ready, true);
+      }
+
+      for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const isR1 = phase === 'R1_DELIBERATION';
+          const wrongRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: isR1 ? dotTopic : 'Inspect src/auth.js.',
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Token range',
+                  kind: 'citation',
+                  source: 'src/auth.js',
+                  statement: 'Verified `openapi.org/api?token=a..b` in src/auth.js.'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org/api?token=a']
+          });
+          assert.equal(
+            wrongRun.targetCalls.length,
+            1,
+            `Finding 1: ${phase}/${errorClass} must refuse tool-free retry when covered with truncated openapi.org/api?token=a`
+          );
+
+          const exactRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: isR1 ? dotTopic : 'Inspect src/auth.js.',
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Token range',
+                  kind: 'citation',
+                  source: 'src/auth.js',
+                  statement: 'Verified `openapi.org/api?token=a..b` in src/auth.js.'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org/api?token=a..b']
+          });
+          assert.equal(
+            exactRun.targetCalls.length,
+            2,
+            `Finding 1: ${phase}/${errorClass} must permit tool-free retry with exact openapi.org/api?token=a..b`
+          );
+          assert.equal(exactRun.targetCalls[0].tools, 'read-only');
+          assert.equal(exactRun.targetCalls[0].cwd, '/repo');
+          assert.equal(exactRun.targetCalls[1].tools, 'none');
+          assert.equal(exactRun.targetCalls[1].cwd, undefined);
+        }
+      }
+
+      // 2. Finding 2 (Important): Structured proof.source & clarification.source preserve literal punctuation.
+      const structuredSourceCases = [
+        { literal: 'openapi.org/api*!', stripped: 'openapi.org/api*' },
+        { literal: 'openapi.org/api*.', stripped: 'openapi.org/api*' },
+        { literal: 'openapi.org:443/api*!', stripped: 'openapi.org:443/api*' },
+        { literal: 'https://example.com/api!', stripped: 'https://example.com/api' },
+        { literal: 'https://en.wikipedia.org/wiki/URI_(general)', stripped: 'https://en.wikipedia.org/wiki/URI_(general' },
+        { literal: 'openapi.org/v1/item(1)', stripped: 'openapi.org/v1/item(1' }
+      ];
+
+      assert.deepEqual(
+        extractVerificationDependencies([], { structuredSources: ['openapi.org/api*!', 'openapi.org/api*.'] }),
+        {
+          workspaceFileDeps: [],
+          workspaceBroadDeps: [],
+          externalDeps: ['openapi.org/api*!', 'openapi.org/api*.']
+        }
+      );
+      assert.deepEqual(extractVerificationDependencies(['openapi.org/api*!']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['openapi.org/api*!']
+      });
+
+      for (const { literal, stripped } of structuredSourceCases) {
+        const makeProof = (kind = 'citation') => ({
+          id: 'P1',
+          round: 1,
+          seatId: 's1',
+          status: 'admitted',
+          kind,
+          source: literal,
+          statement: 'Contract check'
+        });
+
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const r1Wrong = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              clarifications: [{ label: 'Spec', source: literal, text: 'Reference source' }],
+              coveredSources: ['src/auth.js', stripped]
+            })
+          );
+          assert.equal(r1Wrong.ready, false, `R1 clarification structured source ${literal} must refuse stripped ${stripped}`);
+          assert.ok(r1Wrong.missingDependencies.includes(literal));
+
+          const r1Right = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              clarifications: [{ label: 'Spec', source: literal, text: 'Reference source' }],
+              coveredSources: ['src/auth.js', literal]
+            })
+          );
+          assert.equal(r1Right.ready, true, `R1 clarification structured source ${literal} must allow exact coverage`);
+
+          const judgeWrong = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              proofs: [makeProof('citation')],
+              coveredSources: ['src/auth.js', stripped]
+            })
+          );
+          assert.equal(judgeWrong.ready, false, `JUDGE structured proof.source ${literal} must refuse stripped ${stripped}`);
+
+          const benchWrong = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              proofs: [makeProof('benchmark')],
+              coveredSources: ['src/auth.js', stripped]
+            })
+          );
+          assert.equal(benchWrong.ready, false, `JUDGE benchmark structured source ${literal} must refuse stripped ${stripped}`);
+          assert.ok(!benchWrong.missingDependencies.includes(stripped));
+
+          const judgeRight = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              proofs: [makeProof('benchmark')],
+              coveredSources: ['src/auth.js', literal]
+            })
+          );
+          assert.equal(judgeRight.ready, true, `JUDGE benchmark structured source ${literal} must allow exact coverage`);
+
+          const voteWrong = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              candidate: { summary: 'Candidate', clauses: [{ id: 'C1', context: 'c', conclusion: 'k', citedProofIds: ['P1'] }] },
+              admittedProofs: [makeProof('citation')],
+              coveredSources: ['src/auth.js', stripped]
+            })
+          );
+          assert.equal(voteWrong.ready, false, `VOTING structured source ${literal} must refuse stripped ${stripped}`);
+
+          const voteRight = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              candidate: { summary: 'Candidate', clauses: [{ id: 'C1', context: 'c', conclusion: 'k', citedProofIds: ['P1'] }] },
+              admittedProofs: [makeProof('citation')],
+              coveredSources: ['src/auth.js', literal]
+            })
+          );
+          assert.equal(voteRight.ready, true, `VOTING structured source ${literal} must allow exact coverage`);
+        }
+      }
+
+      for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const isR1 = phase === 'R1_DELIBERATION';
+          const wrongRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: 'Inspect src/auth.js.',
+            clarifications: isR1 ? [{ label: 'Spec', source: 'openapi.org/api*!', text: 'Endpoint contract' }] : [],
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Endpoint',
+                  kind: 'citation',
+                  source: 'openapi.org/api*!',
+                  statement: 'Contract checked for src/auth.js'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org/api*']
+          });
+          assert.equal(
+            wrongRun.targetCalls.length,
+            1,
+            `Finding 2: ${phase}/${errorClass} must refuse stripped openapi.org/api* for literal openapi.org/api*!`
+          );
+
+          const exactRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: 'Inspect src/auth.js.',
+            clarifications: isR1 ? [{ label: 'Spec', source: 'openapi.org/api*!', text: 'Endpoint contract' }] : [],
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Endpoint',
+                  kind: 'citation',
+                  source: 'openapi.org/api*!',
+                  statement: 'Contract checked for src/auth.js'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org/api*!']
+          });
+          assert.equal(
+            exactRun.targetCalls.length,
+            2,
+            `Finding 2: ${phase}/${errorClass} must permit exact openapi.org/api*!`
+          );
+          assert.equal(exactRun.targetCalls[0].tools, 'read-only');
+          assert.equal(exactRun.targetCalls[0].cwd, '/repo');
+          assert.equal(exactRun.targetCalls[1].tools, 'none');
+          assert.equal(exactRun.targetCalls[1].cwd, undefined);
+        }
+      }
+
+      // 3. Finding 3 (Minor): Port-qualified wildcard/path bare endpoints classify as externalDeps, never workspaceBroadDeps.
+      for (const endpoint of ['openapi.org:443/api*', 'example.com:8080/v1*', 'openapi.org:9/api*']) {
+        assert.deepEqual(extractVerificationDependencies([`Inspect src/auth.js and ${endpoint}.`]), {
+          workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+          workspaceBroadDeps: [],
+          externalDeps: [endpoint]
+        });
+      }
+      assert.deepEqual(extractVerificationDependencies(['Check ./openapi.org:443/api* and example.dev:1-20.']), {
+        workspaceFileDeps: [{ source: 'example.dev', startLine: 1, endLine: 20 }],
+        workspaceBroadDeps: ['openapi.org:443/api*'],
+        externalDeps: []
+      });
+
+      const portTopic = 'Inspect src/auth.js and openapi.org:443/api*.';
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        const portlessDenied = evaluateToolFreeEvidenceReadiness(
+          makeReadinessParams({
+            errorClass,
+            topic: portTopic,
+            coveredSources: ['src/auth.js', 'openapi.org/api*']
+          })
+        );
+        assert.equal(portlessDenied.ready, false);
+        assert.ok(portlessDenied.missingDependencies.includes('openapi.org:443/api*'));
+
+        const exactAllowed = evaluateToolFreeEvidenceReadiness(
+          makeReadinessParams({
+            errorClass,
+            topic: portTopic,
+            coveredSources: ['src/auth.js', 'OPENAPI.ORG:443/api*']
+          })
+        );
+        assert.equal(exactAllowed.ready, true);
+      }
+
+      for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const isR1 = phase === 'R1_DELIBERATION';
+          const wrongRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: isR1 ? portTopic : 'Inspect src/auth.js.',
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Port endpoint',
+                  kind: 'citation',
+                  source: 'src/auth.js',
+                  statement: 'Checked openapi.org:443/api* against src/auth.js.'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org/api*']
+          });
+          assert.equal(
+            wrongRun.targetCalls.length,
+            1,
+            `Finding 3: ${phase}/${errorClass} must refuse portless openapi.org/api*`
+          );
+
+          const exactRun = await runPhaseEngineCase({
+            phase,
+            errorClass,
+            topic: isR1 ? portTopic : 'Inspect src/auth.js.',
+            s1Proof: isR1
+              ? null
+              : {
+                  scope: 'Port endpoint',
+                  kind: 'citation',
+                  source: 'src/auth.js',
+                  statement: 'Checked openapi.org:443/api* against src/auth.js.'
+                },
+            coveredSources: ['src/auth.js', 'openapi.org:443/api*']
+          });
+          assert.equal(
+            exactRun.targetCalls.length,
+            2,
+            `Finding 3: ${phase}/${errorClass} must permit exact openapi.org:443/api*`
+          );
+          assert.equal(exactRun.targetCalls[0].tools, 'read-only');
+          assert.equal(exactRun.targetCalls[0].cwd, '/repo');
+          assert.equal(exactRun.targetCalls[1].tools, 'none');
+          assert.equal(exactRun.targetCalls[1].cwd, undefined);
+        }
+      }
+    });
   });
 });

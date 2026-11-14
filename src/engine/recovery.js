@@ -37,8 +37,15 @@ const BARE_DOMAIN_EXACT_REGEX = new RegExp(
   `^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}$`,
   'i'
 );
+const BARE_DOMAIN_LOOKBEHIND_SOURCE = '(?<![A-Za-z0-9_/$-]|(?<!\\.)\\.)';
+const BARE_DOMAIN_HOST_SOURCE = `(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}`;
+const BARE_DOMAIN_WITH_SUFFIX_REGEX = new RegExp(
+  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{1,5})?[/?#][^\\s"'` +
+    '`<>()\\[\\]]*',
+  'gi'
+);
 const BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE =
-  `(?<![A-Za-z0-9_./$-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}(?::\\d{2,5})?(?:[/?#][^\\s"'` +
+  `${BARE_DOMAIN_LOOKBEHIND_SOURCE}${BARE_DOMAIN_HOST_SOURCE}(?::\\d{2,5})?(?:[/?#][^\\s"'` +
   '`<>()\\[\\]]*)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
 
 const KNOWN_STANDALONE_EXTENSIONLESS_FILES = new Set([
@@ -208,12 +215,34 @@ function stripTrailingProsePunctuation(rawToken, sourceText, offset) {
     offset === 0 &&
     typeof sourceText === 'string' &&
     rawToken.length === sourceText.length &&
-    /[?#=]/.test(rawToken) &&
+    /[/?#=]/.test(rawToken) &&
     !rawToken.endsWith('.')
   ) {
     return rawToken;
   }
   return rawToken.replace(/[.,;:!?)]+$/, '');
+}
+
+function unwrapStructuredSource(rawValue) {
+  const trimmed = typeof rawValue === 'string' ? rawValue.trim() : String(rawValue || '').trim();
+  if (trimmed.length < 2) {
+    return trimmed;
+  }
+  const wrapperPairs = [
+    ['`', '`'],
+    ['"', '"'],
+    ["'", "'"],
+    ['<', '>']
+  ];
+  for (const [open, close] of wrapperPairs) {
+    if (trimmed.startsWith(open) && trimmed.endsWith(close)) {
+      const inner = trimmed.slice(1, -1).trim();
+      if (inner && !inner.includes(close)) {
+        return inner;
+      }
+    }
+  }
+  return trimmed;
 }
 
 function collectStrings(value, out) {
@@ -282,6 +311,23 @@ function isRecognizedBareDomain(token) {
     return false;
   }
   return BARE_DOMAIN_EXACT_REGEX.test(trimmed);
+}
+
+function isRecognizedBareDomainAuthority(token, allowSingleDigitPort = false) {
+  const trimmed = String(token || '').trim();
+  if (!trimmed) {
+    return false;
+  }
+  const portRe = allowSingleDigitPort ? /^(.*):(\d{1,5})$/ : /^(.*):(\d{2,5})$/;
+  const match = portRe.exec(trimmed);
+  if (match) {
+    const portNum = Number.parseInt(match[2], 10);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return false;
+    }
+    return isRecognizedBareDomain(match[1]);
+  }
+  return isRecognizedBareDomain(trimmed);
 }
 
 function hasKnownFileExtensionOrDotfile(segment) {
@@ -401,7 +447,7 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   if (segments.length === 0) {
     return 'leave';
   }
-  if (!rawToken.startsWith('/') && !hasExplicitDotSlash && isRecognizedBareDomain(segments[0])) {
+  if (!rawToken.startsWith('/') && !hasExplicitDotSlash && isRecognizedBareDomainAuthority(segments[0], true)) {
     return 'leave';
   }
   if (hasExplicitDotSlash || startRaw !== undefined) {
@@ -443,13 +489,14 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
  * and external URLs/standards/domains from prompt/topic/candidate/proof text inputs.
  *
  * @param {string|string[]} inputs
+ * @param {{ structuredSources?: string|string[] }} [options]
  * @returns {{
  *   workspaceFileDeps: Array<{ source: string, startLine?: number, endLine?: number, unbounded?: boolean }>,
  *   workspaceBroadDeps: string[],
  *   externalDeps: string[]
  * }}
  */
-export function extractVerificationDependencies(inputs) {
+export function extractVerificationDependencies(inputs, options = {}) {
   const strings = [];
   collectStrings(inputs, strings);
 
@@ -459,9 +506,29 @@ export function extractVerificationDependencies(inputs) {
   const externalDeps = [];
   const seenExternal = new Set();
 
+  const structuredList = [];
+  collectStrings(options?.structuredSources, structuredList);
+  for (const rawStructured of structuredList) {
+    const unwrapped = unwrapStructuredSource(rawStructured);
+    if (!unwrapped) {
+      continue;
+    }
+    const isValidUrlToken =
+      isUrlExternalSource(unwrapped) && !/^[a-z][a-z0-9+.-]*:\/\/$/i.test(unwrapped);
+    if (!/\s/.test(unwrapped) && (isValidUrlToken || Boolean(parseBareDomainEndpoint(unwrapped)))) {
+      const extKey = canonicalizeExternalDepKey(unwrapped);
+      if (!seenExternal.has(extKey)) {
+        seenExternal.add(extKey);
+        externalDeps.push(unwrapped);
+      }
+    } else {
+      strings.push(unwrapped);
+    }
+  }
+
   for (const text of strings) {
-    // 1. Extract external URI scheme URLs first and mask them so URL paths
-    //    or embedded standard tokens are not misclassified or duplicated.
+    // 1a. Extract external URI scheme URLs first and mask them so URL paths
+    //     or embedded standard tokens are not misclassified or duplicated.
     let masked = text.replace(URL_REGEX, (rawUrl, ...args) => {
       const offset = args[args.length - 2];
       const sourceStr = args[args.length - 1];
@@ -474,6 +541,24 @@ export function extractVerificationDependencies(inputs) {
       return ' '.repeat(rawUrl.length);
     });
 
+    // 1b. Extract bare external endpoints with path/query/hash suffixes (and optional port)
+    //     BEFORE ellipsis masking and glob matching so embedded `..` (e.g. `openapi.org/api?token=a..b`)
+    //     and port-qualified wildcards (e.g. `openapi.org:443/api*`) stay intact.
+    masked = masked.replace(BARE_DOMAIN_WITH_SUFFIX_REGEX, (rawDomain, ...args) => {
+      const offset = args[args.length - 2];
+      const sourceStr = args[args.length - 1];
+      const normalized = stripTrailingProsePunctuation(rawDomain, sourceStr, offset).trim();
+      if (!normalized || isSemanticVersionToken(normalized) || !parseBareDomainEndpoint(normalized)) {
+        return rawDomain;
+      }
+      const domainKey = canonicalizeExternalDepKey(normalized);
+      if (!seenExternal.has(domainKey)) {
+        seenExternal.add(domainKey);
+        externalDeps.push(normalized);
+      }
+      return ' '.repeat(rawDomain.length);
+    });
+
     // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction.
     masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
 
@@ -484,7 +569,7 @@ export function extractVerificationDependencies(inputs) {
       const hasRelativePrefix = cleanedCandidate.startsWith('./') || cleanedCandidate.startsWith('../');
       const trimmed = cleanedCandidate.replace(/^\.\//, '');
       const firstSeg = trimmed.split('/')[0];
-      if (!hasRelativePrefix && !cleanedCandidate.startsWith('/') && isRecognizedBareDomain(firstSeg)) {
+      if (!hasRelativePrefix && !cleanedCandidate.startsWith('/') && isRecognizedBareDomainAuthority(firstSeg, true)) {
         return full;
       }
       const looksBroad = trimmed.includes('*')
@@ -626,13 +711,13 @@ function checkPhasePrerequisites({
   return formatEvidenceFailure(`unsupported recovery phase "${String(phase)}"`, [String(phase)]);
 }
 
-function appendProofTexts(list, texts) {
+function appendProofTexts(list, texts, structuredSources = []) {
   if (!Array.isArray(list)) return;
   for (const proof of list) {
     if (proof?.scope) texts.push(String(proof.scope));
     if (proof?.statement) texts.push(String(proof.statement));
     if (proof?.judgeAdmittedStatement) texts.push(String(proof.judgeAdmittedStatement));
-    if (proof?.source) texts.push(String(proof.source));
+    if (proof?.source) structuredSources.push(String(proof.source));
   }
 }
 
@@ -718,6 +803,7 @@ function collectPhasePromptTexts({
   admittedProofs
 }) {
   const texts = [];
+  const structuredSources = [];
   if (typeof topic === 'string' && topic.trim()) {
     texts.push(topic);
   }
@@ -727,9 +813,19 @@ function collectPhasePromptTexts({
         texts.push(c);
       } else if (c && typeof c === 'object') {
         if (c.question) texts.push(String(c.question));
-        if (c.answer) texts.push(String(c.answer));
-        if (c.source) texts.push(String(c.source));
+        if (c.source) structuredSources.push(String(c.source));
+        if (c.label) texts.push(String(c.label));
         if (c.text) texts.push(String(c.text));
+        if (c.answer) {
+          const rawAnswer = String(c.answer).trim();
+          const syntheticDiscoveryAnswer =
+            typeof c.label === 'string' && typeof c.text === 'string'
+              ? `[${c.label.trim()}] (Source: ${String(c.source || '').trim()}): ${c.text.trim()}`
+              : null;
+          if (!syntheticDiscoveryAnswer || rawAnswer !== syntheticDiscoveryAnswer) {
+            texts.push(String(c.answer));
+          }
+        }
       }
     }
   }
@@ -760,7 +856,7 @@ function collectPhasePromptTexts({
       }
     }
   }
-  appendProofTexts(proofs, texts);
+  appendProofTexts(proofs, texts, structuredSources);
   const resolvedBacking = Array.isArray(backingProofs)
     ? backingProofs
     : resolveBackingProofs({
@@ -773,23 +869,25 @@ function collectPhasePromptTexts({
         previousCandidate
       });
   if (resolvedBacking.length > 0) {
-    appendProofTexts(resolvedBacking, texts);
+    appendProofTexts(resolvedBacking, texts, structuredSources);
   }
   if (phase === 'VOTING') {
-    appendProofTexts(admittedProofs, texts);
+    appendProofTexts(admittedProofs, texts, structuredSources);
   }
-  return texts;
+  return { texts, structuredSources };
 }
 
 function augmentProofDependencies(proofList, deps) {
   if (!Array.isArray(proofList)) return;
   for (const proof of proofList) {
     if (!proof || typeof proof !== 'object') continue;
-    const rawSource = typeof proof.source === 'string' ? proof.source.trim() : '';
+    const rawSource = unwrapStructuredSource(proof.source);
     const rawStatement = typeof proof.statement === 'string' ? proof.statement.trim() : '';
     const rawAdmittedStatement =
       typeof proof.judgeAdmittedStatement === 'string' ? proof.judgeAdmittedStatement.trim() : '';
-    const sourceDeps = rawSource ? extractVerificationDependencies([rawSource]) : null;
+    const sourceDeps = rawSource
+      ? extractVerificationDependencies([], { structuredSources: [rawSource] })
+      : null;
     const sourceHasConcreteFile = Boolean(
       sourceDeps &&
       sourceDeps.workspaceFileDeps.length > 0 &&
@@ -801,7 +899,7 @@ function augmentProofDependencies(proofList, deps) {
       if (
         rawSource &&
         !sourceHasConcreteFile &&
-        !deps.externalDeps.includes(rawSource) &&
+        !deps.externalDeps.some((d) => externalSourcesMatch(d, rawSource)) &&
         !deps.workspaceBroadDeps.includes(rawSource)
       ) {
         deps.externalDeps.push(rawSource);
@@ -826,7 +924,7 @@ function augmentProofDependencies(proofList, deps) {
         !sourceHasConcreteFile &&
         !sourceIsCommandOrRepo &&
         (!sourceDeps || sourceDeps.externalDeps.length === 0) &&
-        !deps.externalDeps.includes(rawSource) &&
+        !deps.externalDeps.some((d) => externalSourcesMatch(d, rawSource)) &&
         !deps.workspaceBroadDeps.includes(rawSource) &&
         CHECK_EXTERNAL_SOURCE_REGEX.test(rawSource)
       ) {
@@ -883,13 +981,21 @@ function isUrlExternalSource(value) {
 
 function parseBareDomainEndpoint(value) {
   const trimmed = String(value || '').trim();
-  if (!trimmed || isUrlExternalSource(trimmed)) {
+  if (!trimmed || /\s/.test(trimmed) || isUrlExternalSource(trimmed)) {
     return null;
   }
   const delimMatch = /[/?#]/.exec(trimmed);
   const authority = delimMatch ? trimmed.slice(0, delimMatch.index) : trimmed;
   const suffix = delimMatch ? trimmed.slice(delimMatch.index) : '';
-  const host = authority.replace(/:\d{2,5}$/, '');
+  const portMatch = delimMatch ? /^(.*):(\d{1,5})$/.exec(authority) : /^(.*):(\d{2,5})$/.exec(authority);
+  let host = authority;
+  if (portMatch) {
+    const portNum = Number.parseInt(portMatch[2], 10);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return null;
+    }
+    host = portMatch[1];
+  }
   if (!isRecognizedBareDomain(host)) {
     return null;
   }
@@ -1049,7 +1155,7 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     openObjections,
     previousCandidate
   });
-  const texts = collectPhasePromptTexts({
+  const { texts, structuredSources } = collectPhasePromptTexts({
     phase,
     round,
     topic,
@@ -1062,7 +1168,7 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     openObjections,
     admittedProofs
   });
-  const deps = extractVerificationDependencies(texts);
+  const deps = extractVerificationDependencies(texts, { structuredSources });
 
   // Spec §1 & §7 item 2: external `kind: 'benchmark'` sources and `kind: 'check'`
   // command/repo/external claims in proofs, prior backing proofs & admittedProofs veto unattested recovery.

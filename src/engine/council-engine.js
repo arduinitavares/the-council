@@ -1057,6 +1057,18 @@ export class CouncilEngine {
       if (typeof dec?.statement === 'string' && dec.statement.trim()) {
         fields.push({ label: `judge.proofDecisions[${key}].statement`, text: dec.statement });
       }
+      if (typeof dec?.admittedStatement === 'string' && dec.admittedStatement.trim()) {
+        fields.push({
+          label: `judge.proofDecisions[${key}].admittedStatement`,
+          text: dec.admittedStatement
+        });
+      }
+      if (typeof dec?.reason === 'string' && dec.reason.trim()) {
+        fields.push({ label: `judge.proofDecisions[${key}].reason`, text: dec.reason });
+      }
+      if (typeof dec?.caveat === 'string' && dec.caveat.trim()) {
+        fields.push({ label: `judge.proofDecisions[${key}].caveat`, text: dec.caveat });
+      }
     });
     const citationRes = validateCitationFields(fields, { forbiddenWorkspaceRoots });
     return {
@@ -1167,6 +1179,7 @@ export class CouncilEngine {
       effectiveCwd: participant?.tools === 'none' ? undefined : participant?.cwd ?? this.config?.cwd
     };
     const roundProofs = (this.state.proofs || []).filter((p) => p.round === currentRound);
+    const priorProofs = (this.state.proofs || []).filter((p) => p.round < currentRound);
     const admittedProofs = (this.state.proofs || []).filter(
       (p) => p.status === 'admitted' || p.status === 'partially_admitted'
     );
@@ -1203,6 +1216,7 @@ export class CouncilEngine {
       clarifications: this.state.clarifications || [],
       evidence: this.state.evidence || [],
       proofs: roundProofs,
+      priorProofs,
       candidate: effectivePhase === 'VOTING' ? this.state.candidate : null,
       previousCandidate:
         previousCandidate ?? (effectivePhase === 'DELIBERATION' && currentRound > 1 ? this.state.candidate : null),

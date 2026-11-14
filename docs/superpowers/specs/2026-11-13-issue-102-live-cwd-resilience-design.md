@@ -130,7 +130,7 @@ When `ready === false`, `_planParticipantRecovery` returns `canRetry: false`, `t
 
 ### Single Authority: `CouncilEngine.prototype._planParticipantRecovery`
 Replace all 7 inline retryability checks in [council-engine.js](file:///Users/aaat/projects/the-council/src/engine/council-engine.js) with `_planParticipantRecovery`, evaluated in this exact precedence order:
-1. **Non-Retryable Check**: `!_isRetryableError(error)` -> `canRetry: false, terminationKind: 'non_retryable'` (preserves `AuthenticationError`, `FORBIDDEN_STATE_ACCESS`, default `HarnessExecutionError`).
+1. **Non-Retryable Check**: `!_isRetryableError(error)` -> `canRetry: false, terminationKind: 'non_retryable'` (preserves non-retryable `AuthenticationError`, `AbortError`, and default `HarnessExecutionError` while keeping Issue `#90` `FORBIDDEN_STATE_ACCESS` retryable contract intact).
 2. **Retry Cap Check**: `retries >= maxRetries` -> `canRetry: false, terminationKind: 'retries_exhausted'`.
 3. **Single Tool-Free Recovery Limit (All Subsequent Error Types)**: `toolFreeRecoveryUsed === true` -> `canRetry: false, terminationKind: 'tool_free_already_used'`, terminating immediately regardless of whether the subsequent failure is `InvalidResponseError`, `QuotaExhaustionError`, `TimeoutError`, `HeadlessToolDeniedError`, or retryable `HarnessExecutionError`.
 4. **Remaining Budget Check**: `remainingBudget < minViableBudgetMs` (`Math.min(5000, Math.floor(totalBudgetMs * 0.1))`) -> `canRetry: false, terminationKind: 'budget_exhausted'`.

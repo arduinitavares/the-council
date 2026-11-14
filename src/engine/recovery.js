@@ -21,7 +21,39 @@ const VALID_PHASE_SET = new Set(VALID_SELF_CONTAINED_PHASES);
 const EFFORT_SET = new Set(ALLOWED_EFFORTS);
 const URL_REGEX = /\b(?:https?|file):\/\/[^\s"'`<>()[\]]+/gi;
 const GLOB_REGEX = /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?])/g;
-const FILE_REGEX = /(?:^|[\s"'`(\[,;])(\.?\.?\/?(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|py|go|rs|sh|css|html|sql|txt|lock))(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const KNOWN_EXTENSIONLESS_FILES = new Set([
+  'Makefile',
+  'Dockerfile',
+  'Containerfile',
+  'Jenkinsfile',
+  'Vagrantfile',
+  'Gemfile',
+  'Procfile',
+  'Rakefile',
+  'Justfile',
+  'Brewfile',
+  'WORKSPACE',
+  'BUILD'
+]);
+const KNOWN_FILE_EXTENSIONS = new Set([
+  'c', 'h', 'hh', 'hpp', 'hxx', 'cpp', 'cc', 'cxx', 'm', 'mm',
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'd',
+  'py', 'pyi', 'go', 'rs', 'java', 'kt', 'kts', 'swift', 'cs', 'fs',
+  'scala', 'lua', 'dart', 'zig', 'hs', 'ml', 'mli', 'ex', 'exs', 'erl',
+  'clj', 'cljs', 'r', 'jl', 'pl', 'pm', 'rb', 'php', 'nim', 'v', 'sv', 'vhd',
+  'proto', 'graphql', 'gql', 'prisma', 'sql',
+  'json', 'jsonl', 'jsonc', 'json5', 'md', 'mdx', 'rst', 'adoc', 'tex', 'txt',
+  'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+  'xml', 'svg', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'vue', 'svelte', 'astro',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
+  'lock', 'log', 'csv', 'tsv', 'diff', 'patch', 'tf', 'tfvars', 'hcl', 'nix', 'cmake', 'mk', 'wasm', 'map', 'pem', 'crt', 'key', 'bazel'
+]);
+const IGNORED_DOMAIN_TLDS = new Set([
+  'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'ai', 'app', 'co', 'me',
+  'info', 'biz', 'xyz', 'gg', 'land', 'uk', 'de', 'fr', 'jp'
+]);
+const FILE_REGEX = /(?:^|[\s"'`(\[,;])(\.?\.?\/?(?:(?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[A-Za-z][A-Za-z0-9]{0,11}|Makefile|Dockerfile|Containerfile|Jenkinsfile|Vagrantfile|Gemfile|Procfile|Rakefile|Justfile|Brewfile|WORKSPACE|BUILD)|(?:\.\/|\.\.\/)(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-]+|(?:bin|src|lib|pkg|cmd|internal|include|tests?|specs?|docs?|scripts?|tools?|configs?|packages?|apps?)(?:\/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_-]+(?=:[\d])))(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const NAMED_EXTERNAL_STANDARD_REGEX = /\b(?:RFC[\s-]*\d+|ISO(?:\/IEC)?[\s-]*\d+(?:[-:]\d+)*|CVE-\d{4}-\d+|CWE-\d+|IEEE[\s-]*\d+(?:\.\d+)*|NIST[\s-]+(?:SP[\s-]+)?\d+(?:[-.]\d+)*|FIPS[\s-]*\d+(?:-\d+)?|POSIX(?:\.\d+(?:-\d+)?)?|BCP[\s-]*\d+|ECMA-\d+|OWASP(?:\s+(?:ASVS|Top\s+\d+|SAMM))?|W3C(?:\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\s+\d+(?:\.\d+)*)?|(?<![\/])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:org|com|net|edu|gov))\b/gi;
 const CHECK_COMMAND_OR_REPO_REGEX = /(?:`[^`]+`|\b(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl)\b(?:\s+[-/\w.]|$)|\b(?:entire|whole|across(?:\s+the)?)\s+(?:repo|repository|codebase|workspace)\b|\b(?:repo(?:sitory)?|codebase)\s+(?:check|scan|audit|wide)\b|\brepo-wide\b|\brun\s+(?:tests?|command|script)\b)/i;
 const CHECK_EXTERNAL_SOURCE_REGEX = /\b(?:rfc\s*\d+|iso[\s/-]*\d+|ietf|w3c|owasp|cve-\d{4}-\d+|mdn|openapi|external(?:\s+\w+)?|upstream(?:\s+\w+)?|remote(?:\s+\w+)?|third[- ]party(?:\s+\w+)?|(?:rest|http|graphql|vendor)\s+api)\b|(?:[a-z0-9-]+\.(?:org|io|dev|net|com|edu|gov)\b)/i;
 
@@ -135,15 +167,28 @@ export function extractVerificationDependencies(inputs) {
   const seenExternal = new Set();
 
   for (const text of strings) {
-    // 1. Extract external HTTP/HTTPS URLs first and mask them so URL paths
-    //    are not misclassified as workspace directory or file dependencies.
+    // 1. Extract external HTTP/HTTPS/file URLs first and mask them so URL paths
+    //    or embedded standard tokens are not misclassified or duplicated.
     let masked = text.replace(URL_REGEX, (rawUrl) => {
       const cleaned = rawUrl.replace(/[.,;:!?)]+$/, '');
-      if (cleaned && !seenExternal.has(cleaned)) {
-        seenExternal.add(cleaned);
+      const urlKey = `url:${cleaned}`;
+      if (cleaned && !seenExternal.has(urlKey)) {
+        seenExternal.add(urlKey);
         externalDeps.push(cleaned);
       }
       return ' '.repeat(rawUrl.length);
+    });
+
+    // 1b. Extract named external standards/identifiers (RFC, ISO, CVE, OWASP, etc.) across all texts
+    //     BEFORE dot/version masking so e.g. ISO 27001 or OpenAPI 3.1.0 is preserved intact.
+    masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd) => {
+      const normalized = rawStd.replace(/\s+/g, ' ').trim();
+      const stdKey = `std:${normalized.replace(/[\s-]+/g, '').toLowerCase()}`;
+      if (normalized && !seenExternal.has(stdKey)) {
+        seenExternal.add(stdKey);
+        externalDeps.push(normalized);
+      }
+      return ' '.repeat(rawStd.length);
     });
 
     // 2. Mask ellipses (`...`, `..`) and semantic versions (`v22.1.0`, `1.2.3`)
@@ -180,12 +225,17 @@ export function extractVerificationDependencies(inputs) {
       if (!source || source.includes('..')) {
         continue;
       }
-      if (
-        !hasExplicitPathPrefix &&
-        startRaw === undefined &&
-        IGNORED_SINGLE_SEGMENT_JS_NOUNS.has(source.toLowerCase())
-      ) {
-        continue;
+      if (!hasExplicitPathPrefix && startRaw === undefined) {
+        if (IGNORED_SINGLE_SEGMENT_JS_NOUNS.has(source.toLowerCase())) {
+          continue;
+        }
+        if (!KNOWN_EXTENSIONLESS_FILES.has(source)) {
+          const dotIdx = source.lastIndexOf('.');
+          const ext = dotIdx >= 0 ? source.slice(dotIdx + 1).toLowerCase() : '';
+          if (!ext || IGNORED_DOMAIN_TLDS.has(ext) || !KNOWN_FILE_EXTENSIONS.has(ext)) {
+            continue;
+          }
+        }
       }
       if (startRaw !== undefined) {
         const startLine = Number.parseInt(startRaw, 10);
@@ -272,15 +322,87 @@ function appendProofTexts(list, texts) {
   for (const proof of list) {
     if (proof?.scope) texts.push(String(proof.scope));
     if (proof?.statement) texts.push(String(proof.statement));
+    if (proof?.judgeAdmittedStatement) texts.push(String(proof.judgeAdmittedStatement));
     if (proof?.source) texts.push(String(proof.source));
   }
 }
 
+function resolveBackingProofs({
+  phase,
+  round = 1,
+  proofs = [],
+  priorProofs = [],
+  admittedProofs = [],
+  openObjections = [],
+  previousCandidate = null
+}) {
+  if (Number(round) <= 1 || (phase !== 'DELIBERATION' && phase !== 'JUDGE_AUDIT_SYNTHESIS')) {
+    return [];
+  }
+  const referencedIds = new Set();
+  if (Array.isArray(openObjections)) {
+    for (const obj of openObjections) {
+      if (typeof obj?.proofId === 'string' && obj.proofId.trim()) {
+        referencedIds.add(obj.proofId.trim());
+      }
+    }
+  }
+  if (phase === 'DELIBERATION' && Array.isArray(previousCandidate?.clauses)) {
+    for (const clause of previousCandidate.clauses) {
+      if (typeof clause?.proofId === 'string' && clause.proofId.trim()) {
+        referencedIds.add(clause.proofId.trim());
+      }
+      if (Array.isArray(clause?.citedProofIds)) {
+        for (const pid of clause.citedProofIds) {
+          if (typeof pid === 'string' && pid.trim()) referencedIds.add(pid.trim());
+        }
+      }
+      if (Array.isArray(clause?.proofIds)) {
+        for (const pid of clause.proofIds) {
+          if (typeof pid === 'string' && pid.trim()) referencedIds.add(pid.trim());
+        }
+      }
+      if (Array.isArray(clause?.supportingProofs)) {
+        for (const pid of clause.supportingProofs) {
+          if (typeof pid === 'string' && pid.trim()) referencedIds.add(pid.trim());
+        }
+      }
+    }
+  }
+  if (referencedIds.size === 0) {
+    return [];
+  }
+
+  const seenIds = new Set(
+    (Array.isArray(proofs) ? proofs : [])
+      .map((p) => (typeof p?.id === 'string' ? p.id.trim() : ''))
+      .filter(Boolean)
+  );
+  const backingProofs = [];
+  const pool = [
+    ...(Array.isArray(priorProofs) ? priorProofs : []),
+    ...(Array.isArray(admittedProofs) ? admittedProofs : [])
+  ];
+  for (const proof of pool) {
+    if (!proof || typeof proof !== 'object') continue;
+    const pid = typeof proof.id === 'string' ? proof.id.trim() : '';
+    if (!pid || !referencedIds.has(pid) || seenIds.has(pid)) {
+      continue;
+    }
+    seenIds.add(pid);
+    backingProofs.push(proof);
+  }
+  return backingProofs;
+}
+
 function collectPhasePromptTexts({
   phase,
+  round = 1,
   topic,
   clarifications,
   proofs,
+  priorProofs = [],
+  backingProofs = null,
   candidate,
   previousCandidate,
   openObjections,
@@ -330,6 +452,20 @@ function collectPhasePromptTexts({
     }
   }
   appendProofTexts(proofs, texts);
+  const resolvedBacking = Array.isArray(backingProofs)
+    ? backingProofs
+    : resolveBackingProofs({
+        phase,
+        round,
+        proofs,
+        priorProofs,
+        admittedProofs,
+        openObjections,
+        previousCandidate
+      });
+  if (resolvedBacking.length > 0) {
+    appendProofTexts(resolvedBacking, texts);
+  }
   if (phase === 'VOTING') {
     appendProofTexts(admittedProofs, texts);
   }
@@ -342,6 +478,8 @@ function augmentProofDependencies(proofList, deps) {
     if (!proof || typeof proof !== 'object') continue;
     const rawSource = typeof proof.source === 'string' ? proof.source.trim() : '';
     const rawStatement = typeof proof.statement === 'string' ? proof.statement.trim() : '';
+    const rawAdmittedStatement =
+      typeof proof.judgeAdmittedStatement === 'string' ? proof.judgeAdmittedStatement.trim() : '';
     const sourceDeps = rawSource ? extractVerificationDependencies([rawSource]) : null;
     const sourceHasConcreteFile = Boolean(
       sourceDeps &&
@@ -364,9 +502,12 @@ function augmentProofDependencies(proofList, deps) {
 
     if (proof.kind === 'check') {
       const sourceIsCommandOrRepo = !sourceHasConcreteFile && rawSource && CHECK_COMMAND_OR_REPO_REGEX.test(rawSource);
-      const statementIsCommandOrRepo = rawStatement && CHECK_COMMAND_OR_REPO_REGEX.test(rawStatement);
+      const statementMatch = [rawStatement, rawAdmittedStatement].find(
+        (s) => s && CHECK_COMMAND_OR_REPO_REGEX.test(s)
+      );
+      const statementIsCommandOrRepo = Boolean(statementMatch);
       if (sourceIsCommandOrRepo || statementIsCommandOrRepo) {
-        const label = sourceIsCommandOrRepo ? rawSource : rawStatement.slice(0, 80);
+        const label = sourceIsCommandOrRepo ? rawSource : statementMatch.slice(0, 80);
         if (label && !deps.workspaceBroadDeps.includes(label)) {
           deps.workspaceBroadDeps.push(label);
         }
@@ -375,6 +516,7 @@ function augmentProofDependencies(proofList, deps) {
         rawSource &&
         !sourceHasConcreteFile &&
         !sourceIsCommandOrRepo &&
+        (!sourceDeps || sourceDeps.externalDeps.length === 0) &&
         !deps.externalDeps.includes(rawSource) &&
         !deps.workspaceBroadDeps.includes(rawSource) &&
         CHECK_EXTERNAL_SOURCE_REGEX.test(rawSource)
@@ -426,6 +568,22 @@ function doesCoveredArtifactSatisfyFileDep(dep, artifact, evidenceById) {
   return cov.startLine <= dep.startLine && cov.endLine >= depEnd;
 }
 
+function isUrlExternalSource(value) {
+  return /^(?:https?|file):\/\//i.test(String(value || '').trim());
+}
+
+function externalSourcesMatch(a, b) {
+  const sa = String(a || '').trim();
+  const sb = String(b || '').trim();
+  if (!sa || !sb) {
+    return false;
+  }
+  if (isUrlExternalSource(sa) || isUrlExternalSource(sb)) {
+    return sa === sb;
+  }
+  return sa.toLowerCase() === sb.toLowerCase();
+}
+
 function doesCoveredArtifactSatisfyExternalDep(extSource, artifact, evidenceById) {
   if (!artifact || typeof artifact !== 'object') {
     return false;
@@ -434,10 +592,10 @@ function doesCoveredArtifactSatisfyExternalDep(extSource, artifact, evidenceById
   if (!isValidEvidenceItem(ev)) {
     return false;
   }
-  if (String(artifact.source || '').trim() !== extSource) {
+  if (!externalSourcesMatch(artifact.source, extSource)) {
     return false;
   }
-  if (ev.source !== undefined && String(ev.source).trim() !== extSource) {
+  if (ev.source !== undefined && !externalSourcesMatch(ev.source, extSource)) {
     return false;
   }
   return artifact.coverage === 'complete_artifact';
@@ -460,6 +618,7 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     clarifications = [],
     evidence = [],
     proofs = [],
+    priorProofs = [],
     candidate = null,
     previousCandidate = null,
     openObjections = [],
@@ -534,11 +693,23 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
     );
   }
 
+  const backingProofs = resolveBackingProofs({
+    phase,
+    round,
+    proofs,
+    priorProofs,
+    admittedProofs,
+    openObjections,
+    previousCandidate
+  });
   const texts = collectPhasePromptTexts({
     phase,
+    round,
     topic,
     clarifications,
     proofs,
+    priorProofs,
+    backingProofs,
     candidate,
     previousCandidate,
     openObjections,
@@ -547,8 +718,11 @@ export function evaluateToolFreeEvidenceReadiness(params = {}) {
   const deps = extractVerificationDependencies(texts);
 
   // Spec §1 & §7 item 2: external `kind: 'benchmark'` sources and `kind: 'check'`
-  // command/repo/external claims in proofs & admittedProofs veto unattested recovery.
+  // command/repo/external claims in proofs, prior backing proofs & admittedProofs veto unattested recovery.
   augmentProofDependencies(proofs, deps);
+  if (backingProofs.length > 0) {
+    augmentProofDependencies(backingProofs, deps);
+  }
   if (phase === 'VOTING') {
     augmentProofDependencies(admittedProofs, deps);
   }
@@ -1188,6 +1362,7 @@ export function planParticipantRecovery(params = {}) {
     clarifications = [],
     evidence = [],
     proofs = [],
+    priorProofs = [],
     candidate = null,
     previousCandidate = null,
     openObjections = [],
@@ -1276,6 +1451,7 @@ export function planParticipantRecovery(params = {}) {
       clarifications,
       evidence,
       proofs,
+      priorProofs,
       candidate,
       previousCandidate,
       openObjections,

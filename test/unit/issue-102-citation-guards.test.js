@@ -553,4 +553,113 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
     assert.equal(s3.retryDiagnosticsHistory[0].tools, 'none');
     assert.equal(engine._seatToolFreeUsed.get('1:DELIBERATION:s3-timeout'), true);
   });
+
+  it('Important 2: validates and normalizes dec.admittedStatement, dec.reason, and dec.caveat in Judge proofDecisions', () => {
+    const trustedRoot = path.join(os.tmpdir(), 'council-safe-cwd-judge-dec');
+    const engine = new CouncilEngine(
+      {
+        topic: 'Validate judge proofDecisions fields',
+        selfContainedInput: {
+          kind: 'full_context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
+        seats: [
+          { id: 's1', harness: 'mock', model: 'mock-a', soul: 'S1' },
+          { id: 's2', harness: 'mock', model: 'mock-b', soul: 'S2' }
+        ],
+        judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra' }
+      },
+      { harnessResolver: () => new MockAdapter() }
+    );
+
+    const badAdmittedStmt = engine._normalizeAndValidateJudge(
+      {
+        summary: 'Summary OK',
+        clauses: [{ id: 'C1', statement: 'Clause OK', supportingProofs: ['P1'] }],
+        proofDecisions: {
+          P1: {
+            status: 'partially_admitted',
+            admittedStatement: 'Core verified at ../outside.js:12',
+            note: 'Bounded caveat'
+          }
+        }
+      },
+      { trustedEphemeralRoots: [], forbiddenWorkspaceRoots: [] }
+    );
+    assert.equal(badAdmittedStmt.valid, false);
+    assert.ok(badAdmittedStmt.errors.some((e) => /admittedStatement/.test(e)));
+
+    const badCombinedAdmittedStmt = engine._normalizeAndValidateJudge(
+      {
+        summary: 'Summary OK',
+        clauses: [{ id: 'C1', context: 'Auth', conclusion: 'Clause OK', citedProofIds: ['P1'] }],
+        proofDecisions: {
+          P1: {
+            status: 'partially_admitted',
+            admittedStatement: 'Verified .council/state.json:1 and ../outside.js:3',
+            note: 'Bounded caveat'
+          }
+        }
+      },
+      { trustedEphemeralRoots: [], forbiddenWorkspaceRoots: [] }
+    );
+    assert.equal(badCombinedAdmittedStmt.valid, false);
+    assert.ok(badCombinedAdmittedStmt.errors.some((e) => /admittedStatement/.test(e)));
+
+    const badReason = engine._normalizeAndValidateJudge(
+      {
+        summary: 'Summary OK',
+        clauses: [{ id: 'C1', statement: 'Clause OK', supportingProofs: ['P1'] }],
+        proofDecisions: {
+          P1: {
+            status: 'rejected',
+            reason: 'Read .council/state.json instead',
+            note: 'Note OK'
+          }
+        }
+      },
+      { trustedEphemeralRoots: [], forbiddenWorkspaceRoots: [] }
+    );
+    assert.equal(badReason.valid, false);
+    assert.ok(badReason.errors.some((e) => /reason/.test(e)));
+
+    const badCaveat = engine._normalizeAndValidateJudge(
+      {
+        summary: 'Summary OK',
+        clauses: [{ id: 'C1', statement: 'Clause OK', supportingProofs: ['P1'] }],
+        proofDecisions: {
+          P1: {
+            status: 'partially_admitted',
+            admittedStatement: 'Safe statement',
+            caveat: 'Verified /private-host/repo/src/auth.js:10 outside isolated root'
+          }
+        }
+      },
+      { trustedEphemeralRoots: [], forbiddenWorkspaceRoots: ['/private-host/repo'] }
+    );
+    assert.equal(badCaveat.valid, false);
+    assert.ok(badCaveat.errors.some((e) => /caveat/.test(e)));
+
+    const goodNormalized = engine._normalizeAndValidateJudge(
+      {
+        summary: 'Summary OK',
+        clauses: [{ id: 'C1', statement: 'Clause OK', supportingProofs: ['P1'] }],
+        proofDecisions: {
+          P1: {
+            status: 'partially_admitted',
+            admittedStatement: `Verified core via ${path.join(trustedRoot, 'src/auth.js:18')}`,
+            reason: `Scoped check at ${path.join(trustedRoot, 'src/session.js:5')}`,
+            caveat: `Excluded ${path.join(trustedRoot, 'src/legacy.js:9')}`
+          }
+        }
+      },
+      { trustedEphemeralRoots: [trustedRoot], forbiddenWorkspaceRoots: [] }
+    );
+    assert.equal(goodNormalized.valid, true, `Unexpected validation errors: ${JSON.stringify(goodNormalized.errors)}`);
+    assert.equal(goodNormalized.judgeResult.proofDecisions.P1.admittedStatement, 'Verified core via src/auth.js:18');
+    assert.equal(goodNormalized.judgeResult.proofDecisions.P1.reason, 'Scoped check at src/session.js:5');
+    assert.equal(goodNormalized.judgeResult.proofDecisions.P1.caveat, 'Excluded src/legacy.js:9');
+  });
 });

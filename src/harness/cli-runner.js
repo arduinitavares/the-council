@@ -3900,6 +3900,33 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
       record.retryDiagnostics !== undefined ? record.retryDiagnostics : context?.retryDiagnostics;
     const phase = record.phase ?? context?.phase;
     const round = record.round ?? context?.round;
+    const pickDefined = (...values) => {
+      for (const value of values) {
+        if (value !== undefined) return value;
+      }
+      return undefined;
+    };
+    const inferEffortForTelemetry = (modelString, defaultEffort) => {
+      if (typeof modelString !== 'string' || !modelString.trim()) {
+        return undefined;
+      }
+      const trimmed = modelString.trim();
+      const fallback =
+        typeof defaultEffort === 'string' && defaultEffort.trim() ? defaultEffort.trim().toLowerCase() : 'high';
+      try {
+        const baseModel = extractCanonicalBaseModel(trimmed, fallback);
+        if (baseModel === 'composer-2.5' || trimmed.toLowerCase() === 'composer-2.5') {
+          return null;
+        }
+        return parseModelAndEffort(trimmed, fallback).effort;
+      } catch {
+        return typeof defaultEffort === 'string' && defaultEffort.trim()
+          ? defaultEffort.trim().toLowerCase()
+          : undefined;
+      }
+    };
+    const hasRetryDiag = Boolean(retryDiagnostics && typeof retryDiagnostics === 'object');
+    const rawEffectiveModel = record.model || context?.model;
     const attempt =
       typeof record.attempt === 'number'
         ? record.attempt
@@ -3907,21 +3934,44 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
           ? retryDiagnostics.attempt
           : typeof context?.attempt === 'number'
             ? context.attempt
-            : retryDiagnostics === null
+            : !hasRetryDiag
               ? 0
               : undefined;
-    const requestedModel = record.requestedModel ?? retryDiagnostics?.requestedModel;
-    const requestedEffort = record.requestedEffort ?? retryDiagnostics?.requestedEffort;
-    const effectiveEffort = record.effectiveEffort ?? retryDiagnostics?.effectiveEffort;
-    const capabilityProvenance =
-      record.capabilityProvenance ?? retryDiagnostics?.capabilityProvenance;
+    const requestedModel = pickDefined(
+      record.requestedModel,
+      retryDiagnostics?.requestedModel,
+      context?.requestedModel,
+      context?.seat?.model,
+      rawEffectiveModel
+    );
+    const requestedEffort = pickDefined(
+      record.requestedEffort,
+      retryDiagnostics?.requestedEffort,
+      context?.requestedEffort,
+      inferEffortForTelemetry(requestedModel || rawEffectiveModel, context?.reasoningEffort)
+    );
+    const effectiveEffort = pickDefined(
+      record.effectiveEffort,
+      retryDiagnostics?.effectiveEffort,
+      inferEffortForTelemetry(rawEffectiveModel, record.reasoningEffort ?? context?.reasoningEffort)
+    );
+    const capabilityProvenance = pickDefined(
+      record.capabilityProvenance,
+      retryDiagnostics?.capabilityProvenance,
+      context?.capabilityProvenance,
+      null
+    );
     const fallbackApplied =
       typeof record.fallbackApplied === 'boolean'
         ? record.fallbackApplied
         : typeof retryDiagnostics?.fallbackApplied === 'boolean'
           ? retryDiagnostics.fallbackApplied
-          : undefined;
-    const fallbackReason = record.fallbackReason ?? retryDiagnostics?.fallbackReason;
+          : false;
+    const fallbackReason = pickDefined(
+      record.fallbackReason,
+      retryDiagnostics?.fallbackReason,
+      null
+    );
 
     const normalizedTrace = normalizeProviderTrace(record.trace, {
       durationMs: record.durationMs,
@@ -3934,12 +3984,12 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
       ...(typeof phase === 'string' && phase ? { phase } : {}),
       ...(typeof round === 'number' ? { round } : {}),
       ...(typeof attempt === 'number' ? { attempt } : {}),
-      ...(requestedModel != null ? { requestedModel } : {}),
-      ...(requestedEffort != null ? { requestedEffort } : {}),
-      ...(effectiveEffort != null ? { effectiveEffort } : {}),
-      ...(capabilityProvenance != null ? { capabilityProvenance } : {}),
+      ...(requestedModel !== undefined ? { requestedModel } : {}),
+      ...(requestedEffort !== undefined ? { requestedEffort } : {}),
+      ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
+      ...(capabilityProvenance !== undefined ? { capabilityProvenance } : {}),
       ...(typeof fallbackApplied === 'boolean' ? { fallbackApplied } : {}),
-      ...(fallbackReason != null ? { fallbackReason } : {}),
+      ...(fallbackReason !== undefined ? { fallbackReason } : {}),
       tools:
         record.tools === 'none' || context?.tools === 'none'
           ? 'none'
@@ -4061,20 +4111,36 @@ function sanitizeDeniedActionEntry(entry, options = null) {
     'error',
     'message',
     'path',
+    'file_path',
+    'filePath',
+    'file',
+    'target_file',
+    'targetFile',
+    'target_path',
+    'targetPath',
+    'absolute_path',
+    'absolutePath',
     'command',
-    'target'
+    'cmd',
+    'cwd',
+    'directory',
+    'dir',
+    'target',
+    'uri',
+    'url'
   ]) {
     const val = entry[key];
     if (typeof val === 'string' && val.trim()) {
       out[key] = sanitizeEnvelopeText(val, options, 512);
     }
   }
-  if (entry.arguments && typeof entry.arguments === 'object') {
+  if (entry.arguments && typeof entry.arguments === 'object' && !Array.isArray(entry.arguments)) {
     const argSummary = {};
-    for (const argKey of ['path', 'file', 'target_file', 'command', 'cmd']) {
-      if (typeof entry.arguments[argKey] === 'string' && entry.arguments[argKey].trim()) {
-        argSummary[argKey] = sanitizeEnvelopeText(entry.arguments[argKey], options, 512);
+    for (const [argKey, argVal] of Object.entries(entry.arguments)) {
+      if (typeof argVal === 'string' && argVal.trim()) {
+        argSummary[argKey] = sanitizeEnvelopeText(argVal, options, 512);
       }
+      if (Object.keys(argSummary).length >= 20) break;
     }
     if (Object.keys(argSummary).length > 0) {
       out.arguments = argSummary;
@@ -4083,8 +4149,8 @@ function sanitizeDeniedActionEntry(entry, options = null) {
   return Object.keys(out).length > 0 ? out : { action: 'denied' };
 }
 
-function collectDeniedActions(json, toolCalls, options = null) {
-  const rawEntries = [
+function collectRawDeniedActions(json, toolCalls) {
+  return [
     ...(Array.isArray(json?.denied_actions) ? json.denied_actions : []),
     ...(Array.isArray(json?.deniedActions) ? json.deniedActions : []),
     ...(Array.isArray(json?.trace?.denied_actions) ? json.trace.denied_actions : []),
@@ -4093,6 +4159,10 @@ function collectDeniedActions(json, toolCalls, options = null) {
       ? toolCalls.filter((tc) => tc && typeof tc === 'object' && (tc.status === 'denied' || tc.denied === true))
       : [])
   ];
+}
+
+function collectDeniedActions(json, toolCalls, options = null) {
+  const rawEntries = collectRawDeniedActions(json, toolCalls);
   const deduped = [];
   const seen = new Set();
   for (const entry of rawEntries) {
@@ -4227,12 +4297,13 @@ function parseAntigravityOutput(raw, options = null) {
     }
   }
 
+  const rawDeniedActions = collectRawDeniedActions(parsedJson, toolCalls);
   deniedActions = collectDeniedActions(parsedJson, toolCalls, options);
   if (deniedActions.length > 0) {
     hasFailureMetadata = true;
   }
 
-  const itemsToScan = [...toolCalls, ...deniedActions];
+  const itemsToScan = [...toolCalls, ...rawDeniedActions];
   const envelopeCheck =
     itemsToScan.length > 0
       ? detectForbiddenCouncilAccess(itemsToScan, null, options)

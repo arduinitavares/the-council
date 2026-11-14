@@ -1292,5 +1292,250 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       assert.equal(s3Calls[1].retryDiagnostics?.fallbackApplied, true);
       assert.equal(s3Calls[1].retryDiagnostics?.capabilityProvenance, 'live_cli_catalog');
     });
+
+    it('Important 3 & 4: resolves prior-round backing proofs for Round 2 DELIBERATION, extension-independent paths, and named external standards across all inputs', async () => {
+      // 1. Extension-independent file paths + named external standards across phase inputs,
+      // while ignoring prose pairs (and/or, read/write), frameworks (Node.js), versions, and ellipses
+      const deps = extractVerificationDependencies([
+        'Inspect include/auth.h:120-145, proto/service.proto, bin/council, Makefile:42, Dockerfile, and/or read/write paths.',
+        'Check RFC 9110 Section 15, ISO 27001, CVE-2026-1234, OWASP ASVS, FIPS 140-3, POSIX.1-2017, example.org on Node.js v22.1.0 ... ready.',
+        'URL https://datatracker.ietf.org/doc/html/rfc9110 must not duplicate the standard token from its path.'
+      ]);
+      assert.ok(
+        deps.workspaceFileDeps.some(
+          (d) => d.source === 'include/auth.h' && d.startLine === 120 && d.endLine === 145
+        ),
+        `Expected include/auth.h:120-145 in ${JSON.stringify(deps.workspaceFileDeps)}`
+      );
+      assert.ok(
+        deps.workspaceFileDeps.some((d) => d.source === 'proto/service.proto' && d.unbounded === true),
+        `Expected proto/service.proto in ${JSON.stringify(deps.workspaceFileDeps)}`
+      );
+      assert.ok(
+        deps.workspaceFileDeps.some((d) => d.source === 'bin/council' && d.unbounded === true),
+        `Expected bin/council in ${JSON.stringify(deps.workspaceFileDeps)}`
+      );
+      assert.ok(
+        deps.workspaceFileDeps.some((d) => d.source === 'Makefile' && d.startLine === 42),
+        `Expected Makefile:42 in ${JSON.stringify(deps.workspaceFileDeps)}`
+      );
+      assert.ok(
+        deps.workspaceFileDeps.some((d) => d.source === 'Dockerfile' && d.unbounded === true),
+        `Expected Dockerfile in ${JSON.stringify(deps.workspaceFileDeps)}`
+      );
+      assert.ok(!deps.workspaceFileDeps.some((d) => /and\/or|read\/write|Node\.js|v22/.test(d.source)));
+      assert.ok(!deps.workspaceBroadDeps.some((d) => /and\/or|read\/write/.test(d)));
+
+      assert.ok(deps.externalDeps.includes('RFC 9110'));
+      assert.ok(deps.externalDeps.includes('ISO 27001'));
+      assert.ok(deps.externalDeps.includes('CVE-2026-1234'));
+      assert.ok(deps.externalDeps.includes('OWASP ASVS'));
+      assert.ok(deps.externalDeps.includes('FIPS 140-3'));
+      assert.ok(deps.externalDeps.includes('POSIX.1-2017'));
+      assert.ok(deps.externalDeps.includes('example.org'));
+      assert.ok(deps.externalDeps.includes('https://datatracker.ietf.org/doc/html/rfc9110'));
+      assert.equal(
+        deps.externalDeps.filter((d) => d.toLowerCase().replace(/\s+/g, '') === 'rfc9110').length,
+        1,
+        `Should extract single RFC 9110 token without duplicating URL slug: ${JSON.stringify(deps.externalDeps)}`
+      );
+
+      // 2. Named external standard in topic refuses conceptualNoExternalVerification (even with NO effectiveCwd),
+      // and matches coveredArtifacts case-insensitively
+      const topicRfcDenied = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify caching behavior against RFC 9110 Section 15',
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(topicRfcDenied.ready, false);
+      assert.equal(topicRfcDenied.reasonCode, 'evidence_access_failure');
+      assert.ok(topicRfcDenied.missingDependencies.includes('RFC 9110'));
+
+      const caseInsensitiveRfcOk = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify caching behavior against RFC 9110',
+        evidence: [{ id: 'E1', label: 'RFC 9110 text', source: 'rfc 9110', text: '[E1] Complete RFC 9110 spec.' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'rfc 9110', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(caseInsensitiveRfcOk.ready, true);
+
+      // 3. Round 2 DELIBERATION resolves prior-round backing proofs referenced by openObjections / previousCandidate
+      // (including judgeAdmittedStatement!) even when Round 2 has 0 proofs submitted yet
+      const r2BackingUncovered = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 2,
+        errorClass: 'TimeoutError',
+        topic: 'Evaluate consensus soundness',
+        proofs: [],
+        priorProofs: [
+          {
+            id: 'P1',
+            round: 1,
+            seatId: 's1',
+            status: 'contested',
+            kind: 'citation',
+            source: 'Spec',
+            statement: 'Claim passes invariant',
+            judgeAdmittedStatement: 'Core verified at include/auth.h:120-145'
+          }
+        ],
+        previousCandidate: {
+          round: 1,
+          summary: 'Round 1 synthesis',
+          clauses: [{ id: 'C1', context: 'Auth', conclusion: 'Core invariant holds', citedProofIds: ['P1'] }]
+        },
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P1', reason: 'Boundary condition disputed' }],
+        admittedProofs: [],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(r2BackingUncovered.ready, false);
+      assert.equal(r2BackingUncovered.reasonCode, 'evidence_access_failure');
+
+      // Reproducer from Review-102 Important 3: admitted Round 1 proof with uncovered external URL referenced by R2 objection
+      const r2ExternalUrlObjection = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 2,
+        errorClass: 'TimeoutError',
+        topic: 'Evaluate HTTP cache compliance',
+        proofs: [],
+        priorProofs: [
+          {
+            id: 'P1',
+            round: 1,
+            seatId: 's1',
+            status: 'admitted',
+            kind: 'citation',
+            source: 'https://example.org/rfc9110',
+            statement: 'Cache-Control must be respected'
+          }
+        ],
+        previousCandidate: {
+          round: 1,
+          summary: 'Round 1 synthesis',
+          clauses: [{ id: 'C1', context: 'HTTP', conclusion: 'Cache header holds', citedProofIds: ['P1'] }]
+        },
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P1', reason: 'Header exception missing' }],
+        admittedProofs: [
+          {
+            id: 'P1',
+            round: 1,
+            seatId: 's1',
+            status: 'admitted',
+            kind: 'citation',
+            source: 'https://example.org/rfc9110',
+            statement: 'Cache-Control must be respected'
+          }
+        ],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(r2ExternalUrlObjection.ready, false);
+      assert.equal(r2ExternalUrlObjection.reasonCode, 'evidence_access_failure');
+
+      // 4. CouncilEngine Round 2 DELIBERATION passes priorProofs into recovery planning:
+      // Seat s1 submits P1 citing include/auth.h:120-145 in R1 (tools: 'read-only'); s2 objects in R1 voting (prose reason);
+      // in R2 deliberation under conceptualNoExternalVerification, TimeoutError for s2 MUST terminate (NOT drop tools).
+      const mock = new MockAdapter();
+      let s2DelibR2Attempts = 0;
+      const origProof = mock.executeSeatProof.bind(mock);
+      const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+      const origVote = mock.executeSeatVote.bind(mock);
+
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.round === 1) {
+          if (ctx.seat.id === 's1') {
+            return {
+              scope: 'Auth header',
+              kind: 'citation',
+              source: 'include/auth.h:120-145',
+              statement: 'Expiry verified in include/auth.h:120-145'
+            };
+          }
+          return {
+            scope: 'Invariant',
+            kind: 'check',
+            source: 'Logical invariant',
+            statement: 'Check holds conceptually'
+          };
+        }
+        if (ctx.round === 2 && ctx.seat.id === 's2') {
+          s2DelibR2Attempts += 1;
+          throw new TimeoutError('Round 2 delib timeout', { timeoutMs: 1000, harness: 'codex', seatId: 's2' });
+        }
+        return origProof(ctx);
+      };
+      mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+        const base = await origJudge(ctx);
+        if (ctx.round === 1) {
+          return {
+            ...base,
+            summary: 'Round 1 candidate relying on P1',
+            clauses: [{ id: 'C1', context: 'Auth', conclusion: 'Expiry check holds', citedProofIds: ['P1'] }],
+            proofDecisions: {
+              ...base.proofDecisions,
+              P1: { status: 'partially_admitted', admittedStatement: 'Verified include/auth.h:120-145', note: 'Header only' }
+            }
+          };
+        }
+        return base;
+      };
+      mock.executeSeatVote = async (ctx) => {
+        if (ctx.round === 1 && ctx.seat.id === 's2') {
+          return { vote: 'object', proofId: 'P1', reason: 'Expiry edge case disputed' };
+        }
+        if (ctx.round === 1) {
+          return { vote: 'accept' };
+        }
+        return origVote(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Evaluate protocol consistency',
+          minQuorum: 2,
+          maxRounds: 2,
+          maxRetriesPerSeat: 1,
+          cwd: '/tmp/test-repo-r2',
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Conceptual only',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
+          judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only' },
+            { id: 's3', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S3', tools: 'read-only' }
+          ]
+        },
+        { harnessResolver: () => mock }
+      );
+
+      await engine.run();
+      assert.equal(s2DelibR2Attempts, 1, 'Round 2 Delib timeout referencing uncovered prior proof P1 must NOT retry tool-free');
+    });
   });
 });

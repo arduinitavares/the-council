@@ -678,3 +678,203 @@ test('listAntigravityModels parses selector output via runner and exec and handl
   assert.deepEqual(failRes.selectors, []);
   assert.ok(failRes.error);
 });
+
+test('Important 1 & Minor 1: scans raw denied actions (arguments.file_path, >50 entries, >512 chars) and emits Wave-0 attribution + explicit null fields', async () => {
+  const repoDir = makeTempDir('council-raw-denied-');
+  try {
+    // 1. arguments.file_path targeting .council/state.json escalates to FORBIDDEN_STATE_ACCESS (empty and nonempty responses)
+    await assert.rejects(
+      () =>
+        cliRunner.runAntigravityCli({
+          model: 'gemini-4-argon-high',
+          prompt: 'Analyze module',
+          tools: 'none',
+          cwd: repoDir,
+          exec: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({
+              response: '',
+              denied_actions: [
+                {
+                  tool: 'read_file',
+                  arguments: { file_path: path.join(repoDir, '.council/state.json') },
+                  reason: 'blocked'
+                }
+              ]
+            }),
+            stderr: ''
+          })
+        }),
+      (err) => err?.code === 'FORBIDDEN_STATE_ACCESS'
+    );
+
+    await assert.rejects(
+      () =>
+        cliRunner.runAntigravityCli({
+          model: 'gemini-4-argon-high',
+          prompt: 'Analyze module',
+          tools: 'none',
+          cwd: repoDir,
+          exec: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({
+              response: 'Nonempty output',
+              denied_actions: [
+                {
+                  tool: 'read_file',
+                  arguments: { file_path: '.council/state.json' }
+                }
+              ]
+            }),
+            stderr: ''
+          })
+        }),
+      (err) => err?.code === 'FORBIDDEN_STATE_ACCESS'
+    );
+
+    // 2. Entry #55 (past the 50-item sanitize cap) targeting .council/ escalates to FORBIDDEN_STATE_ACCESS
+    const paddedDenied = Array.from({ length: 54 }, (_, idx) => ({
+      tool: 'read_file',
+      arguments: { file_path: `src/file-${idx}.js` }
+    }));
+    paddedDenied.push({
+      tool: 'read_file',
+      arguments: { file_path: '.council/telemetry-summary.json' }
+    });
+    await assert.rejects(
+      () =>
+        cliRunner.runAntigravityCli({
+          model: 'gemini-4-argon-high',
+          prompt: 'Analyze module',
+          tools: 'none',
+          exec: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({ response: '', denied_actions: paddedDenied }),
+            stderr: ''
+          })
+        }),
+      (err) => err?.code === 'FORBIDDEN_STATE_ACCESS'
+    );
+
+    // 3. Field >512 chars with .council/ after offset 512 is still caught before sanitization truncates it
+    const longPrefix = 'x'.repeat(600);
+    await assert.rejects(
+      () =>
+        cliRunner.runAntigravityCli({
+          model: 'gemini-4-argon-high',
+          prompt: 'Analyze module',
+          tools: 'none',
+          exec: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({
+              response: '',
+              denied_actions: [
+                {
+                  tool: 'read_file',
+                  arguments: { file_path: `${longPrefix}/.council/state.json` }
+                }
+              ]
+            }),
+            stderr: ''
+          })
+        }),
+      (err) => err?.code === 'FORBIDDEN_STATE_ACCESS'
+    );
+
+    // 4. Benign arguments.file_path is preserved on sanitized HeadlessToolDeniedError.deniedActions
+    await assert.rejects(
+      () =>
+        cliRunner.runAntigravityCli({
+          model: 'gemini-4-argon-high',
+          prompt: 'Analyze module',
+          tools: 'none',
+          exec: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({
+              response: '',
+              denied_actions: [
+                {
+                  tool: 'read_file',
+                  arguments: { file_path: 'src/auth.js' },
+                  reason: 'approval_required'
+                }
+              ]
+            }),
+            stderr: ''
+          })
+        }),
+      (err) => {
+        assert.equal(err.code, 'HEADLESS_TOOL_DENIED');
+        assert.equal(err.deniedActions?.[0]?.arguments?.file_path, 'src/auth.js');
+        return true;
+      }
+    );
+
+    // 5. Wave-0 attribution defaults + explicit null preservation in recordProviderCall
+    const wave0Calls = [];
+    await cliRunner.runAntigravityCli({
+      model: 'gemini-4-argon-high',
+      prompt: 'Wave 0 call',
+      tools: 'none',
+      context: { seatId: 's-wave0', phase: 'DELIBERATION', round: 1, retryDiagnostics: null },
+      onCallRecord: (rec) => wave0Calls.push(rec),
+      exec: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({ response: 'ok' }),
+        stderr: ''
+      })
+    });
+    assert.equal(wave0Calls.length, 1);
+    assert.equal(wave0Calls[0].attempt, 0);
+    assert.equal(wave0Calls[0].requestedModel, 'gemini-4-argon-high');
+    assert.equal(wave0Calls[0].requestedEffort, 'high');
+    assert.equal(wave0Calls[0].effectiveEffort, 'high');
+    assert.equal(wave0Calls[0].capabilityProvenance, null);
+    assert.equal(wave0Calls[0].fallbackApplied, false);
+    assert.equal(wave0Calls[0].fallbackReason, null);
+    assert.ok('capabilityProvenance' in wave0Calls[0]);
+    assert.ok('fallbackReason' in wave0Calls[0]);
+
+    // 6. Composer-2.5 preserves explicit null requestedEffort / effectiveEffort / fallbackReason (no invented 'high')
+    const composerWave0 = [];
+    cliRunner.recordProviderCall({
+      context: { seatId: 's-comp-w0', retryDiagnostics: null },
+      onCallRecord: (rec) => composerWave0.push(rec),
+      record: { provider: 'cursor', model: 'composer-2.5', tools: 'none', exitCode: 0, durationMs: 5, trace: {} }
+    });
+    assert.equal(composerWave0[0].attempt, 0);
+    assert.equal(composerWave0[0].requestedModel, 'composer-2.5');
+    assert.ok('requestedEffort' in composerWave0[0]);
+    assert.equal(composerWave0[0].requestedEffort, null);
+    assert.ok('effectiveEffort' in composerWave0[0]);
+    assert.equal(composerWave0[0].effectiveEffort, null);
+    assert.ok('fallbackReason' in composerWave0[0]);
+    assert.equal(composerWave0[0].fallbackReason, null);
+
+    const composerRetry = [];
+    cliRunner.recordProviderCall({
+      context: {
+        seatId: 's-comp-retry',
+        retryDiagnostics: {
+          attempt: 1,
+          requestedModel: 'composer-2.5',
+          requestedEffort: null,
+          effectiveEffort: null,
+          capabilityProvenance: 'adapter_static_policy',
+          fallbackApplied: false,
+          fallbackReason: null
+        }
+      },
+      onCallRecord: (rec) => composerRetry.push(rec),
+      record: { provider: 'cursor', model: 'composer-2.5', tools: 'none', exitCode: 0, durationMs: 5, trace: {} }
+    });
+    assert.ok('requestedEffort' in composerRetry[0]);
+    assert.equal(composerRetry[0].requestedEffort, null);
+    assert.ok('effectiveEffort' in composerRetry[0]);
+    assert.equal(composerRetry[0].effectiveEffort, null);
+    assert.ok('fallbackReason' in composerRetry[0]);
+    assert.equal(composerRetry[0].fallbackReason, null);
+  } finally {
+    rmDir(repoDir);
+  }
+});

@@ -69,7 +69,8 @@ const KNOWN_PATH_EXTENSIONLESS_FILES = new Set([
   'README', 'LICENSE', 'LICENCE', 'NOTICE', 'COPYING', 'PATENTS',
   'AUTHORS', 'CONTRIBUTORS', 'MAINTAINERS', 'OWNERS', 'CHANGELOG',
   'CHANGES', 'HISTORY', 'NEWS', 'SECURITY', 'SUPPORT', 'GOVERNANCE',
-  'VERSION', 'MANIFEST', 'TODO', 'ROADMAP', 'configure'
+  'CONTRIBUTING', 'CODE_OF_CONDUCT', 'VERSION', 'MANIFEST', 'TODO',
+  'ROADMAP', 'ATTRIBUTION', 'CREDITS', 'INSTALL', 'configure'
 ]);
 
 const KNOWN_DOTFILES = new Set([
@@ -1388,15 +1389,34 @@ const BLOCKQUOTE_QUOTED_HEAD_PROSE_FOLLOWERS = new Set([
   'may'
 ]);
 
-function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos = null) {
+function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos = null, gtCol = 0) {
+  let col = gtCol + 1;
   let restStart = opPos + 1;
-  const hadSpaceAfterGt = restStart < n && isSpaceOrTabCode(text.charCodeAt(restStart));
+  let hadSpaceAfterGt = false;
+  let innerBaseCol = col;
+  if (restStart < n) {
+    const firstPost = text.charCodeAt(restStart);
+    if (firstPost === 32) {
+      hadSpaceAfterGt = true;
+      col += 1;
+      innerBaseCol = col;
+      restStart += 1;
+    } else if (firstPost === 9) {
+      hadSpaceAfterGt = true;
+      innerBaseCol = col + 1;
+      col += 4 - (col & 3);
+      restStart += 1;
+    }
+  }
   while (restStart < n && isSpaceOrTabCode(text.charCodeAt(restStart))) {
+    const cc = text.charCodeAt(restStart);
+    col += cc === 9 ? 4 - (col & 3) : 1;
     restStart += 1;
   }
+  const innerIndentCols = col - innerBaseCol;
   if (restStart >= n || text[restStart] === '\r' || text[restStart] === '\n') {
     return hadSpaceAfterGt || opPos + 1 >= n || text[opPos + 1] === '\r' || text[opPos + 1] === '\n'
-      ? { nextIndex: restStart, keepLineStart: false }
+      ? { nextIndex: restStart, keepLineStart: false, nextCol: col, nextBaseCol: innerBaseCol }
       : null;
   }
   if (
@@ -1408,7 +1428,39 @@ function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTa
       text[restStart + 1] === '\r' ||
       text[restStart + 1] === '\n')
   ) {
-    return { nextIndex: restStart, keepLineStart: true };
+    return {
+      nextIndex: restStart,
+      keepLineStart: innerIndentCols <= 3,
+      nextCol: col,
+      nextBaseCol: innerIndentCols <= 3 ? col : innerBaseCol
+    };
+  }
+  if (
+    hadSpaceAfterGt &&
+    innerIndentCols <= 3 &&
+    (text[restStart] === '`' || text[restStart] === '~')
+  ) {
+    const fc = text.charCodeAt(restStart);
+    let fEnd = restStart + 1;
+    while (fEnd < n && text.charCodeAt(fEnd) === fc) {
+      fEnd += 1;
+    }
+    if (fEnd - restStart >= 3) {
+      let validFence = true;
+      if (fc === 96) {
+        for (let q = fEnd; q < n; q += 1) {
+          const qc = text.charCodeAt(q);
+          if (qc === 10 || qc === 13) break;
+          if (qc === 96) {
+            validFence = false;
+            break;
+          }
+        }
+      }
+      if (validFence) {
+        return { nextIndex: restStart, keepLineStart: true, nextCol: col, nextBaseCol: innerBaseCol };
+      }
+    }
   }
   if (!hadSpaceAfterGt) {
     return null;
@@ -1734,9 +1786,13 @@ function parseShellClausesLinear(text, options = {}) {
   };
   let lastCloseTagPosMap = undefined;
   let atMarkdownLineStart = allowMarkdownBlockquotes;
+  let lineCol = 0;
+  let lineBaseCol = 0;
+  let lineBqDepth = 0;
   let inMarkdownCodeFence = false;
   let fenceCharCode = 0;
   let fenceMinLen = 0;
+  let fenceBqDepth = 0;
   let segTokenCount = 0;
   let segHardStarterCount = 0;
   let pendingQuotedVerbIdx = -1;
@@ -1864,8 +1920,25 @@ function parseShellClausesLinear(text, options = {}) {
 
   while (i < n) {
     const wsStart = i;
-    while (i < n && isHorizontalWsCode(text.charCodeAt(i))) {
-      i += 1;
+    if (atMarkdownLineStart) {
+      while (i < n) {
+        const wcc = text.charCodeAt(i);
+        if (wcc === 32) {
+          lineCol += 1;
+          i += 1;
+        } else if (wcc === 9) {
+          lineCol += 4 - (lineCol & 3);
+          i += 1;
+        } else if (wcc === 13 || wcc === 11 || wcc === 12) {
+          i += 1;
+        } else {
+          break;
+        }
+      }
+    } else {
+      while (i < n && isHorizontalWsCode(text.charCodeAt(i))) {
+        i += 1;
+      }
     }
     if (clearOpenTagsAtWhitespace && i > wsStart) {
       openTagStack = null;
@@ -1878,7 +1951,39 @@ function parseShellClausesLinear(text, options = {}) {
     const ch = text[i];
     const lineStartHere = atMarkdownLineStart;
     atMarkdownLineStart = false;
-    if (allowMarkdownBlockquotes && lineStartHere && (ch === '`' || ch === '~') && i - wsStart <= 3) {
+    const indentCols = lineStartHere ? lineCol - lineBaseCol : 0;
+
+    if (inMarkdownCodeFence && fenceBqDepth > 0 && lineStartHere && lineBqDepth < fenceBqDepth) {
+      if (ch === '>' && indentCols <= 3 && (i + 1 >= n || (text[i + 1] !== '>' && text[i + 1] !== '&' && text[i + 1] !== '|'))) {
+        let nextCol = lineCol + 1;
+        let nextBaseCol = nextCol;
+        let nextPos = i + 1;
+        if (nextPos < n) {
+          const post = text.charCodeAt(nextPos);
+          if (post === 32) {
+            nextCol += 1;
+            nextBaseCol = nextCol;
+            nextPos += 1;
+          } else if (post === 9) {
+            nextBaseCol = nextCol + 1;
+            nextCol += 4 - (nextCol & 3);
+            nextPos += 1;
+          }
+        }
+        lineBqDepth += 1;
+        lineCol = nextCol;
+        lineBaseCol = nextBaseCol;
+        atMarkdownLineStart = true;
+        i = nextPos;
+        continue;
+      }
+      inMarkdownCodeFence = false;
+      fenceCharCode = 0;
+      fenceMinLen = 0;
+      fenceBqDepth = 0;
+    }
+
+    if (allowMarkdownBlockquotes && lineStartHere && (ch === '`' || ch === '~') && indentCols <= 3) {
       const fc = ch.charCodeAt(0);
       let runEnd = i;
       while (runEnd < n && text.charCodeAt(runEnd) === fc) {
@@ -1902,6 +2007,7 @@ function parseShellClausesLinear(text, options = {}) {
             inMarkdownCodeFence = true;
             fenceCharCode = fc;
             fenceMinLen = runLen;
+            fenceBqDepth = lineBqDepth;
           }
         } else if (fc === fenceCharCode && runLen >= fenceMinLen) {
           let q = runEnd;
@@ -1912,6 +2018,7 @@ function parseShellClausesLinear(text, options = {}) {
             inMarkdownCodeFence = false;
             fenceCharCode = 0;
             fenceMinLen = 0;
+            fenceBqDepth = 0;
           }
         }
       }
@@ -1922,6 +2029,9 @@ function parseShellClausesLinear(text, options = {}) {
       pushClause();
       if (ch === '\n' && allowMarkdownBlockquotes) {
         atMarkdownLineStart = true;
+        lineCol = 0;
+        lineBaseCol = 0;
+        lineBqDepth = 0;
       }
       i += 1;
       continue;
@@ -2529,12 +2639,16 @@ function parseShellClausesLinear(text, options = {}) {
         opChar === '>' &&
         !isMultiCharRedir &&
         lineStartHere &&
+        indentCols <= 3 &&
         !pendingSkippedAngleTag
       ) {
-        const bqMatch = matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos);
+        const bqMatch = matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos, lineCol);
         if (bqMatch !== null) {
+          lineBqDepth += 1;
           if (bqMatch.keepLineStart) {
             atMarkdownLineStart = true;
+            lineCol = bqMatch.nextCol;
+            lineBaseCol = bqMatch.nextBaseCol;
           }
           i = bqMatch.nextIndex;
           continue;
@@ -3427,6 +3541,74 @@ function scanShellCommandText(text, options) {
   return res;
 }
 
+function consumeBlockquotePrefixesAtLineStart(text, pos, n, maxDepth) {
+  let cur = pos;
+  let col = 0;
+  let baseCol = 0;
+  let count = 0;
+  while (count < maxDepth && cur < n) {
+    let q = cur;
+    let qCol = col;
+    while (q < n) {
+      const cc = text.charCodeAt(q);
+      if (cc === 32) {
+        qCol += 1;
+        q += 1;
+      } else if (cc === 9) {
+        qCol += 4 - (qCol & 3);
+        q += 1;
+      } else {
+        break;
+      }
+      if (qCol - baseCol > 3) {
+        return { count, pos: cur, col, baseCol };
+      }
+    }
+    if (q >= n || text.charCodeAt(q) !== 62) {
+      return { count, pos: cur, col, baseCol };
+    }
+    col = qCol + 1;
+    baseCol = col;
+    count += 1;
+    q += 1;
+    if (q < n) {
+      const post = text.charCodeAt(q);
+      if (post === 32) {
+        col += 1;
+        baseCol = col;
+        q += 1;
+      } else if (post === 9) {
+        baseCol = col + 1;
+        col += 4 - (col & 3);
+        q += 1;
+      }
+    }
+    cur = q;
+  }
+  return { count, pos: cur, col, baseCol };
+}
+
+function stripBlockquoteFenceContainer(slice, fenceBqDepth) {
+  if (!slice || fenceBqDepth <= 0) {
+    return slice;
+  }
+  const firstNl = slice.indexOf('\n');
+  if (firstNl === -1) {
+    return slice;
+  }
+  const slen = slice.length;
+  let out = slice.slice(0, firstNl + 1);
+  let pos = firstNl + 1;
+  while (pos < slen) {
+    const lineEnd = slice.indexOf('\n', pos);
+    const end = lineEnd === -1 ? slen : lineEnd + 1;
+    const stripped = consumeBlockquotePrefixesAtLineStart(slice, pos, end, fenceBqDepth);
+    out += slice.slice(stripped.pos, end);
+    pos = end;
+  }
+  return out;
+}
+
 function findMatchingBacktickSpan(text, openPos, n, btState) {
   if (openPos + 1 >= n || text.charCodeAt(openPos + 1) !== 96) {
     if (btState.noSingleBt) {
@@ -3454,14 +3636,62 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
   const btLen = runEnd - openPos;
 
   if (btLen >= 3) {
-    let lead = 0;
     let p = openPos;
-    while (p > 0 && lead < 3 && isSpaceOrTabCode(text.charCodeAt(p - 1))) {
+    while (p > 0) {
+      const prevCode = text.charCodeAt(p - 1);
+      if (prevCode !== 32 && prevCode !== 9 && prevCode !== 62) {
+        break;
+      }
       p -= 1;
-      lead += 1;
     }
     const atFenceLineStart = p === 0 || text.charCodeAt(p - 1) === 10 || text.charCodeAt(p - 1) === 13;
+    let validFencePrefix = false;
+    let fenceBqDepth = 0;
     if (atFenceLineStart) {
+      let q = p;
+      let col = 0;
+      let baseCol = 0;
+      validFencePrefix = true;
+      while (q < openPos) {
+        const qc = text.charCodeAt(q);
+        if (qc === 32) {
+          col += 1;
+          q += 1;
+        } else if (qc === 9) {
+          col += 4 - (col & 3);
+          q += 1;
+        } else if (qc === 62) {
+          if (col - baseCol > 3) {
+            validFencePrefix = false;
+            break;
+          }
+          col += 1;
+          baseCol = col;
+          fenceBqDepth += 1;
+          q += 1;
+          if (q < openPos) {
+            const post = text.charCodeAt(q);
+            if (post === 32) {
+              col += 1;
+              baseCol = col;
+              q += 1;
+            } else if (post === 9) {
+              baseCol = col + 1;
+              col += 4 - (col & 3);
+              q += 1;
+            }
+          }
+        } else {
+          validFencePrefix = false;
+          break;
+        }
+        if (col - baseCol > 3) {
+          validFencePrefix = false;
+          break;
+        }
+      }
+    }
+    if (validFencePrefix) {
       let openLineEnd = runEnd;
       let hasBtOnInfoLine = false;
       while (openLineEnd < n) {
@@ -3476,17 +3706,31 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
         openLineEnd += 1;
       }
       if (!hasBtOnInfoLine && openLineEnd < n) {
+        let prevLineEnd = openLineEnd;
         let pos = openLineEnd;
         if (text.charCodeAt(pos) === 13) pos += 1;
         if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
         while (pos < n) {
-          let cLead = 0;
-          let cp = pos;
-          while (cp < n && cLead < 3 && isSpaceOrTabCode(text.charCodeAt(cp))) {
-            cp += 1;
-            cLead += 1;
+          let contentPos = pos;
+          let lineCol = 0;
+          let lineBaseCol = 0;
+          if (fenceBqDepth > 0) {
+            const bqRes = consumeBlockquotePrefixesAtLineStart(text, pos, n, fenceBqDepth);
+            if (bqRes.count < fenceBqDepth) {
+              const closeAt = Math.max(runEnd - 1, prevLineEnd - 1);
+              return { matched: true, innerStart: runEnd, innerEnd: prevLineEnd, closeEnd: closeAt, runEnd, fenceBqDepth };
+            }
+            contentPos = bqRes.pos;
+            lineCol = bqRes.col;
+            lineBaseCol = bqRes.baseCol;
           }
-          if (cp < n && text.charCodeAt(cp) === 96) {
+          let cCols = lineCol;
+          let cp = contentPos;
+          while (cp < n && (cCols - lineBaseCol) <= 3 && isSpaceOrTabCode(text.charCodeAt(cp))) {
+            cCols += text.charCodeAt(cp) === 9 ? 4 - (cCols & 3) : 1;
+            cp += 1;
+          }
+          if ((cCols - lineBaseCol) <= 3 && cp < n && text.charCodeAt(cp) === 96) {
             let ce = cp;
             while (ce < n && text.charCodeAt(ce) === 96) {
               ce += 1;
@@ -3497,17 +3741,18 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
                 tail += 1;
               }
               if (tail >= n || text.charCodeAt(tail) === 10 || text.charCodeAt(tail) === 13) {
-                return { matched: true, innerStart: runEnd, innerEnd: pos, closeEnd: ce - 1, runEnd };
+                return { matched: true, innerStart: runEnd, innerEnd: prevLineEnd, closeEnd: ce - 1, runEnd, fenceBqDepth };
               }
             }
           }
           while (pos < n && text.charCodeAt(pos) !== 10 && text.charCodeAt(pos) !== 13) {
             pos += 1;
           }
+          prevLineEnd = pos;
           if (pos < n && text.charCodeAt(pos) === 13) pos += 1;
           if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
         }
-        return { matched: true, innerStart: runEnd, innerEnd: n, closeEnd: n - 1, runEnd };
+        return { matched: true, innerStart: runEnd, innerEnd: n, closeEnd: n - 1, runEnd, fenceBqDepth };
       }
     }
   }
@@ -3667,6 +3912,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   let noMoreSingle = false;
   const btState = { noSingleBt: false, multiRuns: null };
   let nextBsPos = -2;
+  let nextBtPos = includeBackticks ? -2 : -1;
   const pad64 = '                                                                ';
   const matchedDeps = [];
   const seenMatched = new Set();
@@ -3676,32 +3922,149 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
       matchedDeps.push(dep);
     }
   };
+  const evalAndMaskSpan = (spanStart, innerStart, innerEnd, closeIdx, isBacktick, fenceBqDepth = 0) => {
+    const rawInnerSlice = rawText.slice(innerStart, innerEnd);
+    const inner = (fenceBqDepth > 0
+      ? stripBlockquoteFenceContainer(rawInnerSlice, fenceBqDepth)
+      : rawInnerSlice
+    ).trim();
+    if (inner) {
+      if (isBacktick && !includeBackticks) {
+        pushMatched(inner);
+        if (stopOnFirst) return true;
+      } else {
+        const innerEvalKey = `${isBacktick ? '1:' : '0:'}${inner}`;
+        let didMatchInner = innerEvalCache ? innerEvalCache.get(innerEvalKey) : undefined;
+        if (didMatchInner === undefined) {
+          const isSafeEndpoint =
+            includeBackticks &&
+            typeof isSingleExternalEndpointToken === 'function' &&
+            isSingleExternalEndpointToken(inner);
+          if (isSafeEndpoint) {
+            didMatchInner = false;
+          } else {
+            const startsDot = inner.charCodeAt(0) === 46;
+            const matchesScript = includeBareScript && startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
+            let innerMatchesCmd = false;
+            if (!matchesScript) {
+              if (!/[\s;|&<>()$`\\"']/.test(inner)) {
+                const simpleWord = toAsciiLowerFast(stripShellBinPrefix(stripTrailingProsePunct(inner) || inner));
+                innerMatchesCmd =
+                  SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
+              } else {
+                innerMatchesCmd = scanShellCommandText(
+                  inner,
+                  isBacktick ? undefined : { allowMarkdownBlockquotes: true }
+                );
+              }
+            }
+            didMatchInner = Boolean(matchesScript || innerMatchesCmd);
+          }
+          if (!innerEvalCache) {
+            innerEvalCache = new Map();
+          }
+          innerEvalCache.set(innerEvalKey, didMatchInner);
+        }
+        if (didMatchInner) {
+          pushMatched(inner);
+          if (stopOnFirst) return true;
+        }
+      }
+    }
+
+    if (!maskedParts) maskedParts = [];
+    if (spanStart > cursor) maskedParts.push(rawText.slice(cursor, spanStart));
+    const spanLen = closeIdx - spanStart + 1;
+    maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
+    cursor = closeIdx + 1;
+    return false;
+  };
+  const scanEmbeddedBackticksBefore = (fromPos, endQuote) => {
+    if (!includeBackticks) {
+      return -1;
+    }
+    if (nextBtPos !== -1 && nextBtPos <= fromPos) {
+      nextBtPos = rawText.indexOf('`', fromPos + 1);
+    }
+    let scan = nextBtPos;
+    while (scan !== -1 && scan < endQuote) {
+      let bs = 0;
+      while (scan - 1 - bs >= 0 && rawText.charCodeAt(scan - 1 - bs) === 92) {
+        bs += 1;
+      }
+      if ((bs & 1) === 1) {
+        scan = rawText.indexOf('`', scan + 1);
+        continue;
+      }
+      const btMatch = findMatchingBacktickSpan(rawText, scan, n, btState);
+      if (!btMatch.matched) {
+        scan = rawText.indexOf('`', btMatch.runEnd);
+        continue;
+      }
+      if (evalAndMaskSpan(scan, btMatch.innerStart, btMatch.innerEnd, btMatch.closeEnd, true, btMatch.fenceBqDepth || 0)) {
+        return -2;
+      }
+      if (btMatch.closeEnd >= endQuote) {
+        return btMatch.closeEnd;
+      }
+      scan = rawText.indexOf('`', btMatch.closeEnd + 1);
+    }
+    nextBtPos = scan;
+    return -1;
+  };
 
   for (let i = 0; i < n; i += 1) {
     const cc = rawText.charCodeAt(i);
     if (cc !== 34 && cc !== 39 && (!includeBackticks || cc !== 96)) {
       continue;
     }
-    const ch = cc === 34 ? '"' : cc === 39 ? "'" : '`';
-    if (i > 0 && isDelimitedQuotePrefixCode(rawText.charCodeAt(i - 1))) {
-      if (ch === '`') {
-        while (i + 1 < n && rawText.charCodeAt(i + 1) === 96) {
-          i += 1;
-        }
+    if (cc === 96) {
+      let bs = 0;
+      while (i - 1 - bs >= 0 && rawText.charCodeAt(i - 1 - bs) === 92) {
+        bs += 1;
+      }
+      if ((bs & 1) === 1) {
         continue;
       }
+      const btMatch = findMatchingBacktickSpan(rawText, i, n, btState);
+      if (!btMatch.matched) {
+        i = btMatch.runEnd - 1;
+        continue;
+      }
+      if (evalAndMaskSpan(i, btMatch.innerStart, btMatch.innerEnd, btMatch.closeEnd, true, btMatch.fenceBqDepth || 0)) {
+        return { matchedDeps, remainder: rawText };
+      }
+      i = btMatch.closeEnd;
+      continue;
+    }
+
+    const ch = cc === 34 ? '"' : "'";
+    if (i > 0 && isDelimitedQuotePrefixCode(rawText.charCodeAt(i - 1))) {
+      const prevCc = rawText.charCodeAt(i - 1);
       if (ch === "'") {
+        const isApostrophe =
+          isAsciiAlphaNumCode(prevCc) &&
+          ((i + 1 < n && isAsciiAlphaNumCode(rawText.charCodeAt(i + 1))) ||
+            ((i + 1 >= n || isTrailingApostropheBoundaryAt(rawText, i + 1)) &&
+              hasSingleQuoteCloseBeforeSpace(rawText, i, n) === -1));
+        if (isApostrophe) {
+          continue;
+        }
         if (!noMoreSingle) {
           const endSq = findNextNonApostropheSingleQuote(rawText, i + 1, n);
           if (endSq === -1) {
             noMoreSingle = true;
           } else {
-            i = endSq;
+            const embRes = scanEmbeddedBackticksBefore(i, endSq);
+            if (embRes === -2) {
+              return { matchedDeps, remainder: rawText };
+            }
+            i = embRes >= 0 ? embRes : endSq;
           }
         }
         continue;
       }
-      if (ch === '"' && !noMoreDouble) {
+      if (!noMoreDouble) {
         const nextDq = rawText.indexOf('"', i + 1);
         if (nextDq === -1) {
           noMoreDouble = true;
@@ -3709,10 +4072,10 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
           if (nextBsPos !== -1 && nextBsPos <= i) {
             nextBsPos = rawText.indexOf('\\', i + 1);
           }
+          let endDq = -1;
           if (nextBsPos === -1 || nextBsPos > nextDq) {
-            i = nextDq;
+            endDq = nextDq;
           } else {
-            let endDq = -1;
             for (let k = nextBsPos; k < n; k += 1) {
               if (rawText[k] === '\\') {
                 k += 1;
@@ -3723,11 +4086,15 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
                 break;
               }
             }
-            if (endDq === -1) {
-              noMoreDouble = true;
-            } else {
-              i = endDq;
+          }
+          if (endDq === -1) {
+            noMoreDouble = true;
+          } else {
+            const embRes = scanEmbeddedBackticksBefore(i, endDq);
+            if (embRes === -2) {
+              return { matchedDeps, remainder: rawText };
             }
+            i = embRes >= 0 ? embRes : endDq;
           }
         }
       }
@@ -3738,7 +4105,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     }
 
     let closeIdx = -1;
-    let innerStart = i + 1;
+    const innerStart = i + 1;
     let innerEnd = -1;
     if (ch === '"') {
       const nextDq = rawText.indexOf('"', i + 1);
@@ -3769,74 +4136,18 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
         }
       }
       innerEnd = closeIdx;
-    } else if (ch === "'") {
+    } else {
       closeIdx = findNextNonApostropheSingleQuote(rawText, i + 1, n);
       if (closeIdx === -1) {
         noMoreSingle = true;
         continue;
       }
       innerEnd = closeIdx;
-    } else {
-      const btMatch = findMatchingBacktickSpan(rawText, i, n, btState);
-      if (!btMatch.matched) {
-        i = btMatch.runEnd - 1;
-        continue;
-      }
-      innerStart = btMatch.innerStart;
-      innerEnd = btMatch.innerEnd;
-      closeIdx = btMatch.closeEnd;
     }
 
-    const inner = rawText.slice(innerStart, innerEnd).trim();
-    if (inner) {
-      if (ch === '`' && !includeBackticks) {
-        pushMatched(inner);
-        if (stopOnFirst) return { matchedDeps, remainder: rawText };
-      } else {
-        const innerEvalKey = `${ch === '`' ? '1:' : '0:'}${inner}`;
-        let didMatchInner = innerEvalCache ? innerEvalCache.get(innerEvalKey) : undefined;
-        if (didMatchInner === undefined) {
-          const isSafeEndpoint =
-            includeBackticks &&
-            typeof isSingleExternalEndpointToken === 'function' &&
-            isSingleExternalEndpointToken(inner);
-          if (isSafeEndpoint) {
-            didMatchInner = false;
-          } else {
-            const startsDot = inner.charCodeAt(0) === 46;
-            const matchesScript = includeBareScript && startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
-            let innerMatchesCmd = false;
-            if (!matchesScript) {
-              if (!/[\s;|&<>()$`\\"']/.test(inner)) {
-                const simpleWord = toAsciiLowerFast(stripShellBinPrefix(stripTrailingProsePunct(inner) || inner));
-                innerMatchesCmd =
-                  SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
-              } else {
-                innerMatchesCmd = scanShellCommandText(
-                  inner,
-                  ch === '`' ? undefined : { allowMarkdownBlockquotes: true }
-                );
-              }
-            }
-            didMatchInner = Boolean(matchesScript || innerMatchesCmd);
-          }
-          if (!innerEvalCache) {
-            innerEvalCache = new Map();
-          }
-          innerEvalCache.set(innerEvalKey, didMatchInner);
-        }
-        if (didMatchInner) {
-          pushMatched(inner);
-          if (stopOnFirst) return { matchedDeps, remainder: rawText };
-        }
-      }
+    if (evalAndMaskSpan(i, innerStart, innerEnd, closeIdx, false)) {
+      return { matchedDeps, remainder: rawText };
     }
-
-    if (!maskedParts) maskedParts = [];
-    if (i > cursor) maskedParts.push(rawText.slice(cursor, i));
-    const spanLen = closeIdx - i + 1;
-    maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
-    cursor = closeIdx + 1;
     i = closeIdx;
   }
 
@@ -3983,7 +4294,6 @@ function maskBackticksLinear(text) {
   const n = text.length;
   let out = '';
   let cursor = 0;
-  let noMoreSq = false;
   const btState = { noSingleBt: false, multiRuns: null };
 
   for (let i = 0; i < n; i += 1) {
@@ -3992,27 +4302,31 @@ function maskBackticksLinear(text) {
       i += 1;
       continue;
     }
-    if (c === "'" && !noMoreSq) {
-      const precededByAlphaNum = i > 0 && /[A-Za-z0-9]/.test(text[i - 1]);
-      const followedByAlphaNum = i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
-      if (precededByAlphaNum && followedByAlphaNum && hasSingleQuoteCloseBeforeSpace(text, i, n) === -1) {
-        continue;
-      }
-      const closeSq = text.indexOf("'", i + 1);
-      if (closeSq === -1) {
-        noMoreSq = true;
-      } else {
-        i = closeSq;
-      }
-      continue;
-    }
     if (c === '`') {
       const btMatch = findMatchingBacktickSpan(text, i, n, btState);
       if (!btMatch.matched) {
         i = btMatch.runEnd - 1;
         continue;
       }
-      out += text.slice(cursor, i) + ' '.repeat(btMatch.closeEnd - i + 1);
+      let padLen = btMatch.closeEnd - i + 1;
+      if (padLen < 5) {
+        let p = i;
+        let wsCount = 0;
+        while (p > 0 && wsCount <= 4) {
+          const pcc = text.charCodeAt(p - 1);
+          if (pcc !== 32 && pcc !== 9) break;
+          p -= 1;
+          wsCount += 1;
+        }
+        if (wsCount <= 4) {
+          if (p === 0 || text.charCodeAt(p - 1) === 10 || text.charCodeAt(p - 1) === 13) {
+            padLen = Math.max(padLen, 4);
+          } else if (text.charCodeAt(p - 1) === 62) {
+            padLen = Math.max(padLen, 5);
+          }
+        }
+      }
+      out += text.slice(cursor, i) + ' '.repeat(padLen);
       cursor = btMatch.closeEnd + 1;
       i = btMatch.closeEnd;
     }
@@ -4089,7 +4403,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
   if (!text || typeof text !== 'string' || !hasPotentialOuterCommandStarter(text)) {
     return [];
   }
-  const outerCacheKey = activeReadinessCache ? trimHorizontalWs(text) : null;
+  const outerCacheKey = activeReadinessCache ? text : null;
   let clauses = outerCacheKey !== null ? activeReadinessCache.outerClauses.get(outerCacheKey) : undefined;
   if (!clauses) {
     const maskedBt = maskBackticksLinear(outerCacheKey ?? text);
@@ -4696,6 +5010,13 @@ function unwrapStructuredSource(rawValue) {
   if (trimmed.length < 2) {
     return trimmed;
   }
+  const multiBacktickMatch = trimmed.match(/^(`+)([^`]+)\1$/);
+  if (multiBacktickMatch) {
+    const inner = multiBacktickMatch[2].trim();
+    if (inner) {
+      return inner;
+    }
+  }
   const wrapperPairs = [
     ['`', '`'],
     ['"', '"'],
@@ -4872,7 +5193,7 @@ function isNonPathSlashExpression(source, segments) {
  * runtime/framework noun to mask without adding a dependency ('mask_only'), or
  * non-file text to leave intact for external standard/domain extraction ('leave').
  */
-function classifyFileCandidate(rawToken, startRaw, endRaw) {
+function classifyFileCandidate(rawToken, startRaw, endRaw, isStructuredSource = false, fullText = '') {
   const hasExplicitDotSlash = rawToken.startsWith('./');
   const source = normalizeWorkspacePath(rawToken);
   if (!source || source.includes('..')) {
@@ -4890,7 +5211,11 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
       if (isRecognizedBareDomain(source) && endRaw === undefined) {
         return 'leave';
       }
-      if (KNOWN_STANDALONE_EXTENSIONLESS_FILES.has(source) || hasKnownFileExtensionOrDotfile(source)) {
+      if (
+        KNOWN_STANDALONE_EXTENSIONLESS_FILES.has(source) ||
+        hasKnownFileExtensionOrDotfile(source) ||
+        (isStructuredSource && KNOWN_PATH_EXTENSIONLESS_FILES.has(source) && (source !== 'configure' || !/\s/.test(fullText)))
+      ) {
         return 'file';
       }
       if (startRaw !== undefined) {
@@ -6812,6 +7137,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
   const seenExternal = new Set();
 
   const structuredList = [];
+  const structuredTextSet = new Set();
   collectStrings(options?.structuredSources, structuredList);
   for (const rawStructured of structuredList) {
     const unwrapped = unwrapStructuredSource(rawStructured);
@@ -6825,12 +7151,14 @@ export function extractVerificationDependencies(inputs, options = {}) {
         externalDeps.push(unwrapped);
       }
     } else {
+      structuredTextSet.add(unwrapped);
       strings.push(unwrapped);
     }
   }
 
   const uniqueStrings = strings.length > 1 ? Array.from(new Set(strings)) : strings;
   for (const text of uniqueStrings) {
+    const isStructuredSource = structuredTextSet.has(text);
     // 0. Extract explicitly delimited single-token external URLs/endpoints first so
     //    embedded parentheses, brackets, `..`, and trailing punctuation stay verbatim.
     let masked =
@@ -6912,9 +7240,9 @@ export function extractVerificationDependencies(inputs, options = {}) {
 
     // 4. Extract concrete workspace files BEFORE named external standards so file paths like
     //    `src/openapi.js` or `docs/rfc9110.md` are recorded as files and masked from standard matching.
-    if (hasPotentialFileCandidateChar(masked)) {
+    if (isStructuredSource || hasPotentialFileCandidateChar(masked)) {
       masked = masked.replace(FILE_CANDIDATE_REGEX, (full, lead, rawToken, startRaw, endRaw) => {
-        const decision = classifyFileCandidate(rawToken, startRaw, endRaw);
+        const decision = classifyFileCandidate(rawToken, startRaw, endRaw, isStructuredSource, text);
         if (decision === 'leave') {
           return full;
         }

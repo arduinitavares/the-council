@@ -15,6 +15,7 @@ import {
 } from '../../src/engine/index.js';
 import { transitionCouncil } from '../../src/machine/reducer.js';
 import { createInitialCouncilState } from '../../src/machine/state.js';
+import { validateProof } from '../../src/proofs/validator.js';
 import { MockAdapter } from '../../src/harness/mock.js';
 import {
   HeadlessToolDeniedError,
@@ -10606,6 +10607,508 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         const readyMs = performance.now() - tReady0;
         assert.ok(readyMs < 20, `Expected <20ms warmed readiness for ${probe.name}, got ${readyMs.toFixed(2)}ms`);
         assert.equal(readiness.ready, probe.expectReady, `Unexpected readiness=${readiness.ready} for ${probe.name}`);
+      }
+    });
+
+    it('ReReview-102 Round 26 fixes: enforces CommonMark blockquote/fence column thresholds, backtick-prefix & apostrophe precedence, structured root extensionless file citations, and <20ms 48KB latency', async () => {
+      const sampleAuthProof = {
+        id: 'P1',
+        seatId: 's1',
+        round: 1,
+        scope: 'Verify auth token expiry',
+        kind: 'check',
+        source: 'src/auth.js',
+        statement: 'Token expiry verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+
+      function buildR26ReadinessInputs({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = [],
+        coveredSources = ['src/auth.js']
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        };
+      }
+
+      function runR26PlanParticipant(params) {
+        const isJudge = params.phase === 'JUDGE_AUDIT_SYNTHESIS';
+        const errorClass = params.errorClass;
+        return planParticipantRecovery({
+          ...buildR26ReadinessInputs(params),
+          participantId: isJudge ? 'judge' : 's1',
+          role: isJudge ? 'judge' : 'seat',
+          error:
+            errorClass === 'TimeoutError'
+              ? { message: `${params.phase} timeout`, code: 'ETIMEDOUT' }
+              : { message: `${params.phase} tool denied`, code: 'HEADLESS_TOOL_DENIED' },
+          isRetryable: true,
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          requestedModel: 'gpt-6-astra',
+          requestedEffort: 'high'
+        });
+      }
+
+      async function executeR26PhaseEngine({
+        phase,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        s1Proof = null,
+        coveredSources = ['src/auth.js']
+      }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (
+            (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') ||
+            (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2')
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault(ctx.seat.id);
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) {
+            return s1Proof;
+          }
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('s1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications,
+            maxClarificationBatches: 0,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'R26 regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        const checkPhase = phase.startsWith('JUDGE_') ? 'JUDGE_AUDIT_SYNTHESIS' : phase === 'VOTING' ? 'VOTING' : 'DELIBERATION';
+        const checkRound = phase.endsWith('_R2') || phase === 'R2_DELIBERATION' ? 2 : 1;
+        const targetId = checkPhase === 'JUDGE_AUDIT_SYNTHESIS' ? 'judge' : phase === 'R2_DELIBERATION' ? 's2' : 's1';
+        let enginePlan = null;
+        const origEnginePlan = engine._planParticipantRecovery.bind(engine);
+        engine._planParticipantRecovery = (arg) => {
+          const res = origEnginePlan(arg);
+          if (arg?.participant?.id === targetId && arg?.phase === checkPhase && Number(arg?.round || 1) === checkRound) {
+            enginePlan = res;
+          }
+          return res;
+        };
+        await engine.run();
+        assert.ok(enginePlan, `Expected live _planParticipantRecovery capture for ${phase} (${errorClass})`);
+        return { targetCalls, enginePlan };
+      }
+
+      // 0. outerClauses cache key preservation across leading indentation variants
+      assert.deepEqual(extractVerificationDependencies(['> This works.']).workspaceBroadDeps, []);
+      assert.ok(extractVerificationDependencies(['    > This works.']).workspaceBroadDeps.length > 0);
+      const cacheIsolationVerdict = evaluateToolFreeEvidenceReadiness(
+        buildR26ReadinessInputs({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          topic: 'Inspect src/auth.js.',
+          clarifications: [{ question: '> This works.', answer: '    > This works.' }]
+        })
+      );
+      assert.equal(cacheIsolationVerdict.ready, false);
+      assert.equal(cacheIsolationVerdict.reasonCode, 'evidence_access_failure');
+
+      const r26ReadinessPhaseCases = [
+        ['DELIBERATION', 1, {}],
+        ['DELIBERATION', 2, { priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, { proofs: [sampleAuthProof] }],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, { proofs: [sampleAuthProof], priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['VOTING', 1, { candidate: sampleCandidate, admittedProofs: [sampleAuthProof] }]
+      ];
+
+      // 1 & 2. Finding 1 (CommonMark indent/fence/masking) + Finding 2 (backtick-prefix & apostrophes)
+      const r26RefuseTopics = [
+        'Inspect src/auth.js.\n\n    > out_target custom_cmd',
+        'Inspect src/auth.js.\n\n\t> out_target custom_cmd',
+        'Inspect src/auth.js.\n\n  \t> out_target custom_cmd',
+        'Inspect src/auth.js.\n> outer\n>     > out_target custom_cmd',
+        `Inspect src/auth.js.\n${'> '.repeat(12)}\`a\`> out_target custom_cmd`,
+        'Inspect src/auth.js.\n`a`> out_target custom_cmd',
+        'Inspect src/auth.js.\n> `a`> out_target custom_cmd',
+        'Inspect src/auth.js.\n> ```txt\n> > This works.\n> ```',
+        'Inspect src/auth.js.\n> ~~~sh\n> > out_target custom_cmd\n> ~~~',
+        'Inspect src/auth.js.\nverify`> note echo ok`',
+        'Inspect src/auth.js.\nverify``> note echo ok``',
+        'Inspect src/auth.js.\n(verify)`> note echo ok`',
+        'Inspect src/auth.js.\nfoo/bar`> note echo ok`',
+        'Inspect src/auth.js.\nverify\\\\`> note echo ok`',
+        "Inspect src/auth.js. It doesn't matter '> note echo ok'",
+        "Inspect src/auth.js. Check students' notes `> note echo ok`",
+        'Inspect src/auth.js.\nfoo="`> note echo ok`"',
+        "Inspect src/auth.js.\nfoo='`> note echo ok`'"
+      ];
+      const r26AllowTopics = [
+        'Inspect src/auth.js.\n\n   > 3-space blockquote prose.\n',
+        'Inspect src/auth.js.\n>   > Nested 2-space blockquote prose.\n',
+        'Inspect src/auth.js.\n> ```txt\n> just plain prose\n> ```\n',
+        'Inspect src/auth.js.\n> ```txt\n> foo ``` bar\n> ```\n',
+        "Inspect src/auth.js. It doesn't alter students' 'read-only' notes.",
+        "Inspect src/auth.js. verify`token` and `It isn't` an issue."
+      ];
+
+      for (const topic of r26RefuseTopics) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.ok(deps.workspaceBroadDeps.length > 0, `Expected broad dep refusal for ${JSON.stringify(topic)}`);
+      }
+      for (const topic of r26AllowTopics) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.deepEqual(deps.workspaceBroadDeps, [], `Expected 0 broad deps for prose control ${JSON.stringify(topic)}`);
+      }
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        for (const [phaseName, round, extra] of r26ReadinessPhaseCases) {
+          for (const topic of r26RefuseTopics) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR26ReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, false, `Expected readiness refusal for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(readiness.reasonCode, 'evidence_access_failure');
+
+            const plan = runR26PlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, false, `Expected planParticipantRecovery refusal for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(plan.terminationKind, 'evidence_access_failure');
+          }
+          for (const topic of r26AllowTopics) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR26ReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, true, `Expected readiness approval for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+
+            const plan = runR26PlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, true, `Expected planParticipantRecovery approval for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(plan.nextTools, 'none');
+            assert.equal(plan.terminationKind, null);
+          }
+        }
+
+        for (const enginePhase of allFivePhases) {
+          for (const topic of r26RefuseTopics) {
+            const out = await executeR26PhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, false);
+            assert.equal(out.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(out.targetCalls.length, 1, `Expected engine refusal for ${JSON.stringify(topic)} in ${enginePhase} (${errorClass})`);
+          }
+          for (const topic of r26AllowTopics) {
+            const out = await executeR26PhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, true);
+            assert.equal(out.enginePlan.nextTools, 'none');
+            assert.equal(out.enginePlan.terminationKind, null);
+            assert.equal(out.targetCalls.length, 2, `Expected engine retry for ${JSON.stringify(topic)} in ${enginePhase} (${errorClass})`);
+            assert.equal(out.targetCalls[1].tools, 'none');
+            assert.equal(out.targetCalls[1].cwd, undefined);
+          }
+        }
+      }
+
+      // 3. Finding 3: bare root extensionless filenames in structured sources & 20-combo phase/error/planner matrices
+      const allRootExtensionlessNames = [
+        'README',
+        'LICENSE',
+        'NOTICE',
+        'CHANGELOG',
+        'SECURITY',
+        'CONTRIBUTING',
+        'CODE_OF_CONDUCT',
+        'CONTRIBUTORS',
+        'ATTRIBUTION',
+        'CREDITS',
+        'INSTALL',
+        'configure'
+      ];
+      for (const source of allRootExtensionlessNames) {
+        const val = validateProof({
+          scope: 'Verify root file',
+          kind: 'citation',
+          source,
+          statement: 'Verified root repository file.'
+        });
+        assert.equal(val.valid, true, `Expected validateProof valid for ${source}, got ${JSON.stringify(val.errors)}`);
+
+        for (const wrapped of [source, `"${source}"`, `'${source}'`, `\`${source}\``, `\`\`${source}\`\``, `<${source}>`]) {
+          const deps = extractVerificationDependencies(['Check documentation'], { structuredSources: [wrapped] });
+          assert.deepEqual(
+            deps.workspaceFileDeps,
+            [{ source, unbounded: true }],
+            `Expected workspaceFileDeps [${source}] for structuredSource ${wrapped}`
+          );
+        }
+      }
+
+      // Positive prose & multi-word configure controls
+      assert.deepEqual(
+        extractVerificationDependencies(['NOTICE: SECURITY and CONTRIBUTING policies configure README and LICENSE']).workspaceFileDeps,
+        []
+      );
+      assert.deepEqual(
+        extractVerificationDependencies(['Check topic'], { structuredSources: ['Verified how to configure auth'] }).workspaceFileDeps,
+        []
+      );
+
+      const matrixRootFilenames = [
+        'README',
+        'LICENSE',
+        'NOTICE',
+        'SECURITY',
+        'CONTRIBUTING',
+        'ATTRIBUTION',
+        'CREDITS',
+        'INSTALL',
+        'configure'
+      ];
+      for (const source of matrixRootFilenames) {
+        const docProof = {
+          id: 'P1',
+          seatId: 's1',
+          round: 1,
+          scope: 'Doc',
+          kind: 'citation',
+          source,
+          statement: 'Verified doc.'
+        };
+        const docClarifications = [{ batch: 1, label: 'Doc', source, text: 'Note' }];
+        const docCandidate = { id: 'C1', round: 1, summary: 'Documentation verified.', admittedProofIds: ['P1'] };
+        const docObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify cited documentation details.' }];
+
+        const f3Normalized = [
+          { enginePhase: 'R1_DELIBERATION', phaseName: 'DELIBERATION', round: 1, inputs: { clarifications: docClarifications }, s1Proof: null },
+          { enginePhase: 'R2_DELIBERATION', phaseName: 'DELIBERATION', round: 2, inputs: { priorProofs: [docProof], previousCandidate: docCandidate, openObjections: docObjections }, s1Proof: docProof },
+          { enginePhase: 'JUDGE_AUDIT_SYNTHESIS_R1', phaseName: 'JUDGE_AUDIT_SYNTHESIS', round: 1, inputs: { proofs: [docProof] }, s1Proof: docProof },
+          { enginePhase: 'JUDGE_AUDIT_SYNTHESIS_R2', phaseName: 'JUDGE_AUDIT_SYNTHESIS', round: 2, inputs: { proofs: [docProof], priorProofs: [docProof], previousCandidate: docCandidate, openObjections: docObjections }, s1Proof: docProof },
+          { enginePhase: 'VOTING', phaseName: 'VOTING', round: 1, inputs: { candidate: docCandidate, admittedProofs: [docProof] }, s1Proof: docProof }
+        ];
+
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          for (const entry of f3Normalized) {
+            // Uncovered (only src/auth.js covered) -> must refuse all 20 combinations
+            const uncoveredReadiness = evaluateToolFreeEvidenceReadiness(
+              buildR26ReadinessInputs({
+                phase: entry.phaseName,
+                round: entry.round,
+                errorClass,
+                coveredSources: ['src/auth.js'],
+                ...entry.inputs
+              })
+            );
+            assert.equal(uncoveredReadiness.ready, false, `Expected uncovered refusal for ${source} in ${entry.enginePhase} (${errorClass})`);
+            assert.equal(uncoveredReadiness.reasonCode, 'evidence_access_failure');
+
+            const uncoveredPlan = runR26PlanParticipant({
+              phase: entry.phaseName,
+              round: entry.round,
+              errorClass,
+              coveredSources: ['src/auth.js'],
+              ...entry.inputs
+            });
+            assert.equal(uncoveredPlan.canRetry, false);
+            assert.equal(uncoveredPlan.terminationKind, 'evidence_access_failure');
+
+            const uncoveredEngine = await executeR26PhaseEngine({
+              phase: entry.enginePhase,
+              errorClass,
+              clarifications: entry.inputs.clarifications || [],
+              s1Proof: entry.s1Proof,
+              coveredSources: ['src/auth.js']
+            });
+            assert.equal(uncoveredEngine.enginePlan.canRetry, false);
+            assert.equal(uncoveredEngine.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(uncoveredEngine.targetCalls.length, 1, `Expected uncovered engine refusal for ${source} in ${entry.enginePhase} (${errorClass})`);
+
+            // Covered (src/auth.js + source covered) -> must approve all 20 combinations
+            const coveredReadiness = evaluateToolFreeEvidenceReadiness(
+              buildR26ReadinessInputs({
+                phase: entry.phaseName,
+                round: entry.round,
+                errorClass,
+                coveredSources: ['src/auth.js', source],
+                ...entry.inputs
+              })
+            );
+            assert.equal(coveredReadiness.ready, true, `Expected covered approval for ${source} in ${entry.enginePhase} (${errorClass})`);
+
+            const coveredPlan = runR26PlanParticipant({
+              phase: entry.phaseName,
+              round: entry.round,
+              errorClass,
+              coveredSources: ['src/auth.js', source],
+              ...entry.inputs
+            });
+            assert.equal(coveredPlan.canRetry, true);
+            assert.equal(coveredPlan.nextTools, 'none');
+            assert.equal(coveredPlan.terminationKind, null);
+
+            const coveredEngine = await executeR26PhaseEngine({
+              phase: entry.enginePhase,
+              errorClass,
+              clarifications: entry.inputs.clarifications || [],
+              s1Proof: entry.s1Proof,
+              coveredSources: ['src/auth.js', source]
+            });
+            assert.equal(coveredEngine.enginePlan.canRetry, true);
+            assert.equal(coveredEngine.enginePlan.nextTools, 'none');
+            assert.equal(coveredEngine.enginePlan.terminationKind, null);
+            assert.equal(coveredEngine.targetCalls.length, 2, `Expected covered engine retry for ${source} in ${entry.enginePhase} (${errorClass})`);
+            assert.equal(coveredEngine.targetCalls[1].tools, 'none');
+            assert.equal(coveredEngine.targetCalls[1].cwd, undefined);
+          }
+        }
+      }
+
+      // 4. R26 48,000-byte warmed extraction + readiness latency budget (<20ms)
+      const r26LatencyProbes = [
+        {
+          name: 'r26-indented-code-48k',
+          payload: `Inspect src/auth.js.\n${'    > out_target custom_cmd\n'.repeat(1713)}`.padEnd(48000, ' '),
+          expectBroad: true,
+          expectReady: false
+        },
+        {
+          name: 'r26-prefixed-inline-code-48k',
+          payload: `Inspect src/auth.js.\n${'verify`> note echo ok`; '.repeat(1999)}`.padEnd(48000, ' '),
+          expectBroad: true,
+          expectReady: false
+        }
+      ];
+      for (const probe of r26LatencyProbes) {
+        assert.equal(Buffer.byteLength(probe.payload, 'utf8'), 48000, `Expected exact 48000B payload for ${probe.name}`);
+        extractVerificationDependencies([probe.payload]);
+        const tExtract0 = performance.now();
+        const deps = extractVerificationDependencies([probe.payload]);
+        const extractMs = performance.now() - tExtract0;
+        assert.ok(extractMs < 20, `Expected <20ms warmed extract for ${probe.name}, got ${extractMs.toFixed(2)}ms`);
+        assert.equal(deps.workspaceBroadDeps.length > 0, probe.expectBroad);
+
+        const readinessArgs = buildR26ReadinessInputs({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          topic: probe.payload
+        });
+        evaluateToolFreeEvidenceReadiness(readinessArgs);
+        const tReady0 = performance.now();
+        const readiness = evaluateToolFreeEvidenceReadiness(readinessArgs);
+        const readyMs = performance.now() - tReady0;
+        assert.ok(readyMs < 20, `Expected <20ms warmed readiness for ${probe.name}, got ${readyMs.toFixed(2)}ms`);
+        assert.equal(readiness.ready, probe.expectReady);
       }
     });
   });

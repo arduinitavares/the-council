@@ -225,6 +225,18 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
       tools: 'read-only'
     });
     assert.match(pJudgePriorOnly, /0 local workspace reads/i);
+
+    for (const bareSource of ['README', 'LICENSE', '"README"', 'NOTICE', 'CONTRIBUTING', 'CODE_OF_CONDUCT', '`README`', '``LICENSE``']) {
+      const pJudgeBareRoot = formatJudgePrompt({
+        judge: { id: 'j', cwd: '/Users/secret/repo' },
+        topic: 'Topic',
+        round: 1,
+        proofs: [{ id: 'P1', statement: 'Root file claim', source: bareSource }],
+        tools: 'read-only'
+      });
+      assert.match(pJudgeBareRoot, /3[–-]5 targeted reads/i, `Expected 3–5 targeted reads for bare source ${bareSource}`);
+      assert.doesNotMatch(pJudgeBareRoot, /0 local workspace reads/i, `Did not expect 0 local workspace reads for bare source ${bareSource}`);
+    }
   });
 
   it('CouncilEngine rejects leaked forbidden/temp/.council citations in Deliberation, Vote, and Judge via retryable InvalidResponseError and normalizes trusted ephemeral subpaths cleanly', async () => {

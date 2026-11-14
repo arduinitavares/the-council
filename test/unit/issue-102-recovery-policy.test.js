@@ -1,0 +1,731 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  extractVerificationDependencies,
+  evaluateToolFreeEvidenceReadiness,
+  resolveRetryModelAndEffort,
+  validateRetryFallbackCapability,
+  planParticipantRecovery,
+  resolveConfig,
+  validateConfig
+} from '../../src/engine/index.js';
+import { transitionCouncil } from '../../src/machine/reducer.js';
+import { createInitialCouncilState } from '../../src/machine/state.js';
+
+describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Retry Diagnostics', () => {
+  describe('extractVerificationDependencies', () => {
+    it('extracts file/line/single-segment/broad/URL dependencies while ignoring ellipses, versions, and framework names', () => {
+      const deps = extractVerificationDependencies([
+        'Inspect src/auth.js:120-145, a.js, src/engine/, and https://datatracker.ietf.org/doc/html/rfc9110, on Node.js v22.1.0 ... ready.'
+      ]);
+      assert.deepEqual(deps.workspaceFileDeps, [
+        { source: 'src/auth.js', startLine: 120, endLine: 145 },
+        { source: 'a.js', unbounded: true }
+      ]);
+      assert.ok(deps.workspaceBroadDeps.includes('src/engine/'));
+      assert.deepEqual(deps.externalDeps, ['https://datatracker.ietf.org/doc/html/rfc9110']);
+    });
+
+    it('detects glob dependencies such as src/** and **/*.js while ignoring prose ellipses', () => {
+      const deps = extractVerificationDependencies([
+        'Scan src/** and **/*.js ... check ./foo.ts:10-20.'
+      ]);
+      assert.ok(deps.workspaceBroadDeps.includes('src/**'));
+      assert.ok(deps.workspaceBroadDeps.includes('**/*.js'));
+      assert.deepEqual(deps.workspaceFileDeps, [
+        { source: 'foo.ts', startLine: 10, endLine: 20 }
+      ]);
+    });
+  });
+
+  describe('evaluateToolFreeEvidenceReadiness', () => {
+    it('refuses HeadlessToolDeniedError when originalTools was already none even with conceptual contract', () => {
+      const res = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'HeadlessToolDeniedError',
+        topic: 'Pure conceptual question',
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'none', effectiveCwd: undefined }
+      });
+      assert.equal(res.ready, false);
+      assert.equal(res.reasonCode, 'evidence_access_failure');
+    });
+
+    it('permits TimeoutError recovery when originalTools was already none and phase prerequisites hold', () => {
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: 'Conceptual question',
+          originalInvocationMeta: { effectiveTools: 'none' }
+        }).ready,
+        true
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 2,
+          errorClass: 'TimeoutError',
+          topic: 'Conceptual question',
+          previousCandidate: null,
+          openObjections: [],
+          originalInvocationMeta: { effectiveTools: 'none' }
+        }).ready,
+        false
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: 1,
+          errorClass: 'TimeoutError',
+          proofs: [{ id: 'P1', kind: 'check', source: 'Spec', statement: 'Ok' }],
+          originalInvocationMeta: { effectiveTools: 'none' }
+        }).ready,
+        true
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'VOTING',
+          round: 1,
+          errorClass: 'TimeoutError',
+          candidate: { round: 1, summary: 'Sum', clauses: [] },
+          originalInvocationMeta: { effectiveTools: 'none' }
+        }).ready,
+        true
+      );
+    });
+
+    it('rejects partial/irrelevant [E1] stubs, roundScope round_1_only in Round 2, and unverified cwd timeouts', () => {
+      const resStub = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Using [E1], verify token expiry in src/auth.js',
+        evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resStub.ready, false);
+      assert.equal(resStub.reasonCode, 'evidence_access_failure');
+
+      // Partial line coverage { startLine: 1, endLine: 5 } MUST be refused for unbounded src/auth.js or 120-145
+      const resPartialLines = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify token expiry in src/auth.js:120-145',
+        evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: { startLine: 1, endLine: 5 } }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resPartialLines.ready, false);
+
+      const resPartialUnbounded = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify token expiry in src/auth.js',
+        evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: { startLine: 1, endLine: 5 } }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resPartialUnbounded.ready, false);
+
+      // Round > 1 requires roundScope === 'all_rounds'
+      const resRound2Blocked = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 2,
+        errorClass: 'TimeoutError',
+        topic: 'Conceptual topic',
+        previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+        openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P1', reason: 'Dispute' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          conceptualNoExternalVerification: true
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(resRound2Blocked.ready, false);
+
+      // Valid complete_artifact covers unbounded src/auth.js
+      const resCovered = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify src/auth.js',
+        evidence: [{ id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export function checkTokenExpiry() { return true; }' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resCovered.ready, true);
+
+      // Enclosing line coverage satisfies line-bounded dependency
+      const resEnclosing = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'HeadlessToolDeniedError',
+        topic: 'Verify src/auth.js:120-145',
+        evidence: [{ id: 'E1', label: 'Auth slice', source: 'src/auth.js', text: 'function check() {}' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: { startLine: 100, endLine: 160 } }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resEnclosing.ready, true);
+    });
+
+    it('enforces Spec §1 line 119: refuses open-ended Delib R1 when effectiveCwd is set and workspaceFileDeps is empty, even with unrelated coveredArtifacts', () => {
+      const resOpenEnded = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Audit the repository architecture for subtle defects',
+        evidence: [{ id: 'E1', label: 'Readme', source: 'README.md', text: 'Overview text' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'README.md', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(resOpenEnded.ready, false);
+      assert.equal(resOpenEnded.reasonCode, 'evidence_access_failure');
+    });
+
+    it('refuses conceptualNoExternalVerification for HeadlessToolDeniedError, attached effectiveCwd, URLs, and external benchmark proofs', () => {
+      // Rejects HeadlessToolDeniedError
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          topic: 'Conceptual question',
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            conceptualNoExternalVerification: true
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only' }
+        }).ready,
+        false
+      );
+
+      // Rejects attached effectiveCwd
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: 'Conceptual question',
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            conceptualNoExternalVerification: true
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        }).ready,
+        false
+      );
+
+      // Rejects external URL even without cwd
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: 'Verify https://datatracker.ietf.org/doc/html/rfc9110',
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            conceptualNoExternalVerification: true
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only' }
+        }).ready,
+        false
+      );
+
+      // Rejects external kind: 'benchmark' source absent from coveredArtifacts during JUDGE_AUDIT_SYNTHESIS
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness({
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: 'Throughput analysis',
+          proofs: [{ id: 'P1', kind: 'benchmark', source: 'TechEmpower Round 22', statement: '120k req/s' }],
+          selfContainedInput: {
+            phases: ['JUDGE_AUDIT_SYNTHESIS'],
+            conceptualNoExternalVerification: true
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only' }
+        }).ready,
+        false
+      );
+    });
+  });
+
+  describe('planParticipantRecovery precedence & single tool-free limit', () => {
+    it('enforces exact 7-step precedence and blocks ALL subsequent errors after toolFreeRecoveryUsed === true', () => {
+      // 1. Non-retryable beats retries_exhausted
+      const nonRetryable = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: new Error('Auth failed'),
+        errorClass: 'AuthenticationError',
+        isRetryable: false,
+        retries: 5,
+        maxRetries: 1,
+        toolFreeRecoveryUsed: true
+      });
+      assert.equal(nonRetryable.canRetry, false);
+      assert.equal(nonRetryable.terminationKind, 'non_retryable');
+
+      // 2. Retries exhausted beats toolFreeRecoveryUsed
+      const exhausted = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: new Error('Bad JSON'),
+        errorClass: 'InvalidResponseError',
+        isRetryable: true,
+        retries: 2,
+        maxRetries: 2,
+        toolFreeRecoveryUsed: true
+      });
+      assert.equal(exhausted.canRetry, false);
+      assert.equal(exhausted.terminationKind, 'retries_exhausted');
+
+      // 3. Single tool-free recovery guard blocks ALL subsequent error classes
+      for (const errorClass of [
+        'InvalidResponseError',
+        'QuotaExhaustionError',
+        'TimeoutError',
+        'HeadlessToolDeniedError',
+        'HarnessExecutionError'
+      ]) {
+        const afterToolFree = planParticipantRecovery({
+          participantId: 's1',
+          role: 'seat',
+          error: { message: `Subsequent ${errorClass}`, code: errorClass === 'HeadlessToolDeniedError' ? 'HEADLESS_TOOL_DENIED' : undefined },
+          errorClass,
+          isRetryable: true,
+          retries: 1,
+          maxRetries: 3,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: true,
+          originalAttemptTools: 'none'
+        });
+        assert.equal(afterToolFree.canRetry, false);
+        assert.equal(afterToolFree.terminationKind, 'tool_free_already_used');
+      }
+
+      // 4. Budget exhausted
+      const lowBudget = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: new Error('Quota'),
+        errorClass: 'QuotaExhaustionError',
+        isRetryable: true,
+        retries: 0,
+        maxRetries: 2,
+        remainingBudget: 4999,
+        minViable: 5000,
+        toolFreeRecoveryUsed: false
+      });
+      assert.equal(lowBudget.canRetry, false);
+      assert.equal(lowBudget.terminationKind, 'budget_exhausted');
+    });
+
+    it('handles HeadlessToolDeniedError (passed via error object/errorClass) and preserves tools/effort on QuotaExhaustionError', () => {
+      // Denied without selfContainedInput -> evidence_access_failure
+      const deniedUnattested = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: { message: 'Bash denied in headless mode', code: 'HEADLESS_TOOL_DENIED' },
+        errorClass: 'HeadlessToolDeniedError',
+        isRetryable: true,
+        retries: 0,
+        maxRetries: 1,
+        remainingBudget: 50000,
+        minViable: 5000,
+        toolFreeRecoveryUsed: false,
+        originalAttemptTools: 'read-only',
+        phase: 'DELIBERATION',
+        round: 1,
+        topic: 'Inspect src/index.js',
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+      });
+      assert.equal(deniedUnattested.canRetry, false);
+      assert.equal(deniedUnattested.terminationKind, 'evidence_access_failure');
+      assert.match(deniedUnattested.reason, /^Tool-free recovery refused \(insufficient self-contained evidence:/);
+
+      // Denied WITH complete_artifact coverage -> approved tool-free retry + setsToolFreeRecoveryUsed
+      const deniedAttested = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: { message: 'Bash denied in headless mode', code: 'HEADLESS_TOOL_DENIED' },
+        errorClass: 'HeadlessToolDeniedError',
+        isRetryable: true,
+        retries: 0,
+        maxRetries: 2,
+        remainingBudget: 60000,
+        minViable: 5000,
+        toolFreeRecoveryUsed: false,
+        originalAttemptTools: 'read-only',
+        phase: 'DELIBERATION',
+        round: 1,
+        topic: 'Inspect src/index.js',
+        evidence: [{ id: 'E1', label: 'Index', source: 'src/index.js', text: 'export const x = 1;' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/index.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' },
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high',
+        retryEffortFallback: true
+      });
+      assert.equal(deniedAttested.canRetry, true);
+      assert.equal(deniedAttested.nextTools, 'none');
+      assert.equal(deniedAttested.nextCwd, undefined);
+      assert.equal(deniedAttested.nextModel, 'gemini-4-argon-medium');
+      assert.equal(deniedAttested.nextReasoningEffort, 'medium');
+      assert.equal(deniedAttested.setsToolFreeRecoveryUsed, true);
+      assert.equal(deniedAttested.retryDiagnostics.fallbackApplied, true);
+      assert.equal(deniedAttested.retryDiagnostics.fallbackReason, 'HeadlessToolDeniedError');
+      assert.equal(deniedAttested.retryDiagnostics.tools, 'none');
+
+      // QuotaExhaustionError preserves tools and requested effort even when retryEffortFallback is true
+      const normalQuota = planParticipantRecovery({
+        participantId: 's1',
+        role: 'seat',
+        error: new Error('HTTP 429'),
+        errorClass: 'QuotaExhaustionError',
+        isRetryable: true,
+        retries: 1,
+        maxRetries: 3,
+        remainingBudget: 50000,
+        minViable: 5000,
+        toolFreeRecoveryUsed: false,
+        originalAttemptTools: 'read-only',
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' },
+        retryEffortFallback: true,
+        harness: 'antigravity',
+        model: 'gemini-4-argon-high'
+      });
+      assert.equal(normalQuota.canRetry, true);
+      assert.equal(normalQuota.nextTools, 'read-only');
+      assert.equal(normalQuota.nextCwd, '/repo');
+      assert.equal(normalQuota.nextModel, 'gemini-4-argon-high');
+      assert.equal(normalQuota.setsToolFreeRecoveryUsed, false);
+      assert.equal(normalQuota.retryDiagnostics.fallbackEnabled, true);
+      assert.equal(normalQuota.retryDiagnostics.fallbackApplied, false);
+      assert.equal(normalQuota.retryDiagnostics.fallbackReason, null);
+      assert.equal(normalQuota.retryDiagnostics.capabilityProvenance, null);
+      assert.equal(normalQuota.retryDiagnostics.attempt, 2);
+    });
+  });
+
+  describe('resolveRetryModelAndEffort, validateRetryFallbackCapability, & config metadata', () => {
+    it('preserves flag-off compatibility and attaches non-enumerable _explicitReasoningEffort cleanly', () => {
+      // Flag off must NOT reject inline + explicit conflict
+      const flagOff = resolveConfig({
+        retryEffortFallback: false,
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', reasoningEffort: 'low', soul: 'S' },
+          { id: 's2', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'A' }
+        ]
+      });
+      assert.equal(flagOff.retryEffortFallback, false);
+      assert.equal(flagOff.selfContainedInput, null);
+      assert.equal(flagOff.seats[0]._explicitReasoningEffort, true);
+      assert.equal(flagOff.seats[1]._explicitReasoningEffort, false);
+      assert.equal(Object.keys(flagOff.seats[0]).includes('_explicitReasoningEffort'), false);
+
+      // Flag on: resolveConfig still returns cleanly (so CLI preflight / validateRetryFallbackCapability reports CONFLICTING_MODEL_EFFORT)
+      const conflictResolved = resolveConfig({
+        retryEffortFallback: true,
+        judge: { id: 'j', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'J' },
+        seats: [
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', reasoningEffort: 'low', soul: 'S' },
+          { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'A' }
+        ]
+      });
+      assert.equal(conflictResolved.retryEffortFallback, true);
+      const capCheck = validateRetryFallbackCapability({ config: conflictResolved });
+      assert.equal(capCheck.valid, false);
+      assert.match(capCheck.errors[0], /CONFLICTING_MODEL_EFFORT/);
+
+      // Global inherited reasoningEffort: 'low' with inline model does NOT trigger CONFLICTING_MODEL_EFFORT even across re-resolution
+      const globalInherited = resolveConfig({
+        retryEffortFallback: true,
+        reasoningEffort: 'low',
+        judge: { id: 'j', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'J' },
+        seats: [
+          { id: 's1', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S' },
+          { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'A' }
+        ]
+      });
+      assert.equal(globalInherited.seats[0]._explicitReasoningEffort, false);
+      assert.equal(globalInherited.seats[0].reasoningEffort, 'low');
+      const reResolved = resolveConfig(globalInherited);
+      assert.equal(reResolved.seats[0]._explicitReasoningEffort, false);
+      assert.equal(validateRetryFallbackCapability({ config: reResolved }).valid, true);
+    });
+
+    it('validates retryEffortFallback and selfContainedInput schemas cleanly in validateConfig', () => {
+      const base = {
+        topic: 'Config schema test',
+        maxRounds: 1,
+        minQuorum: 2,
+        maxClarificationBatches: 0,
+        maxRetriesPerSeat: 1,
+        seats: [
+          { id: 's1', harness: 'mock', model: 'm1', soul: 'A' },
+          { id: 's2', harness: 'mock', model: 'm2', soul: 'B' }
+        ]
+      };
+      assert.equal(validateConfig({ ...base, retryEffortFallback: 'yes' }).valid, false);
+      assert.equal(validateConfig({ ...base, selfContainedInput: [] }).valid, false);
+      assert.equal(validateConfig({ ...base, selfContainedInput: { phases: ['BOGUS'] } }).valid, false);
+      assert.equal(validateConfig({ ...base, selfContainedInput: { roundScope: 'round_2' } }).valid, false);
+      assert.equal(
+        validateConfig({
+          ...base,
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: [{ source: 'a.js', evidenceId: 'E1', coverage: { startLine: 10, endLine: 5 } }]
+          }
+        }).valid,
+        false
+      );
+      assert.equal(
+        validateConfig({
+          ...base,
+          retryEffortFallback: true,
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: [{ source: 'a.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+          }
+        }).valid,
+        true
+      );
+    });
+
+    it('handles composer-2.5, low-effort preservation, bare model medium cap, live_cli_catalog, and unverified date-stamped selectors', () => {
+      const composerPlan = resolveRetryModelAndEffort({
+        harness: 'cursor',
+        model: 'composer-2.5',
+        retryEffortFallback: true
+      });
+      assert.equal(composerPlan.supported, true);
+      assert.equal(composerPlan.effectiveModel, 'composer-2.5');
+      assert.equal(composerPlan.requestedEffort, null);
+      assert.equal(composerPlan.effectiveEffort, null);
+      assert.equal(composerPlan.fallbackApplied, false);
+      assert.equal(composerPlan.provenance, 'adapter_static_policy');
+
+      // Never raises low to medium
+      const keepLow = resolveRetryModelAndEffort({
+        harness: 'antigravity',
+        model: 'claude-opus-5-5-low',
+        retryEffortFallback: true,
+        capabilityCatalog: { selectors: ['claude-opus-5-5-low', 'claude-opus-5-5-medium'], source: 'live_cli_catalog' }
+      });
+      assert.equal(keepLow.supported, true);
+      assert.equal(keepLow.effectiveEffort, 'low');
+      assert.equal(keepLow.fallbackApplied, false);
+      assert.equal(keepLow.provenance, 'live_cli_catalog');
+
+      // Bare gpt-6-astra with reasoningEffort: 'max' synchronizes to 'gpt-6-astra (medium)'
+      const capCodexMedium = resolveRetryModelAndEffort({
+        harness: 'codex',
+        model: 'gpt-6-astra',
+        reasoningEffort: 'max',
+        retryEffortFallback: true
+      });
+      assert.equal(capCodexMedium.supported, true);
+      assert.equal(capCodexMedium.effectiveModel, 'gpt-6-astra (medium)');
+      assert.equal(capCodexMedium.effectiveEffort, 'medium');
+      assert.equal(capCodexMedium.fallbackApplied, true);
+      assert.equal(capCodexMedium.provenance, 'adapter_static_policy');
+
+      // Unverified date-stamped claude-opus-5-5-20260501 fails UNSUPPORTED_MODEL_EFFORT without catalog
+      const unverifiedDated = validateRetryFallbackCapability({
+        config: {
+          seats: [{ id: 's1', harness: 'antigravity', model: 'claude-opus-5-5-20260501' }]
+        },
+        catalogByHarness: {}
+      });
+      assert.equal(unverifiedDated.valid, false);
+      assert.match(unverifiedDated.errors[0], /UNSUPPORTED_MODEL_EFFORT/);
+
+      // Direct resolveRetryModelAndEffort conflict when retryEffortFallback is true
+      const conflictOptIn = resolveRetryModelAndEffort({
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        explicitReasoningEffort: 'low',
+        hasExplicitReasoningEffort: true,
+        retryEffortFallback: true
+      });
+      assert.equal(conflictOptIn.supported, false);
+      assert.equal(conflictOptIn.errorCode, 'CONFLICTING_MODEL_EFFORT');
+
+      // Same inputs with retryEffortFallback: false must succeed without CONFLICTING_MODEL_EFFORT
+      const conflictFlagOff = resolveRetryModelAndEffort({
+        harness: 'codex',
+        model: 'gpt-6-astra (max)',
+        explicitReasoningEffort: 'low',
+        hasExplicitReasoningEffort: true,
+        retryEffortFallback: false
+      });
+      assert.equal(conflictFlagOff.supported, true);
+      assert.equal(conflictFlagOff.effectiveEffort, 'max');
+      assert.equal(conflictFlagOff.fallbackApplied, false);
+    });
+  });
+
+  describe('state.js & reducer.js retry diagnostics lifecycle', () => {
+    it('initializes, appends, and clears activeRetryDiagnostics without cross-seat or judge wiping', () => {
+      let state = createInitialCouncilState({
+        topic: 'Reducer retry diagnostics',
+        minQuorum: 2,
+        maxRetriesPerSeat: 2,
+        seats: [
+          { id: 's1', harness: 'mock', model: 'gemini-4-argon-high', soul: 'A' },
+          { id: 's2', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'B' }
+        ],
+        judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'J' }
+      });
+      assert.equal(state.judge.activeRetryDiagnostics, null);
+      assert.deepEqual(state.judge.retryDiagnosticsHistory, []);
+      assert.equal(state.seats[0].activeRetryDiagnostics, null);
+      assert.deepEqual(state.seats[0].retryDiagnosticsHistory, []);
+
+      // ADD_SEAT initializes fields as well
+      state = transitionCouncil(state, {
+        type: 'ADD_SEAT',
+        seat: { id: 's3', harness: 'mock', model: 'gpt-6.1-sol (high)', soul: 'C' }
+      });
+      assert.equal(state.seats[2].activeRetryDiagnostics, null);
+      assert.deepEqual(state.seats[2].retryDiagnosticsHistory, []);
+
+      state = transitionCouncil(state, { type: 'BEGIN_ROUND' });
+
+      const diagS1 = {
+        participantId: 's1',
+        role: 'seat',
+        phase: 'DELIBERATION',
+        round: 1,
+        attempt: 1,
+        requestedModel: 'gemini-4-argon-high',
+        requestedEffort: 'high',
+        effectiveModel: 'gemini-4-argon-medium',
+        effectiveEffort: 'medium',
+        capabilityProvenance: 'adapter_static_policy',
+        fallbackEnabled: true,
+        fallbackApplied: true,
+        fallbackReason: 'TimeoutError',
+        tools: 'none'
+      };
+      const diagS2 = { ...diagS1, participantId: 's2', requestedModel: 'gpt-6-astra (max)', effectiveModel: 'gpt-6-astra (medium)' };
+
+      state = transitionCouncil(state, { type: 'SEAT_FAULT', seatId: 's1', status: 'fault_timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_SEAT', seatId: 's1', retryDiagnostics: diagS1 });
+      assert.deepEqual(state.seats[0].activeRetryDiagnostics, diagS1);
+      assert.equal(state.seats[0].retryDiagnosticsHistory.length, 1);
+      assert.equal(state.seats[1].activeRetryDiagnostics, null);
+
+      state = transitionCouncil(state, { type: 'SEAT_FAULT', seatId: 's2', status: 'fault_timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_SEAT', seatId: 's2', retryDiagnostics: diagS2 });
+      assert.deepEqual(state.seats[1].activeRetryDiagnostics, diagS2);
+      // s1 activeRetryDiagnostics must remain intact when s2 retries
+      assert.deepEqual(state.seats[0].activeRetryDiagnostics, diagS1);
+
+      // SUBMIT_PROOF on s1 clears ONLY s1.activeRetryDiagnostics, leaving s2 intact
+      state = transitionCouncil(state, {
+        type: 'SUBMIT_PROOF',
+        id: 'P1',
+        seatId: 's1',
+        scope: 'A',
+        kind: 'check',
+        source: 'a.js',
+        statement: 'Ok'
+      });
+      assert.equal(state.seats[0].activeRetryDiagnostics, null);
+      assert.equal(state.seats[0].retryDiagnosticsHistory.length, 1);
+      assert.deepEqual(state.seats[1].activeRetryDiagnostics, diagS2);
+
+      // EXCUSE_SEAT on s3 (while quorum >= 2) clears ONLY s3, leaving s2 intact if active
+      state = transitionCouncil(state, { type: 'EXCUSE_SEAT', seatId: 's3', reason: 'Fault' });
+      assert.deepEqual(state.seats[1].activeRetryDiagnostics, diagS2);
+
+      // START_JUDGING clears all seats & judge activeRetryDiagnostics
+      state = transitionCouncil(state, { type: 'START_JUDGING' });
+      assert.equal(state.seats[1].activeRetryDiagnostics, null);
+      assert.equal(state.judge.activeRetryDiagnostics, null);
+
+      // JUDGE_FAULT -> RETRY_JUDGE populates judge diagnostics -> JUDGE_AUDIT_AND_SYNTHESIZE clears judge diagnostics
+      const diagJudge = {
+        ...diagS1,
+        participantId: 'j',
+        role: 'judge',
+        phase: 'JUDGE_AUDIT_SYNTHESIS'
+      };
+      state = transitionCouncil(state, { type: 'JUDGE_FAULT', status: 'fault_timeout', reason: 'Judge timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_JUDGE', retryDiagnostics: diagJudge });
+      assert.deepEqual(state.judge.activeRetryDiagnostics, diagJudge);
+      assert.equal(state.judge.retryDiagnosticsHistory.length, 1);
+
+      state = transitionCouncil(state, {
+        type: 'JUDGE_AUDIT_AND_SYNTHESIZE',
+        summary: 'Candidate',
+        clauses: [{ context: 'A', conclusion: 'Done', citedProofIds: ['P1'] }]
+      });
+      assert.equal(state.judge.activeRetryDiagnostics, null);
+      assert.equal(state.judge.retryDiagnosticsHistory.length, 1);
+
+      // CAST_VOTE clears only voting seat's activeRetryDiagnostics
+      state = transitionCouncil(state, { type: 'SEAT_FAULT', seatId: 's1', status: 'fault_timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_SEAT', seatId: 's1', retryDiagnostics: { ...diagS1, phase: 'VOTING' } });
+      state = transitionCouncil(state, { type: 'SEAT_FAULT', seatId: 's2', status: 'fault_timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_SEAT', seatId: 's2', retryDiagnostics: { ...diagS2, phase: 'VOTING' } });
+      state = transitionCouncil(state, { type: 'CAST_VOTE', seatId: 's1', vote: 'accept' });
+      assert.equal(state.seats[0].activeRetryDiagnostics, null);
+      assert.equal(state.seats[0].retryDiagnosticsHistory.length, 2);
+      assert.notEqual(state.seats[1].activeRetryDiagnostics, null);
+
+      // BEGIN_ROUND (via object + EVALUATE_ROUND into round 2) leaves activeRetryDiagnostics null
+      state = transitionCouncil(state, { type: 'CAST_VOTE', seatId: 's2', vote: 'object', proofId: 'P1', reason: 'Need R2' });
+      assert.equal(state.seats[1].activeRetryDiagnostics, null);
+      state = transitionCouncil(state, { type: 'EVALUATE_ROUND' });
+      assert.equal(state.phase, 'reviewing');
+      assert.equal(state.round, 2);
+      assert.equal(state.seats[0].activeRetryDiagnostics, null);
+      assert.equal(state.seats[1].activeRetryDiagnostics, null);
+      assert.equal(state.judge.activeRetryDiagnostics, null);
+
+      // Terminal JUDGE_FAULT clears activeRetryDiagnostics on judge and seats
+      state = transitionCouncil(state, { type: 'SUBMIT_PROOF', id: 'P2', seatId: 's1', scope: 'A', kind: 'check', source: 'a.js', statement: 'R2' });
+      state = transitionCouncil(state, { type: 'START_JUDGING' });
+      state = transitionCouncil(state, { type: 'JUDGE_FAULT', status: 'fault_timeout' });
+      state = transitionCouncil(state, { type: 'RETRY_JUDGE', retryDiagnostics: { ...diagJudge, round: 2 } });
+      assert.notEqual(state.judge.activeRetryDiagnostics, null);
+      state = transitionCouncil(state, { type: 'JUDGE_FAULT', terminal: true, status: 'fault_timeout', reason: 'Exhausted' });
+      assert.equal(state.phase, 'completed');
+      assert.equal(state.judge.activeRetryDiagnostics, null);
+      assert.equal(state.judge.retryDiagnosticsHistory.length, 2);
+    });
+  });
+});

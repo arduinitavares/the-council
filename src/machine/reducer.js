@@ -53,6 +53,38 @@ function reject(state, eventType, reason) {
 /**
  * Success helper: updates previousPhase, lastEventName, lastTransition, history.
  */
+function cloneRetryDiagnostics(diag) {
+  if (!diag || typeof diag !== 'object') return null;
+  return typeof structuredClone === 'function'
+    ? structuredClone(diag)
+    : JSON.parse(JSON.stringify(diag));
+}
+
+function recordParticipantRetryDiagnostics(participant, retryDiagnostics) {
+  if (!participant) return;
+  if (!Array.isArray(participant.retryDiagnosticsHistory)) {
+    participant.retryDiagnosticsHistory = [];
+  }
+  if (retryDiagnostics && typeof retryDiagnostics === 'object') {
+    const cloned = cloneRetryDiagnostics(retryDiagnostics);
+    participant.activeRetryDiagnostics = cloned;
+    participant.retryDiagnosticsHistory.push(cloneRetryDiagnostics(cloned));
+  } else {
+    participant.activeRetryDiagnostics = null;
+  }
+}
+
+function clearAllActiveRetryDiagnostics(next) {
+  if (next.judge) {
+    next.judge.activeRetryDiagnostics = null;
+  }
+  if (Array.isArray(next.seats)) {
+    for (const s of next.seats) {
+      if (s) s.activeRetryDiagnostics = null;
+    }
+  }
+}
+
 function succeed(prevState, next, eventType, message) {
   if (normalizePhase(next.phase) === 'completed') {
     if (Array.isArray(next.seats)) {
@@ -69,6 +101,7 @@ function succeed(prevState, next, eventType, message) {
       delete next.judge.faultReason;
       delete next.judge.errorClass;
     }
+    clearAllActiveRetryDiagnostics(next);
   }
   next.previousPhase = prevState.phase;
   const subType = next.faultSeatId
@@ -125,6 +158,8 @@ export function transitionCouncil(state, event) {
         status: 'idle',
         retries: 0,
         excusedReason: null,
+        activeRetryDiagnostics: null,
+        retryDiagnosticsHistory: [],
         tools: s.tools || 'read-only',
         ...(typeof s.timeoutMs === 'number' && s.timeoutMs > 0 ? { timeoutMs: s.timeoutMs } : {}),
         ...(typeof s.disableHooks === 'boolean' ? { disableHooks: s.disableHooks } : {}),
@@ -232,6 +267,7 @@ export function transitionCouncil(state, event) {
       next.judge.status = 'idle';
       delete next.judge.faultReason;
       delete next.judge.errorClass;
+      clearAllActiveRetryDiagnostics(next);
       activeSeats(next).forEach((s) => {
         s.status = 'thinking';
         delete s.faultReason;
@@ -300,6 +336,7 @@ export function transitionCouncil(state, event) {
         status: 'pending',
         judgeNote: null
       });
+      seat.activeRetryDiagnostics = null;
       if (currentPhase === 'reviewing') {
         seat.status = 'proof_submitted';
         delete seat.faultReason;
@@ -323,6 +360,7 @@ export function transitionCouncil(state, event) {
       }
       next.phase = 'judging';
       next.judge.status = 'thinking';
+      clearAllActiveRetryDiagnostics(next);
       return succeed(
         state,
         next,
@@ -444,6 +482,7 @@ export function transitionCouncil(state, event) {
       next.judge.status = 'idle';
       delete next.judge.faultReason;
       delete next.judge.errorClass;
+      clearAllActiveRetryDiagnostics(next);
       next.phase = 'confirming';
       activeSeats(next).forEach((s) => {
         s.status = 'thinking';
@@ -523,6 +562,7 @@ export function transitionCouncil(state, event) {
           }
         });
         seat.status = 'accepted';
+        seat.activeRetryDiagnostics = null;
         delete seat.faultReason;
         delete seat.errorClass;
         return succeed(
@@ -550,6 +590,7 @@ export function transitionCouncil(state, event) {
           status: 'open'
         });
         seat.status = 'objected';
+        seat.activeRetryDiagnostics = null;
         delete seat.faultReason;
         delete seat.errorClass;
         return succeed(
@@ -611,6 +652,7 @@ export function transitionCouncil(state, event) {
       seat.status = 'thinking';
       delete seat.faultReason;
       delete seat.errorClass;
+      recordParticipantRetryDiagnostics(seat, event.retryDiagnostics);
       next.phase = state.returnPhase || 'reviewing';
       next.faultSeatId = null;
       return succeed(
@@ -636,6 +678,7 @@ export function transitionCouncil(state, event) {
         return reject(state, event.type, 'Seat "' + targetId + '" is not active.');
       }
       seat.status = 'excused';
+      seat.activeRetryDiagnostics = null;
       seat.excusedReason = event.reason || 'Quota reached — excused mid-run';
       if (event.errorClass) {
         seat.errorClass = event.errorClass;
@@ -763,6 +806,7 @@ export function transitionCouncil(state, event) {
       next.judge.status = 'thinking';
       delete next.judge.faultReason;
       delete next.judge.errorClass;
+      recordParticipantRetryDiagnostics(next.judge, event.retryDiagnostics);
       next.phase = state.returnPhase || 'judging';
       return succeed(
         state,
@@ -883,6 +927,7 @@ export function transitionCouncil(state, event) {
 
       next.round += 1;
       next.phase = 'reviewing';
+      clearAllActiveRetryDiagnostics(next);
       active.forEach((s) => {
         s.status = 'thinking';
       });

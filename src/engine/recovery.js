@@ -844,27 +844,44 @@ function isShellStarterVerbLower(lower) {
   );
 }
 
+function isSpaceOrTabCode(cc) {
+  return cc === 32 || cc === 9;
+}
+
+function isAsciiAlphaCode(cc) {
+  return (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122);
+}
+
+function isTagNameBodyCode(cc) {
+  return isAsciiAlphaCode(cc) || (cc >= 48 && cc <= 57) || cc === 45;
+}
+
+function isVersionTokenStopAt(text, idx) {
+  const cc = text.charCodeAt(idx);
+  return isShellTokenDelimiterAt(text, idx) || cc === 44 || cc === 58 || cc === 33 || cc === 63;
+}
+
 function skipMatchedCloseTagsAt(text, pos, n, openTagStack = null, localOpenedStack = null, consumedOpenCount = 0) {
   let q = pos;
-  while (q < n && /[ \t]/.test(text[q])) {
+  while (q < n && isSpaceOrTabCode(text.charCodeAt(q))) {
     q += 1;
   }
   let openIdx = openTagStack ? openTagStack.length - 1 - consumedOpenCount : -1;
   let localIdx = localOpenedStack ? localOpenedStack.length - 1 : -1;
   if (openIdx < 0 && localIdx < 0) {
-    return { pos: q, consumedOpenCount, remainingLocalStack: null };
+    return { pos: q, consumedOpenCount, remainingLocalLen: 0 };
   }
   let usedOpenCount = consumedOpenCount;
-  while (q + 2 < n && text[q] === '<' && text[q + 1] === '/' && /[A-Za-z]/.test(text[q + 2])) {
+  while (q + 2 < n && text.charCodeAt(q) === 60 && text.charCodeAt(q + 1) === 47 && isAsciiAlphaCode(text.charCodeAt(q + 2))) {
     const closeLim = Math.min(n, q + 32);
     let c = q + 2;
-    while (c < closeLim && /[A-Za-z0-9-]/.test(text[c])) {
+    while (c < closeLim && isTagNameBodyCode(text.charCodeAt(c))) {
       c += 1;
     }
-    if (!(c > q + 2 && c < closeLim && text[c] === '>')) {
+    if (!(c > q + 2 && c < closeLim && text.charCodeAt(c) === 62)) {
       break;
     }
-    const tagLower = text.slice(q + 2, c).toLowerCase();
+    const tagLower = toAsciiLowerFast(text.slice(q + 2, c));
     if (localIdx >= 0) {
       if (localOpenedStack[localIdx] !== tagLower) {
         break;
@@ -880,14 +897,14 @@ function skipMatchedCloseTagsAt(text, pos, n, openTagStack = null, localOpenedSt
       break;
     }
     q = c + 1;
-    while (q < n && /[ \t]/.test(text[q])) {
+    while (q < n && isSpaceOrTabCode(text.charCodeAt(q))) {
       q += 1;
     }
   }
   return {
     pos: q,
     consumedOpenCount: usedOpenCount,
-    remainingLocalStack: localIdx >= 0 ? localOpenedStack.slice(0, localIdx + 1) : null
+    remainingLocalLen: localIdx + 1
   };
 }
 
@@ -912,7 +929,7 @@ function isRedirRhsDelimCode(code) {
   );
 }
 
-function isRuntimeVersionFollowedByComparisonAt(
+function matchRuntimeVersionFollowedByComparisonAt(
   text,
   pos,
   n,
@@ -922,45 +939,48 @@ function isRuntimeVersionFollowedByComparisonAt(
   getLastCloseTagPos = null
 ) {
   let q = pos;
-  while (q < n && (text[q] === ' ' || text[q] === '\t')) {
+  while (q < n && isSpaceOrTabCode(text.charCodeAt(q))) {
     q += 1;
   }
   const skippedClose = skipMatchedCloseTagsAt(text, q, n, openTagStack, localOpenedStack, consumedOpenCount);
   q = skippedClose.pos;
   let usedOpenCount = skippedClose.consumedOpenCount;
-  const nextLocalStack = skippedClose.remainingLocalStack ? [...skippedClose.remainingLocalStack] : [];
-  while (q < n && text[q] === '<') {
-    if (q + 1 < n && text[q + 1] === '/') {
+  let nextLocalStack = skippedClose.remainingLocalLen > 0 ? localOpenedStack.slice(0, skippedClose.remainingLocalLen) : null;
+  while (q < n && text.charCodeAt(q) === 60) {
+    if (q + 1 < n && text.charCodeAt(q + 1) === 47) {
       const closeRes = skipMatchedCloseTagsAt(text, q, n, openTagStack, nextLocalStack, usedOpenCount);
       if (closeRes.pos === q) {
         break;
       }
       q = closeRes.pos;
       usedOpenCount = closeRes.consumedOpenCount;
-      nextLocalStack.length = 0;
-      if (closeRes.remainingLocalStack) {
-        nextLocalStack.push(...closeRes.remainingLocalStack);
+      if (nextLocalStack) {
+        nextLocalStack.length = closeRes.remainingLocalLen;
       }
       continue;
     }
-    if (q + 1 < n && /[A-Za-z]/.test(text[q + 1])) {
+    if (q + 1 < n && isAsciiAlphaCode(text.charCodeAt(q + 1))) {
       const openLim = Math.min(n, q + 32);
       let c = q + 1;
-      while (c < openLim && /[A-Za-z0-9-]/.test(text[c])) {
+      while (c < openLim && isTagNameBodyCode(text.charCodeAt(c))) {
         c += 1;
       }
-      if (c > q + 1 && c < openLim && text[c] === '>') {
+      if (c > q + 1 && c < openLim && text.charCodeAt(c) === 62) {
         const tagRaw = text.slice(q + 1, c);
-        const tagLower = tagRaw.toLowerCase();
+        const tagLower = toAsciiLowerFast(tagRaw);
         if (
           KNOWN_PATH_EXTENSIONLESS_FILES.has(tagRaw) ||
           (getLastCloseTagPos !== null && getLastCloseTagPos(tagLower) <= c)
         ) {
           break;
         }
-        nextLocalStack.push(tagLower);
+        if (!nextLocalStack) {
+          nextLocalStack = [tagLower];
+        } else {
+          nextLocalStack.push(tagLower);
+        }
         q = c + 1;
-        while (q < n && (text[q] === ' ' || text[q] === '\t')) {
+        while (q < n && isSpaceOrTabCode(text.charCodeAt(q))) {
           q += 1;
         }
         continue;
@@ -970,17 +990,41 @@ function isRuntimeVersionFollowedByComparisonAt(
   }
   let vEnd = q;
   const vLim = Math.min(n, q + 32);
-  while (vEnd < vLim && !/[\s;|&<>(),;:!?]/.test(text[vEnd])) {
+  while (vEnd < vLim && !isVersionTokenStopAt(text, vEnd)) {
     vEnd += 1;
   }
   if (vEnd === q) {
-    return false;
+    return null;
   }
   const vTok = text.slice(q, vEnd);
   if (!UNSIGNED_RUNTIME_VERSION_TOKEN_REGEX.test(vTok)) {
-    return false;
+    return null;
   }
-  return isFollowedByComparisonOpAt(text, vEnd, n, openTagStack, nextLocalStack, usedOpenCount);
+  return isFollowedByComparisonOpAt(text, vEnd, n, openTagStack, nextLocalStack, usedOpenCount)
+    ? { verStart: q, verEnd: vEnd }
+    : null;
+}
+
+function isRuntimeVersionFollowedByComparisonAt(
+  text,
+  pos,
+  n,
+  openTagStack = null,
+  localOpenedStack = null,
+  consumedOpenCount = 0,
+  getLastCloseTagPos = null
+) {
+  return (
+    matchRuntimeVersionFollowedByComparisonAt(
+      text,
+      pos,
+      n,
+      openTagStack,
+      localOpenedStack,
+      consumedOpenCount,
+      getLastCloseTagPos
+    ) !== null
+  );
 }
 
 function isFollowedByComparisonOpAt(
@@ -995,16 +1039,34 @@ function isFollowedByComparisonOpAt(
   if (q >= n) {
     return false;
   }
-  const two = text.slice(q, q + 2);
-  if (two === '>=' || two === '<=' || two === '->' || two === '=>' || two === '<-') {
+  const c0 = text.charCodeAt(q);
+  const c1 = q + 1 < n ? text.charCodeAt(q + 1) : 0;
+  // >= (62, 61), <= (60, 61), -> (45, 62), => (61, 62), <- (60, 45)
+  if (
+    (c0 === 62 && c1 === 61) ||
+    (c0 === 60 && c1 === 61) ||
+    (c0 === 45 && c1 === 62) ||
+    (c0 === 61 && c1 === 62) ||
+    (c0 === 60 && c1 === 45)
+  ) {
     return true;
   }
-  if ((text[q] === '<' || text[q] === '>') && q + 1 < n) {
+  if ((c0 === 60 || c0 === 62) && q + 1 < n) {
     let d = q + 1;
-    while (d < n && /[ \t]/.test(text[d])) {
+    while (d < n && isSpaceOrTabCode(text.charCodeAt(d))) {
       d += 1;
     }
-    return d < n && /^(?:[+-]?\d|v\d)/i.test(text.slice(d, Math.min(n, d + 4)));
+    if (d >= n) {
+      return false;
+    }
+    const dc = text.charCodeAt(d);
+    if (dc >= 48 && dc <= 57) {
+      return true;
+    }
+    if ((dc === 43 || dc === 45 || dc === 118 || dc === 86) && d + 1 < n) {
+      const nc = text.charCodeAt(d + 1);
+      return nc >= 48 && nc <= 57;
+    }
   }
   return false;
 }
@@ -1304,55 +1366,32 @@ function isProseNumericOrVersionComparison(
   return true;
 }
 
-const BLOCKQUOTE_PROSE_LEAD_WORDS = new Set([
-  'a',
-  'an',
-  'the',
-  'all',
-  'any',
-  'each',
-  'every',
-  'no',
-  'some',
-  'both',
-  'either',
-  'neither',
-  'if',
-  'when',
-  'where',
-  'while',
-  'because',
-  'since',
-  'although',
-  'though',
-  'unless',
-  'until',
-  'before',
-  'after',
-  'ensure',
-  'verify',
-  'confirm',
-  'check',
-  'inspect',
-  'review',
-  'note',
-  'notes',
-  'see',
-  'summary',
-  'context',
-  'background',
-  'rationale',
-  'important',
-  'warning',
-  'caution',
-  'tip',
-  'example'
+const BLOCKQUOTE_QUOTED_HEAD_PROSE_FOLLOWERS = new Set([
+  'and',
+  'or',
+  'is',
+  'are',
+  'was',
+  'were',
+  'in',
+  'of',
+  'for',
+  'with',
+  'from',
+  'has',
+  'have',
+  'must',
+  'should',
+  'can',
+  'cannot',
+  'will',
+  'may'
 ]);
 
-function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n) {
+function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos = null) {
   let restStart = opPos + 1;
-  const hadSpaceAfterGt = restStart < n && (text[restStart] === ' ' || text[restStart] === '\t');
-  while (restStart < n && (text[restStart] === ' ' || text[restStart] === '\t')) {
+  const hadSpaceAfterGt = restStart < n && isSpaceOrTabCode(text.charCodeAt(restStart));
+  while (restStart < n && isSpaceOrTabCode(text.charCodeAt(restStart))) {
     restStart += 1;
   }
   if (restStart >= n || text[restStart] === '\r' || text[restStart] === '\n') {
@@ -1375,11 +1414,15 @@ function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n) {
     return null;
   }
   let firstEnd = restStart;
-  const firstLim = Math.min(n, restStart + 128);
-  while (firstEnd < firstLim && !/[\s;|&<>()]/.test(text[firstEnd])) {
+  const firstCap = restStart + 128;
+  const firstLim = Math.min(n, firstCap);
+  while (firstEnd < firstLim && !isShellTokenDelimiterAt(text, firstEnd)) {
     firstEnd += 1;
   }
-  if (firstEnd === restStart || firstEnd === firstLim) {
+  if (
+    firstEnd === restStart ||
+    (firstEnd === firstCap && firstEnd < n && !isShellTokenDelimiterAt(text, firstEnd))
+  ) {
     return null;
   }
   const firstRaw = text.slice(restStart, firstEnd);
@@ -1393,79 +1436,252 @@ function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n) {
     return null;
   }
   const firstClean = stripTrailingProsePunct(firstRaw);
-  const firstLower = firstClean.toLowerCase();
   const firstIsFile = isLikelyShellFileArg(firstClean);
-  const isLowerBareShellTarget =
-    /^[a-z0-9_][a-z0-9_.-]*$/.test(firstRaw) &&
-    !/^\d+\.$/.test(firstRaw) &&
-    !BLOCKQUOTE_PROSE_LEAD_WORDS.has(firstLower) &&
-    !SPLIT_QUOTE_PROSE_STOPWORDS.has(firstLower);
 
   let afterFirst = firstEnd;
-  while (afterFirst < n && (text[afterFirst] === ' ' || text[afterFirst] === '\t')) {
+  while (afterFirst < n && isSpaceOrTabCode(text.charCodeAt(afterFirst))) {
     afterFirst += 1;
   }
   if (afterFirst >= n || /[\r\n;|&)]/.test(text[afterFirst])) {
     return null;
   }
   if (text[afterFirst] === '<' || text[afterFirst] === '>' || text[afterFirst] === '(') {
-    if (
-      firstIsFile ||
-      /["']/.test(firstRaw) ||
-      firstRaw === '-' ||
-      (isLowerBareShellTarget && !VERSIONED_RUNTIME_NOUNS.has(firstLower))
-    ) {
+    if (firstIsFile || /["']/.test(firstRaw) || firstRaw === '-') {
+      return null;
+    }
+    if (text[afterFirst] === '>') {
+      return isFollowedByComparisonOpAt(text, firstEnd, n) ? { nextIndex: restStart, keepLineStart: false } : null;
+    }
+    if (text[afterFirst] === '<') {
+      return isFollowedByComparisonOpAt(text, firstEnd, n) ||
+        (afterFirst + 1 < n && isAsciiAlphaCode(text.charCodeAt(afterFirst + 1)))
+        ? { nextIndex: restStart, keepLineStart: false }
+        : null;
+    }
+    let p = afterFirst + 1;
+    while (p < n && isSpaceOrTabCode(text.charCodeAt(p))) {
+      p += 1;
+    }
+    if (p >= n || isLikelyShellTokenAt(text, p, n, null, null, 0, getLastCloseTagPos)) {
       return null;
     }
     return { nextIndex: restStart, keepLineStart: false };
   }
 
   let secondEnd = afterFirst;
-  const secondLim = Math.min(n, afterFirst + 128);
-  while (secondEnd < secondLim && !/[\s;|&<>()]/.test(text[secondEnd])) {
+  const secondCap = afterFirst + 128;
+  const secondLim = Math.min(n, secondCap);
+  while (secondEnd < secondLim && !isShellTokenDelimiterAt(text, secondEnd)) {
     secondEnd += 1;
   }
-  if (secondEnd === afterFirst || secondEnd === secondLim) {
+  if (
+    secondEnd === afterFirst ||
+    (secondEnd === secondCap && secondEnd < n && !isShellTokenDelimiterAt(text, secondEnd))
+  ) {
     return null;
   }
   const secondRaw = text.slice(afterFirst, secondEnd);
   const secondClean = stripTrailingProsePunct(secondRaw);
   const secondLower = stripShellBinPrefix(secondClean).toLowerCase();
-  const secondLooksLikeCommandHead =
+  if (
     secondRaw[0] === '/' ||
     secondRaw.startsWith('./') ||
     secondRaw.startsWith('../') ||
     secondRaw.startsWith('~/') ||
-    /["'$`\\=]/.test(secondRaw) ||
-    isShellStarterVerbLower(secondLower) ||
-    SHELL_CONTROL_PREFIX_WORDS.has(secondLower);
-
-  if (/["']/.test(firstRaw)) {
-    const unquotedFirst = firstClean.replace(/^["']+|["']+$/g, '');
+    (secondRaw.length > 1 && secondRaw[0] === '-' && secondRaw !== '--') ||
+    /[$`\\=#{}]/.test(secondRaw) ||
+    SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(secondClean) ||
+    (/^\d+$/.test(secondRaw) && secondEnd < n && (text[secondEnd] === '<' || text[secondEnd] === '>'))
+  ) {
+    return null;
+  }
+  if (secondRaw === '-' || secondRaw === '--' || secondRaw === '—' || secondRaw === '–') {
+    let afterSecond = secondEnd;
+    while (afterSecond < n && isSpaceOrTabCode(text.charCodeAt(afterSecond))) {
+      afterSecond += 1;
+    }
+    let thirdEnd = afterSecond;
+    const thirdCap = afterSecond + 64;
+    const thirdLim = Math.min(n, thirdCap);
+    while (thirdEnd < thirdLim && !isShellTokenDelimiterAt(text, thirdEnd)) {
+      thirdEnd += 1;
+    }
+    if (thirdEnd === afterSecond || (thirdEnd === thirdCap && thirdEnd < n && !isShellTokenDelimiterAt(text, thirdEnd))) {
+      return null;
+    }
+    const thirdRaw = text.slice(afterSecond, thirdEnd);
+    const thirdClean = stripTrailingProsePunct(thirdRaw);
+    const thirdLower = stripShellBinPrefix(thirdClean).toLowerCase();
     if (
-      !unquotedFirst ||
-      isLikelyShellFileArg(unquotedFirst) ||
-      secondLooksLikeCommandHead ||
-      !/^[A-Za-z]{2,}$/.test(secondClean)
+      !thirdClean ||
+      /["'$`\\=/]/.test(thirdRaw) ||
+      !/^[A-Za-z]{2,}$/.test(thirdClean) ||
+      isShellStarterVerbLower(thirdLower) ||
+      SHELL_CONTROL_PREFIX_WORDS.has(thirdLower)
     ) {
       return null;
     }
     return { nextIndex: restStart, keepLineStart: false };
   }
+  if (!secondClean) {
+    return null;
+  }
+
+  if (/["']/.test(secondRaw)) {
+    if (firstIsFile || /["']/.test(firstRaw) || firstRaw === '-') {
+      return null;
+    }
+    const scStart = secondClean[0];
+    const scEnd = secondClean[secondClean.length - 1];
+    const unquotedSecond =
+      secondClean.length >= 2 && ((scStart === '"' && scEnd === '"') || (scStart === "'" && scEnd === "'"))
+        ? secondClean.slice(1, -1)
+        : secondClean.replace(/^["']+|["']+$/g, '');
+    if (
+      !unquotedSecond ||
+      /["'\s/]/.test(unquotedSecond) ||
+      isLikelyShellFileArg(unquotedSecond) ||
+      SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(unquotedSecond)
+    ) {
+      return null;
+    }
+    const unqLower = stripShellBinPrefix(unquotedSecond).toLowerCase();
+    if (isShellStarterVerbLower(unqLower) || SHELL_CONTROL_PREFIX_WORDS.has(unqLower)) {
+      if (!/^[A-Z][A-Za-z0-9-]*$/.test(firstClean)) {
+        return null;
+      }
+      let afterSecond = secondEnd;
+      while (afterSecond < n && isSpaceOrTabCode(text.charCodeAt(afterSecond))) {
+        afterSecond += 1;
+      }
+      let thirdEnd = afterSecond;
+      const thirdLim = Math.min(n, afterSecond + 32);
+      while (thirdEnd < thirdLim && !isShellTokenDelimiterAt(text, thirdEnd)) {
+        thirdEnd += 1;
+      }
+      const thirdRaw = text.slice(afterSecond, thirdEnd);
+      const thirdClean = stripTrailingProsePunct(thirdRaw);
+      const thirdLower = thirdClean.toLowerCase();
+      if (
+        !thirdClean ||
+        /["'$`\\=/]/.test(thirdRaw) ||
+        !BLOCKQUOTE_QUOTED_HEAD_PROSE_FOLLOWERS.has(thirdLower)
+      ) {
+        return null;
+      }
+      if (thirdLower === 'and' || thirdLower === 'or') {
+        let afterThird = thirdEnd;
+        while (afterThird < n && isSpaceOrTabCode(text.charCodeAt(afterThird))) {
+          afterThird += 1;
+        }
+        let fourthEnd = afterThird;
+        const fourthLim = Math.min(n, afterThird + 64);
+        while (fourthEnd < fourthLim && !isShellTokenDelimiterAt(text, fourthEnd)) {
+          fourthEnd += 1;
+        }
+        const fourthRaw = text.slice(afterThird, fourthEnd);
+        const fourthClean = stripTrailingProsePunct(fourthRaw);
+        const fc0 = fourthClean[0];
+        const fcLast = fourthClean[fourthClean.length - 1];
+        if (
+          fourthClean.length < 3 ||
+          !((fc0 === '"' && fcLast === '"') || (fc0 === "'" && fcLast === "'"))
+        ) {
+          return null;
+        }
+        const unquotedFourth = fourthClean.slice(1, -1);
+        if (
+          !unquotedFourth ||
+          /["'\s/]/.test(unquotedFourth) ||
+          isLikelyShellFileArg(unquotedFourth) ||
+          SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(unquotedFourth)
+        ) {
+          return null;
+        }
+        let afterFourth = fourthEnd;
+        while (afterFourth < n && isSpaceOrTabCode(text.charCodeAt(afterFourth))) {
+          afterFourth += 1;
+        }
+        let fifthEnd = afterFourth;
+        const fifthLim = Math.min(n, afterFourth + 32);
+        while (fifthEnd < fifthLim && !isShellTokenDelimiterAt(text, fifthEnd)) {
+          fifthEnd += 1;
+        }
+        const fifthRaw = text.slice(afterFourth, fifthEnd);
+        const fifthClean = stripTrailingProsePunct(fifthRaw);
+        const fifthLower = fifthClean.toLowerCase();
+        if (
+          !fifthClean ||
+          /["'$`\\=/]/.test(fifthRaw) ||
+          !BLOCKQUOTE_QUOTED_HEAD_PROSE_FOLLOWERS.has(fifthLower) ||
+          fifthLower === 'and' ||
+          fifthLower === 'or'
+        ) {
+          return null;
+        }
+      }
+    }
+    return { nextIndex: restStart, keepLineStart: false };
+  }
+
+  if (isShellStarterVerbLower(secondLower) || SHELL_CONTROL_PREFIX_WORDS.has(secondLower)) {
+    const allowedRuntimeComparison =
+      secondRaw === secondClean &&
+      !firstIsFile &&
+      !/["']/.test(firstRaw) &&
+      firstRaw !== '-' &&
+      ((VERSIONED_RUNTIME_NOUNS.has(secondLower) &&
+        (isFollowedByComparisonOpAt(text, secondEnd, n) ||
+          isRuntimeVersionFollowedByComparisonAt(text, secondEnd, n, null, null, 0, getLastCloseTagPos))) ||
+        (secondLower === 'git' && isFollowedByComparisonOpAt(text, secondEnd, n)));
+    if (!allowedRuntimeComparison) {
+      return null;
+    }
+  }
+
+  if (/["']/.test(firstRaw)) {
+    const fcStart = firstClean[0];
+    const fcEnd = firstClean[firstClean.length - 1];
+    if (
+      firstClean.length < 3 ||
+      !((fcStart === '"' && fcEnd === '"') || (fcStart === "'" && fcEnd === "'"))
+    ) {
+      return null;
+    }
+    const unquotedFirst = firstClean.slice(1, -1);
+    if (
+      !unquotedFirst ||
+      /["'\s/]/.test(unquotedFirst) ||
+      isLikelyShellFileArg(unquotedFirst) ||
+      SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(unquotedFirst) ||
+      !/^[A-Za-z]{2,}$/.test(secondClean)
+    ) {
+      return null;
+    }
+    const unqFirstLower = stripShellBinPrefix(unquotedFirst).toLowerCase();
+    if (isShellStarterVerbLower(unqFirstLower) || SHELL_CONTROL_PREFIX_WORDS.has(unqFirstLower)) {
+      const secLower = secondClean.toLowerCase();
+      if (!BLOCKQUOTE_QUOTED_HEAD_PROSE_FOLLOWERS.has(secLower) || secLower === 'and' || secLower === 'or') {
+        return null;
+      }
+    }
+    return { nextIndex: restStart, keepLineStart: false };
+  }
   if (firstIsFile) {
-    if (secondLooksLikeCommandHead || !/^[A-Za-z]{2,}$/.test(secondClean)) {
+    if (!/^[A-Za-z]{2,}$/.test(secondClean)) {
       return null;
     }
     return { nextIndex: restStart, keepLineStart: false };
   }
-  if ((isLowerBareShellTarget || firstRaw === '-') && secondLooksLikeCommandHead) {
+  if (firstRaw === '-' && !/^[A-Za-z]{2,}$/.test(secondClean)) {
     return null;
   }
   return { nextIndex: restStart, keepLineStart: false };
 }
 
-function parseShellClausesLinear(text) {
+function parseShellClausesLinear(text, options = {}) {
   const n = text.length;
+  const allowMarkdownBlockquotes = Boolean(options.allowMarkdownBlockquotes);
   const clauses = [];
   let current = {
     tokens: [],
@@ -1480,6 +1696,14 @@ function parseShellClausesLinear(text) {
   let pendingSkippedAngleTag = false;
   let openTagStack = null;
   let clearOpenTagsAtWhitespace = false;
+  let cachedRuntimeCompVerbIdx = -1;
+  let cachedRuntimeCompVerStart = -1;
+  let cachedRuntimeCompVerEnd = -1;
+  const clearRuntimeComparisonTagCache = () => {
+    cachedRuntimeCompVerbIdx = -1;
+    cachedRuntimeCompVerStart = -1;
+    cachedRuntimeCompVerEnd = -1;
+  };
   const hasTopOpenTag = (tagLower) =>
     Boolean(openTagStack && openTagStack.length > 0 && openTagStack[openTagStack.length - 1] === tagLower);
   const pushOpenTag = (tagLower) => {
@@ -1490,6 +1714,7 @@ function parseShellClausesLinear(text) {
     }
   };
   const popOpenTag = () => {
+    clearRuntimeComparisonTagCache();
     if (!openTagStack || openTagStack.length === 0) {
       return;
     }
@@ -1508,7 +1733,10 @@ function parseShellClausesLinear(text) {
     current.standaloneRedirs.push(rawSnippet);
   };
   let lastCloseTagPosMap = undefined;
-  let atMarkdownLineStart = true;
+  let atMarkdownLineStart = allowMarkdownBlockquotes;
+  let inMarkdownCodeFence = false;
+  let fenceCharCode = 0;
+  let fenceMinLen = 0;
   let segTokenCount = 0;
   let segHardStarterCount = 0;
   let pendingQuotedVerbIdx = -1;
@@ -1525,6 +1753,7 @@ function parseShellClausesLinear(text) {
   let commaConjReady = false;
   let runtimeVerbTok = null;
   const resetSegmentState = () => {
+    clearRuntimeComparisonTagCache();
     segTokenCount = 0;
     segHardStarterCount = 0;
     pendingQuotedVerbIdx = -1;
@@ -1547,6 +1776,7 @@ function parseShellClausesLinear(text) {
     openTagStack = null;
     clearOpenTagsAtWhitespace = false;
     clearCommaComparisonState();
+    clearRuntimeComparisonTagCache();
     if (targetEndsSentence) {
       resetSegmentState();
     } else {
@@ -1588,11 +1818,11 @@ function parseShellClausesLinear(text) {
         let pos = text.indexOf('</');
         while (pos !== -1) {
           let end = pos + 2;
-          while (end < n && /[A-Za-z0-9-]/.test(text[end])) {
+          while (end < n && isTagNameBodyCode(text.charCodeAt(end))) {
             end += 1;
           }
-          if (end > pos + 2 && end < n && text[end] === '>' && /[A-Za-z]/.test(text[pos + 2])) {
-            lastCloseTagPosMap.set(text.slice(pos + 2, end).toLowerCase(), pos);
+          if (end > pos + 2 && end < n && text.charCodeAt(end) === 62 && isAsciiAlphaCode(text.charCodeAt(pos + 2))) {
+            lastCloseTagPosMap.set(toAsciiLowerFast(text.slice(pos + 2, end)), pos);
           }
           pos = text.indexOf('</', pos + 2);
         }
@@ -1640,6 +1870,7 @@ function parseShellClausesLinear(text) {
     if (clearOpenTagsAtWhitespace && i > wsStart) {
       openTagStack = null;
       clearOpenTagsAtWhitespace = false;
+      clearRuntimeComparisonTagCache();
     }
     if (i >= n) {
       break;
@@ -1647,11 +1878,49 @@ function parseShellClausesLinear(text) {
     const ch = text[i];
     const lineStartHere = atMarkdownLineStart;
     atMarkdownLineStart = false;
+    if (allowMarkdownBlockquotes && lineStartHere && (ch === '`' || ch === '~') && i - wsStart <= 3) {
+      const fc = ch.charCodeAt(0);
+      let runEnd = i;
+      while (runEnd < n && text.charCodeAt(runEnd) === fc) {
+        runEnd += 1;
+      }
+      const runLen = runEnd - i;
+      if (runLen >= 3) {
+        if (!inMarkdownCodeFence) {
+          let validOpenFence = true;
+          if (fc === 96) {
+            for (let q = runEnd; q < n; q += 1) {
+              const qc = text.charCodeAt(q);
+              if (qc === 10 || qc === 13) break;
+              if (qc === 96) {
+                validOpenFence = false;
+                break;
+              }
+            }
+          }
+          if (validOpenFence) {
+            inMarkdownCodeFence = true;
+            fenceCharCode = fc;
+            fenceMinLen = runLen;
+          }
+        } else if (fc === fenceCharCode && runLen >= fenceMinLen) {
+          let q = runEnd;
+          while (q < n && isHorizontalWsCode(text.charCodeAt(q))) {
+            q += 1;
+          }
+          if (q >= n || text.charCodeAt(q) === 10 || text.charCodeAt(q) === 13) {
+            inMarkdownCodeFence = false;
+            fenceCharCode = 0;
+            fenceMinLen = 0;
+          }
+        }
+      }
+    }
 
     // Clause separators: &&, ||, ;, |, \n
     if (ch === '\n' || ch === ';') {
       pushClause();
-      if (ch === '\n') {
+      if (ch === '\n' && allowMarkdownBlockquotes) {
         atMarkdownLineStart = true;
       }
       i += 1;
@@ -1990,31 +2259,53 @@ function parseShellClausesLinear(text) {
             }
           }
         }
+        const nextTagCc = opPos + 1 < n ? text.charCodeAt(opPos + 1) : 0;
         if (
           opChar === '<' &&
-          opPos + 1 < n &&
-          /[A-Za-z/!?]/.test(text[opPos + 1]) &&
-          (hasTagBoundaryBefore || text[opPos + 1] === '/')
+          nextTagCc !== 0 &&
+          (isAsciiAlphaCode(nextTagCc) || nextTagCc === 47 || nextTagCc === 33 || nextTagCc === 63) &&
+          (hasTagBoundaryBefore || nextTagCc === 47)
         ) {
           let tagEnd = -1;
           const limit = Math.min(n, opPos + 64);
+          let isPlainOpenName = isAsciiAlphaCode(nextTagCc);
+          let isPlainCloseName =
+            nextTagCc === 47 && opPos + 2 < limit && isAsciiAlphaCode(text.charCodeAt(opPos + 2));
           for (let q = opPos + 1; q < limit; q += 1) {
-            const tc = text[q];
-            if (tc === '>') {
+            const tcc = text.charCodeAt(q);
+            if (tcc === 62) {
               tagEnd = q;
               break;
             }
-            if (/[\s;|&<()"']/.test(tc)) {
+            if (
+              tcc === 32 ||
+              (tcc >= 9 && tcc <= 13) ||
+              tcc === 59 ||
+              tcc === 124 ||
+              tcc === 38 ||
+              tcc === 60 ||
+              tcc === 40 ||
+              tcc === 41 ||
+              tcc === 34 ||
+              tcc === 39 ||
+              (tcc >= 128 && /\s/.test(text[q]))
+            ) {
               break;
+            }
+            if (isPlainOpenName && q > opPos + 1 && !isTagNameBodyCode(tcc)) {
+              isPlainOpenName = false;
+            }
+            if (isPlainCloseName && q > opPos + 2 && !isTagNameBodyCode(tcc)) {
+              isPlainCloseName = false;
             }
           }
           if (tagEnd !== -1) {
-            const tagInner = text.slice(opPos + 1, tagEnd);
             const isMatchedCloseTag =
-              tagInner.length > 1 &&
-              tagInner[0] === '/' &&
-              /^\/[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) &&
-              hasTopOpenTag(tagInner.slice(1).toLowerCase());
+              isPlainCloseName &&
+              tagEnd > opPos + 2 &&
+              openTagStack !== null &&
+              openTagStack.length > 0 &&
+              hasTopOpenTag(toAsciiLowerFast(text.slice(opPos + 2, tagEnd)));
             if (!hasTagBoundaryBefore) {
               if (isMatchedCloseTag) {
                 popOpenTag();
@@ -2023,23 +2314,25 @@ function parseShellClausesLinear(text) {
                 continue;
               }
             } else {
+              const tagInner = text.slice(opPos + 1, tagEnd);
               const afterIdx = tagEnd + 1;
               let targetProbe = afterIdx;
-              while (targetProbe < n && /[ \t]/.test(text[targetProbe])) {
+              while (targetProbe < n && isSpaceOrTabCode(text.charCodeAt(targetProbe))) {
                 targetProbe += 1;
               }
               const pendingVerbAtTag = pendingUnquotedVerbIdx !== -1 ? current.tokens[pendingUnquotedVerbIdx] : null;
-              const hasActiveStarter =
-                segHardStarterCount > 0 ||
-                pendingQuotedVerbIdx !== -1 ||
-                runtimeVerbTok !== null ||
-                (pendingVerbAtTag !== null &&
-                  !pendingVerbAtTag.hadSkippedComparison &&
-                  !(
-                    !pendingVerbAtTag.wasQuoted &&
-                    !pendingVerbAtTag.hasUnquotedTrailingPunct &&
-                    VERSIONED_RUNTIME_NOUNS.has(pendingVerbAtTag.trimmedClean.toLowerCase()) &&
-                    isRuntimeVersionFollowedByComparisonAt(
+              let hasActiveStarter =
+                segHardStarterCount > 0 || pendingQuotedVerbIdx !== -1 || runtimeVerbTok !== null;
+              if (!hasActiveStarter && pendingVerbAtTag !== null && !pendingVerbAtTag.hadSkippedComparison) {
+                if (
+                  !pendingVerbAtTag.wasQuoted &&
+                  !pendingVerbAtTag.hasUnquotedTrailingPunct &&
+                  VERSIONED_RUNTIME_NOUNS.has(toAsciiLowerFast(pendingVerbAtTag.trimmedClean))
+                ) {
+                  if (cachedRuntimeCompVerbIdx === pendingUnquotedVerbIdx && opPos < cachedRuntimeCompVerStart) {
+                    hasActiveStarter = false;
+                  } else {
+                    const matchedRuntimeComp = matchRuntimeVersionFollowedByComparisonAt(
                       text,
                       opPos,
                       n,
@@ -2047,8 +2340,20 @@ function parseShellClausesLinear(text) {
                       null,
                       0,
                       getLastCloseTagPos
-                    )
-                  ));
+                    );
+                    if (matchedRuntimeComp !== null) {
+                      cachedRuntimeCompVerbIdx = pendingUnquotedVerbIdx;
+                      cachedRuntimeCompVerStart = matchedRuntimeComp.verStart;
+                      cachedRuntimeCompVerEnd = matchedRuntimeComp.verEnd;
+                      hasActiveStarter = false;
+                    } else {
+                      hasActiveStarter = true;
+                    }
+                  }
+                } else {
+                  hasActiveStarter = true;
+                }
+              }
               const isAutoOrSpecial =
                 tagInner.length > 0 &&
                 (tagInner[0] === '!' ||
@@ -2086,8 +2391,8 @@ function parseShellClausesLinear(text) {
               let isPairedHtmlOpenTag = false;
               let isProsePlaceholderTag = false;
               if (!isAutoOrSpecial && !hasNoOutputTarget && !isMatchedCloseTag && !hasActiveStarter) {
-                if (/^[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) && !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)) {
-                  const tagLower = tagInner.toLowerCase();
+                if (isPlainOpenName && !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)) {
+                  const tagLower = toAsciiLowerFast(tagInner);
                   if (getLastCloseTagPos(tagLower) > tagEnd) {
                     let pairedTargetLooksShell = false;
                     if (targetProbe > afterIdx && targetProbe < n) {
@@ -2192,7 +2497,7 @@ function parseShellClausesLinear(text) {
               }
               if (isAutoOrSpecial || hasNoOutputTarget || isMatchedCloseTag || isPairedHtmlOpenTag || isProsePlaceholderTag) {
                 if (isPairedHtmlOpenTag) {
-                  pushOpenTag(tagInner.toLowerCase());
+                  pushOpenTag(toAsciiLowerFast(tagInner));
                 } else if (isMatchedCloseTag) {
                   popOpenTag();
                 }
@@ -2217,8 +2522,16 @@ function parseShellClausesLinear(text) {
         nextPos += 1;
       }
       const isMultiCharRedir = nextPos > opPos + 1;
-      if (fdLen === 0 && opChar === '>' && !isMultiCharRedir && lineStartHere && !pendingSkippedAngleTag) {
-        const bqMatch = matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n);
+      if (
+        allowMarkdownBlockquotes &&
+        !inMarkdownCodeFence &&
+        fdLen === 0 &&
+        opChar === '>' &&
+        !isMultiCharRedir &&
+        lineStartHere &&
+        !pendingSkippedAngleTag
+      ) {
+        const bqMatch = matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n, getLastCloseTagPos);
         if (bqMatch !== null) {
           if (bqMatch.keepLineStart) {
             atMarkdownLineStart = true;
@@ -2647,12 +2960,15 @@ function parseShellClausesLinear(text) {
         !pendingVerbTok.hadSkippedComparison &&
         !pendingVerbTok.wasQuoted &&
         !pendingVerbTok.hasUnquotedTrailingPunct &&
-        VERSIONED_RUNTIME_NOUNS.has(pendingVerbTok.trimmedClean.toLowerCase()) &&
+        VERSIONED_RUNTIME_NOUNS.has(toAsciiLowerFast(pendingVerbTok.trimmedClean)) &&
         !tokObj.wasQuoted &&
         !tokObj.hasUnquotedTrailingPunct &&
         !tokObj.raw.includes('\\') &&
         UNSIGNED_RUNTIME_VERSION_TOKEN_REGEX.test(tokObj.value) &&
-        isFollowedByComparisonOpAt(text, i, n, openTagStack, null, 0)
+        ((cachedRuntimeCompVerbIdx === pendingUnquotedVerbIdx &&
+          tokenStart === cachedRuntimeCompVerStart &&
+          i === cachedRuntimeCompVerEnd) ||
+          isFollowedByComparisonOpAt(text, i, n, openTagStack, null, 0))
       ) {
         tokObj.isRuntimeVersionPair = true;
         runtimeVerbTok = pendingVerbTok;
@@ -2660,6 +2976,7 @@ function parseShellClausesLinear(text) {
         segHardStarterCount += 1;
       }
       pendingUnquotedVerbIdx = -1;
+      clearRuntimeComparisonTagCache();
     }
     current.tokens.push(tokObj);
     const wasAwaitingComparisonRhs = awaitingComparisonRhs;
@@ -3071,7 +3388,9 @@ function scanFlatShellClauses(text, options = {}) {
     return false;
   }
   const normalized = options.skipQuoteNorm ? text : normalizeInlineEscapedQuotes(text);
-  const clauses = parseShellClausesLinear(normalized);
+  const clauses = parseShellClausesLinear(normalized, {
+    allowMarkdownBlockquotes: Boolean(options.allowMarkdownBlockquotes)
+  });
   const isCompound = clauses.length > 1;
   for (let c = 0; c < clauses.length; c += 1) {
     if (clauseLooksLikeShellCommand(clauses[c], isCompound, options)) {
@@ -3087,15 +3406,146 @@ function scanShellCommandText(text, options) {
   if (!text || typeof text !== 'string') {
     return false;
   }
-  const canMemo = activeReadinessCache !== null && options === undefined;
-  if (canMemo && activeReadinessCache.shellCmd.has(text)) {
-    return activeReadinessCache.shellCmd.get(text);
+  const allowMarkdownBlockquotes = Boolean(options && options.allowMarkdownBlockquotes);
+  const canMemo =
+    activeReadinessCache !== null &&
+    (options === undefined || (allowMarkdownBlockquotes && Object.keys(options).length === 1));
+  const memoKey = canMemo
+    ? allowMarkdownBlockquotes
+      ? `bq:${text}`
+      : text.startsWith('bq:') || text.startsWith('raw:')
+        ? `raw:${text}`
+        : text
+    : '';
+  if (canMemo && activeReadinessCache.shellCmd.has(memoKey)) {
+    return activeReadinessCache.shellCmd.get(memoKey);
   }
   const res = scanShellCommandTextInner(text, options || {});
   if (canMemo) {
-    activeReadinessCache.shellCmd.set(text, res);
+    activeReadinessCache.shellCmd.set(memoKey, res);
   }
   return res;
+}
+
+function findMatchingBacktickSpan(text, openPos, n, btState) {
+  if (openPos + 1 >= n || text.charCodeAt(openPos + 1) !== 96) {
+    if (btState.noSingleBt) {
+      return { matched: false, runEnd: openPos + 1 };
+    }
+    let hit = text.indexOf('`', openPos + 1);
+    while (hit !== -1) {
+      if (hit + 1 >= n || text.charCodeAt(hit + 1) !== 96) {
+        return { matched: true, innerStart: openPos + 1, innerEnd: hit, closeEnd: hit, runEnd: openPos + 1 };
+      }
+      let skip = hit + 2;
+      while (skip < n && text.charCodeAt(skip) === 96) {
+        skip += 1;
+      }
+      hit = text.indexOf('`', skip);
+    }
+    btState.noSingleBt = true;
+    return { matched: false, runEnd: openPos + 1 };
+  }
+
+  let runEnd = openPos + 2;
+  while (runEnd < n && text.charCodeAt(runEnd) === 96) {
+    runEnd += 1;
+  }
+  const btLen = runEnd - openPos;
+
+  if (btLen >= 3) {
+    let lead = 0;
+    let p = openPos;
+    while (p > 0 && lead < 3 && isSpaceOrTabCode(text.charCodeAt(p - 1))) {
+      p -= 1;
+      lead += 1;
+    }
+    const atFenceLineStart = p === 0 || text.charCodeAt(p - 1) === 10 || text.charCodeAt(p - 1) === 13;
+    if (atFenceLineStart) {
+      let openLineEnd = runEnd;
+      let hasBtOnInfoLine = false;
+      while (openLineEnd < n) {
+        const cc = text.charCodeAt(openLineEnd);
+        if (cc === 10 || cc === 13) {
+          break;
+        }
+        if (cc === 96) {
+          hasBtOnInfoLine = true;
+          break;
+        }
+        openLineEnd += 1;
+      }
+      if (!hasBtOnInfoLine && openLineEnd < n) {
+        let pos = openLineEnd;
+        if (text.charCodeAt(pos) === 13) pos += 1;
+        if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
+        while (pos < n) {
+          let cLead = 0;
+          let cp = pos;
+          while (cp < n && cLead < 3 && isSpaceOrTabCode(text.charCodeAt(cp))) {
+            cp += 1;
+            cLead += 1;
+          }
+          if (cp < n && text.charCodeAt(cp) === 96) {
+            let ce = cp;
+            while (ce < n && text.charCodeAt(ce) === 96) {
+              ce += 1;
+            }
+            if (ce - cp >= btLen) {
+              let tail = ce;
+              while (tail < n && isSpaceOrTabCode(text.charCodeAt(tail))) {
+                tail += 1;
+              }
+              if (tail >= n || text.charCodeAt(tail) === 10 || text.charCodeAt(tail) === 13) {
+                return { matched: true, innerStart: runEnd, innerEnd: pos, closeEnd: ce - 1, runEnd };
+              }
+            }
+          }
+          while (pos < n && text.charCodeAt(pos) !== 10 && text.charCodeAt(pos) !== 13) {
+            pos += 1;
+          }
+          if (pos < n && text.charCodeAt(pos) === 13) pos += 1;
+          if (pos < n && text.charCodeAt(pos) === 10) pos += 1;
+        }
+        return { matched: true, innerStart: runEnd, innerEnd: n, closeEnd: n - 1, runEnd };
+      }
+    }
+  }
+
+  if (btState.multiRuns === null) {
+    const multiRuns = new Map();
+    let scan = text.indexOf('`');
+    while (scan !== -1) {
+      let sEnd = scan + 1;
+      while (sEnd < n && text.charCodeAt(sEnd) === 96) {
+        sEnd += 1;
+      }
+      const len = sEnd - scan;
+      if (len >= 2) {
+        let entry = multiRuns.get(len);
+        if (!entry) {
+          entry = { runs: [], ptr: 0 };
+          multiRuns.set(len, entry);
+        }
+        entry.runs.push(scan);
+      }
+      scan = text.indexOf('`', sEnd);
+    }
+    btState.multiRuns = multiRuns;
+  }
+
+  const entry = btState.multiRuns.get(btLen);
+  if (entry) {
+    while (entry.ptr < entry.runs.length && entry.runs[entry.ptr] < runEnd) {
+      entry.ptr += 1;
+    }
+    if (entry.ptr < entry.runs.length) {
+      const closeStart = entry.runs[entry.ptr];
+      entry.ptr += 1;
+      return { matched: true, innerStart: runEnd, innerEnd: closeStart, closeEnd: closeStart + btLen - 1, runEnd };
+    }
+  }
+  return { matched: false, runEnd };
 }
 
 function scanShellCommandTextInner(text, options = {}) {
@@ -3109,7 +3559,7 @@ function scanShellCommandTextInner(text, options = {}) {
     const btNorm = normalizeInlineEscapedQuotes(text).replace(/\\`/g, '`');
     const bn = btNorm.length;
     let noMoreSq = false;
-    let noMoreBt = false;
+    const btState = { noSingleBt: false, multiRuns: null };
     let outerHasVerbChecked = false;
     let outerSubCmdCtx = false;
     for (let i = 0; i < bn; i += 1) {
@@ -3130,19 +3580,22 @@ function scanShellCommandTextInner(text, options = {}) {
         }
         continue;
       }
-      if (ch === '`' && !noMoreBt) {
-        const closeBt = btNorm.indexOf('`', i + 1);
-        if (closeBt === -1) {
-          noMoreBt = true;
+      if (ch === '`') {
+        const btMatch = findMatchingBacktickSpan(btNorm, i, bn, btState);
+        if (!btMatch.matched) {
+          i = btMatch.runEnd - 1;
           continue;
         }
-        const btInner = btNorm.slice(i + 1, closeBt).trim();
+        const btInner = btNorm.slice(btMatch.innerStart, btMatch.innerEnd).trim();
         if (btInner) {
           if (!outerHasVerbChecked) {
             outerHasVerbChecked = true;
             const prefix = btNorm.slice(0, i).trim();
             if (prefix) {
-              const pClauses = parseShellClausesLinear(prefix);
+              const pClauses = parseShellClausesLinear(
+                prefix,
+                options.allowMarkdownBlockquotes ? { allowMarkdownBlockquotes: true } : undefined
+              );
               const lastP = pClauses[pClauses.length - 1];
               const leadP = lastP?.tokens?.[0];
               if (leadP) {
@@ -3160,7 +3613,7 @@ function scanShellCommandTextInner(text, options = {}) {
             return true;
           }
         }
-        i = closeBt;
+        i = btMatch.closeEnd;
       }
     }
   }
@@ -3212,7 +3665,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   let cursor = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
-  let noMoreBacktick = false;
+  const btState = { noSingleBt: false, multiRuns: null };
   let nextBsPos = -2;
   const pad64 = '                                                                ';
   const matchedDeps = [];
@@ -3232,6 +3685,9 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     const ch = cc === 34 ? '"' : cc === 39 ? "'" : '`';
     if (i > 0 && isDelimitedQuotePrefixCode(rawText.charCodeAt(i - 1))) {
       if (ch === '`') {
+        while (i + 1 < n && rawText.charCodeAt(i + 1) === 96) {
+          i += 1;
+        }
         continue;
       }
       if (ch === "'") {
@@ -3277,11 +3733,13 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
       }
       continue;
     }
-    if ((ch === '"' && noMoreDouble) || (ch === "'" && noMoreSingle) || (ch === '`' && noMoreBacktick)) {
+    if ((ch === '"' && noMoreDouble) || (ch === "'" && noMoreSingle)) {
       continue;
     }
 
     let closeIdx = -1;
+    let innerStart = i + 1;
+    let innerEnd = -1;
     if (ch === '"') {
       const nextDq = rawText.indexOf('"', i + 1);
       if (nextDq === -1) {
@@ -3310,27 +3768,33 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
           continue;
         }
       }
+      innerEnd = closeIdx;
     } else if (ch === "'") {
       closeIdx = findNextNonApostropheSingleQuote(rawText, i + 1, n);
       if (closeIdx === -1) {
         noMoreSingle = true;
         continue;
       }
+      innerEnd = closeIdx;
     } else {
-      closeIdx = rawText.indexOf('`', i + 1);
-      if (closeIdx === -1) {
-        noMoreBacktick = true;
+      const btMatch = findMatchingBacktickSpan(rawText, i, n, btState);
+      if (!btMatch.matched) {
+        i = btMatch.runEnd - 1;
         continue;
       }
+      innerStart = btMatch.innerStart;
+      innerEnd = btMatch.innerEnd;
+      closeIdx = btMatch.closeEnd;
     }
 
-    const inner = rawText.slice(i + 1, closeIdx).trim();
+    const inner = rawText.slice(innerStart, innerEnd).trim();
     if (inner) {
       if (ch === '`' && !includeBackticks) {
         pushMatched(inner);
         if (stopOnFirst) return { matchedDeps, remainder: rawText };
       } else {
-        let didMatchInner = innerEvalCache ? innerEvalCache.get(inner) : undefined;
+        const innerEvalKey = `${ch === '`' ? '1:' : '0:'}${inner}`;
+        let didMatchInner = innerEvalCache ? innerEvalCache.get(innerEvalKey) : undefined;
         if (didMatchInner === undefined) {
           const isSafeEndpoint =
             includeBackticks &&
@@ -3348,7 +3812,10 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
                 innerMatchesCmd =
                   SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
               } else {
-                innerMatchesCmd = scanShellCommandText(inner);
+                innerMatchesCmd = scanShellCommandText(
+                  inner,
+                  ch === '`' ? undefined : { allowMarkdownBlockquotes: true }
+                );
               }
             }
             didMatchInner = Boolean(matchesScript || innerMatchesCmd);
@@ -3356,7 +3823,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
           if (!innerEvalCache) {
             innerEvalCache = new Map();
           }
-          innerEvalCache.set(inner, didMatchInner);
+          innerEvalCache.set(innerEvalKey, didMatchInner);
         }
         if (didMatchInner) {
           pushMatched(inner);
@@ -3517,7 +3984,7 @@ function maskBackticksLinear(text) {
   let out = '';
   let cursor = 0;
   let noMoreSq = false;
-  let noMoreBt = false;
+  const btState = { noSingleBt: false, multiRuns: null };
 
   for (let i = 0; i < n; i += 1) {
     const c = text[i];
@@ -3539,15 +4006,15 @@ function maskBackticksLinear(text) {
       }
       continue;
     }
-    if (c === '`' && !noMoreBt) {
-      const closeBt = text.indexOf('`', i + 1);
-      if (closeBt === -1) {
-        noMoreBt = true;
+    if (c === '`') {
+      const btMatch = findMatchingBacktickSpan(text, i, n, btState);
+      if (!btMatch.matched) {
+        i = btMatch.runEnd - 1;
         continue;
       }
-      out += text.slice(cursor, i) + ' '.repeat(closeBt - i + 1);
-      cursor = closeBt + 1;
-      i = closeBt;
+      out += text.slice(cursor, i) + ' '.repeat(btMatch.closeEnd - i + 1);
+      cursor = btMatch.closeEnd + 1;
+      i = btMatch.closeEnd;
     }
   }
   return cursor === 0 ? text : out + text.slice(cursor);
@@ -3628,7 +4095,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
     const maskedBt = maskBackticksLinear(outerCacheKey ?? text);
     const normQuotes = normalizeInlineEscapedQuotes(maskedBt);
     const unescaped = unescapeInlineShellWords(normQuotes);
-    clauses = parseShellClausesLinear(unescaped);
+    clauses = parseShellClausesLinear(unescaped, { allowMarkdownBlockquotes: true });
     if (outerCacheKey !== null) {
       activeReadinessCache.outerClauses.set(outerCacheKey, clauses);
     }
@@ -5963,6 +6430,42 @@ function analyzeNonStarGlob(value) {
   };
 }
 
+function hasParenOrBracketChar(str) {
+  for (let i = 0; i < str.length; i += 1) {
+    const cc = str.charCodeAt(i);
+    if (cc === 40 || cc === 41 || cc === 91 || cc === 93) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasNonStarGlobMetaChar(str) {
+  for (let i = 0; i < str.length; i += 1) {
+    const cc = str.charCodeAt(i);
+    if (cc === 91 || cc === 123 || cc === 63) {
+      return true;
+    }
+    if (cc === 40 && i > 0) {
+      const prev = str.charCodeAt(i - 1);
+      if (prev === 64 || prev === 43 || prev === 33 || prev === 63 || prev === 42) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasBroadRunGroupChar(str) {
+  for (let i = 0; i < str.length; i += 1) {
+    const cc = str.charCodeAt(i);
+    if (cc === 40 || cc === 91 || cc === 123) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function extractBroadFromSubSpan(run, subStart, subEnd) {
   const s = run.slice(subStart, subEnd);
   const m = s.length;
@@ -5970,65 +6473,81 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
     return null;
   }
 
-  const { closeAt: charClassClose } = findSegmentCharClasses(s, true);
-  const pairOf = new Int32Array(m).fill(-1);
-  const parenStack = [];
-  const bracketStack = [];
-  for (let i = 0; i < m; i += 1) {
-    if (charClassClose[i] !== -1) {
-      const closeIdx = charClassClose[i];
-      pairOf[i] = closeIdx;
-      pairOf[closeIdx] = i;
-      i = closeIdx;
-      continue;
-    }
-    const ch = s[i];
-    if (ch === '(') {
-      parenStack.push(i);
-    } else if (ch === ')' && parenStack.length > 0) {
-      const open = parenStack.pop();
-      pairOf[open] = i;
-      pairOf[i] = open;
-    } else if (ch === '[') {
-      bracketStack.push(i);
-    } else if (ch === ']' && bracketStack.length > 0) {
-      const open = bracketStack.pop();
-      pairOf[open] = i;
-      pairOf[i] = open;
-    }
-  }
-
   const hasStar = s.includes('*');
   let lo = 0;
   let hi = m;
   let strippedBangQuestionColon = false;
 
-  while (lo < hi) {
-    const last = s[hi - 1];
-    if (last === '!' || last === '?' || last === ':') {
-      strippedBangQuestionColon = true;
-      hi -= 1;
-      continue;
+  if (!hasParenOrBracketChar(s)) {
+    while (lo < hi) {
+      const last = s[hi - 1];
+      if (last === '!' || last === '?' || last === ':') {
+        strippedBangQuestionColon = true;
+        hi -= 1;
+        continue;
+      }
+      if (last === '.' && hi - lo > 1 && (hasStar || !strippedBangQuestionColon)) {
+        hi -= 1;
+        continue;
+      }
+      break;
     }
-    if (last === '.' && hi - lo > 1 && (hasStar || !strippedBangQuestionColon)) {
-      hi -= 1;
-      continue;
+  } else {
+    const { closeAt: charClassClose } = findSegmentCharClasses(s, true);
+    const pairOf = new Int32Array(m).fill(-1);
+    const parenStack = [];
+    const bracketStack = [];
+    for (let i = 0; i < m; i += 1) {
+      if (charClassClose[i] !== -1) {
+        const closeIdx = charClassClose[i];
+        pairOf[i] = closeIdx;
+        pairOf[closeIdx] = i;
+        i = closeIdx;
+        continue;
+      }
+      const ch = s[i];
+      if (ch === '(') {
+        parenStack.push(i);
+      } else if (ch === ')' && parenStack.length > 0) {
+        const open = parenStack.pop();
+        pairOf[open] = i;
+        pairOf[i] = open;
+      } else if (ch === '[') {
+        bracketStack.push(i);
+      } else if (ch === ']' && bracketStack.length > 0) {
+        const open = bracketStack.pop();
+        pairOf[open] = i;
+        pairOf[i] = open;
+      }
     }
-    const first = s[lo];
-    if ((first === '(' || first === '[') && pairOf[lo] === hi - 1) {
-      lo += 1;
-      hi -= 1;
-      continue;
+
+    while (lo < hi) {
+      const last = s[hi - 1];
+      if (last === '!' || last === '?' || last === ':') {
+        strippedBangQuestionColon = true;
+        hi -= 1;
+        continue;
+      }
+      if (last === '.' && hi - lo > 1 && (hasStar || !strippedBangQuestionColon)) {
+        hi -= 1;
+        continue;
+      }
+      const first = s[lo];
+      if ((first === '(' || first === '[') && pairOf[lo] === hi - 1) {
+        lo += 1;
+        hi -= 1;
+        continue;
+      }
+      if ((first === '(' || first === '[') && (pairOf[lo] === -1 || pairOf[lo] >= hi)) {
+        lo += 1;
+        continue;
+      }
+      if ((last === ')' || last === ']') && (pairOf[hi - 1] === -1 || pairOf[hi - 1] < lo)) {
+        hi -= 1;
+        continue;
+      }
+      break;
     }
-    if ((first === '(' || first === '[') && (pairOf[lo] === -1 || pairOf[lo] >= hi)) {
-      lo += 1;
-      continue;
-    }
-    if ((last === ')' || last === ']') && (pairOf[hi - 1] === -1 || pairOf[hi - 1] < lo)) {
-      hi -= 1;
-      continue;
-    }
-    break;
   }
 
   if (lo >= hi) {
@@ -6051,40 +6570,47 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
     looksBroad = hasRelativePrefix || trimmed.includes('/') || trimmed.includes('.');
   }
   if (!looksBroad && trimmed.endsWith('/')) {
-    const { hasNonStarGlob, skeleton } = analyzeNonStarGlob(candidate);
-    const resolvedSkeleton = hasNonStarGlob ? skeleton : candidate;
+    let resolvedSkeleton = candidate;
+    if (hasNonStarGlobMetaChar(candidate)) {
+      const { hasNonStarGlob, skeleton } = analyzeNonStarGlob(candidate);
+      if (hasNonStarGlob) {
+        resolvedSkeleton = skeleton;
+      }
+    }
     looksBroad =
       DIRECTORY_CANDIDATE_REGEX.test(resolvedSkeleton) &&
       resolvedSkeleton.length > 1 &&
       /[A-Za-z0-9_-]/.test(resolvedSkeleton);
-  } else if (!looksBroad) {
+  } else if (!looksBroad && hasNonStarGlobMetaChar(candidate)) {
     const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
-    const globInfo = analyzeNonStarGlob(candidateBase);
-    const {
-      hasNonStarGlob,
-      hasCharClass,
-      hasMultiMatchCharClass,
-      hasBraceList,
-      hasExtGlob,
-      hasQuestionGlob,
-      skeleton
-    } = globInfo;
-    if (hasNonStarGlob && !skeleton.includes('*') && NON_STAR_PATH_SKELETON_REGEX.test(skeleton)) {
-      if (hasRelativePrefix || trimmed.includes('/')) {
-        looksBroad =
-          hasCharClass ||
+    if (hasNonStarGlobMetaChar(candidateBase)) {
+      const globInfo = analyzeNonStarGlob(candidateBase);
+      const {
+        hasNonStarGlob,
+        hasCharClass,
+        hasMultiMatchCharClass,
+        hasBraceList,
+        hasExtGlob,
+        hasQuestionGlob,
+        skeleton
+      } = globInfo;
+      if (hasNonStarGlob && !skeleton.includes('*') && NON_STAR_PATH_SKELETON_REGEX.test(skeleton)) {
+        if (hasRelativePrefix || trimmed.includes('/')) {
+          looksBroad =
+            hasCharClass ||
+            hasExtGlob ||
+            hasBraceList ||
+            classifyFileCandidate(skeleton) === 'file';
+        } else if (
+          hasMultiMatchCharClass ||
           hasExtGlob ||
           hasBraceList ||
-          classifyFileCandidate(skeleton) === 'file';
-      } else if (
-        hasMultiMatchCharClass ||
-        hasExtGlob ||
-        hasBraceList ||
-        hasQuestionGlob
-      ) {
-        looksBroad =
-          classifyFileCandidate(skeleton) === 'file' ||
-          doesRootNonStarGlobMatchFile(candidateBase, globInfo);
+          hasQuestionGlob
+        ) {
+          looksBroad =
+            classifyFileCandidate(skeleton) === 'file' ||
+            doesRootNonStarGlobMatchFile(candidateBase, globInfo);
+        }
       }
     }
   }
@@ -6110,93 +6636,106 @@ function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps)
     }
 
     const runLen = run.length;
-    const { closeAt: charClassCloseAt } = findSegmentCharClasses(run, true);
-    const braceCloseAt = new Int32Array(runLen).fill(-1);
-    const isClosingBrace = new Uint8Array(runLen);
-    const extParenCloseAt = new Int32Array(runLen).fill(-1);
-    const isClosingExtParen = new Uint8Array(runLen);
-    const braceStack = [];
-    const parenStack = [];
-
-    for (let j = 0; j < runLen; j += 1) {
-      if (charClassCloseAt[j] !== -1) {
-        j = charClassCloseAt[j];
-        continue;
-      }
-      const ch = run[j];
-      if (ch === '{') {
-        braceStack.push(j);
-      } else if (ch === '}' && braceStack.length > 0) {
-        const openBrace = braceStack.pop();
-        let crossed = false;
-        while (parenStack.length > 0 && parenStack[parenStack.length - 1].open > openBrace) {
-          parenStack.pop();
-          crossed = true;
-        }
-        if (!crossed) {
-          braceCloseAt[openBrace] = j;
-          isClosingBrace[j] = 1;
-        }
-      } else if (ch === '(') {
-        const prev = j > 0 ? run[j - 1] : '';
-        const isExt =
-          prev === '@' || prev === '+' || prev === '?' || prev === '!' || prev === '*';
-        parenStack.push({ open: j, isExt });
-      } else if (ch === ')' && parenStack.length > 0) {
-        const topParen = parenStack.pop();
-        let crossed = false;
-        while (braceStack.length > 0 && braceStack[braceStack.length - 1] > topParen.open) {
-          braceStack.pop();
-          crossed = true;
-        }
-        if (!crossed && topParen.isExt && j > topParen.open + 1) {
-          extParenCloseAt[topParen.open] = j;
-          isClosingExtParen[j] = 1;
-        }
-      }
-    }
-
     const hits = [];
-    let activeBraceDepth = 0;
-    let activeExtParenDepth = 0;
-    let subStart = 0;
-    for (let j = 0; j < runLen; j += 1) {
-      if (charClassCloseAt[j] !== -1) {
-        j = charClassCloseAt[j];
-      }
-      const ch = run[j];
-      if (ch === '{' && braceCloseAt[j] !== -1) {
-        activeBraceDepth += 1;
-      } else if (ch === '}' && isClosingBrace[j] === 1 && activeBraceDepth > 0) {
-        activeBraceDepth -= 1;
-      } else if (ch === '(' && extParenCloseAt[j] !== -1) {
-        activeExtParenDepth += 1;
-      } else if (ch === ')' && isClosingExtParen[j] === 1 && activeExtParenDepth > 0) {
-        activeExtParenDepth -= 1;
-      } else if (ch === ',' && activeBraceDepth === 0 && activeExtParenDepth === 0) {
-        if (j > subStart) {
-          const hit = extractBroadFromSubSpan(run, subStart, j);
+    if (!hasBroadRunGroupChar(run)) {
+      let subStart = 0;
+      while (subStart < runLen) {
+        const commaIdx = run.indexOf(',', subStart);
+        const subEnd = commaIdx === -1 ? runLen : commaIdx;
+        if (subEnd > subStart) {
+          const hit = extractBroadFromSubSpan(run, subStart, subEnd);
           if (hit) hits.push(hit);
         }
-        subStart = j + 1;
-      } else if (
-        ch === ']' &&
-        j + 1 < runLen &&
-        run[j + 1] === '(' &&
-        activeBraceDepth === 0 &&
-        activeExtParenDepth === 0
-      ) {
-        const splitPos = j + 1;
-        if (splitPos > subStart) {
-          const hit = extractBroadFromSubSpan(run, subStart, splitPos);
-          if (hit) hits.push(hit);
-        }
-        subStart = splitPos;
+        subStart = subEnd + 1;
       }
-    }
-    if (runLen > subStart) {
-      const hit = extractBroadFromSubSpan(run, subStart, runLen);
-      if (hit) hits.push(hit);
+    } else {
+      const { closeAt: charClassCloseAt } = findSegmentCharClasses(run, true);
+      const braceCloseAt = new Int32Array(runLen).fill(-1);
+      const isClosingBrace = new Uint8Array(runLen);
+      const extParenCloseAt = new Int32Array(runLen).fill(-1);
+      const isClosingExtParen = new Uint8Array(runLen);
+      const braceStack = [];
+      const parenStack = [];
+
+      for (let j = 0; j < runLen; j += 1) {
+        if (charClassCloseAt[j] !== -1) {
+          j = charClassCloseAt[j];
+          continue;
+        }
+        const ch = run[j];
+        if (ch === '{') {
+          braceStack.push(j);
+        } else if (ch === '}' && braceStack.length > 0) {
+          const openBrace = braceStack.pop();
+          let crossed = false;
+          while (parenStack.length > 0 && parenStack[parenStack.length - 1].open > openBrace) {
+            parenStack.pop();
+            crossed = true;
+          }
+          if (!crossed) {
+            braceCloseAt[openBrace] = j;
+            isClosingBrace[j] = 1;
+          }
+        } else if (ch === '(') {
+          const prev = j > 0 ? run[j - 1] : '';
+          const isExt =
+            prev === '@' || prev === '+' || prev === '?' || prev === '!' || prev === '*';
+          parenStack.push({ open: j, isExt });
+        } else if (ch === ')' && parenStack.length > 0) {
+          const topParen = parenStack.pop();
+          let crossed = false;
+          while (braceStack.length > 0 && braceStack[braceStack.length - 1] > topParen.open) {
+            braceStack.pop();
+            crossed = true;
+          }
+          if (!crossed && topParen.isExt && j > topParen.open + 1) {
+            extParenCloseAt[topParen.open] = j;
+            isClosingExtParen[j] = 1;
+          }
+        }
+      }
+
+      let activeBraceDepth = 0;
+      let activeExtParenDepth = 0;
+      let subStart = 0;
+      for (let j = 0; j < runLen; j += 1) {
+        if (charClassCloseAt[j] !== -1) {
+          j = charClassCloseAt[j];
+        }
+        const ch = run[j];
+        if (ch === '{' && braceCloseAt[j] !== -1) {
+          activeBraceDepth += 1;
+        } else if (ch === '}' && isClosingBrace[j] === 1 && activeBraceDepth > 0) {
+          activeBraceDepth -= 1;
+        } else if (ch === '(' && extParenCloseAt[j] !== -1) {
+          activeExtParenDepth += 1;
+        } else if (ch === ')' && isClosingExtParen[j] === 1 && activeExtParenDepth > 0) {
+          activeExtParenDepth -= 1;
+        } else if (ch === ',' && activeBraceDepth === 0 && activeExtParenDepth === 0) {
+          if (j > subStart) {
+            const hit = extractBroadFromSubSpan(run, subStart, j);
+            if (hit) hits.push(hit);
+          }
+          subStart = j + 1;
+        } else if (
+          ch === ']' &&
+          j + 1 < runLen &&
+          run[j + 1] === '(' &&
+          activeBraceDepth === 0 &&
+          activeExtParenDepth === 0
+        ) {
+          const splitPos = j + 1;
+          if (splitPos > subStart) {
+            const hit = extractBroadFromSubSpan(run, subStart, splitPos);
+            if (hit) hits.push(hit);
+          }
+          subStart = splitPos;
+        }
+      }
+      if (runLen > subStart) {
+        const hit = extractBroadFromSubSpan(run, subStart, runLen);
+        if (hit) hits.push(hit);
+      }
     }
 
     if (hits.length === 0) {

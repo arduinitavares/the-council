@@ -151,21 +151,23 @@ const NAMED_EXTERNAL_STANDARD_REGEX = new RegExp(
 );
 const CLI_COMMAND_VERB_SOURCE =
   '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|uname|cat|ls|whoami|printenv|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
-const QUOTED_ZERO_ARG_CLI_VERB_SOURCE = '(?:uname|ls|whoami|printenv|go\\s+test)';
-const QUOTED_STRICT_CLI_VERB_SOURCE =
-  '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|cat|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+const PROSE_STRICT_COMMAND_VERB_SOURCE =
+  '(?:npm|npx|pnpm|yarn|pytest|cargo|kubectl|netstat|lsof|realpath|readlink|dirname|xargs|awk|sed|wc)';
 const SHELL_EXEC_SCRIPT_TOKEN_REGEX =
-  /^\.\.?\/(?:[^\s]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s]*\/)?(?:gradlew|mvnw|configure))(?:\s|$)/i;
+  /^\.\.?\/(?:[^\s;|&<>()]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s;|&<>()]*\/)?(?:gradlew|mvnw|configure))$/i;
+const SHELL_UNQUOTED_SCRIPT_CMD_REGEX =
+  /(?:^|[\s;|&(])\.\.?\/(?:[^\s;|&<>()]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s;|&<>()]*\/)?(?:gradlew|mvnw|configure))(?:\s+(?:-[A-Za-z0-9-]+|[^\s;|&<>()])|[;|&]|$)/i;
 const REPO_WIDE_OR_RUN_PHRASE_SOURCE =
   '(?:\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b|\\b(?:repo(?:sitory)?|codebase)\\s+(?:check|scan|audit|wide)\\b|\\brepo-wide\\b|\\brun\\s+(?:tests?|command|script)\\b)';
-const QUOTED_COMMAND_HEAD_REGEX = new RegExp(
-  `^(?:/usr/local/bin/|/usr/bin/|/bin/)?(?:${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s|[<>]|$)|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\s+\\S|\\s*[<>])|(?:make|head|tail|find|stat|ps|df|du|env|which|command|type)\\s+(?:-[A-Za-z0-9-]+|[./~])|make\\s+(?:test|check|build|all|clean|install|lint)(?:\\s|$)|cd\\s+(?:[-./~]|\\.\\.)\\S*)`,
+const REPO_WIDE_OR_RUN_PHRASE_REGEX = new RegExp(REPO_WIDE_OR_RUN_PHRASE_SOURCE, 'i');
+const UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
+  `(?:\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)|\\bmake\\b\\s+(?:-[A-Za-z0-9-]+|[./~]|test|check|build|all|clean|install|lint|fmt|ci|verify)(?:\\s|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
   'i'
 );
-const QUOTED_COMPOUND_OR_PREFIXED_CMD_REGEX =
-  /^(?:make(?:\s|[<>]|$)|cd\s+\S|(?:pwd|id|true|false)(?:\s|[<>]|$))/i;
-const SHELL_ENV_ASSIGN_PREFIX_REGEX =
-  /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\\.|[^\s;'"|&()])*\s+/;
+const UNQUOTED_PROSE_COMMAND_OR_REPO_REGEX = new RegExp(
+  `(?:\\b${PROSE_STRICT_COMMAND_VERB_SOURCE}\\b\\s+(?:-[A-Za-z0-9-]+|[./~]|[a-z0-9_-]+\\.[a-z0-9]{1,8}|test|run|exec|check|build|lint|ci|audit|install|diff|status|log|show|rev-parse)\\b|\\bgo\\s+(?:test|run|build|vet|mod|generate)\\b|\\bgit\\s+(?:status|diff|log|show|rev-parse|ls-files|grep|blame|check-ignore|check-attr|rev-list|branch|tag|remote|fetch|pull|push|merge|rebase|cherry-pick|bisect|worktree)\\b|\\b(?:node|python3?|bash|sh|zsh|docker|curl|grep|rg|cat|ls)\\b\\s+(?:-[A-Za-z0-9-]+|[./~]|https?:\\/\\/|[A-Za-z0-9_./-]+\\.(?:[mc]?[jt]sx?|py|sh|bash|zsh|json|ya?ml|toml|md|txt|log)\\b)|\\bmake\\b\\s+(?:-[A-Za-z0-9-]+|[./~]|test|check|build|all|clean|install|lint|fmt|ci|verify)(?:\\s|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
+  'i'
+);
 const SHELL_WRAPPER_WORD_SET = new Set([
   'env',
   'command',
@@ -179,206 +181,1113 @@ const SHELL_WRAPPER_WORD_SET = new Set([
   'stdbuf',
   'timeout'
 ]);
-const REPO_WIDE_OR_RUN_PHRASE_REGEX = new RegExp(REPO_WIDE_OR_RUN_PHRASE_SOURCE, 'i');
-const UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
-  `(?:\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|\\$\\([^)\\n]+\\)|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
-  'i'
-);
+const SHELL_WRAPPER_SHORT_VALUE_FLAGS = new Map([
+  ['exec', new Set(['a'])],
+  ['env', new Set(['u', 'C', 'S', 'P'])],
+  ['nice', new Set(['n'])],
+  ['sudo', new Set(['u', 'g', 'h', 'p', 'r', 't', 'U', 'C', 'D', 'R', 'T'])],
+  ['timeout', new Set(['s', 'k'])],
+  ['stdbuf', new Set(['i', 'o', 'e'])],
+  ['time', new Set(['f', 'o'])]
+]);
+const SHELL_WRAPPER_LONG_VALUE_FLAGS = new Map([
+  ['env', new Set(['--unset', '--chdir', '--split-string', '--argv0', '--ignore-signal', '--block-signal', '--default-signal'])],
+  ['nice', new Set(['--adjustment'])],
+  ['sudo', new Set(['--user', '--group', '--host', '--prompt', '--role', '--type', '--other-user', '--close-from', '--chdir', '--chroot', '--command-timeout'])],
+  ['timeout', new Set(['--signal', '--kill-after'])],
+  ['stdbuf', new Set(['--input', '--output', '--error'])],
+  ['time', new Set(['--format', '--output'])]
+]);
+const SHELL_ZERO_ARG_CLI_VERBS = new Set(['uname', 'ls', 'whoami', 'printenv']);
+const SHELL_COMPOUND_ZERO_ARG_VERBS = new Set(['pwd', 'id']);
+const SHELL_STRICT_CLI_VERBS = new Set([
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'node',
+  'pytest',
+  'python',
+  'python3',
+  'cargo',
+  'bash',
+  'sh',
+  'zsh',
+  'git',
+  'grep',
+  'rg',
+  'curl',
+  'docker',
+  'kubectl',
+  'cat',
+  'netstat',
+  'lsof',
+  'realpath',
+  'readlink',
+  'basename',
+  'dirname',
+  'xargs',
+  'awk',
+  'sed',
+  'wc'
+]);
+const SHELL_FLAG_OR_PATH_CLI_VERBS = new Set([
+  'head',
+  'tail',
+  'find',
+  'stat',
+  'ps',
+  'df',
+  'du',
+  'env',
+  'which',
+  'command',
+  'type'
+]);
+const SHELL_SPLIT_QUOTE_VERBS = new Set([
+  ...SHELL_ZERO_ARG_CLI_VERBS,
+  ...SHELL_STRICT_CLI_VERBS,
+  ...SHELL_WRAPPER_WORD_SET,
+  'make',
+  'go',
+  'cd'
+]);
+const SHELL_GIT_SUBCOMMANDS = new Set([
+  'status',
+  'diff',
+  'log',
+  'show',
+  'rev-parse',
+  'ls-files',
+  'grep',
+  'blame',
+  'check-ignore',
+  'check-attr',
+  'rev-list',
+  'branch',
+  'tag',
+  'remote',
+  'fetch',
+  'pull',
+  'push',
+  'merge',
+  'rebase',
+  'cherry-pick',
+  'bisect',
+  'worktree',
+  'stash',
+  'clean',
+  'reset',
+  'checkout',
+  'switch'
+]);
+const SHELL_GO_SUBCOMMANDS = new Set(['test', 'run', 'build', 'vet', 'mod', 'generate']);
+const SHELL_MAKE_TARGETS = new Set(['test', 'check', 'build', 'all', 'clean', 'install', 'lint', 'fmt', 'ci', 'verify']);
+const SHELL_CONTROL_PREFIX_WORDS = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do']);
+const SPLIT_QUOTE_PROSE_STOPWORDS = new Set([
+  'and',
+  'or',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'output',
+  'outputs',
+  'key',
+  'keys',
+  'string',
+  'strings',
+  'field',
+  'fields',
+  'value',
+  'values',
+  'literal',
+  'literals',
+  'token',
+  'tokens',
+  'word',
+  'words',
+  'label',
+  'labels',
+  'name',
+  'names',
+  'option',
+  'options',
+  'flag',
+  'flags',
+  'logic',
+  'check',
+  'checks',
+  'step',
+  'steps',
+  'case',
+  'cases',
+  'mode',
+  'modes',
+  'command',
+  'commands',
+  'verb',
+  'verbs',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'of',
+  'with',
+  'from',
+  'by',
+  'as',
+  'into',
+  'onto',
+  'per',
+  'vs',
+  'via',
+  'not',
+  'only',
+  'also',
+  'then',
+  'than',
+  'that',
+  'this',
+  'here',
+  'there',
+  'valid',
+  'invalid',
+  'allowed',
+  'refused',
+  'constant',
+  'equal',
+  'equals',
+  'matched',
+  'matches'
+]);
 
-function matchesQuotedCommandAt(clause, pos, allowPrefixedOrCompoundVerbs) {
-  const head = clause.slice(pos, pos + 1024);
-  if (!head) {
-    return false;
-  }
-  if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(head) || QUOTED_COMMAND_HEAD_REGEX.test(head)) {
-    return true;
-  }
-  if (allowPrefixedOrCompoundVerbs && QUOTED_COMPOUND_OR_PREFIXED_CMD_REGEX.test(head)) {
-    return true;
-  }
-  return false;
+function stripShellBinPrefix(word) {
+  return word.replace(/^(?:\/usr\/local\/bin\/|\/usr\/bin\/|\/bin\/)/i, '');
 }
 
-function isSingleQuotedCommandClause(rawClause, isCompound) {
-  if (!rawClause) {
-    return false;
+function normalizeInlineEscapedQuotes(text) {
+  if (!text || !text.includes('\\"')) {
+    return text;
   }
-  let end = rawClause.length;
-  while (end > 0 && /[\s)}]/.test(rawClause[end - 1])) {
-    end -= 1;
+  let count = 0;
+  let pos = text.indexOf('\\"');
+  while (pos !== -1) {
+    const precededBySlash = pos > 0 && text[pos - 1] === '\\';
+    if (!precededBySlash) {
+      count += 1;
+    }
+    pos = text.indexOf('\\"', pos + 2);
   }
-  let pos = 0;
-  while (pos < end) {
-    const c = rawClause[pos];
-    if (/\s/.test(c) || c === '(') {
-      pos += 1;
+  if (count < 2 || count % 2 !== 0) {
+    return text;
+  }
+  return text.replace(/(^|[^\\])\\"/g, '$1"');
+}
+
+function unescapeInlineShellWords(text) {
+  if (!text || !text.includes('\\')) {
+    return text;
+  }
+  let out = '';
+  let inSingle = false;
+  let inDouble = false;
+  const n = text.length;
+  for (let i = 0; i < n; i += 1) {
+    const ch = text[i];
+    if (ch === "'" && !inDouble) {
+      const isApostrophe =
+        !inSingle && i > 0 && /[A-Za-z0-9]/.test(text[i - 1]) && i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+      if (!isApostrophe) {
+        inSingle = !inSingle;
+      }
+      out += ch;
       continue;
     }
-    if (c === '{' && pos + 1 < end && /\s/.test(rawClause[pos + 1])) {
-      pos += 2;
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      out += ch;
       continue;
+    }
+    if (ch === '\\' && !inSingle && i + 1 < n) {
+      const next = text[i + 1];
+      if (!inDouble && /[A-Za-z0-9_./-]/.test(next)) {
+        out += next;
+        i += 1;
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function findClosedCommandSubstitutions(text) {
+  const n = text.length;
+  if (!text || !text.includes('$(')) {
+    return { closedFrames: [], topLevelClosed: [] };
+  }
+  const topState = { start: -1, inDouble: false, inSingle: false, noMoreSingle: false, parenDepth: 0, arith: false, children: null };
+  const frameStack = [];
+  const closedFrames = [];
+  const topLevelClosed = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const cur = frameStack.length > 0 ? frameStack[frameStack.length - 1] : topState;
+    const ch = text[i];
+
+    if (cur.inSingle) {
+      if (ch === "'") {
+        cur.inSingle = false;
+      }
+      continue;
+    }
+
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      cur.inDouble = !cur.inDouble;
+      continue;
+    }
+
+    if (ch === "'" && !cur.inDouble) {
+      const isInternalApostrophe =
+        i > 0 && /[A-Za-z0-9]/.test(text[i - 1]) && i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+      if (!isInternalApostrophe && !cur.noMoreSingle) {
+        const nextSq = text.indexOf("'", i + 1);
+        if (nextSq === -1) {
+          cur.noMoreSingle = true;
+        } else {
+          cur.inSingle = true;
+        }
+      }
+      continue;
+    }
+
+    if (ch === '$' && i + 1 < n && text[i + 1] === '(') {
+      const isArith = i + 2 < n && text[i + 2] === '(';
+      frameStack.push({
+        start: i,
+        inDouble: false,
+        inSingle: false,
+        noMoreSingle: false,
+        parenDepth: isArith ? 2 : 1,
+        arith: isArith,
+        children: null
+      });
+      i += isArith ? 2 : 1;
+      continue;
+    }
+
+    if (frameStack.length > 0 && !cur.inDouble) {
+      if (ch === '(') {
+        cur.parenDepth += 1;
+        continue;
+      }
+      if (ch === ')') {
+        cur.parenDepth -= 1;
+        if (cur.parenDepth === 0) {
+          const popped = frameStack.pop();
+          popped.end = i + 1;
+          closedFrames.push(popped);
+          if (frameStack.length > 0) {
+            const parent = frameStack[frameStack.length - 1];
+            if (!parent.children) {
+              parent.children = [popped];
+            } else {
+              parent.children.push(popped);
+            }
+          } else {
+            topLevelClosed.push(popped);
+          }
+        }
+      }
+    }
+  }
+
+  return { closedFrames, topLevelClosed };
+}
+
+function buildFrameOwnText(text, startIdx, endIdx, children) {
+  if (!children || children.length === 0) {
+    return text.slice(startIdx, endIdx);
+  }
+  let out = '';
+  let cursor = startIdx;
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child.start > cursor) {
+      out += text.slice(cursor, child.start);
+    }
+    out += ' __SUB__ ';
+    cursor = child.end;
+  }
+  if (cursor < endIdx) {
+    out += text.slice(cursor, endIdx);
+  }
+  return out;
+}
+
+function isFrameOwnBenignFast(text, startIdx, endIdx, children) {
+  let cursor = startIdx;
+  let firstWordStart = -1;
+  let firstWordEnd = -1;
+  const childCount = children ? children.length : 0;
+
+  for (let c = 0; c <= childCount; c += 1) {
+    const segEnd = c < childCount ? children[c].start : endIdx;
+    for (let i = cursor; i < segEnd; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code <= 32) {
+        if (firstWordStart !== -1 && firstWordEnd === -1) {
+          firstWordEnd = i;
+        }
+        continue;
+      }
+      const isAlphaNumUnderscore =
+        (code >= 97 && code <= 122) ||
+        (code >= 65 && code <= 90) ||
+        (code >= 48 && code <= 57) ||
+        code === 95;
+      if (!isAlphaNumUnderscore) {
+        return false;
+      }
+      if (firstWordStart === -1) {
+        firstWordStart = i;
+      }
+    }
+    if (c < childCount) {
+      if (firstWordStart !== -1 && firstWordEnd === -1) {
+        firstWordEnd = segEnd;
+      }
+      cursor = children[c].end;
+    }
+  }
+
+  if (firstWordStart === -1) {
+    return true;
+  }
+  const wordEnd = firstWordEnd === -1 ? endIdx : firstWordEnd;
+  const firstWord = text.slice(firstWordStart, wordEnd).toLowerCase();
+  return !SHELL_KNOWN_LOWER_STARTERS.has(firstWord);
+}
+
+function hasSingleQuoteCloseBeforeSpace(text, openIdx, n) {
+  for (let j = openIdx + 1; j < n; j += 1) {
+    const c = text[j];
+    if (c === "'") {
+      return j;
+    }
+    if (/\s|[;|&()]/.test(c)) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+function parseShellClausesLinear(text) {
+  const n = text.length;
+  const clauses = [];
+  let current = { tokens: [], hasRedirection: false, isFunctionWrap: false };
+  let pendingRedir = false;
+  let i = 0;
+  let noMoreDouble = false;
+  let noMoreSingle = false;
+
+  const pushClause = () => {
+    if (current.tokens.length > 0 || current.hasRedirection) {
+      clauses.push(current);
+    }
+    current = { tokens: [], hasRedirection: false, isFunctionWrap: false };
+    pendingRedir = false;
+  };
+
+  while (i < n) {
+    while (i < n && /[ \t\r\v\f]/.test(text[i])) {
+      i += 1;
+    }
+    if (i >= n) {
+      break;
+    }
+    const ch = text[i];
+
+    // Clause separators: &&, ||, ;, |, \n
+    if (ch === '\n' || ch === ';') {
+      pushClause();
+      i += 1;
+      continue;
+    }
+    if (ch === '|') {
+      pushClause();
+      i += i + 1 < n && text[i + 1] === '|' ? 2 : 1;
+      continue;
+    }
+    if (ch === '&') {
+      if (i + 1 < n && text[i + 1] === '&') {
+        pushClause();
+        i += 2;
+        continue;
+      }
+      if (i + 1 < n && text[i + 1] === '>') {
+        current.hasRedirection = true;
+        pendingRedir = true;
+        i += i + 2 < n && text[i + 2] === '>' ? 3 : 2;
+        while (i < n && /[ \t]/.test(text[i])) i += 1;
+        const targetStart = i;
+        while (i < n && !/[\s;|&<>()]/.test(text[i])) {
+          if (text[i] === '\\' && i + 1 < n) {
+            i += 2;
+          } else {
+            i += 1;
+          }
+        }
+        if (i === targetStart && i < n) i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '(') {
+      if (current.tokens.length === 1 && i + 1 < n && text[i + 1] === ')') {
+        current.isFunctionWrap = true;
+        pushClause();
+        i += 2;
+        continue;
+      }
+      if (current.tokens.length === 0) {
+        i += 1;
+        continue;
+      }
+      pushClause();
+      i += 1;
+      continue;
+    }
+    if (ch === ')') {
+      pushClause();
+      i += 1;
+      continue;
+    }
+    if (ch === '{' && (i + 1 >= n || /\s/.test(text[i + 1])) && current.tokens.length === 0) {
+      i += 1;
+      continue;
+    }
+    if (ch === '}' && current.tokens.length === 0) {
+      i += 1;
+      continue;
+    }
+
+    let fdLen = 0;
+    if (ch >= '0' && ch <= '9') {
+      let k = i;
+      while (k < n && text[k] >= '0' && text[k] <= '9') {
+        k += 1;
+      }
+      if (k < n && (text[k] === '<' || text[k] === '>')) {
+        fdLen = k - i;
+      }
+    }
+
+    if (fdLen > 0 || ch === '<' || ch === '>') {
+      const opPos = i + fdLen;
+      const opChar = text[opPos];
+      current.hasRedirection = true;
+      pendingRedir = true;
+      let nextPos = opPos + 1;
+      if (opChar === '<' && nextPos < n && text[nextPos] === '<') {
+        nextPos += 1;
+        if (nextPos < n && (text[nextPos] === '<' || text[nextPos] === '-')) {
+          nextPos += 1;
+        }
+      } else if (opChar === '<' && nextPos < n && (text[nextPos] === '&' || text[nextPos] === '>')) {
+        nextPos += 1;
+      } else if (opChar === '>' && nextPos < n && (text[nextPos] === '>' || text[nextPos] === '&' || text[nextPos] === '|')) {
+        nextPos += 1;
+      }
+      const isFdDup = text[nextPos - 1] === '&';
+      while (nextPos < n && /[ \t]/.test(text[nextPos])) {
+        nextPos += 1;
+      }
+      if (isFdDup) {
+        if (nextPos < n && text[nextPos] === '-') {
+          nextPos += 1;
+        } else {
+          while (nextPos < n && text[nextPos] >= '0' && text[nextPos] <= '9') {
+            nextPos += 1;
+          }
+        }
+        i = nextPos;
+        continue;
+      }
+      while (nextPos < n && !/[\s;|&<>()]/.test(text[nextPos])) {
+        if (text[nextPos] === '\\' && nextPos + 1 < n) {
+          nextPos += 2;
+        } else if (text[nextPos] === '"') {
+          nextPos += 1;
+          while (nextPos < n && text[nextPos] !== '"') {
+            nextPos += text[nextPos] === '\\' ? 2 : 1;
+          }
+          if (nextPos < n) nextPos += 1;
+        } else if (text[nextPos] === "'") {
+          const endSq = text.indexOf("'", nextPos + 1);
+          nextPos = endSq === -1 ? nextPos + 1 : endSq + 1;
+        } else {
+          nextPos += 1;
+        }
+      }
+      i = nextPos > i ? nextPos : i + 1;
+      continue;
+    }
+
+    const tokenStart = i;
+    let value = '';
+    let wasQuoted = false;
+    let hasRawEq = false;
+
+    while (i < n && !/[\s;|&<>()]/.test(text[i])) {
+      const c = text[i];
+      if (c === '=' && i > tokenStart && !wasQuoted && !hasRawEq) {
+        const prefix = text.slice(tokenStart, i);
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)) {
+          hasRawEq = true;
+        }
+      }
+      if (c === '"') {
+        if (noMoreDouble) {
+          value += c;
+          i += 1;
+          continue;
+        }
+        let closeDq = -1;
+        for (let k = i + 1; k < n; k += 1) {
+          if (text[k] === '\\' && k + 1 < n) {
+            k += 1;
+            continue;
+          }
+          if (text[k] === '"') {
+            closeDq = k;
+            break;
+          }
+        }
+        if (closeDq === -1) {
+          noMoreDouble = true;
+          value += c;
+          i += 1;
+          continue;
+        }
+        wasQuoted = true;
+        for (let k = i + 1; k < closeDq; k += 1) {
+          if (text[k] === '\\' && k + 1 < closeDq && (text[k + 1] === '"' || text[k + 1] === '\\' || text[k + 1] === '$')) {
+            value += text[k + 1];
+            k += 1;
+          } else {
+            value += text[k];
+          }
+        }
+        i = closeDq + 1;
+        continue;
+      }
+      if (c === "'") {
+        const precededByAlphaNum = i > tokenStart && /[A-Za-z0-9]/.test(text[i - 1]);
+        const followedByAlphaNum = i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+        if (precededByAlphaNum && followedByAlphaNum) {
+          const sameWordClose = hasSingleQuoteCloseBeforeSpace(text, i, n);
+          if (sameWordClose === -1) {
+            value += c;
+            i += 1;
+            continue;
+          }
+        }
+        if (noMoreSingle) {
+          value += c;
+          i += 1;
+          continue;
+        }
+        const closeSq = text.indexOf("'", i + 1);
+        if (closeSq === -1) {
+          noMoreSingle = true;
+          value += c;
+          i += 1;
+          continue;
+        }
+        if (precededByAlphaNum && !followedByAlphaNum && i + 1 < n && /[\s,.;:!?)]/.test(text[i + 1])) {
+          value += c;
+          i += 1;
+          continue;
+        }
+        wasQuoted = true;
+        value += text.slice(i + 1, closeSq);
+        i = closeSq + 1;
+        continue;
+      }
+      if (c === '\\' && i + 1 < n) {
+        const nextC = text[i + 1];
+        if (!/\s/.test(nextC)) {
+          value += nextC;
+          i += 2;
+          continue;
+        }
+      }
+      value += c;
+      i += 1;
+    }
+
+    if (i === tokenStart) {
+      i += 1;
+      continue;
+    }
+    const raw = text.slice(tokenStart, i);
+    const trimmedClean = value.replace(/[.,;:!?]+$/, '');
+    current.tokens.push({
+      raw,
+      value,
+      trimmedClean: trimmedClean || value,
+      wasQuoted,
+      isEnvAssign: hasRawEq,
+      precededByRedir: pendingRedir
+    });
+    pendingRedir = false;
+  }
+
+  pushClause();
+  return clauses;
+}
+
+function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options = {}) {
+  const { isSubshellOrSubCmd = false, strictProseMode = false } = options;
+  const tokens = clause.tokens;
+  if (!tokens || startIdx >= tokens.length) {
+    return { matched: false, nextIdx: startIdx + 1 };
+  }
+  if (clause.isFunctionWrap && tokens.length === 1 && !clause.hasRedirection) {
+    return { matched: false, nextIdx: tokens.length };
+  }
+  let idx = startIdx;
+  let hasEnvPrefix = false;
+  let hasWrapperPrefix = false;
+  const hasRedirection = startIdx === 0 ? clause.hasRedirection : Boolean(tokens[startIdx].precededByRedir);
+
+  while (idx < tokens.length) {
+    const tok = tokens[idx];
+    if (idx + 1 < tokens.length && !tok.wasQuoted && SHELL_CONTROL_PREFIX_WORDS.has(tok.value.toLowerCase())) {
+      idx += 1;
+      continue;
+    }
+    if (tok.isEnvAssign && idx + 1 < tokens.length) {
+      hasEnvPrefix = true;
+      idx += 1;
+      continue;
+    }
+    const strippedLower = stripShellBinPrefix(tok.trimmedClean).toLowerCase();
+    if (SHELL_WRAPPER_WORD_SET.has(strippedLower) && idx + 1 < tokens.length) {
+      const nextLower = stripShellBinPrefix(tokens[idx + 1].trimmedClean).toLowerCase();
+      if (
+        !tok.wasQuoted ||
+        hasEnvPrefix ||
+        hasRedirection ||
+        isCompound ||
+        isSubshellOrSubCmd ||
+        nextLower.startsWith('-') ||
+        SHELL_SPLIT_QUOTE_VERBS.has(nextLower) ||
+        SHELL_FLAG_OR_PATH_CLI_VERBS.has(nextLower) ||
+        SHELL_COMPOUND_ZERO_ARG_VERBS.has(nextLower)
+      ) {
+        hasWrapperPrefix = true;
+        idx += 1;
+        let hasCommandLookupFlag = false;
+        const shortValueFlags = SHELL_WRAPPER_SHORT_VALUE_FLAGS.get(strippedLower);
+        const longValueFlags = SHELL_WRAPPER_LONG_VALUE_FLAGS.get(strippedLower);
+        while (idx < tokens.length) {
+          const arg = tokens[idx].value;
+          if (arg === '--') {
+            idx += 1;
+            break;
+          }
+          if (arg.startsWith('--')) {
+            idx += 1;
+            if (!arg.includes('=') && longValueFlags?.has(arg) && idx < tokens.length) {
+              idx += 1;
+            }
+            continue;
+          }
+          if (arg.startsWith('-') && arg.length > 1 && /[A-Za-z0-9]/.test(arg[1])) {
+            const flagChar = arg[1];
+            if (strippedLower === 'command' && (arg.includes('v') || arg.includes('V'))) {
+              hasCommandLookupFlag = true;
+            }
+            idx += 1;
+            if (arg.length === 2 && shortValueFlags?.has(flagChar) && idx < tokens.length) {
+              idx += 1;
+            }
+            continue;
+          }
+          break;
+        }
+        if (hasCommandLookupFlag && idx < tokens.length) {
+          return { matched: true, nextIdx: idx + 1, headIdx: idx };
+        }
+        if (strippedLower === 'timeout' && idx < tokens.length && /^\d+(?:\.\d+)?[smhd]?$/i.test(tokens[idx].value)) {
+          idx += 1;
+        }
+        continue;
+      }
     }
     break;
   }
-  if (pos >= end) {
-    return false;
-  }
-  const clause = rawClause.slice(pos, end);
-  const len = clause.length;
-  const hasRedirection = /[<>]/.test(clause);
-  let idx = 0;
-  let peeledPrefix = false;
 
-  while (idx < len) {
-    while (idx < len && /\s/.test(clause[idx])) {
-      idx += 1;
-    }
-    if (idx >= len) {
-      break;
-    }
-    if (matchesQuotedCommandAt(clause, idx, isCompound || peeledPrefix || hasRedirection)) {
-      return true;
-    }
-    const rest = clause.slice(idx, idx + 1024);
-    const envMatch = SHELL_ENV_ASSIGN_PREFIX_REGEX.exec(rest);
-    if (envMatch) {
-      idx += envMatch[0].length;
-      peeledPrefix = true;
-      continue;
-    }
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
-      let k = idx + rest.indexOf('=') + 1;
-      while (k < len && !/\s/.test(clause[k])) {
-        if (clause[k] === "'") {
-          const nextQ = clause.indexOf("'", k + 1);
-          k = nextQ === -1 ? len : nextQ + 1;
-        } else if (clause[k] === '"') {
-          k += 1;
-          while (k < len && clause[k] !== '"') {
-            k += clause[k] === '\\' ? 2 : 1;
-          }
-          if (k < len) k += 1;
-        } else {
-          k += clause[k] === '\\' ? 2 : 1;
-        }
-      }
-      if (k < len && /\s/.test(clause[k])) {
-        idx = k + 1;
-        peeledPrefix = true;
-        continue;
-      }
-      break;
-    }
-    const wordMatch = /^(?:\/usr\/local\/bin\/|\/usr\/bin\/|\/bin\/)?([A-Za-z0-9_-]+)\s+/.exec(rest);
-    if (!wordMatch) {
-      break;
-    }
-    const wordLower = wordMatch[1].toLowerCase();
-    if (!SHELL_WRAPPER_WORD_SET.has(wordLower)) {
-      break;
-    }
-    idx += wordMatch[0].length;
-    peeledPrefix = true;
-    while (idx < len) {
-      while (idx < len && /\s/.test(clause[idx])) {
-        idx += 1;
-      }
-      const flagSlice = clause.slice(idx, idx + 256);
-      if (flagSlice.startsWith('--')) {
-        const eqOrSp = /^--[A-Za-z0-9_-]*(?:=\S*)?\s+/.exec(flagSlice);
-        if (!eqOrSp) break;
-        idx += eqOrSp[0].length;
-        if (flagSlice.startsWith('-- ')) break;
-        continue;
-      }
-      if (flagSlice.startsWith('-') && flagSlice.length > 1 && /[A-Za-z0-9]/.test(flagSlice[1])) {
-        const shortFlag = /^-[A-Za-z0-9]+\s+/.exec(flagSlice);
-        if (!shortFlag) break;
-        const flagTok = shortFlag[0].trim();
-        idx += shortFlag[0].length;
-        if (
-          (wordLower === 'nice' && flagTok === '-n') ||
-          (wordLower === 'env' && (flagTok === '-u' || flagTok === '-C' || flagTok === '-S')) ||
-          (wordLower === 'sudo' && (flagTok === '-u' || flagTok === '-g')) ||
-          (wordLower === 'timeout' && (flagTok === '-s' || flagTok === '-k'))
-        ) {
-          const argMatch = /^\S+\s+/.exec(clause.slice(idx, idx + 256));
-          if (argMatch) idx += argMatch[0].length;
-        }
-        continue;
-      }
-      break;
-    }
-    if (wordLower === 'timeout') {
-      const durMatch = /^\d+(?:\.\d+)?[smhd]?\s+/i.exec(clause.slice(idx, idx + 64));
-      if (durMatch) {
-        idx += durMatch[0].length;
-      }
+  if (idx >= tokens.length) {
+    return { matched: false, nextIdx: idx };
+  }
+
+  const headTok = tokens[idx];
+  const cmdRaw = stripShellBinPrefix(headTok.trimmedClean);
+  const cmdLower = cmdRaw.toLowerCase();
+  const remainingCount = tokens.length - 1 - idx;
+  const nextVal = remainingCount > 0 ? tokens[idx + 1].trimmedClean : '';
+
+  if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean) || SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.value)) {
+    if (!strictProseMode || remainingCount > 0 || hasEnvPrefix || hasWrapperPrefix || hasRedirection) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
     }
   }
-  return false;
+
+  if (cmdLower === 'go' && remainingCount >= 1 && SHELL_GO_SUBCOMMANDS.has(nextVal.toLowerCase())) {
+    return { matched: true, nextIdx: idx + 1, headIdx: idx };
+  }
+
+  if (SHELL_ZERO_ARG_CLI_VERBS.has(cmdLower)) {
+    if (!strictProseMode || hasEnvPrefix || hasWrapperPrefix || hasRedirection || isSubshellOrSubCmd || remainingCount > 0) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+  }
+
+  if (SHELL_COMPOUND_ZERO_ARG_VERBS.has(cmdLower)) {
+    if (isCompound || hasEnvPrefix || hasWrapperPrefix || hasRedirection || isSubshellOrSubCmd) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+  }
+
+  if (SHELL_STRICT_CLI_VERBS.has(cmdLower)) {
+    if (
+      remainingCount >= 1 &&
+      (headTok.raw.includes('"') || headTok.raw.includes("'") || headTok.raw.includes('\\')) &&
+      SPLIT_QUOTE_PROSE_STOPWORDS.has(nextVal.toLowerCase())
+    ) {
+      return { matched: false, nextIdx: Math.max(startIdx + 1, idx) };
+    }
+    if (remainingCount >= 1 || hasRedirection || (isSubshellOrSubCmd && hasEnvPrefix)) {
+      if (strictProseMode && cmdLower === 'git' && !hasEnvPrefix && !hasWrapperPrefix && !hasRedirection) {
+        const matched = remainingCount >= 1 && (SHELL_GIT_SUBCOMMANDS.has(nextVal.toLowerCase()) || nextVal.startsWith('-'));
+        return { matched, nextIdx: Math.max(startIdx + 1, idx + 1), headIdx: idx };
+      }
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+    return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
+  }
+
+  if (cmdLower === 'make') {
+    if (remainingCount >= 1 && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || SHELL_MAKE_TARGETS.has(nextVal.toLowerCase()))) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+    if (isCompound || hasEnvPrefix || hasWrapperPrefix || hasRedirection || isSubshellOrSubCmd) {
+      const matched = remainingCount === 0 || !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextVal.toLowerCase());
+      return { matched, nextIdx: Math.max(startIdx + 1, idx + 1), headIdx: idx };
+    }
+    return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
+  }
+
+  if (cmdLower === 'cd') {
+    if (remainingCount >= 1 && (/^(?:[-./~]|\.\.)/.test(nextVal) || isCompound || hasEnvPrefix || hasWrapperPrefix || hasRedirection)) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+    return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
+  }
+
+  if (SHELL_FLAG_OR_PATH_CLI_VERBS.has(cmdLower)) {
+    if (remainingCount >= 1 && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || hasEnvPrefix || hasWrapperPrefix || hasRedirection)) {
+      return { matched: true, nextIdx: idx + 1, headIdx: idx };
+    }
+    return { matched: false, nextIdx: Math.max(startIdx + 1, idx + 1) };
+  }
+
+  return { matched: false, nextIdx: Math.max(startIdx + 1, idx) };
 }
 
-function isQuotedCommandOrRepoContent(inner) {
-  if (!inner) {
+function clauseLooksLikeShellCommand(clause, isCompound, options = {}) {
+  return clauseLooksLikeShellCommandFrom(clause, 0, isCompound, options).matched;
+}
+
+const SHELL_KNOWN_LOWER_STARTERS = new Set([
+  ...SHELL_SPLIT_QUOTE_VERBS,
+  ...SHELL_FLAG_OR_PATH_CLI_VERBS,
+  ...SHELL_COMPOUND_ZERO_ARG_VERBS,
+  ...SHELL_CONTROL_PREFIX_WORDS,
+  'entire',
+  'whole',
+  'across',
+  'repo',
+  'repository',
+  'codebase',
+  'run'
+]);
+
+function scanFlatShellClauses(text, options = {}) {
+  if (!text) {
     return false;
   }
-  if (!/[\s;|&><()$=/]/.test(inner)) {
-    return /^(?:uname|ls|whoami|printenv)$/i.test(inner) || /\brepo-wide\b/i.test(inner);
-  }
-  if (REPO_WIDE_OR_RUN_PHRASE_REGEX.test(inner)) {
-    return true;
-  }
-  let subSearch = 0;
-  while (subSearch < inner.length) {
-    const dollarOpen = inner.indexOf('$(', subSearch);
-    if (dollarOpen === -1) {
-      break;
-    }
-    const closeParen = inner.indexOf(')', dollarOpen + 2);
-    if (closeParen === -1) {
-      break;
-    }
-    const subBody = inner.slice(dollarOpen + 2, closeParen).trim();
-    if (subBody && (isQuotedCommandOrRepoContent(subBody) || isSingleQuotedCommandClause(subBody, true))) {
-      return true;
-    }
-    subSearch = closeParen + 1;
-  }
-  const clauses = inner.split(/&&|\|\||[;|\n]/);
+  const normalized = options.skipQuoteNorm ? text : normalizeInlineEscapedQuotes(text);
+  const clauses = parseShellClausesLinear(normalized);
   const isCompound = clauses.length > 1;
   for (let c = 0; c < clauses.length; c += 1) {
-    if (isSingleQuotedCommandClause(clauses[c], isCompound)) {
+    if (clauseLooksLikeShellCommand(clauses[c], isCompound, options)) {
       return true;
     }
   }
   return false;
 }
 
-function hasCheckCommandOrRepoDependency(rawText) {
-  if (!rawText || typeof rawText !== 'string') {
+function scanShellCommandText(text, options = {}) {
+  if (!text || typeof text !== 'string') {
     return false;
   }
-  if (/`[^`]+`/.test(rawText)) {
+  if (REPO_WIDE_OR_RUN_PHRASE_REGEX.test(text)) {
     return true;
   }
+  if (text.includes('`')) {
+    const btNorm = normalizeInlineEscapedQuotes(text).replace(/\\`/g, '`');
+    const bn = btNorm.length;
+    let noMoreSq = false;
+    let noMoreBt = false;
+    let outerHasVerbChecked = false;
+    let outerSubCmdCtx = false;
+    for (let i = 0; i < bn; i += 1) {
+      const ch = btNorm[i];
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === "'" && !noMoreSq) {
+        const isApos = i > 0 && /[A-Za-z0-9]/.test(btNorm[i - 1]) && i + 1 < bn && /[A-Za-z0-9]/.test(btNorm[i + 1]);
+        if (!isApos) {
+          const nextSq = btNorm.indexOf("'", i + 1);
+          if (nextSq === -1) {
+            noMoreSq = true;
+          } else {
+            i = nextSq;
+          }
+        }
+        continue;
+      }
+      if (ch === '`' && !noMoreBt) {
+        const closeBt = btNorm.indexOf('`', i + 1);
+        if (closeBt === -1) {
+          noMoreBt = true;
+          continue;
+        }
+        const btInner = btNorm.slice(i + 1, closeBt).trim();
+        if (btInner) {
+          if (!outerHasVerbChecked) {
+            outerHasVerbChecked = true;
+            const prefix = btNorm.slice(0, i).trim();
+            if (prefix) {
+              const pClauses = parseShellClausesLinear(prefix);
+              const lastP = pClauses[pClauses.length - 1];
+              const leadP = lastP?.tokens?.[0];
+              if (leadP) {
+                const lp = stripShellBinPrefix(leadP.trimmedClean).toLowerCase();
+                outerSubCmdCtx =
+                  leadP.isEnvAssign ||
+                  lastP.hasRedirection ||
+                  SHELL_SPLIT_QUOTE_VERBS.has(lp) ||
+                  SHELL_COMPOUND_ZERO_ARG_VERBS.has(lp) ||
+                  lp === 'echo' ||
+                  lp === 'printf';
+              }
+            }
+          }
+          if (scanFlatShellClauses(btInner, { isSubshellOrSubCmd: outerSubCmdCtx, strictProseMode: false, skipQuoteNorm: true })) {
+            return true;
+          }
+        }
+        i = closeBt;
+      }
+    }
+  }
+  if (text.includes('$(')) {
+    const normalized = normalizeInlineEscapedQuotes(text);
+    const { closedFrames, topLevelClosed } = findClosedCommandSubstitutions(normalized);
+    for (let f = 0; f < closedFrames.length; f += 1) {
+      const frame = closedFrames[f];
+      const ownStart = frame.start + (frame.arith ? 3 : 2);
+      const ownEnd = frame.end - 1;
+      if (isFrameOwnBenignFast(normalized, ownStart, ownEnd, frame.children)) {
+        continue;
+      }
+      const ownText = buildFrameOwnText(normalized, ownStart, ownEnd, frame.children).trim();
+      if (ownText && scanFlatShellClauses(ownText, { isSubshellOrSubCmd: true, strictProseMode: false, skipQuoteNorm: true })) {
+        return true;
+      }
+    }
+    if (topLevelClosed.length > 0) {
+      const strippedTop = buildFrameOwnText(normalized, 0, normalized.length, topLevelClosed);
+      return scanFlatShellClauses(strippedTop, { ...options, skipQuoteNorm: true });
+    }
+  }
+  return scanFlatShellClauses(text, options);
+}
+
+function hasSplitOrConcatQuoteCommand(rawText, openIdx, closeIdx) {
+  const n = rawText.length;
+  // Walk backward/forward to capture contiguous concatenated tokens like `n"pm"` or `'np''m'`
+  let tokStart = openIdx;
+  while (tokStart > 0 && /[A-Za-z0-9_./\\-]/.test(rawText[tokStart - 1])) {
+    tokStart -= 1;
+  }
+  let tokEnd = closeIdx + 1;
+  while (tokEnd < n) {
+    const nc = rawText[tokEnd];
+    if (nc === '"' || nc === "'") {
+      const q = nc;
+      let nextClose = -1;
+      if (q === '"') {
+        for (let k = tokEnd + 1; k < n; k += 1) {
+          if (rawText[k] === '\\') {
+            k += 1;
+            continue;
+          }
+          if (rawText[k] === '"') {
+            nextClose = k;
+            break;
+          }
+        }
+      } else {
+        nextClose = rawText.indexOf("'", tokEnd + 1);
+      }
+      if (nextClose !== -1) {
+        tokEnd = nextClose + 1;
+        continue;
+      }
+      break;
+    }
+    if (!/[A-Za-z0-9_./\\-]/.test(nc)) {
+      break;
+    }
+    tokEnd += 1;
+  }
+
+  const combinedSpan = rawText.slice(tokStart, tokEnd);
+  const parsedLead = parseShellClausesLinear(combinedSpan);
+  const leadToken = parsedLead[0]?.tokens?.[0];
+  if (!leadToken) {
+    return { cmd: null, tokEnd };
+  }
+  const leadLower = stripShellBinPrefix(leadToken.trimmedClean).toLowerCase();
+  if (!SHELL_SPLIT_QUOTE_VERBS.has(leadLower) && !SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(leadToken.trimmedClean)) {
+    return { cmd: null, tokEnd };
+  }
+
+  // Inspect bounded immediate unquoted tail after tokEnd
+  let ws = tokEnd;
+  while (ws < n && /[ \t]/.test(rawText[ws])) {
+    ws += 1;
+  }
+  if (ws === tokEnd && tokEnd < n && !/[<>|&;\n]/.test(rawText[tokEnd])) {
+    return { cmd: null, tokEnd };
+  }
+  if (ws >= n) {
+    return { cmd: null, tokEnd };
+  }
+  const nextCh = rawText[ws];
+  if (',.;:!?)}\n'.includes(nextCh)) {
+    return { cmd: null, tokEnd };
+  }
+  const tailSlice = rawText.slice(ws, Math.min(n, ws + 192));
+  const tailCut = tailSlice.search(/[;\n]|&&|\|\|/);
+  const tailCandidate = (tailCut === -1 ? tailSlice : tailSlice.slice(0, tailCut)).trim();
+  if (!tailCandidate) {
+    return { cmd: null, tokEnd };
+  }
+  const firstTailWordMatch = /^([^\s,;:.!?()[\]{}]+)/.exec(tailCandidate);
+  const firstTailWord = firstTailWordMatch ? firstTailWordMatch[1].toLowerCase() : '';
+  if (SPLIT_QUOTE_PROSE_STOPWORDS.has(firstTailWord)) {
+    return { cmd: null, tokEnd };
+  }
+
+  const candidateClause = `${combinedSpan} ${tailCandidate}`;
+  if (scanShellCommandText(candidateClause)) {
+    const firstArg = firstTailWordMatch ? firstTailWordMatch[1] : tailCandidate;
+    return { cmd: `${leadToken.trimmedClean} ${firstArg}`.trim(), tokEnd };
+  }
+  return { cmd: null, tokEnd };
+}
+
+function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBareScript = false, stopOnFirst = true } = {}) {
   const n = rawText.length;
   let masked = '';
   let cursor = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
+  let noMoreBacktick = false;
+  let lastSplitWordEnd = -1;
+  const matchedDeps = [];
 
   for (let i = 0; i < n; i += 1) {
     const ch = rawText[i];
-    if (ch !== '"' && ch !== "'") {
+    if (ch !== '"' && ch !== "'" && (!includeBackticks || ch !== '`')) {
       continue;
     }
     if (i > 0 && /[A-Za-z0-9_./-]/.test(rawText[i - 1])) {
+      // Allow n"pm" / n'pm' only when it forms a command with tail, evaluating each concatenated token once in O(n)
+      if (ch === '`') {
+        continue;
+      }
+      if (ch === "'") {
+        if (i >= lastSplitWordEnd) {
+          const endSq = hasSingleQuoteCloseBeforeSpace(rawText, i, n);
+          if (endSq !== -1 && endSq - i <= 64) {
+            const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endSq);
+            lastSplitWordEnd = tokEnd;
+            if (splitCmd) {
+              matchedDeps.push(splitCmd);
+              if (stopOnFirst) return { matchedDeps, remainder: rawText };
+            }
+          }
+        }
+        continue;
+      }
+      if (ch === '"' && !noMoreDouble && i >= lastSplitWordEnd) {
+        let endDq = -1;
+        for (let k = i + 1; k < n && k - i <= 64; k += 1) {
+          if (rawText[k] === '\\') {
+            k += 1;
+            continue;
+          }
+          if (rawText[k] === '"') {
+            endDq = k;
+            break;
+          }
+        }
+        if (endDq !== -1) {
+          const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endDq);
+          lastSplitWordEnd = tokEnd;
+          if (splitCmd) {
+            matchedDeps.push(splitCmd);
+            if (stopOnFirst) return { matchedDeps, remainder: rawText };
+          }
+        }
+      }
       continue;
     }
-    if ((ch === '"' && noMoreDouble) || (ch === "'" && noMoreSingle)) {
+    if ((ch === '"' && noMoreDouble) || (ch === "'" && noMoreSingle) || (ch === '`' && noMoreBacktick)) {
       continue;
     }
+
     let closeIdx = -1;
     if (ch === '"') {
       for (let k = i + 1; k < n; k += 1) {
@@ -395,7 +1304,7 @@ function hasCheckCommandOrRepoDependency(rawText) {
         noMoreDouble = true;
         continue;
       }
-    } else {
+    } else if (ch === "'") {
       for (let k = i + 1; k < n; k += 1) {
         if (rawText[k] === "'") {
           const isInternalApostrophe =
@@ -410,19 +1319,176 @@ function hasCheckCommandOrRepoDependency(rawText) {
         noMoreSingle = true;
         continue;
       }
+    } else {
+      closeIdx = rawText.indexOf('`', i + 1);
+      if (closeIdx === -1) {
+        noMoreBacktick = true;
+        continue;
+      }
     }
 
     const inner = rawText.slice(i + 1, closeIdx).trim();
-    if (inner && isQuotedCommandOrRepoContent(inner)) {
-      return true;
+    if (inner) {
+      if (ch === '`' && !includeBackticks) {
+        matchedDeps.push(inner);
+        if (stopOnFirst) return { matchedDeps, remainder: rawText };
+      } else {
+        const isSafeEndpoint = includeBackticks && typeof isSingleExternalEndpointToken === 'function' && isSingleExternalEndpointToken(inner);
+        if (!isSafeEndpoint) {
+          const matchesScript = includeBareScript && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
+          if (matchesScript || scanShellCommandText(inner)) {
+            matchedDeps.push(inner);
+            if (stopOnFirst) return { matchedDeps, remainder: rawText };
+          }
+        }
+      }
     }
+
+    if (ch !== '`' && i >= lastSplitWordEnd) {
+      const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, closeIdx);
+      lastSplitWordEnd = tokEnd;
+      if (splitCmd) {
+        matchedDeps.push(splitCmd);
+        if (stopOnFirst) return { matchedDeps, remainder: rawText };
+      }
+    }
+
     masked += rawText.slice(cursor, i) + ' '.repeat(closeIdx - i + 1);
     cursor = closeIdx + 1;
     i = closeIdx;
   }
 
   const remainder = cursor === 0 ? rawText : masked + rawText.slice(cursor);
-  return UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(remainder);
+  return { matchedDeps, remainder };
+}
+
+function scanUnquotedRedirectionAndWrapperCommands(remainder) {
+  if (!remainder) {
+    return null;
+  }
+  if (
+    !remainder.includes('<') &&
+    !remainder.includes('>') &&
+    !remainder.includes('=') &&
+    !/\b(?:env|command|builtin|time|nohup|nice|sudo|exec|setsid|stdbuf|timeout)\b/i.test(remainder)
+  ) {
+    return null;
+  }
+  const normalized = unescapeInlineShellWords(remainder);
+  const clauses = parseShellClausesLinear(normalized);
+  const isCompound = clauses.length > 1;
+
+  for (let c = 0; c < clauses.length; c += 1) {
+    const clause = clauses[c];
+    const tokens = clause.tokens;
+    let k = 0;
+    while (k < tokens.length) {
+      const tok = tokens[k];
+      const strippedLower = stripShellBinPrefix(tok.trimmedClean).toLowerCase();
+      if (tok.precededByRedir || tok.isEnvAssign || SHELL_WRAPPER_WORD_SET.has(strippedLower)) {
+        const res = clauseLooksLikeShellCommandFrom(clause, k, isCompound, { strictProseMode: false });
+        if (res.matched) {
+          return tokens.slice(k, Math.min(tokens.length, (res.headIdx ?? k) + 3)).map((t) => t.raw).join(' ');
+        }
+        k = Math.max(k + 1, res.nextIdx);
+        continue;
+      }
+      k += 1;
+    }
+  }
+  return null;
+}
+
+function extractProseCommandAndRepoDeps(rawText) {
+  if (!rawText || typeof rawText !== 'string') {
+    return [];
+  }
+  const deps = [];
+  const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
+    includeBackticks: true,
+    includeBareScript: false,
+    stopOnFirst: false
+  });
+  for (let i = 0; i < matchedDeps.length; i += 1) {
+    if (!deps.includes(matchedDeps[i])) {
+      deps.push(matchedDeps[i]);
+    }
+  }
+
+  const normalizedRemainder = unescapeInlineShellWords(remainder);
+  if (normalizedRemainder.includes('$(')) {
+    const { closedFrames } = findClosedCommandSubstitutions(normalizedRemainder);
+    for (let f = 0; f < closedFrames.length; f += 1) {
+      const frame = closedFrames[f];
+      const ownStart = frame.start + (frame.arith ? 3 : 2);
+      const ownEnd = frame.end - 1;
+      if (isFrameOwnBenignFast(normalizedRemainder, ownStart, ownEnd, frame.children)) {
+        continue;
+      }
+      const ownText = buildFrameOwnText(normalizedRemainder, ownStart, ownEnd, frame.children).trim();
+      if (ownText && scanFlatShellClauses(ownText, { isSubshellOrSubCmd: true, strictProseMode: false, skipQuoteNorm: true })) {
+        const snippet = normalizedRemainder.slice(frame.start, frame.end);
+        if (!deps.includes(snippet)) {
+          deps.push(snippet);
+        }
+        break;
+      }
+    }
+  }
+
+  const unquotedMatch = UNQUOTED_PROSE_COMMAND_OR_REPO_REGEX.exec(normalizedRemainder);
+  if (unquotedMatch) {
+    const dep = unquotedMatch[0].trim();
+    if (dep && !deps.includes(dep)) {
+      deps.push(dep);
+    }
+  }
+
+  const redirOrWrapMatch = scanUnquotedRedirectionAndWrapperCommands(remainder);
+  if (redirOrWrapMatch && !deps.includes(redirOrWrapMatch)) {
+    deps.push(redirOrWrapMatch);
+  }
+
+  return deps;
+}
+
+function hasCheckCommandOrRepoDependency(rawText) {
+  if (!rawText || typeof rawText !== 'string') {
+    return false;
+  }
+  if (/`[^`]+`/.test(rawText)) {
+    return true;
+  }
+  const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
+    includeBackticks: false,
+    includeBareScript: true,
+    stopOnFirst: true
+  });
+  if (matchedDeps.length > 0) {
+    return true;
+  }
+
+  const unescapedRemainder = unescapeInlineShellWords(remainder);
+  if (unescapedRemainder.includes('$(')) {
+    const { topLevelClosed } = findClosedCommandSubstitutions(unescapedRemainder);
+    for (let f = 0; f < topLevelClosed.length; f += 1) {
+      const frame = topLevelClosed[f];
+      if (!frame.arith && unescapedRemainder.slice(frame.start + 2, frame.end - 1).trim().length > 0) {
+        return true;
+      }
+    }
+  }
+
+  if (SHELL_UNQUOTED_SCRIPT_CMD_REGEX.test(unescapedRemainder)) {
+    return true;
+  }
+  if (UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(unescapedRemainder)) {
+    return true;
+  }
+  if (scanUnquotedRedirectionAndWrapperCommands(remainder)) {
+    return true;
+  }
+  return false;
 }
 const CHECK_EXTERNAL_SOURCE_REGEX = new RegExp(
   `\\b(?:rfc\\s*\\d+|iso[\\s/-]*\\d+|ietf|w3c|owasp|cve-\\d{4}-\\d+|mdn|openapi|external(?:\\s+\\w+)?|upstream(?:\\s+\\w+)?|remote(?:\\s+\\w+)?|third[- ]party(?:\\s+\\w+)?|(?:rest|http|graphql|vendor)\\s+api)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE}`,
@@ -816,8 +1882,14 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
 function hasPotentialBroadSyntax(str) {
   for (let i = 0; i < str.length; i += 1) {
     const ch = str[i];
-    if (ch === '*' || ch === '/' || ch === '?' || ch === '[' || ch === '{' || ch === '(') {
+    if (ch === '*' || ch === '/' || ch === '?' || ch === '[' || ch === '{') {
       return true;
+    }
+    if (ch === '(' && i > 0) {
+      const prev = str[i - 1];
+      if (prev === '@' || prev === '+' || prev === '!') {
+        return true;
+      }
     }
   }
   return false;
@@ -922,81 +1994,764 @@ function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
   return { closeAt, hasCharClass, hasMultiMatchCharClass };
 }
 
-function sampleCharFromBracket(value, openIdx, closeIdx) {
-  let idx = openIdx + 1;
-  if (idx < closeIdx && (value[idx] === '!' || value[idx] === '^')) {
-    return 'x';
-  }
-  if (idx + 3 < closeIdx && value[idx] === '[' && value[idx + 1] === ':') {
-    const classSlice = value.slice(idx + 2, Math.min(closeIdx, idx + 16));
-    if (classSlice.startsWith('digit:') || classSlice.startsWith('xdigit:')) {
-      return '0';
+const ROOT_GLOB_STANDALONE_NAMES = [
+  'Makefile',
+  'GNUmakefile',
+  'Dockerfile',
+  'Containerfile',
+  'Vagrantfile',
+  'Gemfile',
+  'Rakefile',
+  'Procfile',
+  'Brewfile',
+  'Justfile',
+  'Taskfile',
+  'Jenkinsfile',
+  'Pipfile',
+  'Buildfile',
+  'LICENSE',
+  'README',
+  'CHANGELOG',
+  'CODEOWNERS',
+  'AUTHORS',
+  'NOTICE',
+  'COPYING',
+  'SECURITY',
+  'CONTRIBUTING'
+];
+const ROOT_GLOB_DOTFILE_NAMES = [
+  '.env',
+  '.gitignore',
+  '.gitattributes',
+  '.gitmodules',
+  '.npmrc',
+  '.nvmrc',
+  '.yarnrc',
+  '.editorconfig',
+  '.dockerignore',
+  '.npmignore',
+  '.eslintignore',
+  '.prettierignore',
+  '.eslintrc',
+  '.prettierrc',
+  '.babelrc',
+  '.browserslistrc',
+  '.envrc',
+  '.flake8',
+  '.mailmap',
+  '.htaccess',
+  '.hgignore',
+  '.stignore'
+];
+const STEM_CAN_START = 1;
+const STEM_HAS_CHAR = 2;
+const STEM_LEADING_DOT = 4;
+
+function compilePrefixTrie(words, caseInsensitive) {
+  const edgeMaps = [new Map()];
+  const terminals = [0];
+  for (let w = 0; w < words.length; w += 1) {
+    const rawWord = String(words[w] || '');
+    if (!rawWord) continue;
+    const word = caseInsensitive ? rawWord.toLowerCase() : rawWord;
+    let node = 0;
+    for (let k = 0; k < word.length; k += 1) {
+      const ch = word.charCodeAt(k);
+      let next = edgeMaps[node].get(ch);
+      if (next === undefined) {
+        next = edgeMaps.length;
+        edgeMaps[node].set(ch, next);
+        edgeMaps.push(new Map());
+        terminals.push(0);
+      }
+      node = next;
     }
-    return 'a';
+    terminals[node] = 1;
   }
-  const ch = idx < closeIdx ? value[idx] : 'x';
-  return /[A-Za-z0-9_.-]/.test(ch) ? ch : 'x';
+  const nodeCount = edgeMaps.length;
+  const wordCount = Math.max(1, Math.ceil(nodeCount / 32));
+  let totalEdges = 0;
+  for (let i = 0; i < nodeCount; i += 1) {
+    totalEdges += edgeMaps[i].size;
+  }
+  const edgeHead = new Int32Array(nodeCount + 1);
+  const edgeChar = new Uint16Array(totalEdges);
+  const edgeNextWord = new Int32Array(totalEdges);
+  const edgeNextMask = new Int32Array(totalEdges);
+  let cursor = 0;
+  for (let i = 0; i < nodeCount; i += 1) {
+    edgeHead[i] = cursor;
+    for (const [ch, next] of edgeMaps[i].entries()) {
+      edgeChar[cursor] = ch;
+      edgeNextWord[cursor] = next >> 5;
+      edgeNextMask[cursor] = 1 << (next & 31);
+      cursor += 1;
+    }
+  }
+  edgeHead[nodeCount] = cursor;
+  return {
+    nodeCount,
+    wordCount,
+    caseInsensitive,
+    terminals: Uint8Array.from(terminals),
+    edgeHead,
+    edgeChar,
+    edgeNextWord,
+    edgeNextMask
+  };
 }
 
-function buildGlobSample(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob) {
-  const n = value.length;
-  const stack = [];
-  let curOut = '';
-  let i = 0;
-
-  while (i < n) {
-    if (bracketClose[i] !== -1) {
-      curOut += sampleCharFromBracket(value, i, bracketClose[i]);
-      i = bracketClose[i] + 1;
-      continue;
+let cachedRootGlobTries = null;
+function getRootGlobTries() {
+  if (cachedRootGlobTries) {
+    return cachedRootGlobTries;
+  }
+  const extWords = [];
+  for (const ext of KNOWN_FILE_EXTENSIONS) {
+    if (ext && !IGNORED_DOMAIN_TLDS.has(ext)) {
+      extWords.push(ext);
     }
-    if (braceClose[i] !== -1) {
-      if (braceIsSeq[i] === 1) {
-        const inner = value.slice(i + 1, braceClose[i]);
-        const dotDotIdx = inner.indexOf('..');
-        curOut += dotDotIdx > 0 ? inner.slice(0, dotDotIdx) : inner;
-        i = braceClose[i] + 1;
+  }
+  cachedRootGlobTries = {
+    standalone: compilePrefixTrie(Array.from(new Set([...KNOWN_STANDALONE_EXTENSIONLESS_FILES, ...ROOT_GLOB_STANDALONE_NAMES])), false),
+    dotfile: compilePrefixTrie(Array.from(new Set([...KNOWN_DOTFILES, ...ROOT_GLOB_DOTFILE_NAMES])), true),
+    ext: compilePrefixTrie(extWords, true)
+  };
+  return cachedRootGlobTries;
+}
+
+function isStemStartCode(code) {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 95 ||
+    code === 45
+  );
+}
+
+function isStemBodyCode(code) {
+  return isStemStartCode(code) || code === 46;
+}
+
+const CHAR_ATOM_CACHE = new Array(128);
+function getCharAtom(charStr) {
+  const code = charStr.charCodeAt(0);
+  if (code < 128 && CHAR_ATOM_CACHE[code]) {
+    return CHAR_ATOM_CACHE[code];
+  }
+  const lowerCode = code >= 65 && code <= 90 ? code + 32 : code;
+  const atom = {
+    kind: 'char',
+    code,
+    lowerCode,
+    canStartStem: isStemStartCode(code),
+    canBodyStem: isStemBodyCode(code),
+    matchesDot: code === 46
+  };
+  if (code < 128) {
+    CHAR_ATOM_CACHE[code] = atom;
+  }
+  return atom;
+}
+
+function buildCiMask(mask) {
+  const ciMask = new Uint32Array(mask);
+  for (let c = 65; c <= 90; c += 1) {
+    if ((mask[c >> 5] & (1 << (c & 31))) !== 0) {
+      const lc = c + 32;
+      ciMask[lc >> 5] |= 1 << (lc & 31);
+    }
+  }
+  return ciMask;
+}
+
+const ANY_QUESTION_ATOM = (() => {
+  const mask = new Uint32Array(4);
+  for (let c = 33; c <= 126; c += 1) {
+    if (c !== 47) {
+      mask[c >> 5] |= 1 << (c & 31);
+    }
+  }
+  return {
+    kind: 'bracket',
+    mask,
+    ciMask: buildCiMask(mask),
+    canStartStem: true,
+    canBodyStem: true,
+    matchesDot: true
+  };
+})();
+
+function setMaskBit(mask, code) {
+  if (code >= 0 && code < 128) {
+    mask[code >> 5] |= 1 << (code & 31);
+  }
+}
+
+function setMaskRange(mask, lo, hi) {
+  const a = Math.max(0, Math.min(lo, hi));
+  const b = Math.min(127, Math.max(lo, hi));
+  for (let c = a; c <= b; c += 1) {
+    mask[c >> 5] |= 1 << (c & 31);
+  }
+}
+
+function parseGlobBracketAtom(value, openIdx, closeIdx) {
+  let idx = openIdx + 1;
+  let negated = false;
+  if (idx < closeIdx && (value[idx] === '!' || value[idx] === '^')) {
+    negated = true;
+    idx += 1;
+  }
+  const rawMask = new Uint32Array(4);
+  while (idx < closeIdx) {
+    if (value[idx] === '[' && idx + 2 < closeIdx && value[idx + 1] === ':') {
+      const closeColon = value.indexOf(':]', idx + 2);
+      if (closeColon !== -1 && closeColon < closeIdx) {
+        const clsName = value.slice(idx + 2, closeColon);
+        if (clsName === 'digit' || clsName === 'xdigit') {
+          setMaskRange(rawMask, 48, 57);
+          if (clsName === 'xdigit') {
+            setMaskRange(rawMask, 65, 70);
+            setMaskRange(rawMask, 97, 102);
+          }
+        } else if (clsName === 'lower' || clsName === 'alpha' || clsName === 'alnum' || clsName === 'word') {
+          if (clsName !== 'upper') setMaskRange(rawMask, 97, 122);
+          if (clsName !== 'lower') setMaskRange(rawMask, 65, 90);
+          if (clsName === 'alnum' || clsName === 'word') setMaskRange(rawMask, 48, 57);
+          if (clsName === 'word') setMaskBit(rawMask, 95);
+        } else if (clsName === 'upper') {
+          setMaskRange(rawMask, 65, 90);
+        }
+        idx = closeColon + 2;
         continue;
       }
-      stack.push({ closeIdx: braceClose[i], sep: ',', parentOut: curOut });
-      curOut = '';
+    }
+    if (idx + 2 < closeIdx && value[idx + 1] === '-') {
+      setMaskRange(rawMask, value.charCodeAt(idx), value.charCodeAt(idx + 2));
+      idx += 3;
+      continue;
+    }
+    setMaskBit(rawMask, value.charCodeAt(idx));
+    idx += 1;
+  }
+
+  let mask = rawMask;
+  if (negated) {
+    mask = new Uint32Array(4);
+    for (let c = 33; c <= 126; c += 1) {
+      if (c !== 47 && (rawMask[c >> 5] & (1 << (c & 31))) === 0) {
+        setMaskBit(mask, c);
+      }
+    }
+  }
+
+  let canStartStem = false;
+  let canBodyStem = false;
+  for (let c = 45; c <= 122; c += 1) {
+    if ((mask[c >> 5] & (1 << (c & 31))) !== 0) {
+      if (isStemStartCode(c)) {
+        canStartStem = true;
+        canBodyStem = true;
+        break;
+      }
+      if (c === 46) {
+        canBodyStem = true;
+      }
+    }
+  }
+  const matchesDot = (mask[46 >> 5] & (1 << (46 & 31))) !== 0;
+  return {
+    kind: 'bracket',
+    mask,
+    ciMask: buildCiMask(mask),
+    canStartStem,
+    canBodyStem: canBodyStem || matchesDot,
+    matchesDot
+  };
+}
+
+function buildBraceSequenceNode(inner) {
+  const dotDot = inner.indexOf('..');
+  if (dotDot <= 0) {
+    return getCharAtom('x');
+  }
+  const left = inner.slice(0, dotDot);
+  const right = inner.slice(dotDot + 2);
+  if (/^[A-Za-z]$/.test(left) && /^[A-Za-z]$/.test(right)) {
+    const mask = new Uint32Array(4);
+    setMaskRange(mask, left.charCodeAt(0), right.charCodeAt(0));
+    return { kind: 'bracket', mask, ciMask: buildCiMask(mask), canStartStem: true, canBodyStem: true, matchesDot: false };
+  }
+  const startNum = Number.parseInt(left, 10);
+  const endNum = Number.parseInt(right, 10);
+  if (Number.isFinite(startNum) && Number.isFinite(endNum)) {
+    const step = startNum <= endNum ? 1 : -1;
+    const count = Math.abs(endNum - startNum) + 1;
+    if (count <= 64) {
+      const padLen = left.startsWith('0') && left.length > 1 ? left.length : 0;
+      const branches = [];
+      for (let idx = 0; idx < count; idx += 1) {
+        const val = String(startNum + idx * step);
+        const padded = padLen > 0 ? val.padStart(padLen, '0') : val;
+        const seq = [];
+        for (let k = 0; k < padded.length; k += 1) {
+          seq.push(getCharAtom(padded[k]));
+        }
+        branches.push(seq.length === 1 ? seq[0] : { kind: 'seq', items: seq });
+      }
+      return { kind: 'alt', branches };
+    }
+  }
+  const digits = new Uint32Array(4);
+  setMaskRange(digits, 48, 57);
+  return { kind: 'bracket', mask: digits, ciMask: digits, canStartStem: true, canBodyStem: true, matchesDot: false };
+}
+
+const EMPTY_SEQ_NODE = Object.freeze({ kind: 'seq', items: Object.freeze([]) });
+
+function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob) {
+  const n = value.length;
+  const frames = [{ kind: 'root', stopIdx: n, sep: null, op: null, branches: null, seqItems: [] }];
+  const bracketCache = new Map();
+  let i = 0;
+
+  while (i < n || frames.length > 1) {
+    const top = frames[frames.length - 1];
+    if (frames.length > 1 && i >= top.stopIdx) {
+      const finishedBranch =
+        top.seqItems.length === 0
+          ? EMPTY_SEQ_NODE
+          : top.seqItems.length === 1
+            ? top.seqItems[0]
+            : { kind: 'seq', items: top.seqItems };
+      top.branches.push(finishedBranch);
+      frames.pop();
+      const parent = frames[frames.length - 1];
+      const built =
+        top.kind === 'brace'
+          ? { kind: 'alt', branches: top.branches }
+          : { kind: 'ext', op: top.op, branches: top.branches };
+      parent.seqItems.push(built);
+      if (i === top.stopIdx) {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (i >= n) {
+      break;
+    }
+
+    if (top.sep && value[i] === top.sep) {
+      const branchNode =
+        top.seqItems.length === 0
+          ? EMPTY_SEQ_NODE
+          : top.seqItems.length === 1
+            ? top.seqItems[0]
+            : { kind: 'seq', items: top.seqItems };
+      top.branches.push(branchNode);
+      top.seqItems = [];
       i += 1;
       continue;
     }
+
+    if (bracketClose[i] !== -1) {
+      const closeB = bracketClose[i];
+      if (closeB - i <= 32) {
+        const key = value.slice(i, closeB + 1);
+        let atom = bracketCache.get(key);
+        if (!atom) {
+          atom = parseGlobBracketAtom(value, i, closeB);
+          bracketCache.set(key, atom);
+        }
+        top.seqItems.push(atom);
+      } else {
+        top.seqItems.push(parseGlobBracketAtom(value, i, closeB));
+      }
+      i = closeB + 1;
+      continue;
+    }
+
+    if (braceClose[i] !== -1) {
+      if (braceIsSeq[i] === 1) {
+        top.seqItems.push(buildBraceSequenceNode(value.slice(i + 1, braceClose[i])));
+        i = braceClose[i] + 1;
+        continue;
+      }
+      frames.push({ kind: 'brace', stopIdx: braceClose[i], sep: ',', op: null, branches: [], seqItems: [] });
+      i += 1;
+      continue;
+    }
+
     if (i + 1 < n && parenClose[i + 1] !== -1 && parenIsExtGlob[i + 1] === 1) {
-      stack.push({ closeIdx: parenClose[i + 1], sep: '|', parentOut: curOut });
-      curOut = '';
+      frames.push({
+        kind: 'ext',
+        stopIdx: parenClose[i + 1],
+        sep: '|',
+        op: value[i],
+        branches: [],
+        seqItems: []
+      });
       i += 2;
       continue;
     }
-    if (stack.length > 0) {
-      const top = stack[stack.length - 1];
-      if (i === top.closeIdx) {
-        stack.pop();
-        curOut = top.parentOut + (curOut || 'x');
-        i += 1;
-        continue;
-      }
-      if (value[i] === top.sep) {
-        if (curOut.length > 0) {
-          stack.pop();
-          curOut = top.parentOut + curOut;
-          i = top.closeIdx + 1;
-          continue;
-        }
-        i += 1;
-        continue;
-      }
+
+    if (value[i] === '?') {
+      top.seqItems.push(ANY_QUESTION_ATOM);
+      i += 1;
+      continue;
     }
-    curOut += value[i];
+
+    top.seqItems.push(getCharAtom(value[i]));
     i += 1;
   }
 
-  while (stack.length > 0) {
-    const top = stack.pop();
-    curOut = top.parentOut + (curOut || 'x');
+  const rootItems = frames[0].seqItems;
+  return rootItems.length === 1 ? rootItems[0] : { kind: 'seq', items: rootItems };
+}
+
+function atomMatchesCode(atom, ch, caseInsensitive) {
+  if (atom.kind === 'char') {
+    return caseInsensitive ? atom.lowerCode === ch : atom.code === ch;
   }
-  return curOut;
+  const mask = caseInsensitive ? atom.ciMask : atom.mask;
+  return ch < 128 && (mask[ch >> 5] & (1 << (ch & 31))) !== 0;
+}
+
+function stepTrieBitset(trie, srcBits, dstBits, atom) {
+  const words = trie.wordCount;
+  const edgeHead = trie.edgeHead;
+  const edgeChar = trie.edgeChar;
+  const edgeNextWord = trie.edgeNextWord;
+  const edgeNextMask = trie.edgeNextMask;
+  const ci = trie.caseInsensitive;
+  const isChar = atom.kind === 'char';
+  const charCode = isChar ? (ci ? atom.lowerCode : atom.code) : 0;
+  const mask = isChar ? null : (ci ? atom.ciMask : atom.mask);
+
+  for (let w = 0; w < words; w += 1) {
+    let bits = srcBits[w];
+    while (bits !== 0) {
+      const lsb = bits & -bits;
+      const u = (w << 5) + (31 - Math.clz32(lsb));
+      bits ^= lsb;
+      const start = edgeHead[u];
+      const end = edgeHead[u + 1];
+      if (isChar) {
+        for (let e = start; e < end; e += 1) {
+          if (edgeChar[e] === charCode) {
+            dstBits[edgeNextWord[e]] |= edgeNextMask[e];
+            break;
+          }
+        }
+      } else {
+        for (let e = start; e < end; e += 1) {
+          const ch = edgeChar[e];
+          if (ch < 128 && (mask[ch >> 5] & (1 << (ch & 31))) !== 0) {
+            dstBits[edgeNextWord[e]] |= edgeNextMask[e];
+          }
+        }
+      }
+    }
+  }
+}
+
+function createEmptyNfaState(tries) {
+  return {
+    standalone: new Uint32Array(tries.standalone.wordCount),
+    dotfile: new Uint32Array(tries.dotfile.wordCount),
+    extTrie: new Uint32Array(tries.ext.wordCount),
+    envMask: 0,
+    stemFlags: 0
+  };
+}
+
+function copyNfaStateInto(dst, src) {
+  dst.standalone.set(src.standalone);
+  dst.dotfile.set(src.dotfile);
+  dst.extTrie.set(src.extTrie);
+  dst.envMask = src.envMask;
+  dst.stemFlags = src.stemFlags;
+}
+
+function clearNfaState(dst) {
+  dst.standalone.fill(0);
+  dst.dotfile.fill(0);
+  dst.extTrie.fill(0);
+  dst.envMask = 0;
+  dst.stemFlags = 0;
+}
+
+function orNfaStateInto(dst, src) {
+  for (let i = 0; i < dst.standalone.length; i += 1) dst.standalone[i] |= src.standalone[i];
+  for (let i = 0; i < dst.dotfile.length; i += 1) dst.dotfile[i] |= src.dotfile[i];
+  for (let i = 0; i < dst.extTrie.length; i += 1) dst.extTrie[i] |= src.extTrie[i];
+  dst.envMask |= src.envMask;
+  dst.stemFlags |= src.stemFlags;
+}
+
+function nfaStatesEqual(a, b) {
+  if (a.envMask !== b.envMask || a.stemFlags !== b.stemFlags) {
+    return false;
+  }
+  for (let i = 0; i < a.standalone.length; i += 1) if (a.standalone[i] !== b.standalone[i]) return false;
+  for (let i = 0; i < a.dotfile.length; i += 1) if (a.dotfile[i] !== b.dotfile[i]) return false;
+  for (let i = 0; i < a.extTrie.length; i += 1) if (a.extTrie[i] !== b.extTrie[i]) return false;
+  return true;
+}
+
+function stepNfaLeafInPlace(tries, src, dst, atom) {
+  clearNfaState(dst);
+  stepTrieBitset(tries.standalone, src.standalone, dst.standalone, atom);
+  stepTrieBitset(tries.dotfile, src.dotfile, dst.dotfile, atom);
+  stepTrieBitset(tries.ext, src.extTrie, dst.extTrie, atom);
+
+  const se = src.envMask;
+  if (se !== 0) {
+    let de = 0;
+    if ((se & 1) !== 0 && atomMatchesCode(atom, 46, false)) de |= 2;
+    if ((se & 2) !== 0 && atomMatchesCode(atom, 101, true)) de |= 4;
+    if ((se & 4) !== 0 && atomMatchesCode(atom, 110, true)) de |= 8;
+    if ((se & 8) !== 0 && atomMatchesCode(atom, 118, true)) de |= 16;
+    if ((se & 16) !== 0 && atomMatchesCode(atom, 46, false)) de |= 32;
+    if ((se & 96) !== 0 && atom.canBodyStem) de |= 64;
+    dst.envMask = de;
+  }
+
+  const sf = src.stemFlags;
+  if ((sf & STEM_HAS_CHAR) !== 0 && atom.matchesDot) {
+    dst.extTrie[0] |= 1;
+  }
+  let df = 0;
+  if ((sf & STEM_CAN_START) !== 0 && atom.matchesDot) {
+    df |= STEM_LEADING_DOT;
+  }
+  if ((sf & (STEM_CAN_START | STEM_LEADING_DOT)) !== 0 && atom.canStartStem) {
+    df |= STEM_HAS_CHAR;
+  }
+  if ((sf & STEM_HAS_CHAR) !== 0 && atom.canBodyStem) {
+    df |= STEM_HAS_CHAR;
+  }
+  dst.stemFlags = df;
+}
+
+function hasTrieAccept(trie, bits) {
+  const terminals = trie.terminals;
+  const words = trie.wordCount;
+  for (let w = 0; w < words; w += 1) {
+    let b = bits[w];
+    while (b !== 0) {
+      const lsb = b & -b;
+      const u = (w << 5) + (31 - Math.clz32(lsb));
+      b ^= lsb;
+      if (terminals[u] === 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function evalRootGlobAstIterative(rootNode, tries) {
+  const statePool = [];
+  const allocState = () => (statePool.length > 0 ? statePool.pop() : createEmptyNfaState(tries));
+  const freeState = (s) => {
+    if (s) {
+      statePool.push(s);
+    }
+  };
+
+  const initState = allocState();
+  clearNfaState(initState);
+  initState.standalone[0] = 1;
+  initState.dotfile[0] = 1;
+  initState.envMask = 1;
+  initState.stemFlags = STEM_CAN_START;
+
+  let repeatBudget = 64;
+  const frames = [];
+  let pendingResult = null;
+
+  const pushNode = (node, stateIn, repeatDepth) => {
+    const needsBase =
+      node.kind === 'ext' && (node.op === '?' || node.op === '*' || node.op === '!');
+    let baseCopy = null;
+    if (needsBase) {
+      baseCopy = allocState();
+      copyNfaStateInto(baseCopy, stateIn);
+    }
+    frames.push({
+      kind: node.kind,
+      node,
+      index: 0,
+      curState: stateIn,
+      scratchState: null,
+      baseState: baseCopy,
+      accState: null,
+      prevPassAcc: null,
+      repeatDepth
+    });
+  };
+
+  const popFrameWithResult = (f, resultState) => {
+    if (f.curState && f.curState !== resultState) freeState(f.curState);
+    if (f.scratchState && f.scratchState !== resultState) freeState(f.scratchState);
+    if (f.baseState && f.baseState !== resultState) freeState(f.baseState);
+    if (f.accState && f.accState !== resultState) freeState(f.accState);
+    if (f.prevPassAcc && f.prevPassAcc !== resultState) freeState(f.prevPassAcc);
+    frames.pop();
+    pendingResult = resultState;
+  };
+
+  pushNode(rootNode, initState, 0);
+
+  while (frames.length > 0) {
+    const f = frames[frames.length - 1];
+
+    if (pendingResult !== null) {
+      if (f.kind === 'seq') {
+        freeState(f.curState);
+        f.curState = pendingResult;
+        pendingResult = null;
+        f.index += 1;
+      } else {
+        orNfaStateInto(f.accState, pendingResult);
+        freeState(pendingResult);
+        pendingResult = null;
+        f.index += 1;
+      }
+    }
+
+    if (f.kind === 'char' || f.kind === 'bracket') {
+      const out = allocState();
+      stepNfaLeafInPlace(tries, f.curState, out, f.node);
+      popFrameWithResult(f, out);
+      continue;
+    }
+
+    if (f.kind === 'seq') {
+      const items = f.node.items;
+      let stoppedForChild = false;
+      while (f.index < items.length) {
+        const item = items[f.index];
+        if (item === EMPTY_SEQ_NODE || (item.kind === 'seq' && item.items.length === 0)) {
+          f.index += 1;
+          continue;
+        }
+        if (item.kind === 'char' || item.kind === 'bracket') {
+          if (!f.scratchState) {
+            f.scratchState = allocState();
+          }
+          stepNfaLeafInPlace(tries, f.curState, f.scratchState, item);
+          const tmp = f.curState;
+          f.curState = f.scratchState;
+          f.scratchState = tmp;
+          f.index += 1;
+          if (f.index < items.length && items[f.index] === item && nfaStatesEqual(f.curState, f.scratchState)) {
+            while (f.index < items.length && items[f.index] === item) {
+              f.index += 1;
+            }
+          }
+        } else {
+          const childIn = allocState();
+          copyNfaStateInto(childIn, f.curState);
+          pushNode(item, childIn, f.repeatDepth);
+          stoppedForChild = true;
+          break;
+        }
+      }
+      if (!stoppedForChild) {
+        popFrameWithResult(f, f.curState);
+      }
+      continue;
+    }
+
+    // 'alt' or 'ext'
+    const branches = f.node.branches;
+    if (!f.accState) {
+      f.accState = allocState();
+      clearNfaState(f.accState);
+    }
+    if (f.index < branches.length) {
+      const br = branches[f.index];
+      if (br === EMPTY_SEQ_NODE || (br.kind === 'seq' && br.items.length === 0)) {
+        orNfaStateInto(f.accState, f.curState);
+        f.index += 1;
+        continue;
+      }
+      if (br.kind === 'char' || br.kind === 'bracket') {
+        if (!f.scratchState) {
+          f.scratchState = allocState();
+        }
+        stepNfaLeafInPlace(tries, f.curState, f.scratchState, br);
+        orNfaStateInto(f.accState, f.scratchState);
+        f.index += 1;
+        continue;
+      }
+      const childIn = allocState();
+      copyNfaStateInto(childIn, f.curState);
+      pushNode(br, childIn, f.repeatDepth + (f.node.op === '+' || f.node.op === '*' ? 1 : 0));
+      continue;
+    }
+
+    const op = f.kind === 'ext' ? f.node.op : null;
+    if (op === '+' || op === '*') {
+      if (!f.prevPassAcc) {
+        f.prevPassAcc = allocState();
+        clearNfaState(f.prevPassAcc);
+      }
+      const changed = !nfaStatesEqual(f.accState, f.prevPassAcc);
+      if (changed && f.repeatDepth <= 4 && repeatBudget > 0) {
+        repeatBudget -= 1;
+        copyNfaStateInto(f.prevPassAcc, f.accState);
+        copyNfaStateInto(f.curState, f.accState);
+        f.index = 0;
+        continue;
+      }
+    }
+
+    if (op === '?' || op === '*') {
+      orNfaStateInto(f.accState, f.baseState);
+    } else if (op === '!') {
+      orNfaStateInto(f.accState, f.baseState);
+      f.accState.stemFlags |= STEM_HAS_CHAR;
+    }
+
+    popFrameWithResult(f, f.accState);
+  }
+
+  return pendingResult || initState;
+}
+
+function doesRootNonStarGlobMatchFile(value, globInfo) {
+  if (!value || !globInfo) {
+    return false;
+  }
+  const tries = getRootGlobTries();
+  const ast = parseRootGlobAst(
+    value,
+    globInfo.bracketClose,
+    globInfo.braceClose,
+    globInfo.braceIsSeq,
+    globInfo.parenClose,
+    globInfo.parenIsExtGlob
+  );
+  const finalState = evalRootGlobAstIterative(ast, tries);
+  if ((finalState.envMask & 64) !== 0) {
+    return true;
+  }
+  if (hasTrieAccept(tries.standalone, finalState.standalone)) {
+    return true;
+  }
+  if (hasTrieAccept(tries.dotfile, finalState.dotfile)) {
+    return true;
+  }
+  if (hasTrieAccept(tries.ext, finalState.extTrie)) {
+    return true;
+  }
+  return false;
 }
 
 function analyzeNonStarGlob(value) {
@@ -1071,7 +2826,7 @@ function analyzeNonStarGlob(value) {
       }
     } else if (ch === '(') {
       const prev = i > 0 ? value[i - 1] : '';
-      const isExt = prev === '@' || prev === '+' || prev === '?' || prev === '!';
+      const isExt = prev === '@' || prev === '+' || prev === '?' || prev === '!' || prev === '*';
       parenStack.push({ open: i, isExt });
     } else if (ch === ')') {
       if (parenStack.length > 0) {
@@ -1113,15 +2868,9 @@ function analyzeNonStarGlob(value) {
     i += 1;
   }
 
-  let sample =
-    !value.includes('/') && (hasCharClass || hasBraceList || hasExtGlob)
-      ? buildGlobSample(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob)
-      : value;
-
   const hasQuestionGlob = skeleton.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(value);
   if (hasQuestionGlob) {
     skeleton = skeleton.replace(/\?+/g, 'x');
-    sample = sample.replace(/\?+/g, 'x');
   }
 
   return {
@@ -1132,7 +2881,11 @@ function analyzeNonStarGlob(value) {
     hasExtGlob,
     hasQuestionGlob,
     skeleton,
-    sample
+    bracketClose,
+    braceClose,
+    braceIsSeq,
+    parenClose,
+    parenIsExtGlob
   };
 }
 
@@ -1222,15 +2975,17 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
   let looksBroad = false;
   if (trimmed.includes('*')) {
     looksBroad = hasRelativePrefix || trimmed.includes('/') || trimmed.includes('.');
-  } else if (trimmed.endsWith('/')) {
+  }
+  if (!looksBroad && trimmed.endsWith('/')) {
     const { hasNonStarGlob, skeleton } = analyzeNonStarGlob(candidate);
     const resolvedSkeleton = hasNonStarGlob ? skeleton : candidate;
     looksBroad =
       DIRECTORY_CANDIDATE_REGEX.test(resolvedSkeleton) &&
       resolvedSkeleton.length > 1 &&
       /[A-Za-z0-9_-]/.test(resolvedSkeleton);
-  } else {
+  } else if (!looksBroad) {
     const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
+    const globInfo = analyzeNonStarGlob(candidateBase);
     const {
       hasNonStarGlob,
       hasCharClass,
@@ -1238,10 +2993,9 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
       hasBraceList,
       hasExtGlob,
       hasQuestionGlob,
-      skeleton,
-      sample
-    } = analyzeNonStarGlob(candidateBase);
-    if (hasNonStarGlob && NON_STAR_PATH_SKELETON_REGEX.test(skeleton)) {
+      skeleton
+    } = globInfo;
+    if (hasNonStarGlob && !skeleton.includes('*') && NON_STAR_PATH_SKELETON_REGEX.test(skeleton)) {
       if (hasRelativePrefix || trimmed.includes('/')) {
         looksBroad =
           hasCharClass ||
@@ -1254,12 +3008,9 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
         hasBraceList ||
         hasQuestionGlob
       ) {
-        const sampleDecision = classifyFileCandidate(sample);
-        const skeletonDecision = classifyFileCandidate(skeleton);
         looksBroad =
-          sampleDecision === 'file' ||
-          sampleDecision === 'mask_only' ||
-          skeletonDecision === 'file';
+          classifyFileCandidate(skeleton) === 'file' ||
+          doesRootNonStarGlobMatchFile(candidateBase, globInfo);
       }
     }
   }
@@ -1561,6 +3312,19 @@ export function extractVerificationDependencies(inputs, options = {}) {
     });
   }
 
+  for (const rawInputStr of strings) {
+    if (!rawInputStr || typeof rawInputStr !== 'string') {
+      continue;
+    }
+    const proseCommandDeps = extractProseCommandAndRepoDeps(rawInputStr);
+    for (const dep of proseCommandDeps) {
+      if (dep && !seenBroad.has(dep)) {
+        seenBroad.add(dep);
+        workspaceBroadDeps.push(dep);
+      }
+    }
+  }
+
   return {
     workspaceFileDeps,
     workspaceBroadDeps,
@@ -1860,7 +3624,7 @@ function augmentProofDependencies(proofList, deps) {
       })();
       const hasCliOperatorOrFlagInSource = Boolean(
         sourceTextToInspect &&
-          /(?:&&|\|\||[;|><]|\s-{1,2}[A-Za-z0-9]|\$\(|\.\.?\/[^\s]+\.(?:sh|bash|zsh|ps1|bat|cmd)\b)/i.test(
+          /(?:&&|\|\||[;|><`]|\s-{1,2}[A-Za-z0-9]|\$\(|\\[A-Za-z0-9"']|\.\.?\/(?:[^\s]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s]*\/)?(?:gradlew|mvnw|configure))\b)/i.test(
             sourceTextToInspect
           )
       );

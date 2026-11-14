@@ -1537,5 +1537,187 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       await engine.run();
       assert.equal(s2DelibR2Attempts, 1, 'Round 2 Delib timeout referencing uncovered prior proof P1 must NOT retry tool-free');
     });
+
+    it('ReReview-102 fixes: detects broader bare domains (.io/.dev/.ai/.co.uk), extensionless repo paths (assets/NOTICE), and preserves standard-named workspace files (src/openapi.js, docs/rfc9110.md)', () => {
+      // 1. Bare external domains & host+path endpoints
+      const domainCases = [
+        { prompt: 'Verify the API at example.io.', expected: 'example.io' },
+        { prompt: 'Verify the API at example.dev.', expected: 'example.dev' },
+        { prompt: 'Verify the API at example.ai.', expected: 'example.ai' },
+        { prompt: 'Verify the API at example.co.uk.', expected: 'example.co.uk' },
+        { prompt: 'Check phoronix.com/benchmarks/kernel-6-8.', expected: 'phoronix.com/benchmarks/kernel-6-8' }
+      ];
+      for (const { prompt, expected } of domainCases) {
+        const extracted = extractVerificationDependencies([prompt]);
+        assert.deepEqual(extracted.workspaceFileDeps, [], `Expected no file deps for "${prompt}"`);
+        assert.deepEqual(extracted.workspaceBroadDeps, [], `Expected no broad deps for "${prompt}"`);
+        assert.deepEqual(extracted.externalDeps, [expected], `Expected "${expected}" external dep for "${prompt}"`);
+
+        const denied = evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: prompt,
+          selfContainedInput: { phases: ['DELIBERATION'], conceptualNoExternalVerification: true },
+          originalInvocationMeta: { effectiveTools: 'read-only' }
+        });
+        assert.equal(denied.ready, false);
+        assert.equal(denied.reasonCode, 'evidence_access_failure');
+        assert.ok(denied.missingDependencies.includes(expected));
+      }
+
+      const coveredCoUk = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Verify the API at example.co.uk.',
+        evidence: [{ id: 'E1', label: 'Spec', source: 'example.co.uk', text: 'API response fixture' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'EXAMPLE.CO.UK', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(coveredCoUk.ready, true);
+
+      // 2. Extensionless workspace paths (assets/NOTICE, legal/ATTRIBUTION, hooks/pre-commit, packaging/debian/rules)
+      const partialNoticeDenied = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Inspect src/auth.js and assets/NOTICE.',
+        evidence: [{ id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export const auth = true;' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(partialNoticeDenied.ready, false);
+      assert.equal(partialNoticeDenied.reasonCode, 'evidence_access_failure');
+      assert.ok(partialNoticeDenied.missingDependencies.includes('assets/NOTICE'));
+
+      const fullNoticeReady = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: 'Inspect src/auth.js and assets/NOTICE.',
+        evidence: [
+          { id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export const auth = true;' },
+          { id: 'E2', label: 'Notice', source: 'assets/NOTICE', text: 'Copyright 2026 The Council' }
+        ],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [
+            { source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' },
+            { source: 'assets/NOTICE', evidenceId: 'E2', coverage: 'complete_artifact' }
+          ]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(fullNoticeReady.ready, true);
+
+      const extlessBatch = extractVerificationDependencies([
+        'Inspect legal/ATTRIBUTION, hooks/pre-commit, and packaging/debian/rules.'
+      ]);
+      assert.deepEqual(extlessBatch.workspaceBroadDeps, []);
+      assert.deepEqual(extlessBatch.externalDeps, []);
+      assert.deepEqual(extlessBatch.workspaceFileDeps, [
+        { source: 'legal/ATTRIBUTION', unbounded: true },
+        { source: 'hooks/pre-commit', unbounded: true },
+        { source: 'packaging/debian/rules', unbounded: true }
+      ]);
+
+      // 3. Standard-named workspace files must remain file dependencies, not masked into external standards
+      for (const filePath of ['src/openapi.js', 'docs/rfc9110.md', 'openapi.yaml']) {
+        const extracted = extractVerificationDependencies([`Inspect ${filePath}.`]);
+        assert.deepEqual(extracted.workspaceFileDeps, [{ source: filePath, unbounded: true }]);
+        assert.deepEqual(extracted.workspaceBroadDeps, []);
+        assert.deepEqual(extracted.externalDeps, []);
+
+        const ready = evaluateToolFreeEvidenceReadiness({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'TimeoutError',
+          topic: `Inspect ${filePath}.`,
+          evidence: [{ id: 'E1', label: 'File', source: filePath, text: 'full content' }],
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            coveredArtifacts: [{ source: filePath, evidenceId: 'E1', coverage: 'complete_artifact' }]
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        });
+        assert.equal(ready.ready, true, `Expected ${filePath} with complete_artifact to be ready`);
+      }
+
+      const rangedStandardFile = extractVerificationDependencies(['Check specs/cve-2026-1234.json:1-20.']);
+      assert.deepEqual(rangedStandardFile.workspaceFileDeps, [
+        { source: 'specs/cve-2026-1234.json', startLine: 1, endLine: 20 }
+      ]);
+      assert.deepEqual(rangedStandardFile.workspaceBroadDeps, []);
+      assert.deepEqual(rangedStandardFile.externalDeps, []);
+
+      // Co-occurrence of standard-named workspace file and external standards in one prompt
+      const mixedPrompt = 'Verify that src/openapi.js conforms to OpenAPI 3.1.0 and ISO/IEC 27001.';
+      const mixedDeps = extractVerificationDependencies([mixedPrompt]);
+      assert.deepEqual(mixedDeps.workspaceFileDeps, [{ source: 'src/openapi.js', unbounded: true }]);
+      assert.deepEqual(mixedDeps.workspaceBroadDeps, []);
+      assert.deepEqual(mixedDeps.externalDeps, ['OpenAPI 3.1.0', 'ISO/IEC 27001']);
+
+      const mixedMissingStd = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: mixedPrompt,
+        evidence: [{ id: 'E1', label: 'OpenAPI File', source: 'src/openapi.js', text: 'export const spec = {};' }],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [{ source: 'src/openapi.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(mixedMissingStd.ready, false);
+      assert.equal(mixedMissingStd.reasonCode, 'evidence_access_failure');
+
+      const mixedAllCovered = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: mixedPrompt,
+        evidence: [
+          { id: 'E1', label: 'OpenAPI File', source: 'src/openapi.js', text: 'export const spec = {};' },
+          { id: 'E2', label: 'OpenAPI Spec', source: 'OpenAPI 3.1.0', text: 'OpenAPI 3.1.0 specification text' },
+          { id: 'E3', label: 'ISO Spec', source: 'ISO/IEC 27001', text: 'ISO/IEC 27001 specification text' }
+        ],
+        selfContainedInput: {
+          phases: ['DELIBERATION'],
+          coveredArtifacts: [
+            { source: 'src/openapi.js', evidenceId: 'E1', coverage: 'complete_artifact' },
+            { source: 'OpenAPI 3.1.0', evidenceId: 'E2', coverage: 'complete_artifact' },
+            { source: 'ISO/IEC 27001', evidenceId: 'E3', coverage: 'complete_artifact' }
+          ]
+        },
+        originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+      });
+      assert.equal(mixedAllCovered.ready, true);
+
+      // 4. Conceptual prose & technical non-path slash tokens remain non-blocking
+      const conceptualPrompt =
+        'Consider and/or, read/write, public/private, internal/external, 10k ops/sec, 4500 tx/sec, codex/gpt-6-astra, Math.min, Node.js v22.1.0 ... conceptually.';
+      const conceptualDeps = extractVerificationDependencies([conceptualPrompt]);
+      assert.deepEqual(conceptualDeps.workspaceFileDeps, []);
+      assert.deepEqual(conceptualDeps.workspaceBroadDeps, []);
+      assert.deepEqual(conceptualDeps.externalDeps, []);
+
+      const conceptualReady = evaluateToolFreeEvidenceReadiness({
+        phase: 'DELIBERATION',
+        round: 1,
+        errorClass: 'TimeoutError',
+        topic: conceptualPrompt,
+        selfContainedInput: { phases: ['DELIBERATION'], conceptualNoExternalVerification: true },
+        originalInvocationMeta: { effectiveTools: 'read-only' }
+      });
+      assert.equal(conceptualReady.ready, true);
+    });
   });
 });

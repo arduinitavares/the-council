@@ -19,22 +19,89 @@ export const VALID_SELF_CONTAINED_PHASES = Object.freeze([
 
 const VALID_PHASE_SET = new Set(VALID_SELF_CONTAINED_PHASES);
 const EFFORT_SET = new Set(ALLOWED_EFFORTS);
-const URL_REGEX = /\b(?:https?|file):\/\/[^\s"'`<>()[\]]+/gi;
-const GLOB_REGEX = /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?])/g;
-const KNOWN_EXTENSIONLESS_FILES = new Set([
-  'Makefile',
-  'Dockerfile',
-  'Containerfile',
-  'Jenkinsfile',
-  'Vagrantfile',
-  'Gemfile',
-  'Procfile',
-  'Rakefile',
-  'Justfile',
-  'Brewfile',
-  'WORKSPACE',
-  'BUILD'
+const URL_REGEX =
+  /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]]+/gi;
+const GLOB_REGEX =
+  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?])/g;
+
+const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
+  'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'mil', 'int',
+  'ai', 'app', 'co', 'xyz', 'gg', 'land', 'cloud', 'tech', 'tools', 'page', 'site', 'online',
+  'uk', 'de', 'fr', 'jp', 'ca', 'au', 'us', 'eu', 'nl', 'ch', 'se', 'fi', 'dk',
+  'pt', 'br', 'kr', 'cn', 'tw', 'hk', 'sg', 'nz', 'ie', 'cz', 'mx', 'ar', 'cl', 'za'
 ]);
+const MULTI_PART_CCSLD_SOURCE =
+  '(?:co|com|org|net|ac|gov|edu|or|ne)\\.(?:uk|in|au|jp|nz|br|kr|cn|sg|hk|tw|za|il|it|at|be|no|es)';
+const DOMAIN_SUFFIX_SOURCE = `(?:${MULTI_PART_CCSLD_SOURCE}|${RECOGNIZED_DOMAIN_TLDS.join('|')})`;
+const BARE_DOMAIN_EXACT_REGEX = new RegExp(
+  `^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}$`,
+  'i'
+);
+const BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE =
+  `(?<![A-Za-z0-9_./$-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}(?::\\d{2,5})?(?:/[^\\s"'` +
+  '`<>()\\[\\],;!?]+)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
+
+const KNOWN_STANDALONE_EXTENSIONLESS_FILES = new Set([
+  'Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'Jenkinsfile',
+  'Vagrantfile', 'Gemfile', 'Procfile', 'Rakefile', 'Justfile', 'Brewfile',
+  'Podfile', 'Fastfile', 'Appfile', 'Tiltfile', 'Earthfile', 'Taskfile',
+  'Caddyfile', 'Snakefile', 'SConstruct', 'SConscript', 'CMakeLists',
+  'CODEOWNERS', 'WORKSPACE', 'BUILD', 'Kbuild', 'Kconfig', 'Doxyfile'
+]);
+
+const KNOWN_PATH_EXTENSIONLESS_FILES = new Set([
+  ...KNOWN_STANDALONE_EXTENSIONLESS_FILES,
+  'README', 'LICENSE', 'LICENCE', 'NOTICE', 'COPYING', 'PATENTS',
+  'AUTHORS', 'CONTRIBUTORS', 'MAINTAINERS', 'OWNERS', 'CHANGELOG',
+  'CHANGES', 'HISTORY', 'NEWS', 'SECURITY', 'SUPPORT', 'GOVERNANCE',
+  'VERSION', 'MANIFEST', 'TODO', 'ROADMAP', 'configure'
+]);
+
+const KNOWN_DOTFILES = new Set([
+  '.env', '.gitignore', '.gitattributes', '.gitmodules', '.npmrc', '.nvmrc',
+  '.yarnrc', '.eslintrc', '.prettierrc', '.babelrc', '.editorconfig',
+  '.dockerignore', '.prettierignore', '.eslintignore', '.clang-format',
+  '.clang-tidy', '.flake8', '.pylintrc', '.rubocop', '.luacheckrc'
+]);
+
+const EXTENSIONLESS_PATH_ROOT_DIRS = new Set([
+  'bin', 'sbin', 'libexec', 'src', 'lib', 'pkg', 'cmd', 'internal', 'include',
+  'test', 'tests', 'spec', 'specs', 'doc', 'docs', 'script', 'scripts',
+  'tool', 'tools', 'config', 'configs', 'package', 'packages', 'packaging',
+  'debian', 'app', 'apps', 'asset', 'assets', 'resource', 'resources',
+  'static', 'public', 'vendor', 'third_party', 'third-party', 'fixture',
+  'fixtures', 'migration', 'migrations', 'hook', 'hooks', 'example',
+  'examples', 'sample', 'samples', 'bench', 'benchmarks', 'schema', 'schemas',
+  'proto', 'protos', 'data', 'certs', 'templates', 'infra', 'deploy',
+  'docker', 'k8s', 'helm', 'charts', 'etc', 'usr', '.github', '.githooks',
+  '.husky', '.circleci', '.vscode'
+]);
+
+const IGNORED_PROSE_SLASH_TOKENS = new Set([
+  'and/or', 'either/or', 'read/write', 'yes/no', 'true/false', 'on/off',
+  'in/out', 'up/down', 'min/max', 'pub/sub', 'req/res', 'request/response',
+  'client/server', 'input/output', 'key/value', 'pros/cons', 'pass/fail',
+  'start/stop', 'open/close', 'push/pull', 'send/receive', 'send/recv',
+  'before/after', 'old/new', 'hot/cold', 'blue/green', 'sync/async',
+  'active/passive', 'active/active', 'leader/follower', 'primary/replica',
+  'primary/secondary', 'master/slave', 'cpu/mem', 'cpu/gpu', 'cpu/ram',
+  'model/effort', 'seat/judge', 'accept/object', 'internal/external',
+  'public/private', 'local/remote', 'static/dynamic', 'dev/prod', 'test/prod',
+  'test/dev', 'test/staging', 'staging/prod', 'train/test', 'doc/spec',
+  'docs/specs', 'spec/impl', 'cmd/ctrl', 'let/var', 'var/const', 'try/catch',
+  'async/await', 'if/else', 'get/set', 'opt/in', 'opt/out', 'i/o', 'ci/cd',
+  'tcp/ip', 'udp/ip', 'ssl/tls', 'n/a', 'w/o', 'c/o', 's/mime', 'os/2',
+  'gnu/linux', 'iso/iec', 'low/medium/high', 'dev/staging/prod', 'dev/stage/prod',
+  'read/write/execute', 'read/write/delete', 'create/edit/delete', 'red/green/refactor'
+]);
+
+const RATE_UNIT_DENOMINATORS = new Set([
+  's', 'sec', 'second', 'seconds', 'ms', 'us', 'ns', 'min', 'minute', 'minutes',
+  'hr', 'hour', 'hours', 'day', 'days', 'op', 'ops', 'req', 'reqs', 'tx',
+  'msg', 'kb', 'mb', 'gb', 'tb', 'byte', 'bytes', 'bit', 'bits', 'token',
+  'tokens', 'call', 'calls', 'row', 'rows', 'event', 'events', 'query', 'queries'
+]);
+
 const KNOWN_FILE_EXTENSIONS = new Set([
   'c', 'h', 'hh', 'hpp', 'hxx', 'cpp', 'cc', 'cxx', 'm', 'mm',
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'd',
@@ -49,13 +116,20 @@ const KNOWN_FILE_EXTENSIONS = new Set([
   'lock', 'log', 'csv', 'tsv', 'diff', 'patch', 'tf', 'tfvars', 'hcl', 'nix', 'cmake', 'mk', 'wasm', 'map', 'pem', 'crt', 'key', 'bazel'
 ]);
 const IGNORED_DOMAIN_TLDS = new Set([
-  'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'ai', 'app', 'co', 'me',
-  'info', 'biz', 'xyz', 'gg', 'land', 'uk', 'de', 'fr', 'jp'
+  ...RECOGNIZED_DOMAIN_TLDS,
+  'me', 'info', 'biz', 'in', 'it', 'at', 'be', 'no', 'es', 'il'
 ]);
-const FILE_REGEX = /(?:^|[\s"'`(\[,;])(\.?\.?\/?(?:(?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[A-Za-z][A-Za-z0-9]{0,11}|Makefile|Dockerfile|Containerfile|Jenkinsfile|Vagrantfile|Gemfile|Procfile|Rakefile|Justfile|Brewfile|WORKSPACE|BUILD)|(?:\.\/|\.\.\/)(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-]+|(?:bin|src|lib|pkg|cmd|internal|include|tests?|specs?|docs?|scripts?|tools?|configs?|packages?|apps?)(?:\/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_-]+(?=:[\d])))(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
-const NAMED_EXTERNAL_STANDARD_REGEX = /\b(?:RFC[\s-]*\d+|ISO(?:\/IEC)?[\s-]*\d+(?:[-:]\d+)*|CVE-\d{4}-\d+|CWE-\d+|IEEE[\s-]*\d+(?:\.\d+)*|NIST[\s-]+(?:SP[\s-]+)?\d+(?:[-.]\d+)*|FIPS[\s-]*\d+(?:-\d+)?|POSIX(?:\.\d+(?:-\d+)?)?|BCP[\s-]*\d+|ECMA-\d+|OWASP(?:\s+(?:ASVS|Top\s+\d+|SAMM))?|W3C(?:\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\s+\d+(?:\.\d+)*)?|(?<![\/])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:org|com|net|edu|gov))\b/gi;
+const FILE_CANDIDATE_REGEX =
+  /(^|[\s"'`(\[,;])((?:\.\.?\/|\/)?\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\/\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*)(?::(\d+)(?:-(\d+))?)?(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
+const NAMED_EXTERNAL_STANDARD_REGEX = new RegExp(
+  `(?:\\b(?:RFC[\\s-]*\\d+|ISO(?:\\/IEC)?[\\s-]*\\d+(?:[-:]\\d+)*|CVE-\\d{4}-\\d+|CWE-\\d+|IEEE[\\s-]*\\d+(?:\\.\\d+)*|NIST[\\s-]+(?:SP[\\s-]+)?\\d+(?:[-.]\\d+)*|FIPS[\\s-]*\\d+(?:-\\d+)?|POSIX(?:\\.\\d+(?:-\\d+)?)?|BCP[\\s-]*\\d+|ECMA-\\d+|OWASP(?:\\s+(?:ASVS|Top\\s+\\d+|SAMM))?|W3C(?:\\s+[A-Z][A-Za-z0-9-]+)?|IETF|MDN|OpenAPI(?:\\s+\\d+(?:\\.\\d+)*)?)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE})`,
+  'gi'
+);
 const CHECK_COMMAND_OR_REPO_REGEX = /(?:`[^`]+`|\b(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl)\b(?:\s+[-/\w.]|$)|\b(?:entire|whole|across(?:\s+the)?)\s+(?:repo|repository|codebase|workspace)\b|\b(?:repo(?:sitory)?|codebase)\s+(?:check|scan|audit|wide)\b|\brepo-wide\b|\brun\s+(?:tests?|command|script)\b)/i;
-const CHECK_EXTERNAL_SOURCE_REGEX = /\b(?:rfc\s*\d+|iso[\s/-]*\d+|ietf|w3c|owasp|cve-\d{4}-\d+|mdn|openapi|external(?:\s+\w+)?|upstream(?:\s+\w+)?|remote(?:\s+\w+)?|third[- ]party(?:\s+\w+)?|(?:rest|http|graphql|vendor)\s+api)\b|(?:[a-z0-9-]+\.(?:org|io|dev|net|com|edu|gov)\b)/i;
+const CHECK_EXTERNAL_SOURCE_REGEX = new RegExp(
+  `\\b(?:rfc\\s*\\d+|iso[\\s/-]*\\d+|ietf|w3c|owasp|cve-\\d{4}-\\d+|mdn|openapi|external(?:\\s+\\w+)?|upstream(?:\\s+\\w+)?|remote(?:\\s+\\w+)?|third[- ]party(?:\\s+\\w+)?|(?:rest|http|graphql|vendor)\\s+api)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE}`,
+  'i'
+);
 
 const IGNORED_SINGLE_SEGMENT_JS_NOUNS = new Set([
   'node.js',
@@ -145,9 +219,137 @@ function mergeFileDependency(list, dep) {
   }
 }
 
+function isSemanticVersionToken(token) {
+  return /^v?\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*$/i.test(String(token || '').trim());
+}
+
+function isRecognizedBareDomain(token) {
+  const trimmed = String(token || '').trim();
+  if (!trimmed || isSemanticVersionToken(trimmed)) {
+    return false;
+  }
+  return BARE_DOMAIN_EXACT_REGEX.test(trimmed);
+}
+
+function hasKnownFileExtensionOrDotfile(segment) {
+  if (!segment) {
+    return false;
+  }
+  const lower = segment.toLowerCase();
+  if (KNOWN_DOTFILES.has(lower) || lower.startsWith('.env.')) {
+    return true;
+  }
+  const dotIdx = segment.lastIndexOf('.');
+  if (dotIdx <= 0) {
+    return false;
+  }
+  const ext = segment.slice(dotIdx + 1).toLowerCase();
+  return Boolean(ext && !IGNORED_DOMAIN_TLDS.has(ext) && KNOWN_FILE_EXTENSIONS.has(ext));
+}
+
+function isNonPathSlashExpression(source, segments) {
+  const lower = source.toLowerCase();
+  if (IGNORED_PROSE_SLASH_TOKENS.has(lower)) {
+    return true;
+  }
+  if (segments.every((seg) => /^[A-Z0-9]{1,6}$/.test(seg))) {
+    return true;
+  }
+  if (segments.length === 2) {
+    const [left, right] = segments;
+    if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
+      return true;
+    }
+    if (/^(?:http|https|grpc|tls|ssl|os|http2)$/i.test(left) && /^v?\d+(?:\.\d+)*$/i.test(right)) {
+      return true;
+    }
+    if (RATE_UNIT_DENOMINATORS.has(right.toLowerCase())) {
+      return true;
+    }
+    if (
+      /^(?:codex|antigravity|cursor|openai|gemini|claude|mock)$/i.test(left) &&
+      /^(?:gpt|gemini|claude|grok|composer|mock)-/i.test(right)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Classify a matched file candidate as a workspace file ('file'), a known
+ * runtime/framework noun to mask without adding a dependency ('mask_only'), or
+ * non-file text to leave intact for external standard/domain extraction ('leave').
+ */
+function classifyFileCandidate(rawToken, startRaw) {
+  const hasExplicitDotSlash = rawToken.startsWith('./');
+  const source = normalizeWorkspacePath(rawToken);
+  if (!source || source.includes('..')) {
+    return 'leave';
+  }
+
+  if (!source.includes('/')) {
+    if (IGNORED_SINGLE_SEGMENT_JS_NOUNS.has(source.toLowerCase())) {
+      return hasExplicitDotSlash ? 'file' : 'mask_only';
+    }
+    if (!hasExplicitDotSlash) {
+      if (isSemanticVersionToken(source) || isRecognizedBareDomain(source)) {
+        return 'leave';
+      }
+      if (KNOWN_STANDALONE_EXTENSIONLESS_FILES.has(source) || hasKnownFileExtensionOrDotfile(source)) {
+        return 'file';
+      }
+      if (startRaw !== undefined) {
+        if (KNOWN_PATH_EXTENSIONLESS_FILES.has(source)) {
+          return 'file';
+        }
+        const dotIdx = source.lastIndexOf('.');
+        const ext = dotIdx > 0 ? source.slice(dotIdx + 1).toLowerCase() : '';
+        if (ext && !IGNORED_DOMAIN_TLDS.has(ext) && /^[a-z][a-z0-9]{0,11}$/.test(ext)) {
+          return 'file';
+        }
+      }
+      return 'leave';
+    }
+    return 'file';
+  }
+
+  const segments = source.split('/').filter(Boolean);
+  if (segments.length === 0) {
+    return 'leave';
+  }
+  if (!rawToken.startsWith('/') && !hasExplicitDotSlash && isRecognizedBareDomain(segments[0])) {
+    return 'leave';
+  }
+  if (hasExplicitDotSlash || startRaw !== undefined) {
+    return 'file';
+  }
+
+  const basename = segments[segments.length - 1];
+  if (hasKnownFileExtensionOrDotfile(basename)) {
+    return 'file';
+  }
+  if (isNonPathSlashExpression(source, segments)) {
+    return 'leave';
+  }
+  if (
+    KNOWN_PATH_EXTENSIONLESS_FILES.has(basename) ||
+    EXTENSIONLESS_PATH_ROOT_DIRS.has(segments[0].toLowerCase()) ||
+    segments.some((seg) => seg.startsWith('.') || seg.includes('_')) ||
+    (segments.length === 2 &&
+      /^[a-z][a-z0-9-]*$/.test(segments[0]) &&
+      basename.length >= 3 &&
+      /^[A-Z][A-Z0-9_-]*$/.test(basename)) ||
+    (segments.length >= 3 && (rawToken.startsWith('/') || segments.some((seg) => /[-0-9]/.test(seg))))
+  ) {
+    return 'file';
+  }
+  return 'leave';
+}
+
 /**
  * Extract workspace file references, broad directory/glob exploration patterns,
- * and external URLs from prompt/topic/candidate/proof text inputs.
+ * and external URLs/standards/domains from prompt/topic/candidate/proof text inputs.
  *
  * @param {string|string[]} inputs
  * @returns {{
@@ -167,7 +369,7 @@ export function extractVerificationDependencies(inputs) {
   const seenExternal = new Set();
 
   for (const text of strings) {
-    // 1. Extract external HTTP/HTTPS/file URLs first and mask them so URL paths
+    // 1. Extract external URI scheme URLs first and mask them so URL paths
     //    or embedded standard tokens are not misclassified or duplicated.
     let masked = text.replace(URL_REGEX, (rawUrl) => {
       const cleaned = rawUrl.replace(/[.,;:!?)]+$/, '');
@@ -179,26 +381,17 @@ export function extractVerificationDependencies(inputs) {
       return ' '.repeat(rawUrl.length);
     });
 
-    // 1b. Extract named external standards/identifiers (RFC, ISO, CVE, OWASP, etc.) across all texts
-    //     BEFORE dot/version masking so e.g. ISO 27001 or OpenAPI 3.1.0 is preserved intact.
-    masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd) => {
-      const normalized = rawStd.replace(/\s+/g, ' ').trim();
-      const stdKey = `std:${normalized.replace(/[\s-]+/g, '').toLowerCase()}`;
-      if (normalized && !seenExternal.has(stdKey)) {
-        seenExternal.add(stdKey);
-        externalDeps.push(normalized);
-      }
-      return ' '.repeat(rawStd.length);
-    });
+    // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction.
+    masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
 
-    // 2. Mask ellipses (`...`, `..`) and semantic versions (`v22.1.0`, `1.2.3`)
-    masked = masked
-      .replace(/\.{2,}/g, (m) => ' '.repeat(m.length))
-      .replace(/\bv?\d+(?:\.\d+){1,}\b/gi, (m) => ' '.repeat(m.length));
-
-    // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`).
+    // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`),
+    //    leaving bare domains with trailing slashes intact for external domain detection.
     masked = masked.replace(GLOB_REGEX, (full, candidate) => {
       const trimmed = candidate.replace(/^\.\//, '');
+      const firstSeg = trimmed.split('/')[0];
+      if (isRecognizedBareDomain(firstSeg)) {
+        return full;
+      }
       const looksBroad = trimmed.includes('*')
         ? (trimmed.includes('/') || trimmed.includes('.'))
         : (trimmed.endsWith('/') && trimmed.length > 1 && /[A-Za-z0-9_-]/.test(trimmed));
@@ -213,42 +406,44 @@ export function extractVerificationDependencies(inputs) {
       return `${full.slice(0, idx)}${' '.repeat(candidate.length)}${full.slice(idx + candidate.length)}`;
     });
 
-    // 4. Extract concrete file references with optional `:startLine(-endLine)` bounds.
-    FILE_REGEX.lastIndex = 0;
-    let match;
-    while ((match = FILE_REGEX.exec(masked)) !== null) {
-      const rawToken = match[1];
-      const startRaw = match[2];
-      const endRaw = match[3];
-      const hasExplicitPathPrefix = rawToken.includes('/') || rawToken.startsWith('./');
-      const source = normalizeWorkspacePath(rawToken);
-      if (!source || source.includes('..')) {
-        continue;
+    // 4. Extract concrete workspace files BEFORE named external standards so file paths like
+    //    `src/openapi.js` or `docs/rfc9110.md` are recorded as files and masked from standard matching.
+    masked = masked.replace(FILE_CANDIDATE_REGEX, (full, lead, rawToken, startRaw, endRaw) => {
+      const decision = classifyFileCandidate(rawToken, startRaw);
+      if (decision === 'leave') {
+        return full;
       }
-      if (!hasExplicitPathPrefix && startRaw === undefined) {
-        if (IGNORED_SINGLE_SEGMENT_JS_NOUNS.has(source.toLowerCase())) {
-          continue;
-        }
-        if (!KNOWN_EXTENSIONLESS_FILES.has(source)) {
-          const dotIdx = source.lastIndexOf('.');
-          const ext = dotIdx >= 0 ? source.slice(dotIdx + 1).toLowerCase() : '';
-          if (!ext || IGNORED_DOMAIN_TLDS.has(ext) || !KNOWN_FILE_EXTENSIONS.has(ext)) {
-            continue;
-          }
+      if (decision === 'file') {
+        const source = normalizeWorkspacePath(rawToken);
+        if (startRaw !== undefined) {
+          const startLine = Number.parseInt(startRaw, 10);
+          const endLine = endRaw !== undefined ? Number.parseInt(endRaw, 10) : startLine;
+          mergeFileDependency(workspaceFileDeps, {
+            source,
+            startLine: Math.min(startLine, endLine),
+            endLine: Math.max(startLine, endLine)
+          });
+        } else {
+          mergeFileDependency(workspaceFileDeps, { source, unbounded: true });
         }
       }
-      if (startRaw !== undefined) {
-        const startLine = Number.parseInt(startRaw, 10);
-        const endLine = endRaw !== undefined ? Number.parseInt(endRaw, 10) : startLine;
-        mergeFileDependency(workspaceFileDeps, {
-          source,
-          startLine: Math.min(startLine, endLine),
-          endLine: Math.max(startLine, endLine)
-        });
-      } else {
-        mergeFileDependency(workspaceFileDeps, { source, unbounded: true });
+      return `${lead}${' '.repeat(full.length - lead.length)}`;
+    });
+
+    // 5. Extract named external standards/identifiers and bare external domains/endpoints
+    //    across remaining text before removing version tokens so `OpenAPI 3.1.0` stays intact.
+    masked = masked.replace(NAMED_EXTERNAL_STANDARD_REGEX, (rawStd) => {
+      const normalized = rawStd.replace(/[.,;:!?)]+$/, '').replace(/\s+/g, ' ').trim();
+      if (!normalized || isSemanticVersionToken(normalized)) {
+        return rawStd;
       }
-    }
+      const stdKey = `std:${normalized.replace(/[\s-]+/g, '').toLowerCase()}`;
+      if (!seenExternal.has(stdKey)) {
+        seenExternal.add(stdKey);
+        externalDeps.push(normalized);
+      }
+      return ' '.repeat(rawStd.length);
+    });
   }
 
   return {

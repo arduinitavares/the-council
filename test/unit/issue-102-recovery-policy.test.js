@@ -4508,15 +4508,499 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       // 4. 48KB linear-time regression probes for nested braces & nested extglobs
       extractVerificationDependencies(['warmup src/{a,{b,c}}/ src/+(a|@(b|c))/']);
       for (const [label, payload] of [
-        ['nested-braces-48k', 'src/' + '{a,'.repeat(8000) + 'b' + '}'.repeat(8000) + '/'],
-        ['nested-extglob-48k', 'src/' + '+(a|'.repeat(6000) + 'b' + ')'.repeat(6000) + '/']
+        ['nested-braces-48k', 'src/' + '{a,'.repeat(12000) + 'b' + '}'.repeat(12000) + '/'],
+        ['nested-extglob-48k', 'src/' + '+(a|'.repeat(9600) + 'b' + ')'.repeat(9600) + '/']
       ]) {
+        assert.ok(Buffer.byteLength(payload, 'utf8') >= 48000, `Expected >=48KB for ${label}`);
         const t0 = performance.now();
         const deps = extractVerificationDependencies([payload]);
         const elapsedMs = performance.now() - t0;
-        assert.ok(elapsedMs < 25, `Expected <25ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
+        assert.ok(elapsedMs < 20, `Expected <20ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
         assert.equal(deps.workspaceBroadDeps.length, 1, `Expected 1 broad dep for ${label}`);
       }
+    });
+
+    it('ReReview-102 Round 10 fixes: enforces literal-closing-bracket char classes, empty-alt/sequence brace globs, and whitespace-padded quoted check commands', async () => {
+      function makeReadinessParams({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        coveredSources = ['src/auth.js'],
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = []
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        };
+      }
+
+      async function runPhaseEngineCase({
+        phase,
+        errorClass,
+        topic,
+        clarifications = [],
+        s1Proof = null,
+        coveredSources = ['src/auth.js']
+      }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s2');
+            }
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) {
+            return s1Proof;
+          }
+          return origProof(ctx);
+        };
+
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (phase === 'JUDGE_AUDIT_SYNTHESIS' && ctx.round === 1) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('judge');
+            }
+          }
+          return origJudge(ctx);
+        };
+
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications,
+            maxClarificationBatches: clarifications.length,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Round 10 regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              {
+                id: 's1',
+                harness: 'codex',
+                model: 'gpt-6-astra (high)',
+                soul: 'S1',
+                tools: 'read-only',
+                votingTools: 'read-only',
+                cwd: '/repo'
+              },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        await engine.run();
+        return { engine, targetCalls };
+      }
+
+      const sampleAuthProof = {
+        id: 'P1',
+        round: 1,
+        seatId: 's1',
+        status: 'admitted',
+        scope: 'Auth check',
+        kind: 'code',
+        source: 'src/auth.js',
+        statement: 'Auth contract verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        summary: 'R1 candidate',
+        clauses: [{ id: 'C1', context: 'c', conclusion: 'k', citedProofIds: ['P1'] }]
+      };
+      const sampleObjections = [{ id: 'O1', seatId: 's2', targetProofId: 'P1', reason: 'Re-check claim' }];
+
+      async function assertTopicBroadVetoAllPhases(text, expectedBroad) {
+        const deps = extractVerificationDependencies([text]);
+        assert.deepEqual(
+          deps,
+          {
+            workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+            workspaceBroadDeps: expectedBroad,
+            externalDeps: []
+          },
+          `Expected broad deps ${JSON.stringify(expectedBroad)} for: ${text}`
+        );
+
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const r1Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({ phase: 'DELIBERATION', round: 1, errorClass, topic: text, coveredSources: ['src/auth.js'] })
+          );
+          const r2Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 2,
+              errorClass,
+              topic: text,
+              clarifications: [text],
+              priorProofs: [sampleAuthProof],
+              previousCandidate: sampleCandidate,
+              openObjections: sampleObjections,
+              coveredSources: ['src/auth.js']
+            })
+          );
+          const judgeVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              topic: text,
+              proofs: [sampleAuthProof],
+              coveredSources: ['src/auth.js']
+            })
+          );
+          const voteVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              topic: text,
+              candidate: sampleCandidate,
+              admittedProofs: [sampleAuthProof],
+              coveredSources: ['src/auth.js']
+            })
+          );
+
+          for (const [label, verdict] of [
+            ['R1_DELIBERATION', r1Verdict],
+            ['R2_DELIBERATION', r2Verdict],
+            ['JUDGE_AUDIT_SYNTHESIS', judgeVerdict],
+            ['VOTING', voteVerdict]
+          ]) {
+            assert.equal(verdict.ready, false, `${label}/${errorClass} must refuse ${text}`);
+            assert.equal(verdict.reasonCode, 'evidence_access_failure');
+            assert.ok(
+              verdict.missingDependencies.includes(expectedBroad[0]),
+              `${label}/${errorClass}: expected missingDependencies to include ${expectedBroad[0]}, got ${JSON.stringify(verdict.missingDependencies)}`
+            );
+          }
+
+          for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+            const run = await runPhaseEngineCase({
+              phase,
+              errorClass,
+              topic: text,
+              coveredSources: ['src/auth.js']
+            });
+            assert.equal(run.targetCalls.length, 1, `${phase}/${errorClass} engine must refuse ${text}`);
+          }
+        }
+      }
+
+      // 1. Finding 1 & cousins: literal closing brackets in char classes, comma in char class, & citation controls
+      for (const [text, expectedBroad] of [
+        ['Inspect foo/[!]]', ['foo/[!]]']],
+        ['Inspect (foo/[!]]).', ['foo/[!]]']],
+        ['Inspect [foo/[!]]].', ['foo/[!]]']],
+        ['Inspect (foo/[)]). and (foo/[(]).', ['foo/[)]', 'foo/[(]']],
+        ['Inspect foo/[]a] and foo/[^]]', ['foo/[]a]', 'foo/[^]]']],
+        ['Inspect foo/[]] and foo/[[] and foo/[![]', ['foo/[]]', 'foo/[[]', 'foo/[![]']],
+        ['Inspect [!]]/foo and [[!]]/foo].', ['[!]]/foo']],
+        ['Inspect [[]/foo and [[[]/foo].', ['[[]/foo']],
+        ['Inspect [a]/foo/[b] and [[a]/foo/[b]].', ['[a]/foo/[b]']],
+        ['Inspect src/[!]]/', ['src/[!]]/']],
+        ['Inspect foo/[a,b] and src/[a,b]/', ['foo/[a,b]', 'src/[a,b]/']],
+        ['Inspect (src/**,lib/**).', ['src/**', 'lib/**']],
+        ['Inspect foo/[!]],bar/[!]]', ['foo/[!]]', 'bar/[!]]']],
+        ['Compare [E1]/[E2] and [[E1]/[E2]].', []]
+      ]) {
+        const deps = extractVerificationDependencies([text]);
+        assert.deepEqual(deps.workspaceBroadDeps, expectedBroad, `Char-class extraction mismatch on: ${text}`);
+      }
+
+      for (const [text, expectedBroad] of [
+        ['Inspect src/auth.js and foo/[!]]', ['foo/[!]]']],
+        ['Inspect src/auth.js and foo/[]a]', ['foo/[]a]']],
+        ['Inspect src/auth.js and foo/[^]]', ['foo/[^]]']],
+        ['Inspect src/auth.js and [foo/[!]]].', ['foo/[!]]']],
+        ['Inspect src/auth.js and foo/[a,b]', ['foo/[a,b]']]
+      ]) {
+        await assertTopicBroadVetoAllPhases(text, expectedBroad);
+      }
+
+      // 2. Finding 2 & cousins: brace lists with empty alternatives & sequence braces
+      for (const [text, expectedBroad] of [
+        ['Inspect src/auth.js and src/{a,}/', ['src/{a,}/']],
+        ['Inspect src/{,a}/ and src/{,}/', ['src/{,a}/', 'src/{,}/']],
+        ['Inspect foo/{a,} and foo/{,a} and {a,}/foo', ['foo/{a,}', 'foo/{,a}', '{a,}/foo']],
+        ['Inspect src/{a,{b,}}/', ['src/{a,{b,}}/']],
+        ['Inspect src/{1..3}/ and foo/{a..c}', ['src/{1..3}/', 'foo/{a..c}']]
+      ]) {
+        const deps = extractVerificationDependencies([text]);
+        assert.deepEqual(deps.workspaceBroadDeps, expectedBroad, `Brace extraction mismatch on: ${text}`);
+      }
+
+      for (const [text, expectedBroad] of [
+        ['Inspect src/auth.js and src/{a,}/', ['src/{a,}/']],
+        ['Inspect src/auth.js and src/{,a}/', ['src/{,a}/']],
+        ['Inspect src/auth.js and foo/{a,}', ['foo/{a,}']],
+        ['Inspect src/auth.js and src/{1..3}/', ['src/{1..3}/']]
+      ]) {
+        await assertTopicBroadVetoAllPhases(text, expectedBroad);
+      }
+
+      // 3. Finding 3 & cousins: surrounding/trailing whitespace in quoted check commands & controls
+      async function assertCheckProofBehavior({ source, statement, coveredSources, shouldAllow, label }) {
+        const proof = {
+          id: 'P1',
+          round: 1,
+          seatId: 's1',
+          status: 'admitted',
+          scope: 'File check',
+          kind: 'check',
+          source,
+          statement
+        };
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const r2Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 2,
+              errorClass,
+              priorProofs: [proof],
+              previousCandidate: sampleCandidate,
+              openObjections: sampleObjections,
+              coveredSources
+            })
+          );
+          const judgeVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              proofs: [proof],
+              coveredSources
+            })
+          );
+          const voteVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              candidate: sampleCandidate,
+              admittedProofs: [proof],
+              coveredSources
+            })
+          );
+
+          for (const [phaseLabel, verdict] of [
+            ['R2_DELIBERATION', r2Verdict],
+            ['JUDGE_AUDIT_SYNTHESIS', judgeVerdict],
+            ['VOTING', voteVerdict]
+          ]) {
+            assert.equal(verdict.ready, shouldAllow, `${label}: ${phaseLabel}/${errorClass} ready mismatch`);
+          }
+
+          for (const phase of ['R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+            const run = await runPhaseEngineCase({
+              phase,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              s1Proof: {
+                scope: 'File check',
+                kind: 'check',
+                source,
+                statement
+              },
+              coveredSources
+            });
+            if (shouldAllow) {
+              assert.equal(run.targetCalls.length, 2, `${label}: ${phase}/${errorClass} must permit tool-free retry`);
+              assert.equal(run.targetCalls[1].tools, 'none');
+              assert.equal(run.targetCalls[1].cwd, undefined);
+            } else {
+              assert.equal(run.targetCalls.length, 1, `${label}: ${phase}/${errorClass} must refuse tool-free retry`);
+            }
+          }
+        }
+      }
+
+      for (const badStmt of [
+        'Verified via "ls " output.',
+        'Verified via " ls" output.',
+        'Verified via " ls " output.',
+        "Verified via 'ls ' output.",
+        "Verified via ' ls ' output.",
+        'Verified via "uname " output.',
+        'Verified via "go test " output.',
+        'Verified via "whoami " output.',
+        'Verified via "printenv " output.',
+        'Verified via " cat README " output.',
+        'Verified via " ./scripts/verify.sh " output.',
+        'Verified via " head -n 5 src/auth.js " output.',
+        'Checked "key" then "ls ".'
+      ]) {
+        await assertCheckProofBehavior({
+          source: 'src/auth.js',
+          statement: badStmt,
+          coveredSources: ['src/auth.js', 'README', 'scripts/verify.sh'],
+          shouldAllow: false,
+          label: `Finding 3 whitespace-padded command statement (${badStmt})`
+        });
+      }
+
+      for (const badSource of ['"ls "', "' ls '", '" ./scripts/verify.sh "']) {
+        await assertCheckProofBehavior({
+          source: badSource,
+          statement: 'Verified output.',
+          coveredSources: ['src/auth.js', 'README', 'scripts/verify.sh'],
+          shouldAllow: false,
+          label: `Finding 3 whitespace-padded command source (${badSource})`
+        });
+      }
+
+      for (const control of [
+        {
+          source: 'src/auth.js',
+          statement: 'Proof synthesized according to soul: "S1".',
+          coveredSources: ['src/auth.js']
+        },
+        {
+          source: 'src/auth.js',
+          statement: 'Keys " cat ", " node ", " git ", " make ", and "note!" are valid.',
+          coveredSources: ['src/auth.js']
+        },
+        {
+          source: 'src/auth.js',
+          statement: 'Keys " ls.js ", " uname.txt ", and " cat.md " are covered.',
+          coveredSources: ['src/auth.js', 'ls.js', 'uname.txt', 'cat.md']
+        },
+        {
+          source: 'src/auth.js',
+          statement: "Empty \"\" and \"   \" and didn't fail on users' roles or 'can't' text.",
+          coveredSources: ['src/auth.js']
+        }
+      ]) {
+        await assertCheckProofBehavior({
+          ...control,
+          shouldAllow: true,
+          label: `Finding 3 positive control (${control.statement})`
+        });
+      }
+
+      await assertCheckProofBehavior({
+        source: 'src/auth.js',
+        statement: 'Keys " ls.js " and " cat.md " are covered.',
+        coveredSources: ['src/auth.js'],
+        shouldAllow: false,
+        label: 'Finding 3 missing-coverage negative control'
+      });
+
+      // 4. 48KB linear-time regression probes (<20ms)
+      extractVerificationDependencies(['warmup src/{a,{b,c}}/ foo/[!]]']);
+      for (const [label, payload] of [
+        ['literal-close-bracket-48k', '['.repeat(48000) + '[!]]/foo'],
+        ['empty-alt-braces-48k', 'src/' + '{,a'.repeat(12000) + '}'.repeat(12000) + '/']
+      ]) {
+        assert.ok(Buffer.byteLength(payload, 'utf8') >= 48000, `Expected >=48KB for ${label}`);
+        const t0 = performance.now();
+        const deps = extractVerificationDependencies([payload]);
+        const elapsedMs = performance.now() - t0;
+        assert.ok(elapsedMs < 20, `Expected <20ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
+        assert.equal(deps.workspaceBroadDeps.length, 1, `Expected 1 broad dep for ${label}`);
+      }
+
+      const alternatingQuotesPayload = ' "a'.repeat(16000);
+      assert.ok(Buffer.byteLength(alternatingQuotesPayload, 'utf8') >= 48000);
+      const qt0 = performance.now();
+      const quoteVerdict = evaluateToolFreeEvidenceReadiness(
+        makeReadinessParams({
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: 1,
+          errorClass: 'TimeoutError',
+          proofs: [{ ...sampleAuthProof, kind: 'check', statement: alternatingQuotesPayload }],
+          coveredSources: ['src/auth.js']
+        })
+      );
+      const quoteElapsedMs = performance.now() - qt0;
+      assert.ok(quoteElapsedMs < 20, `Expected <20ms for alternating-quotes-48k, got ${quoteElapsedMs.toFixed(2)}ms`);
+      assert.equal(quoteVerdict.ready, true);
     });
   });
 });

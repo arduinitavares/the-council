@@ -30,6 +30,8 @@ const DIRECTORY_CANDIDATE_REGEX = /^(?:\.\.?\/|\/)?(?:[A-Za-z0-9_.-]+\/)+$/;
 const NON_STAR_PATH_SKELETON_REGEX =
   /^(?:\.\.?\/|\/)?\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\/\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*$/;
 const CITATION_TAG_SLASH_LIST_REGEX = /^\[(?:[EPCO])?\d+\](?:\/\[(?:[EPCO])?\d+\])+$/;
+const BRACE_SEQ_CONTENT_REGEX =
+  /^(?:-?\d+\.\.-?\d+(?:\.\.-?\d+)?|[A-Za-z]\.\.[A-Za-z](?:\.\.-?\d+)?)$/;
 const QUERY_PARAM_ASSIGN_REGEX = /\?[^?/\s=]*=/;
 
 const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
@@ -152,26 +154,85 @@ const CLI_COMMAND_VERB_SOURCE =
 const QUOTED_ZERO_ARG_CLI_VERB_SOURCE = '(?:uname|ls|whoami|printenv|go\\s+test)';
 const QUOTED_STRICT_CLI_VERB_SOURCE =
   '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|cat|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
-const SHELL_EXEC_SCRIPT_PATH_DQUOTE_SOURCE =
-  '\\.\\.?\\/(?:[^"\\s]*\\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^"\\s]*\\/)?(?:gradlew|mvnw|configure))(?=$|\\s|")';
-const SHELL_EXEC_SCRIPT_PATH_SQUOTE_SOURCE =
-  '\\.\\.?\\/(?:[^\'\\s]*\\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\'\\s]*\\/)?(?:gradlew|mvnw|configure))(?=$|\\s|\')';
 const SHELL_EXEC_SCRIPT_TOKEN_REGEX =
   /^\.\.?\/(?:[^\s]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s]*\/)?(?:gradlew|mvnw|configure))(?:\s|$)/i;
-const CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
-  '(?:' +
-    '`[^`]+`' +
-    `|(?<![A-Za-z0-9_./-])"(?:${SHELL_EXEC_SCRIPT_PATH_DQUOTE_SOURCE}[^"]*|${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+\\S[^"]*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S[^"]*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~])[^"]*)"` +
-    `|(?<![A-Za-z0-9_./-])'(?:${SHELL_EXEC_SCRIPT_PATH_SQUOTE_SOURCE}[^']*|${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+\\S[^']*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S[^']*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~])[^']*)'` +
-    `|\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)` +
-    '|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])' +
-    '|\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b' +
-    '|\\b(?:repo(?:sitory)?|codebase)\\s+(?:check|scan|audit|wide)\\b' +
-    '|\\brepo-wide\\b' +
-    '|\\brun\\s+(?:tests?|command|script)\\b' +
-    ')',
+const REPO_WIDE_OR_RUN_PHRASE_SOURCE =
+  '(?:\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b|\\b(?:repo(?:sitory)?|codebase)\\s+(?:check|scan|audit|wide)\\b|\\brepo-wide\\b|\\brun\\s+(?:tests?|command|script)\\b)';
+const QUOTED_COMMAND_CONTENT_REGEX = new RegExp(
+  `^(?:${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+.*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S.*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~]).*)$`,
+  'is'
+);
+const REPO_WIDE_OR_RUN_PHRASE_REGEX = new RegExp(REPO_WIDE_OR_RUN_PHRASE_SOURCE, 'i');
+const UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
+  `(?:\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])|${REPO_WIDE_OR_RUN_PHRASE_SOURCE})`,
   'i'
 );
+
+function hasCheckCommandOrRepoDependency(rawText) {
+  if (!rawText || typeof rawText !== 'string') {
+    return false;
+  }
+  if (/`[^`]+`/.test(rawText)) {
+    return true;
+  }
+  const n = rawText.length;
+  let masked = '';
+  let cursor = 0;
+  let noMoreDouble = false;
+  let noMoreSingle = false;
+
+  for (let i = 0; i < n; i += 1) {
+    const ch = rawText[i];
+    if (ch !== '"' && ch !== "'") {
+      continue;
+    }
+    if (i > 0 && /[A-Za-z0-9_./-]/.test(rawText[i - 1])) {
+      continue;
+    }
+    if ((ch === '"' && noMoreDouble) || (ch === "'" && noMoreSingle)) {
+      continue;
+    }
+    let closeIdx = -1;
+    if (ch === '"') {
+      closeIdx = rawText.indexOf('"', i + 1);
+      if (closeIdx === -1) {
+        noMoreDouble = true;
+        continue;
+      }
+    } else {
+      for (let k = i + 1; k < n; k += 1) {
+        if (rawText[k] === "'") {
+          const isInternalApostrophe =
+            /[A-Za-z0-9]/.test(rawText[k - 1]) && k + 1 < n && /[A-Za-z0-9]/.test(rawText[k + 1]);
+          if (!isInternalApostrophe) {
+            closeIdx = k;
+            break;
+          }
+        }
+      }
+      if (closeIdx === -1) {
+        noMoreSingle = true;
+        continue;
+      }
+    }
+
+    const inner = rawText.slice(i + 1, closeIdx).trim();
+    if (
+      inner &&
+      (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner) ||
+        QUOTED_COMMAND_CONTENT_REGEX.test(inner) ||
+        REPO_WIDE_OR_RUN_PHRASE_REGEX.test(inner))
+    ) {
+      return true;
+    }
+    masked += rawText.slice(cursor, i) + ' '.repeat(closeIdx - i + 1);
+    cursor = closeIdx + 1;
+    i = closeIdx;
+  }
+
+  const remainder = cursor === 0 ? rawText : masked + rawText.slice(cursor);
+  return UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(remainder);
+}
 const CHECK_EXTERNAL_SOURCE_REGEX = new RegExp(
   `\\b(?:rfc\\s*\\d+|iso[\\s/-]*\\d+|ietf|w3c|owasp|cve-\\d{4}-\\d+|mdn|openapi|external(?:\\s+\\w+)?|upstream(?:\\s+\\w+)?|remote(?:\\s+\\w+)?|third[- ]party(?:\\s+\\w+)?|(?:rest|http|graphql|vendor)\\s+api)\\b|${BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE}`,
   'i'
@@ -561,6 +622,79 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   return 'leave';
 }
 
+function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
+  const len = str.length;
+  const closeAt = new Int32Array(len).fill(-1);
+  let hasCharClass = false;
+  let segStart = 0;
+
+  while (segStart < len) {
+    let segEnd = str.indexOf('/', segStart);
+    if (segEnd === -1) {
+      segEnd = len;
+    }
+    let scanStart = segStart;
+    if (
+      allowLeadingOuterBrackets &&
+      segStart === 0 &&
+      segEnd >= 2 &&
+      str[0] === '[' &&
+      str[1] === '['
+    ) {
+      let k = 1;
+      while (k + 1 < segEnd && str[k + 1] === '[') {
+        k += 1;
+      }
+      if (k + 1 < segEnd) {
+        const afterRun = str[k + 1];
+        if (afterRun === ':' || afterRun === '.' || afterRun === '=' || afterRun === ']') {
+          scanStart = k - 1;
+        } else {
+          scanStart = k;
+        }
+      }
+    }
+
+    let openIdx = -1;
+    for (let i = scanStart; i < segEnd; i += 1) {
+      const ch = str[i];
+      if (ch === '[') {
+        if (openIdx === -1) {
+          openIdx = i;
+        } else if (i + 3 < segEnd) {
+          const delim = str[i + 1];
+          if (delim === ':' || delim === '.' || delim === '=') {
+            const limit = Math.min(segEnd - 1, i + 20);
+            for (let p = i + 2; p < limit; p += 1) {
+              if (str[p] === delim && str[p + 1] === ']' && p > i + 2) {
+                i = p + 1;
+                break;
+              }
+              if (str[p] === ']' || str[p] === '/') {
+                break;
+              }
+            }
+          }
+        }
+      } else if (ch === ']' && openIdx !== -1) {
+        const isInitialLiteralClose =
+          i === openIdx + 1 ||
+          (i === openIdx + 2 && (str[openIdx + 1] === '!' || str[openIdx + 1] === '^'));
+        if (isInitialLiteralClose) {
+          continue;
+        }
+        closeAt[openIdx] = i;
+        hasCharClass = true;
+        openIdx = -1;
+      }
+    }
+
+    segStart = segEnd + 1;
+  }
+
+  return { closeAt, hasCharClass };
+}
+
 function analyzeNonStarGlob(value) {
   if (!value || CITATION_TAG_SLASH_LIST_REGEX.test(value)) {
     return {
@@ -574,57 +708,15 @@ function analyzeNonStarGlob(value) {
   }
 
   const n = value.length;
-  const bracketClose = new Int32Array(n).fill(-1);
+  const { closeAt: bracketClose, hasCharClass } = findSegmentCharClasses(value, false);
   const braceClose = new Int32Array(n).fill(-1);
   const parenClose = new Int32Array(n).fill(-1);
   const parenIsExtGlob = new Uint8Array(n);
 
-  let hasCharClass = false;
   let hasBraceList = false;
   let hasExtGlob = false;
 
-  // Pass 1a: Pre-pair POSIX character classes [...] within each '/' segment in O(n).
-  const bracketStack = [];
-  for (let i = 0; i < n; i++) {
-    const ch = value[i];
-    if (ch === '/') {
-      bracketStack.length = 0;
-      continue;
-    }
-    if (ch === '[') {
-      if (bracketStack.length === 0) {
-        bracketStack.push({ open: i, posixInner: false });
-      } else {
-        const top = bracketStack[bracketStack.length - 1];
-        const next = i + 1 < n ? value[i + 1] : '';
-        if (!top.posixInner && (next === ':' || next === '.' || next === '=')) {
-          bracketStack.push({ open: i, posixInner: true });
-        }
-      }
-      continue;
-    }
-    if (ch === ']' && bracketStack.length > 0) {
-      const top = bracketStack[bracketStack.length - 1];
-      if (top.posixInner) {
-        const expectedDelim = value[top.open + 1];
-        if (i > top.open + 2 && value[i - 1] === expectedDelim) {
-          bracketStack.pop();
-        }
-        continue;
-      }
-      const isInitialLiteralClose =
-        i === top.open + 1 ||
-        (i === top.open + 2 && (value[top.open + 1] === '!' || value[top.open + 1] === '^'));
-      if (isInitialLiteralClose) {
-        continue;
-      }
-      bracketStack.pop();
-      bracketClose[top.open] = i;
-      hasCharClass = true;
-    }
-  }
-
-  // Pass 1b: Pre-pair nested {...} brace lists and extglob (...) in O(n), skipping paired [...] and clearing crossing stacks.
+  // Pre-pair nested {...} brace lists, sequence braces, and extglob (...) in O(n), skipping paired [...] and clearing crossing stacks.
   const braceStack = [];
   const parenStack = [];
   for (let i = 0; i < n; i++) {
@@ -636,34 +728,29 @@ function analyzeNonStarGlob(value) {
     if (ch === '{') {
       braceStack.push({
         open: i,
-        commaCount: 0,
-        lastSegmentStart: i + 1,
-        hasEmptyAlt: false
+        commaCount: 0
       });
     } else if (ch === ',') {
       if (braceStack.length > 0) {
         const topBrace = braceStack[braceStack.length - 1];
         const topParen = parenStack.length > 0 ? parenStack[parenStack.length - 1] : null;
         if (!topParen || topBrace.open > topParen.open) {
-          if (i === topBrace.lastSegmentStart) {
-            topBrace.hasEmptyAlt = true;
-          }
           topBrace.commaCount += 1;
-          topBrace.lastSegmentStart = i + 1;
         }
       }
     } else if (ch === '}') {
       if (braceStack.length > 0) {
         const topBrace = braceStack.pop();
-        if (i === topBrace.lastSegmentStart) {
-          topBrace.hasEmptyAlt = true;
-        }
         let crossed = false;
         while (parenStack.length > 0 && parenStack[parenStack.length - 1].open > topBrace.open) {
           parenStack.pop();
           crossed = true;
         }
-        if (!crossed && topBrace.commaCount >= 1 && !topBrace.hasEmptyAlt) {
+        const isSeqBrace =
+          topBrace.commaCount === 0 &&
+          i - topBrace.open <= 64 &&
+          BRACE_SEQ_CONTENT_REGEX.test(value.slice(topBrace.open + 1, i));
+        if (!crossed && (topBrace.commaCount >= 1 || isSeqBrace)) {
           braceClose[topBrace.open] = i;
           hasBraceList = true;
         }
@@ -689,7 +776,7 @@ function analyzeNonStarGlob(value) {
     }
   }
 
-  // Pass 2: Collapse outermost matched non-star glob spans to 'x' in O(n).
+  // Collapse outermost matched non-star glob spans to 'x' in O(n).
   let skeleton = '';
   let i = 0;
   while (i < n) {
@@ -734,10 +821,18 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
     return null;
   }
 
+  const { closeAt: charClassClose } = findSegmentCharClasses(s, true);
   const pairOf = new Int32Array(m).fill(-1);
   const parenStack = [];
   const bracketStack = [];
   for (let i = 0; i < m; i += 1) {
+    if (charClassClose[i] !== -1) {
+      const closeIdx = charClassClose[i];
+      pairOf[i] = closeIdx;
+      pairOf[closeIdx] = i;
+      i = closeIdx;
+      continue;
+    }
     const ch = s[i];
     if (ch === '(') {
       parenStack.push(i);
@@ -841,9 +936,13 @@ function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps)
     }
 
     const runLen = run.length;
+    const { closeAt: charClassCloseAt } = findSegmentCharClasses(run, true);
     const braceCloseAt = new Int32Array(runLen).fill(-1);
     const braceStack = [];
     for (let j = 0; j < runLen; j += 1) {
+      if (charClassCloseAt[j] !== -1) {
+        j = charClassCloseAt[j];
+      }
       const ch = run[j];
       if (ch === '{') {
         braceStack.push(j);
@@ -856,6 +955,9 @@ function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps)
     let activeBraceDepth = 0;
     let subStart = 0;
     for (let j = 0; j < runLen; j += 1) {
+      if (charClassCloseAt[j] !== -1) {
+        j = charClassCloseAt[j];
+      }
       const ch = run[j];
       if (ch === '{' && braceCloseAt[j] !== -1) {
         activeBraceDepth += 1;
@@ -1001,8 +1103,11 @@ export function extractVerificationDependencies(inputs, options = {}) {
       return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
     });
 
-    // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction.
-    masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
+    // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction, preserving exact sequence braces `{a..b}`.
+    masked = masked.replace(
+      /\{(?:-?\d+\.\.-?\d+(?:\.\.-?\d+)?|[A-Za-z]\.\.[A-Za-z](?:\.\.-?\d+)?)\}|\.{2,}/g,
+      (m) => (m.startsWith('{') ? m : ' '.repeat(m.length))
+    );
 
     // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`, `src/*[0-9].js`),
     //    leaving unprefixed bare domains with trailing slashes or wildcards intact for external detection.
@@ -1354,7 +1459,7 @@ function augmentProofDependencies(proofList, deps) {
       );
       const sourceTextToInspect = unwrappedSource || trimmedOriginalSource;
       const sourceIsPureNamedStandard = (() => {
-        if (!sourceTextToInspect || CHECK_COMMAND_OR_REPO_REGEX.test(sourceTextToInspect)) {
+        if (!sourceTextToInspect || hasCheckCommandOrRepoDependency(sourceTextToInspect)) {
           return false;
         }
         const singleDeps = extractVerificationDependencies([sourceTextToInspect]);
@@ -1385,13 +1490,13 @@ function augmentProofDependencies(proofList, deps) {
         (isExecutableScriptSource ||
           (!sourceHasConcreteFile &&
             !sourceIsSingleExternalEndpoint &&
-            (CHECK_COMMAND_OR_REPO_REGEX.test(originalSource) ||
-              (Boolean(unwrappedSource) && CHECK_COMMAND_OR_REPO_REGEX.test(unwrappedSource)) ||
+            (hasCheckCommandOrRepoDependency(originalSource) ||
+              (Boolean(unwrappedSource) && hasCheckCommandOrRepoDependency(unwrappedSource)) ||
               isSourceCliInvocation ||
               ((isQuoteOrBacktickWrapped || hasCliOperatorOrFlagInSource) &&
                 !sourceIsPureNamedStandard))));
       const statementMatch = [rawStatement, rawAdmittedStatement].find(
-        (s) => s && CHECK_COMMAND_OR_REPO_REGEX.test(s)
+        (s) => s && hasCheckCommandOrRepoDependency(s)
       );
       const statementIsCommandOrRepo = Boolean(statementMatch);
       if (sourceIsCommandOrRepo || statementIsCommandOrRepo) {

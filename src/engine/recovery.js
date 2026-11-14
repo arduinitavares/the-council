@@ -22,7 +22,7 @@ const EFFORT_SET = new Set(ALLOWED_EFFORTS);
 const URL_REGEX =
   /\b(?:https?|file|wss?|ftp|ssh|git|psql|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?|grpc|s3|gs):\/\/[^\s"'`<>()[\]]+/gi;
 const GLOB_REGEX =
-  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?])/g;
+  /(?:^|[\s"'`(\[,;])((?:\.\.?\/)?(?:[^\s"'`)\],;*]*\*[^\s"'`)\],;]*)|(?:(?:[A-Za-z0-9_.-]+\/)+))(?=$|[\s"'`)\],;!?]|(?:\.(?:\s|$)))/g;
 
 const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
   'com', 'org', 'net', 'io', 'dev', 'edu', 'gov', 'mil', 'int',
@@ -38,8 +38,8 @@ const BARE_DOMAIN_EXACT_REGEX = new RegExp(
   'i'
 );
 const BARE_DOMAIN_WITH_OPTIONAL_PATH_SOURCE =
-  `(?<![A-Za-z0-9_./$-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}(?::\\d{2,5})?(?:/[^\\s"'` +
-  '`<>()\\[\\],;!?]+)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
+  `(?<![A-Za-z0-9_./$-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+${DOMAIN_SUFFIX_SOURCE}(?::\\d{2,5})?(?:[/?#][^\\s"'` +
+  '`<>()\\[\\]]*)?(?!\\.[A-Za-z0-9]|[A-Za-z0-9_-])';
 
 const KNOWN_STANDALONE_EXTENSIONLESS_FILES = new Set([
   'Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'Jenkinsfile',
@@ -93,6 +93,14 @@ const IGNORED_PROSE_SLASH_TOKENS = new Set([
   'tcp/ip', 'udp/ip', 'ssl/tls', 'n/a', 'w/o', 'c/o', 's/mime', 'os/2',
   'gnu/linux', 'iso/iec', 'low/medium/high', 'dev/staging/prod', 'dev/stage/prod',
   'read/write/execute', 'read/write/delete', 'create/edit/delete', 'red/green/refactor'
+]);
+
+const RATE_UNIT_NUMERATORS = new Set([
+  'op', 'ops', 'req', 'reqs', 'request', 'requests', 'tx', 'tps', 'qps', 'rps',
+  'msg', 'msgs', 'message', 'messages', 'kb', 'mb', 'gb', 'tb', 'byte', 'bytes',
+  'bit', 'bits', 'pkt', 'pkts', 'packet', 'packets', 'token', 'tokens',
+  'call', 'calls', 'row', 'rows', 'event', 'events', 'query', 'queries',
+  'read', 'reads', 'write', 'writes', 'item', 'items', 'job', 'jobs'
 ]);
 
 const RATE_UNIT_DENOMINATORS = new Set([
@@ -220,7 +228,19 @@ function mergeFileDependency(list, dep) {
 }
 
 function isSemanticVersionToken(token) {
-  return /^v?\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*$/i.test(String(token || '').trim());
+  const trimmed = String(token || '').trim();
+  const match = /^v?\d+(?:\.\d+)+/i.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const rest = trimmed.slice(match[0].length);
+  if (!rest) {
+    return true;
+  }
+  if (rest.startsWith('-')) {
+    return /^-[A-Za-z0-9]+(?:\.[A-Za-z0-9-]+)*$/.test(rest);
+  }
+  return /^\.(?:alpha|beta|rc|pre|dev|next|canary|nightly|snapshot|post|final|release)\d*$/i.test(rest);
 }
 
 function isRecognizedBareDomain(token) {
@@ -247,6 +267,36 @@ function hasKnownFileExtensionOrDotfile(segment) {
   return Boolean(ext && !IGNORED_DOMAIN_TLDS.has(ext) && KNOWN_FILE_EXTENSIONS.has(ext));
 }
 
+function hasPathFileExtensionOrDotfile(segment) {
+  if (!segment || isSemanticVersionToken(segment)) {
+    return false;
+  }
+  if (segment.startsWith('.') && segment.length > 1) {
+    return true;
+  }
+  const dotIdx = segment.lastIndexOf('.');
+  if (dotIdx <= 0) {
+    return false;
+  }
+  const ext = segment.slice(dotIdx + 1);
+  return /^[A-Za-z][A-Za-z0-9]{0,11}$/.test(ext);
+}
+
+function isRateSlashExpression(left, right) {
+  if (!RATE_UNIT_DENOMINATORS.has(right.toLowerCase())) {
+    return false;
+  }
+  const lowerLeft = left.toLowerCase();
+  return RATE_UNIT_NUMERATORS.has(lowerLeft) || /^\d+(?:\.\d+)?[kmgbt]?b?$/i.test(left);
+}
+
+function isProviderModelSlashExpression(left, right) {
+  return (
+    /^(?:codex|antigravity|cursor|openai|gemini|claude|mock)$/i.test(left) &&
+    /^(?:gpt|gemini|claude|grok|composer|mock)-/i.test(right)
+  );
+}
+
 function isNonPathSlashExpression(source, segments) {
   const lower = source.toLowerCase();
   if (IGNORED_PROSE_SLASH_TOKENS.has(lower)) {
@@ -263,13 +313,7 @@ function isNonPathSlashExpression(source, segments) {
     if (/^(?:http|https|grpc|tls|ssl|os|http2)$/i.test(left) && /^v?\d+(?:\.\d+)*$/i.test(right)) {
       return true;
     }
-    if (RATE_UNIT_DENOMINATORS.has(right.toLowerCase())) {
-      return true;
-    }
-    if (
-      /^(?:codex|antigravity|cursor|openai|gemini|claude|mock)$/i.test(left) &&
-      /^(?:gpt|gemini|claude|grok|composer|mock)-/i.test(right)
-    ) {
+    if (isRateSlashExpression(left, right) || isProviderModelSlashExpression(left, right)) {
       return true;
     }
   }
@@ -281,7 +325,7 @@ function isNonPathSlashExpression(source, segments) {
  * runtime/framework noun to mask without adding a dependency ('mask_only'), or
  * non-file text to leave intact for external standard/domain extraction ('leave').
  */
-function classifyFileCandidate(rawToken, startRaw) {
+function classifyFileCandidate(rawToken, startRaw, endRaw) {
   const hasExplicitDotSlash = rawToken.startsWith('./');
   const source = normalizeWorkspacePath(rawToken);
   if (!source || source.includes('..')) {
@@ -290,16 +334,22 @@ function classifyFileCandidate(rawToken, startRaw) {
 
   if (!source.includes('/')) {
     if (IGNORED_SINGLE_SEGMENT_JS_NOUNS.has(source.toLowerCase())) {
-      return hasExplicitDotSlash ? 'file' : 'mask_only';
+      return hasExplicitDotSlash || startRaw !== undefined ? 'file' : 'mask_only';
     }
     if (!hasExplicitDotSlash) {
-      if (isSemanticVersionToken(source) || isRecognizedBareDomain(source)) {
+      if (isSemanticVersionToken(source)) {
+        return 'leave';
+      }
+      if (isRecognizedBareDomain(source) && endRaw === undefined) {
         return 'leave';
       }
       if (KNOWN_STANDALONE_EXTENSIONLESS_FILES.has(source) || hasKnownFileExtensionOrDotfile(source)) {
         return 'file';
       }
       if (startRaw !== undefined) {
+        if (endRaw !== undefined) {
+          return 'file';
+        }
         if (KNOWN_PATH_EXTENSIONLESS_FILES.has(source)) {
           return 'file';
         }
@@ -324,17 +374,25 @@ function classifyFileCandidate(rawToken, startRaw) {
   if (hasExplicitDotSlash || startRaw !== undefined) {
     return 'file';
   }
+  if (IGNORED_PROSE_SLASH_TOKENS.has(source.toLowerCase())) {
+    return 'leave';
+  }
+  if (segments.length === 2 && isProviderModelSlashExpression(segments[0], segments[1])) {
+    return 'leave';
+  }
 
   const basename = segments[segments.length - 1];
-  if (hasKnownFileExtensionOrDotfile(basename)) {
+  if (
+    hasPathFileExtensionOrDotfile(basename) ||
+    KNOWN_PATH_EXTENSIONLESS_FILES.has(basename) ||
+    EXTENSIONLESS_PATH_ROOT_DIRS.has(segments[0].toLowerCase())
+  ) {
     return 'file';
   }
   if (isNonPathSlashExpression(source, segments)) {
     return 'leave';
   }
   if (
-    KNOWN_PATH_EXTENSIONLESS_FILES.has(basename) ||
-    EXTENSIONLESS_PATH_ROOT_DIRS.has(segments[0].toLowerCase()) ||
     segments.some((seg) => seg.startsWith('.') || seg.includes('_')) ||
     (segments.length === 2 &&
       /^[a-z][a-z0-9-]*$/.test(segments[0]) &&
@@ -385,11 +443,13 @@ export function extractVerificationDependencies(inputs) {
     masked = masked.replace(/\.{2,}/g, (m) => ' '.repeat(m.length));
 
     // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`),
-    //    leaving bare domains with trailing slashes intact for external domain detection.
+    //    leaving unprefixed bare domains with trailing slashes intact for external domain detection.
     masked = masked.replace(GLOB_REGEX, (full, candidate) => {
-      const trimmed = candidate.replace(/^\.\//, '');
+      const cleanedCandidate = candidate.includes('*') ? candidate.replace(/\.(?=$)/, '') : candidate;
+      const hasRelativePrefix = cleanedCandidate.startsWith('./') || cleanedCandidate.startsWith('../');
+      const trimmed = cleanedCandidate.replace(/^\.\//, '');
       const firstSeg = trimmed.split('/')[0];
-      if (isRecognizedBareDomain(firstSeg)) {
+      if (!hasRelativePrefix && !cleanedCandidate.includes('*') && isRecognizedBareDomain(firstSeg)) {
         return full;
       }
       const looksBroad = trimmed.includes('*')
@@ -402,14 +462,14 @@ export function extractVerificationDependencies(inputs) {
         seenBroad.add(trimmed);
         workspaceBroadDeps.push(trimmed);
       }
-      const idx = full.indexOf(candidate);
-      return `${full.slice(0, idx)}${' '.repeat(candidate.length)}${full.slice(idx + candidate.length)}`;
+      const idx = full.indexOf(cleanedCandidate);
+      return `${full.slice(0, idx)}${' '.repeat(cleanedCandidate.length)}${full.slice(idx + cleanedCandidate.length)}`;
     });
 
     // 4. Extract concrete workspace files BEFORE named external standards so file paths like
     //    `src/openapi.js` or `docs/rfc9110.md` are recorded as files and masked from standard matching.
     masked = masked.replace(FILE_CANDIDATE_REGEX, (full, lead, rawToken, startRaw, endRaw) => {
-      const decision = classifyFileCandidate(rawToken, startRaw);
+      const decision = classifyFileCandidate(rawToken, startRaw, endRaw);
       if (decision === 'leave') {
         return full;
       }
@@ -437,7 +497,7 @@ export function extractVerificationDependencies(inputs) {
       if (!normalized || isSemanticVersionToken(normalized)) {
         return rawStd;
       }
-      const stdKey = `std:${normalized.replace(/[\s-]+/g, '').toLowerCase()}`;
+      const stdKey = canonicalizeExternalDepKey(normalized);
       if (!seenExternal.has(stdKey)) {
         seenExternal.add(stdKey);
         externalDeps.push(normalized);
@@ -764,7 +824,37 @@ function doesCoveredArtifactSatisfyFileDep(dep, artifact, evidenceById) {
 }
 
 function isUrlExternalSource(value) {
-  return /^(?:https?|file):\/\//i.test(String(value || '').trim());
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(String(value || '').trim());
+}
+
+function parseBareDomainEndpoint(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed || isUrlExternalSource(trimmed)) {
+    return null;
+  }
+  const delimMatch = /[/?#]/.exec(trimmed);
+  const authority = delimMatch ? trimmed.slice(0, delimMatch.index) : trimmed;
+  const suffix = delimMatch ? trimmed.slice(delimMatch.index) : '';
+  const host = authority.replace(/:\d{2,5}$/, '');
+  if (!isRecognizedBareDomain(host)) {
+    return null;
+  }
+  return {
+    authorityLower: authority.toLowerCase(),
+    suffix
+  };
+}
+
+function canonicalizeExternalDepKey(value) {
+  const trimmed = String(value || '').trim();
+  if (isUrlExternalSource(trimmed)) {
+    return `url:${trimmed}`;
+  }
+  const bare = parseBareDomainEndpoint(trimmed);
+  if (bare) {
+    return bare.suffix ? `endpoint:${bare.authorityLower}${bare.suffix}` : `domain:${bare.authorityLower}`;
+  }
+  return `std:${trimmed.replace(/[\s-]+/g, '').toLowerCase()}`;
 }
 
 function externalSourcesMatch(a, b) {
@@ -775,6 +865,14 @@ function externalSourcesMatch(a, b) {
   }
   if (isUrlExternalSource(sa) || isUrlExternalSource(sb)) {
     return sa === sb;
+  }
+  const bareA = parseBareDomainEndpoint(sa);
+  const bareB = parseBareDomainEndpoint(sb);
+  if ((bareA && bareA.suffix) || (bareB && bareB.suffix)) {
+    if (!bareA || !bareB) {
+      return false;
+    }
+    return bareA.authorityLower === bareB.authorityLower && bareA.suffix === bareB.suffix;
   }
   return sa.toLowerCase() === sb.toLowerCase();
 }

@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import {
   extractVerificationDependencies,
   evaluateToolFreeEvidenceReadiness,
@@ -1718,6 +1719,195 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         originalInvocationMeta: { effectiveTools: 'read-only' }
       });
       assert.equal(conceptualReady.ready, true);
+    });
+
+    it('ReReview-102 Round 2 regressions: preserves multi-segment extensions, workspace root paths, ranged JS nouns, relative globs/dirs, exact bare endpoint path/query coverage, and linear version scanning', () => {
+      function params(topic, sources = [], cwd = '/repo', errorClass = 'TimeoutError', evidenceOverrides = null) {
+        return {
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass,
+          topic,
+          evidence: sources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source: evidenceOverrides?.[i] ?? source,
+            text: `complete content for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION'],
+            coveredArtifacts: sources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: cwd }
+        };
+      }
+
+      // 1. Consolidated 24-case refusal matrix (12 targets x 2 error classes, both bare & period-terminated)
+      const regressionTargets = [
+        'reports/audit.pdf',
+        'web/logo.png',
+        'foo/bar.weird',
+        'src/ops',
+        'config/rows',
+        'src/min',
+        'Node.js:1-20',
+        './example.dev/',
+        './example.dev/*',
+        './site.io/**',
+        'example.com/API',
+        'example.com/api?version=2'
+      ];
+      let refusalCases = 0;
+      for (const target of regressionTargets) {
+        const coveredOnlySources = target.startsWith('example.com/')
+          ? ['src/auth.js', 'example.com/api']
+          : ['src/auth.js'];
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          for (const suffix of ['', '.']) {
+            const verdict = evaluateToolFreeEvidenceReadiness(
+              params(`Inspect src/auth.js and ${target}${suffix}`, coveredOnlySources, '/repo', errorClass)
+            );
+            assert.equal(verdict.ready, false, `Expected refusal for ${target}${suffix} (${errorClass})`);
+            assert.equal(verdict.reasonCode, 'evidence_access_failure');
+          }
+          refusalCases += 1;
+        }
+      }
+      assert.equal(refusalCases, 24);
+
+      // 2. Exact dependency extraction & positive coverage checks
+      for (const fileTarget of [
+        'reports/audit.pdf',
+        'web/logo.png',
+        'foo/bar.weird',
+        'src/ops',
+        'config/rows',
+        'src/min',
+        'releases/v1.2.json'
+      ]) {
+        const extracted = extractVerificationDependencies([`Inspect ${fileTarget}.`]);
+        assert.deepEqual(extracted.workspaceFileDeps, [{ source: fileTarget, unbounded: true }]);
+        assert.deepEqual(extracted.workspaceBroadDeps, []);
+        assert.deepEqual(extracted.externalDeps, []);
+      }
+
+      for (const coveredFile of ['reports/audit.pdf', 'src/ops']) {
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            params(`Inspect src/auth.js and ${coveredFile}`, ['src/auth.js', coveredFile], '/repo')
+          ).ready,
+          true,
+          `Expected complete coverage to allow ${coveredFile}`
+        );
+      }
+
+      const rangedNode = extractVerificationDependencies(['Inspect Node.js:1-20.']);
+      assert.deepEqual(rangedNode, {
+        workspaceFileDeps: [{ source: 'Node.js', startLine: 1, endLine: 20 }],
+        workspaceBroadDeps: [],
+        externalDeps: []
+      });
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(
+          params('Inspect src/auth.js and Node.js:1-20', ['src/auth.js', 'Node.js'], '/repo')
+        ).ready,
+        true
+      );
+
+      const rangedDomainFile = extractVerificationDependencies(['Inspect example.dev:1-20.']);
+      assert.deepEqual(rangedDomainFile, {
+        workspaceFileDeps: [{ source: 'example.dev', startLine: 1, endLine: 20 }],
+        workspaceBroadDeps: [],
+        externalDeps: []
+      });
+
+      const domainWithPort = extractVerificationDependencies(['Verify example.dev:8080.']);
+      assert.deepEqual(domainWithPort, {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.dev:8080']
+      });
+
+      assert.deepEqual(extractVerificationDependencies(['Inspect ./example.dev/.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: ['example.dev/'],
+        externalDeps: []
+      });
+      assert.deepEqual(extractVerificationDependencies(['Inspect ./example.dev/*.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: ['example.dev/*'],
+        externalDeps: []
+      });
+      assert.deepEqual(extractVerificationDependencies(['Inspect ./site.io/**.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: ['site.io/**'],
+        externalDeps: []
+      });
+
+      assert.deepEqual(extractVerificationDependencies(['Compare example.com/api and example.com/API.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.com/api', 'example.com/API']
+      });
+      assert.deepEqual(extractVerificationDependencies(['Inspect example.com/api?version=2.']), {
+        workspaceFileDeps: [],
+        workspaceBroadDeps: [],
+        externalDeps: ['example.com/api?version=2']
+      });
+
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(
+          params('Inspect src/auth.js and example.com/API', ['src/auth.js', 'example.com/API'], '/repo')
+        ).ready,
+        true
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(
+          params('Inspect src/auth.js and example.com/API', ['src/auth.js', 'EXAMPLE.COM/API'], '/repo')
+        ).ready,
+        true
+      );
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(
+          params(
+            'Inspect src/auth.js and example.com/api?version=2',
+            ['src/auth.js', 'example.com/api?version=2'],
+            '/repo'
+          )
+        ).ready,
+        true
+      );
+      // Spoofed/mismatched evidence.source ('example.com/api' vs artifact.source 'example.com/API') must refuse
+      assert.equal(
+        evaluateToolFreeEvidenceReadiness(
+          params(
+            'Inspect src/auth.js and example.com/API',
+            ['src/auth.js', 'example.com/API'],
+            '/repo',
+            'TimeoutError',
+            ['src/auth.js', 'example.com/api']
+          )
+        ).ready,
+        false
+      );
+
+      // 3. Linear-time scan check on 32k version/path strings (< 50 ms)
+      for (const { sample, expectEmpty } of [
+        { sample: `v1.${'1.'.repeat(16000)}_`, expectEmpty: true },
+        { sample: `foo/${'1.'.repeat(16000)}!`, expectEmpty: true },
+        { sample: `foo/${'1.'.repeat(16000)}_`, expectEmpty: false }
+      ]) {
+        const startMs = performance.now();
+        const deps = extractVerificationDependencies(sample);
+        const elapsedMs = performance.now() - startMs;
+        if (expectEmpty) {
+          assert.deepEqual(deps, { workspaceFileDeps: [], workspaceBroadDeps: [], externalDeps: [] });
+        }
+        assert.ok(elapsedMs < 50, `Expected linear scan <50ms, took ${elapsedMs.toFixed(2)}ms`);
+      }
     });
   });
 });

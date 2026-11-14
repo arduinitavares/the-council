@@ -129,8 +129,6 @@ export function getTransitionSummary(event, state) {
       return `Seat "${event.seatId}" withdrew Objection ${event.objectionId || ''}`;
     case 'SEAT_FAULT':
       return `Seat "${event.seatId}" faulted (${formatFaultDetail(event.errorClass, event.reason)})`;
-    case 'RETRY_SEAT':
-      return `Retrying faulted Seat "${event.seatId}"`;
     case 'EXCUSE_SEAT':
       return `Excused Seat "${event.seatId}" (${event.reason || 'retries exhausted'})`;
     case 'JUDGE_FAULT': {
@@ -140,8 +138,26 @@ export function getTransitionSummary(event, state) {
       }
       return `Judge faulted (${detail})`;
     }
-    case 'RETRY_JUDGE':
-      return 'Retrying faulted Judge';
+    case 'RETRY_SEAT':
+    case 'RETRY_JUDGE': {
+      const baseSummary =
+        event.type === 'RETRY_SEAT'
+          ? `Retrying faulted Seat "${event.seatId}"`
+          : 'Retrying faulted Judge';
+      const diag = event.retryDiagnostics;
+      if (!diag || typeof diag !== 'object') {
+        return baseSummary;
+      }
+      const formatChoice = (model, effort) =>
+        `${model || 'unknown'}${effort ? ` (${effort})` : ''}`;
+      const reqDesc = formatChoice(diag.requestedModel, diag.requestedEffort);
+      const effDesc = formatChoice(diag.effectiveModel || diag.requestedModel, diag.effectiveEffort);
+      const parts = [`${reqDesc} -> ${effDesc}`, `tools=${diag.tools || 'unknown'}`];
+      if (diag.fallbackReason) {
+        parts.push(`reason=${diag.fallbackReason}`);
+      }
+      return `${baseSummary} (${parts.join(', ')})`;
+    }
     case 'EVALUATE_ROUND': {
       if (state?.phase === 'completed') {
         return `Evaluated Round ${state?.round ?? 1}: Verdict — ${state?.verdict?.kind || 'Completed'}`;
@@ -402,6 +418,41 @@ export class VisualizerLiveWatcher {
     const fullHistory = data.currentState && Array.isArray(data.currentState.history) ? data.currentState.history : [];
     const accHistory = fullHistory.length > data.steps.length ? fullHistory.slice(data.steps.length) : [];
 
+    const hasOwn = (obj, key) => Boolean(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+    const cloneValue = (val) =>
+      val == null ? val : typeof structuredClone === 'function' ? structuredClone(val) : JSON.parse(JSON.stringify(val));
+    const cloneHistory = (arr) => (Array.isArray(arr) ? cloneValue(arr) : []);
+    const participantHasRetryKeys = (p) => hasOwn(p, 'activeRetryDiagnostics') || hasOwn(p, 'retryDiagnosticsHistory');
+    const hasRetrySchema = Boolean(
+      participantHasRetryKeys(baseJudge) ||
+        baseSeats.some(participantHasRetryKeys) ||
+        participantHasRetryKeys(data.initialConfig && data.initialConfig.judge) ||
+        (data.initialConfig &&
+          Array.isArray(data.initialConfig.seats) &&
+          data.initialConfig.seats.some(participantHasRetryKeys)) ||
+        data.steps.some((step) => {
+          const sd = step && step.stateDelta;
+          if (!sd) return false;
+          if (participantHasRetryKeys(sd.judgeState)) return true;
+          const changes = sd.seatChanges || sd.seatStates || [];
+          return Array.isArray(changes) && changes.some(participantHasRetryKeys);
+        })
+    );
+
+    let judgeAcc = baseJudge ? Object.assign({}, baseJudge) : null;
+    if (judgeAcc) {
+      delete judgeAcc.faultReason;
+      delete judgeAcc.errorClass;
+      if (hasOwn(judgeAcc, 'retries')) judgeAcc.retries = 0;
+      if (hasRetrySchema) {
+        judgeAcc.activeRetryDiagnostics = null;
+        judgeAcc.retryDiagnosticsHistory = [];
+      } else {
+        delete judgeAcc.activeRetryDiagnostics;
+        delete judgeAcc.retryDiagnosticsHistory;
+      }
+    }
+
     const seatMap = new Map();
     const proofMap = new Map();
     const objMap = new Map();
@@ -432,7 +483,57 @@ export class VisualizerLiveWatcher {
         for (const id of d.removedSeatIds) seatMap.delete(id);
       }
       for (const s of d.seatChanges || d.seatStates || []) {
-        seatMap.set(s.id, s);
+        const prevSeat = seatMap.get(s.id);
+        const nextSeat = prevSeat ? Object.assign({}, prevSeat) : Object.assign({}, s);
+        if (prevSeat) {
+          for (const key of Object.keys(s)) {
+            if (key !== 'activeRetryDiagnostics' && key !== 'retryDiagnosticsHistory') {
+              nextSeat[key] = s[key];
+            }
+          }
+          if (!hasOwn(s, 'faultReason') && hasOwn(s, 'status')) delete nextSeat.faultReason;
+          if (!hasOwn(s, 'errorClass') && hasOwn(s, 'status')) delete nextSeat.errorClass;
+          if (!hasOwn(s, 'excusedReason') && hasOwn(s, 'status')) delete nextSeat.excusedReason;
+        }
+        if (hasRetrySchema) {
+          if (hasOwn(s, 'activeRetryDiagnostics')) {
+            nextSeat.activeRetryDiagnostics = s.activeRetryDiagnostics ? cloneValue(s.activeRetryDiagnostics) : null;
+          } else if (!prevSeat) {
+            nextSeat.activeRetryDiagnostics = null;
+          }
+          if (hasOwn(s, 'retryDiagnosticsHistory')) {
+            nextSeat.retryDiagnosticsHistory = cloneHistory(s.retryDiagnosticsHistory);
+          } else if (!prevSeat) {
+            nextSeat.retryDiagnosticsHistory = [];
+          }
+        }
+        seatMap.set(s.id, nextSeat);
+      }
+      if (d.judgeState && typeof d.judgeState === 'object') {
+        if (!judgeAcc) {
+          judgeAcc = {};
+          if (hasRetrySchema) {
+            judgeAcc.activeRetryDiagnostics = null;
+            judgeAcc.retryDiagnosticsHistory = [];
+          }
+        }
+        if (hasOwn(d.judgeState, 'id')) judgeAcc.id = d.judgeState.id;
+        if (hasOwn(d.judgeState, 'status')) judgeAcc.status = d.judgeState.status;
+        if (hasOwn(d.judgeState, 'retries')) judgeAcc.retries = d.judgeState.retries;
+        if (hasOwn(d.judgeState, 'faultReason')) judgeAcc.faultReason = d.judgeState.faultReason;
+        else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.faultReason;
+        if (hasOwn(d.judgeState, 'errorClass')) judgeAcc.errorClass = d.judgeState.errorClass;
+        else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.errorClass;
+        if (hasRetrySchema) {
+          if (hasOwn(d.judgeState, 'activeRetryDiagnostics')) {
+            judgeAcc.activeRetryDiagnostics = d.judgeState.activeRetryDiagnostics
+              ? cloneValue(d.judgeState.activeRetryDiagnostics)
+              : null;
+          }
+          if (hasOwn(d.judgeState, 'retryDiagnosticsHistory')) {
+            judgeAcc.retryDiagnosticsHistory = cloneHistory(d.judgeState.retryDiagnosticsHistory);
+          }
+        }
       }
       if (Array.isArray(d.removedProofIds)) {
         for (const id of d.removedProofIds) proofMap.delete(id);
@@ -452,30 +553,57 @@ export class VisualizerLiveWatcher {
           .filter((bs) => seatMap.has(bs.id))
           .map((bs) => {
             const ds = seatMap.get(bs.id);
-            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? bs.retries ?? 0 });
+            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? 0 });
             if (ds.faultReason !== undefined) merged.faultReason = ds.faultReason;
             else delete merged.faultReason;
             if (ds.errorClass !== undefined) merged.errorClass = ds.errorClass;
             else delete merged.errorClass;
             if (ds.excusedReason !== undefined) merged.excusedReason = ds.excusedReason;
             else delete merged.excusedReason;
+            if (hasRetrySchema) {
+              merged.activeRetryDiagnostics =
+                hasOwn(ds, 'activeRetryDiagnostics') && ds.activeRetryDiagnostics
+                  ? cloneValue(ds.activeRetryDiagnostics)
+                  : null;
+              merged.retryDiagnosticsHistory = hasOwn(ds, 'retryDiagnosticsHistory')
+                ? cloneHistory(ds.retryDiagnosticsHistory)
+                : [];
+            } else {
+              delete merged.activeRetryDiagnostics;
+              delete merged.retryDiagnosticsHistory;
+            }
             return merged;
           });
         seatMap.forEach((ds, id) => {
           if (!baseSeatIds.has(id)) {
-            seats.push(Object.assign({}, ds));
+            const extra = Object.assign({}, ds);
+            if (hasRetrySchema) {
+              extra.activeRetryDiagnostics =
+                hasOwn(ds, 'activeRetryDiagnostics') && ds.activeRetryDiagnostics
+                  ? cloneValue(ds.activeRetryDiagnostics)
+                  : null;
+              extra.retryDiagnosticsHistory = hasOwn(ds, 'retryDiagnosticsHistory')
+                ? cloneHistory(ds.retryDiagnosticsHistory)
+                : [];
+            }
+            seats.push(extra);
           }
         });
 
-        let judge = baseJudge ? Object.assign({}, baseJudge) : null;
-        if (judge && d.judgeState) {
-          judge.status = d.judgeState.status;
-          if (d.judgeState.retries !== undefined) judge.retries = d.judgeState.retries;
-          if (d.judgeState.faultReason !== undefined) judge.faultReason = d.judgeState.faultReason;
-          else delete judge.faultReason;
-          if (d.judgeState.errorClass !== undefined) judge.errorClass = d.judgeState.errorClass;
-          else delete judge.errorClass;
-        }
+        const judge = judgeAcc
+          ? Object.assign(
+              {},
+              judgeAcc,
+              hasRetrySchema
+                ? {
+                    activeRetryDiagnostics: judgeAcc.activeRetryDiagnostics
+                      ? cloneValue(judgeAcc.activeRetryDiagnostics)
+                      : null,
+                    retryDiagnosticsHistory: cloneHistory(judgeAcc.retryDiagnosticsHistory)
+                  }
+                : {}
+            )
+          : null;
 
         const proofs = allProofs
           .filter((p) => proofMap.has(p.id))
@@ -643,23 +771,35 @@ export class VisualizerLiveWatcher {
     const seatChanges = [];
     if (Array.isArray(clonedState.seats)) {
       for (const s of clonedState.seats) {
+        const hasActiveDiag = Object.prototype.hasOwnProperty.call(s, 'activeRetryDiagnostics');
+        const hasHistoryDiag = Object.prototype.hasOwnProperty.call(s, 'retryDiagnosticsHistory');
+        const prev = this._prevSeatMap.get(s.id);
         const entry = {
           id: s.id,
           status: s.status,
           retries: s.retries ?? 0,
           ...(s.faultReason !== undefined ? { faultReason: s.faultReason } : {}),
           ...(s.errorClass !== undefined ? { errorClass: s.errorClass } : {}),
-          ...(s.excusedReason !== undefined ? { excusedReason: s.excusedReason } : {})
+          ...(s.excusedReason !== undefined ? { excusedReason: s.excusedReason } : {}),
+          ...(hasActiveDiag
+            ? { activeRetryDiagnostics: s.activeRetryDiagnostics ? clone(s.activeRetryDiagnostics) : null }
+            : prev && Object.prototype.hasOwnProperty.call(prev, 'activeRetryDiagnostics') && prev.activeRetryDiagnostics !== null
+              ? { activeRetryDiagnostics: null }
+              : {}),
+          ...(hasHistoryDiag
+            ? { retryDiagnosticsHistory: Array.isArray(s.retryDiagnosticsHistory) ? clone(s.retryDiagnosticsHistory) : [] }
+            : {})
         };
         nextSeatMap.set(s.id, entry);
-        const prev = this._prevSeatMap.get(s.id);
         if (
           !prev ||
           prev.status !== entry.status ||
           prev.retries !== entry.retries ||
           prev.faultReason !== entry.faultReason ||
           prev.errorClass !== entry.errorClass ||
-          prev.excusedReason !== entry.excusedReason
+          prev.excusedReason !== entry.excusedReason ||
+          JSON.stringify(prev.activeRetryDiagnostics ?? null) !== JSON.stringify(entry.activeRetryDiagnostics ?? null) ||
+          JSON.stringify(prev.retryDiagnosticsHistory ?? []) !== JSON.stringify(entry.retryDiagnosticsHistory ?? [])
         ) {
           seatChanges.push(entry);
         }
@@ -759,7 +899,21 @@ export class VisualizerLiveWatcher {
             status: clonedState.judge.status,
             retries: clonedState.judge.retries ?? 0,
             ...(clonedState.judge.faultReason !== undefined ? { faultReason: clonedState.judge.faultReason } : {}),
-            ...(clonedState.judge.errorClass !== undefined ? { errorClass: clonedState.judge.errorClass } : {})
+            ...(clonedState.judge.errorClass !== undefined ? { errorClass: clonedState.judge.errorClass } : {}),
+            ...(Object.prototype.hasOwnProperty.call(clonedState.judge, 'activeRetryDiagnostics')
+              ? {
+                  activeRetryDiagnostics: clonedState.judge.activeRetryDiagnostics
+                    ? clone(clonedState.judge.activeRetryDiagnostics)
+                    : null
+                }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(clonedState.judge, 'retryDiagnosticsHistory')
+              ? {
+                  retryDiagnosticsHistory: Array.isArray(clonedState.judge.retryDiagnosticsHistory)
+                    ? clone(clonedState.judge.retryDiagnosticsHistory)
+                    : []
+                }
+              : {})
           }
         : null,
       proofChanges,
@@ -802,8 +956,20 @@ export class VisualizerLiveWatcher {
    * Handles real-time seat status telemetry.
    * @private
    */
-  _handleSeatTelemetry({ seatId, status, metadata, timestamp } = {}) {
+  _handleSeatTelemetry(event = {}) {
     if (this._stopped) return;
+    const { seatId, status, metadata, timestamp } = event || {};
+    const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
+    const hasDirectDiag = Boolean(event && Object.prototype.hasOwnProperty.call(event, 'retryDiagnostics'));
+    const hasMetaDiag = Boolean(
+      metadata && typeof metadata === 'object' && Object.prototype.hasOwnProperty.call(metadata, 'retryDiagnostics')
+    );
+    const hasDiag = hasDirectDiag || hasMetaDiag;
+    const incomingRetryDiagnostics = hasDirectDiag
+      ? event.retryDiagnostics
+      : hasMetaDiag
+        ? metadata.retryDiagnostics
+        : undefined;
 
     const applyTelemetryToTarget = (target) => {
       if (!target) return;
@@ -825,6 +991,14 @@ export class VisualizerLiveWatcher {
       ) {
         delete target.faultReason;
         delete target.errorClass;
+      }
+      if (hasDiag) {
+        target.activeRetryDiagnostics = incomingRetryDiagnostics ? clone(incomingRetryDiagnostics) : null;
+      } else if (
+        (status === 'proof_submitted' || status === 'accepted' || status === 'objected' || status === 'excused') &&
+        Object.prototype.hasOwnProperty.call(target, 'activeRetryDiagnostics')
+      ) {
+        target.activeRetryDiagnostics = null;
       }
     };
 
@@ -944,6 +1118,44 @@ export class VisualizerLiveWatcher {
       : ((data.initialConfig && Array.isArray(data.initialConfig.evidence)) ? data.initialConfig.evidence : []);
     const fullHistory = (data.currentState && Array.isArray(data.currentState.history)) ? data.currentState.history : [];
     const accHistory = fullHistory.length > data.steps.length ? fullHistory.slice(data.steps.length) : [];
+    const hasOwn = function (obj, key) {
+      return Boolean(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+    };
+    const cloneValue = function (val) {
+      return val == null ? val : JSON.parse(JSON.stringify(val));
+    };
+    const cloneHistory = function (arr) {
+      return Array.isArray(arr) ? cloneValue(arr) : [];
+    };
+    const participantHasRetryKeys = function (p) {
+      return hasOwn(p, 'activeRetryDiagnostics') || hasOwn(p, 'retryDiagnosticsHistory');
+    };
+    const hasRetrySchema = Boolean(
+      participantHasRetryKeys(baseJudge) ||
+      baseSeats.some(participantHasRetryKeys) ||
+      participantHasRetryKeys(data.initialConfig && data.initialConfig.judge) ||
+      (data.initialConfig && Array.isArray(data.initialConfig.seats) && data.initialConfig.seats.some(participantHasRetryKeys)) ||
+      data.steps.some(function (step) {
+        const sd = step && step.stateDelta;
+        if (!sd) return false;
+        if (participantHasRetryKeys(sd.judgeState)) return true;
+        const changes = sd.seatChanges || sd.seatStates || [];
+        return Array.isArray(changes) && changes.some(participantHasRetryKeys);
+      })
+    );
+    let judgeAcc = baseJudge ? Object.assign({}, baseJudge) : null;
+    if (judgeAcc) {
+      delete judgeAcc.faultReason;
+      delete judgeAcc.errorClass;
+      if (hasOwn(judgeAcc, 'retries')) judgeAcc.retries = 0;
+      if (hasRetrySchema) {
+        judgeAcc.activeRetryDiagnostics = null;
+        judgeAcc.retryDiagnosticsHistory = [];
+      } else {
+        delete judgeAcc.activeRetryDiagnostics;
+        delete judgeAcc.retryDiagnosticsHistory;
+      }
+    }
     const seatMap = new Map();
     const proofMap = new Map();
     const objMap = new Map();
@@ -969,30 +1181,107 @@ export class VisualizerLiveWatcher {
           d.removedSeatIds.forEach(function (id) { seatMap.delete(id); });
         }
         (d.seatChanges || d.seatStates || []).forEach(function (s) {
-          seatMap.set(s.id, s);
+          const prevSeat = seatMap.get(s.id);
+          const nextSeat = prevSeat ? Object.assign({}, prevSeat) : Object.assign({}, s);
+          if (prevSeat) {
+            Object.keys(s).forEach(function (key) {
+              if (key !== 'activeRetryDiagnostics' && key !== 'retryDiagnosticsHistory') {
+                nextSeat[key] = s[key];
+              }
+            });
+            if (!hasOwn(s, 'faultReason') && hasOwn(s, 'status')) delete nextSeat.faultReason;
+            if (!hasOwn(s, 'errorClass') && hasOwn(s, 'status')) delete nextSeat.errorClass;
+            if (!hasOwn(s, 'excusedReason') && hasOwn(s, 'status')) delete nextSeat.excusedReason;
+          }
+          if (hasRetrySchema) {
+            if (hasOwn(s, 'activeRetryDiagnostics')) {
+              nextSeat.activeRetryDiagnostics = s.activeRetryDiagnostics ? cloneValue(s.activeRetryDiagnostics) : null;
+            } else if (!prevSeat) {
+              nextSeat.activeRetryDiagnostics = null;
+            }
+            if (hasOwn(s, 'retryDiagnosticsHistory')) {
+              nextSeat.retryDiagnosticsHistory = cloneHistory(s.retryDiagnosticsHistory);
+            } else if (!prevSeat) {
+              nextSeat.retryDiagnosticsHistory = [];
+            }
+          }
+          seatMap.set(s.id, nextSeat);
         });
+        if (d.judgeState && typeof d.judgeState === 'object') {
+          if (!judgeAcc) {
+            judgeAcc = {};
+            if (hasRetrySchema) {
+              judgeAcc.activeRetryDiagnostics = null;
+              judgeAcc.retryDiagnosticsHistory = [];
+            }
+          }
+          if (hasOwn(d.judgeState, 'id')) judgeAcc.id = d.judgeState.id;
+          if (hasOwn(d.judgeState, 'status')) judgeAcc.status = d.judgeState.status;
+          if (hasOwn(d.judgeState, 'retries')) judgeAcc.retries = d.judgeState.retries;
+          if (hasOwn(d.judgeState, 'faultReason')) judgeAcc.faultReason = d.judgeState.faultReason;
+          else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.faultReason;
+          if (hasOwn(d.judgeState, 'errorClass')) judgeAcc.errorClass = d.judgeState.errorClass;
+          else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.errorClass;
+          if (hasRetrySchema) {
+            if (hasOwn(d.judgeState, 'activeRetryDiagnostics')) {
+              judgeAcc.activeRetryDiagnostics = d.judgeState.activeRetryDiagnostics
+                ? cloneValue(d.judgeState.activeRetryDiagnostics)
+                : null;
+            }
+            if (hasOwn(d.judgeState, 'retryDiagnosticsHistory')) {
+              judgeAcc.retryDiagnosticsHistory = cloneHistory(d.judgeState.retryDiagnosticsHistory);
+            }
+          }
+        }
         const seats = baseSeats
           .filter(function (bs) { return seatMap.has(bs.id); })
           .map(function (bs) {
             const ds = seatMap.get(bs.id);
-            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? bs.retries ?? 0 });
+            const merged = Object.assign({}, bs, { status: ds.status, retries: ds.retries ?? 0 });
             if (ds.faultReason !== undefined) merged.faultReason = ds.faultReason; else delete merged.faultReason;
             if (ds.errorClass !== undefined) merged.errorClass = ds.errorClass; else delete merged.errorClass;
             if (ds.excusedReason !== undefined) merged.excusedReason = ds.excusedReason; else delete merged.excusedReason;
+            if (hasRetrySchema) {
+              merged.activeRetryDiagnostics = hasOwn(ds, 'activeRetryDiagnostics') && ds.activeRetryDiagnostics
+                ? cloneValue(ds.activeRetryDiagnostics)
+                : null;
+              merged.retryDiagnosticsHistory = hasOwn(ds, 'retryDiagnosticsHistory')
+                ? cloneHistory(ds.retryDiagnosticsHistory)
+                : [];
+            } else {
+              delete merged.activeRetryDiagnostics;
+              delete merged.retryDiagnosticsHistory;
+            }
             return merged;
           });
         seatMap.forEach(function (ds, id) {
           if (!baseSeatIds.has(id)) {
-            seats.push(Object.assign({}, ds));
+            const extra = Object.assign({}, ds);
+            if (hasRetrySchema) {
+              extra.activeRetryDiagnostics = hasOwn(ds, 'activeRetryDiagnostics') && ds.activeRetryDiagnostics
+                ? cloneValue(ds.activeRetryDiagnostics)
+                : null;
+              extra.retryDiagnosticsHistory = hasOwn(ds, 'retryDiagnosticsHistory')
+                ? cloneHistory(ds.retryDiagnosticsHistory)
+                : [];
+            }
+            seats.push(extra);
           }
         });
-        let judge = baseJudge ? Object.assign({}, baseJudge) : null;
-        if (judge && d.judgeState) {
-          judge.status = d.judgeState.status;
-          if (d.judgeState.retries !== undefined) judge.retries = d.judgeState.retries;
-          if (d.judgeState.faultReason !== undefined) judge.faultReason = d.judgeState.faultReason; else delete judge.faultReason;
-          if (d.judgeState.errorClass !== undefined) judge.errorClass = d.judgeState.errorClass; else delete judge.errorClass;
-        }
+        const judge = judgeAcc
+          ? Object.assign(
+              {},
+              judgeAcc,
+              hasRetrySchema
+                ? {
+                    activeRetryDiagnostics: judgeAcc.activeRetryDiagnostics
+                      ? cloneValue(judgeAcc.activeRetryDiagnostics)
+                      : null,
+                    retryDiagnosticsHistory: cloneHistory(judgeAcc.retryDiagnosticsHistory)
+                  }
+                : {}
+            )
+          : null;
         if (Array.isArray(d.removedProofIds)) {
           d.removedProofIds.forEach(function (id) { proofMap.delete(id); });
         }

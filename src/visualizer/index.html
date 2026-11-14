@@ -2200,6 +2200,56 @@
         const lblRosterCount = document.getElementById('lbl-roster-count');
         if (lblRosterCount) lblRosterCount.textContent = (seats.length + (judge ? 1 : 0)) + ' members';
 
+        const renderRetryDiagnosticsHtml = function (participant) {
+          if (!participant || typeof participant !== 'object') return '';
+          const active =
+            participant.activeRetryDiagnostics && typeof participant.activeRetryDiagnostics === 'object'
+              ? participant.activeRetryDiagnostics
+              : null;
+          const history = Array.isArray(participant.retryDiagnosticsHistory)
+            ? participant.retryDiagnosticsHistory.filter(function (entry) {
+                return entry && typeof entry === 'object';
+              })
+            : [];
+          if (!active && history.length === 0) return '';
+
+          let out = '';
+          if (active) {
+            const attemptNum = active.attempt != null ? String(active.attempt) : '1';
+            const effModel = active.effectiveModel || active.requestedModel || participant.model || 'unknown';
+            const effEffortPart = active.effectiveEffort ? ' (' + esc(String(active.effectiveEffort)) + ')' : '';
+            const reasonPart = active.fallbackReason ? ' · ' + esc(String(active.fallbackReason)) : '';
+            const toolsPart = active.tools ? ' · tools=' + esc(String(active.tools)) : '';
+            out +=
+              '<div class="retry-diagnostics-active" style="margin-top:4px; font-size:11px; font-family:var(--mono); color:var(--amber); background:var(--amber-soft); padding:3px 6px; border-radius:4px; overflow-wrap:anywhere;">' +
+                'Retry #' + esc(attemptNum) + ' · effective: ' + esc(String(effModel)) + effEffortPart + reasonPart + toolsPart +
+              '</div>';
+          }
+          if (history.length > 0) {
+            const badgesHtml = history
+              .map(function (h) {
+                const hAttempt = h.attempt != null ? String(h.attempt) : '?';
+                const reqModel = h.requestedModel || participant.model || 'unknown';
+                const reqEffort = h.requestedEffort ? ' (' + esc(String(h.requestedEffort)) + ')' : '';
+                const effModel = h.effectiveModel || reqModel;
+                const effEffort = h.effectiveEffort ? ' (' + esc(String(h.effectiveEffort)) + ')' : '';
+                const hReason = h.fallbackReason ? ' · ' + esc(String(h.fallbackReason)) : '';
+                const hTools = h.tools ? ' [' + esc(String(h.tools)) + ']' : '';
+                return (
+                  '<span class="badge badge-seat-proof" style="overflow-wrap:anywhere;">' +
+                    '#' + esc(hAttempt) + ': ' + esc(String(reqModel)) + reqEffort + ' → ' + esc(String(effModel)) + effEffort + hReason + hTools +
+                  '</span>'
+                );
+              })
+              .join(' ');
+            out +=
+              '<div class="retry-diagnostics-history" style="display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; font-size:10.5px; font-family:var(--mono);">' +
+                badgesHtml +
+              '</div>';
+          }
+          return out;
+        };
+
         let judgeHtml = '';
         if (judge) {
           const judgeStatusToken = sanitizeClassToken(judge.status, 'idle');
@@ -2212,6 +2262,7 @@
               '</div>' +
               '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(judge.model) + ' · non-voting</div>' +
               renderSoulCardHtml(judge.soul, esc) +
+              renderRetryDiagnosticsHtml(judge) +
               '<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 8px; font-size:11px; font-family:var(--mono); margin-top:4px;">' +
                 '<span style="color:var(--accent);">Status: ' + esc(String(judge.status || 'idle').toUpperCase()) + '</span>' +
                 (judge.faultReason ? '<span style="color:var(--red); min-width:0; overflow-wrap:anywhere;">' + esc(judge.faultReason) + '</span>' : '') +
@@ -2240,6 +2291,7 @@
               '</div>' +
               '<div style="font-size:11.5px; font-family:var(--mono); color:var(--text-muted);">' + esc(s.model) + ' · retries ' + (Number(s.retries) || 0) + '/' + maxRetries + '</div>' +
               renderSoulCardHtml(s.soul, esc) +
+              renderRetryDiagnosticsHtml(s) +
               '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; font-size:11px; font-family:var(--mono); margin-top:2px;">' +
                 seatProofsHtml +
               '</div>' +

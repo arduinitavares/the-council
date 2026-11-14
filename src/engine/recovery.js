@@ -428,7 +428,11 @@ function unescapeInlineShellWords(text) {
     const ch = text[i];
     if (ch === "'" && !inDouble) {
       const isApostrophe =
-        !inSingle && i > 0 && /[A-Za-z0-9]/.test(text[i - 1]) && i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+        !inSingle &&
+        i > 0 &&
+        /[A-Za-z0-9]/.test(text[i - 1]) &&
+        ((i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1])) ||
+          ((i + 1 >= n || /[\s,.;:!?)]/.test(text[i + 1])) && hasSingleQuoteCloseBeforeSpace(text, i, n) === -1));
       if (!isApostrophe) {
         inSingle = !inSingle;
       }
@@ -443,6 +447,28 @@ function unescapeInlineShellWords(text) {
     if (ch === '\\' && !inSingle && i + 1 < n) {
       const next = text[i + 1];
       if (!inDouble && /[A-Za-z0-9_./-]/.test(next)) {
+        if (next === '.') {
+          let hasWordCharAfterDot = false;
+          for (let p = i + 2; p < n && !/[\s;|&<>()]/.test(text[p]); p += 1) {
+            if (text[p] === '\\' && p + 1 < n) {
+              const esc = text[p + 1];
+              if (!/[.,;:!?]/.test(esc) && !/\s/.test(esc)) {
+                hasWordCharAfterDot = true;
+                break;
+              }
+              p += 1;
+              continue;
+            }
+            if (!/[.,;:!?]/.test(text[p])) {
+              hasWordCharAfterDot = true;
+              break;
+            }
+          }
+          if (!hasWordCharAfterDot) {
+            out += ch;
+            continue;
+          }
+        }
         out += next;
         i += 1;
         continue;
@@ -632,12 +658,199 @@ function stripTrailingProsePunct(str) {
   return end === str.length ? str : str.slice(0, end);
 }
 
+function hasOddPrecedingBackslashes(str, idx) {
+  let count = 0;
+  for (let k = idx - 1; k >= 0 && str[k] === '\\'; k -= 1) {
+    count += 1;
+  }
+  return (count & 1) === 1;
+}
+
+const PROSE_POST_TAG_WORDS = new Set([
+  'and', 'or', 'is', 'are', 'was', 'were', 'in', 'on', 'at', 'to', 'for', 'of',
+  'with', 'from', 'by', 'as', 'do', 'does', 'did', 'has', 'have', 'had', 'can',
+  'will', 'should', 'must', 'may', 'not'
+]);
+const PROSE_LIST_INTRODUCERS = new Set([
+  'key', 'keys', 'word', 'words', 'token', 'tokens', 'literal', 'literals',
+  'string', 'strings', 'name', 'names', 'verb', 'verbs', 'field', 'fields',
+  'option', 'options', 'and', 'or'
+]);
+const PROSE_LIST_FOLLOWERS = new Set(['and', 'or', 'in', 'of', 'is', 'are', 'was', 'were']);
+const PROSE_NODE_DETERMINERS = new Set([
+  'each', 'every', 'any', 'a', 'an', 'the', 'this', 'that', 'single', 'parent',
+  'child', 'root', 'leaf', 'target', 'current'
+]);
+const VERSIONED_RUNTIME_NOUNS = new Set([
+  'node', 'nodejs', 'python', 'python2', 'python3', 'go', 'golang', 'npm', 'pnpm',
+  'yarn', 'bun', 'deno', 'cargo', 'rustc', 'docker', 'kubectl', 'git', 'pytest',
+  'java', 'javac', 'ruby', 'php', 'perl', 'dotnet', 'clang', 'gcc', 'cmake', 'make'
+]);
+
+function hasActiveCommandStarterInSegment(tokens, endExclusive = tokens.length) {
+  let segStart = 0;
+  for (let r = endExclusive - 1; r >= 0; r -= 1) {
+    if (tokens[r].hasUnquotedTrailingPunct) {
+      segStart = r + 1;
+      break;
+    }
+  }
+  for (let r = segStart; r < endExclusive; r += 1) {
+    const t = tokens[r];
+    if (
+      t.isEnvAssign ||
+      t.precededByRedir ||
+      t.followedByRedir ||
+      t.raw.includes('\\') ||
+      SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(t.trimmedClean)
+    ) {
+      return true;
+    }
+    const tLower = stripShellBinPrefix(t.trimmedClean).toLowerCase();
+    if (
+      SHELL_SPLIT_QUOTE_VERBS.has(tLower) ||
+      SHELL_FLAG_OR_PATH_CLI_VERBS.has(tLower) ||
+      SHELL_COMPOUND_ZERO_ARG_VERBS.has(tLower)
+    ) {
+      if (!t.wasQuoted) {
+        if (
+          t.hadSkippedComparison ||
+          (tLower === 'node' &&
+            r > segStart &&
+            PROSE_NODE_DETERMINERS.has(tokens[r - 1].trimmedClean.toLowerCase()))
+        ) {
+          continue;
+        }
+        return true;
+      }
+      const isWholeQuote =
+        t.raw.length >= 2 &&
+        ((t.raw[0] === '"' && t.raw[t.raw.length - 1] === '"') ||
+          (t.raw[0] === "'" && t.raw[t.raw.length - 1] === "'"));
+      if (!isWholeQuote) {
+        return true;
+      }
+      const prevW = r > 0 ? tokens[r - 1].trimmedClean.toLowerCase() : '';
+      const nextW = r + 1 < tokens.length ? tokens[r + 1].trimmedClean.toLowerCase() : '';
+      if (
+        (r > 0 && (tokens[r - 1].hasUnquotedTrailingPunct || PROSE_LIST_INTRODUCERS.has(prevW))) &&
+        r + 1 < tokens.length &&
+        !tokens[r + 1].wasQuoted &&
+        PROSE_LIST_FOLLOWERS.has(nextW)
+      ) {
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function isProseNumericOrVersionComparison(
+  tokens,
+  targetRaw,
+  targetClean,
+  targetLastEscaped,
+  fdLen,
+  isMultiCharRedir,
+  text,
+  nextPos
+) {
+  if (fdLen !== 0 || isMultiCharRedir || targetLastEscaped || /["'\\]/.test(targetRaw)) {
+    return false;
+  }
+  if (tokens.length === 0) {
+    return false;
+  }
+  const prevTok = tokens[tokens.length - 1];
+  if (
+    prevTok.hasUnquotedTrailingPunct ||
+    prevTok.followedByRedir ||
+    prevTok.precededByRedir ||
+    prevTok.wasQuoted ||
+    prevTok.raw.includes('\\') ||
+    prevTok.isEnvAssign ||
+    prevTok.trimmedClean.includes('/') ||
+    prevTok.trimmedClean.startsWith('-')
+  ) {
+    return false;
+  }
+  const prevLower = prevTok.trimmedClean.toLowerCase();
+  if (!prevLower) {
+    return false;
+  }
+  if (SHELL_KNOWN_LOWER_STARTERS.has(prevLower) || SHELL_WRAPPER_WORD_SET.has(prevLower)) {
+    if (
+      !VERSIONED_RUNTIME_NOUNS.has(prevLower) ||
+      !/^(?:[+-]?\d+(?:\.\d+)*(?:-(?:alpha|beta|rc)(?:\.\d+)?)?|v\d+(?:\.\d+)*(?:-(?:alpha|beta|rc)(?:\.\d+)?)?)$/i.test(
+        targetClean
+      )
+    ) {
+      return false;
+    }
+  } else if (
+    !/^(?:[+-]?\d+(?:\.\d+)*(?:%|ms|s|sec|secs|us|ns|m|min|mins|h|hr|hrs|d|b|kb|mb|gb|tb|kib|mib|gib|k|x|px|rem|em|vh|vw|hz|khz|mhz|ghz|fps|rps|qps|tps)?|v\d+(?:\.\d+)*)$/i.test(
+      targetClean
+    )
+  ) {
+    return false;
+  }
+  if (hasActiveCommandStarterInSegment(tokens, tokens.length - 1)) {
+    return false;
+  }
+  const n = text.length;
+  let afterTargetPos = nextPos;
+  while (afterTargetPos < n && /[ \t]/.test(text[afterTargetPos])) {
+    afterTargetPos += 1;
+  }
+  if (afterTargetPos < n) {
+    if (
+      /[<>'"\\]/.test(text[afterTargetPos]) ||
+      text.slice(afterTargetPos, afterTargetPos + 2) === './' ||
+      text.slice(afterTargetPos, afterTargetPos + 3) === '../'
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function parseShellClausesLinear(text) {
   const n = text.length;
   const clauses = [];
-  let current = { tokens: [], hasRedirection: false, isFunctionWrap: false };
+  let current = {
+    tokens: [],
+    hasRedirection: false,
+    isFunctionWrap: false,
+    pipedIn: false,
+    pipedOut: false,
+    logicalChain: false
+  };
   let pendingRedir = false;
   let pendingSkippedAngleTag = false;
+  let skippedOpenTags = null;
+  let lastCloseTagPosMap = undefined;
+  const getLastCloseTagPos = (tagLower) => {
+    if (lastCloseTagPosMap === undefined) {
+      if (!text.includes('</')) {
+        lastCloseTagPosMap = null;
+      } else {
+        lastCloseTagPosMap = new Map();
+        let pos = text.indexOf('</');
+        while (pos !== -1) {
+          let end = pos + 2;
+          while (end < n && /[A-Za-z0-9-]/.test(text[end])) {
+            end += 1;
+          }
+          if (end > pos + 2 && end < n && text[end] === '>' && /[A-Za-z]/.test(text[pos + 2])) {
+            lastCloseTagPosMap.set(text.slice(pos + 2, end).toLowerCase(), pos);
+          }
+          pos = text.indexOf('</', pos + 2);
+        }
+      }
+    }
+    return lastCloseTagPosMap ? lastCloseTagPosMap.get(tagLower) ?? -1 : -1;
+  };
   let i = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
@@ -646,9 +859,17 @@ function parseShellClausesLinear(text) {
     if (current.tokens.length > 0 || current.hasRedirection) {
       clauses.push(current);
     }
-    current = { tokens: [], hasRedirection: false, isFunctionWrap: false };
+    current = {
+      tokens: [],
+      hasRedirection: false,
+      isFunctionWrap: false,
+      pipedIn: false,
+      pipedOut: false,
+      logicalChain: false
+    };
     pendingRedir = false;
     pendingSkippedAngleTag = false;
+    skippedOpenTags = null;
   };
 
   while (i < n) {
@@ -667,13 +888,24 @@ function parseShellClausesLinear(text) {
       continue;
     }
     if (ch === '|') {
-      pushClause();
-      i += i + 1 < n && text[i + 1] === '|' ? 2 : 1;
+      if (i + 1 < n && text[i + 1] === '|') {
+        current.logicalChain = true;
+        pushClause();
+        current.logicalChain = true;
+        i += 2;
+      } else {
+        current.pipedOut = true;
+        pushClause();
+        current.pipedIn = true;
+        i += 1;
+      }
       continue;
     }
     if (ch === '&') {
       if (i + 1 < n && text[i + 1] === '&') {
+        current.logicalChain = true;
         pushClause();
+        current.logicalChain = true;
         i += 2;
         continue;
       }
@@ -716,10 +948,13 @@ function parseShellClausesLinear(text) {
         }
         const targetRaw = text.slice(targetStart, i);
         if (targetRaw) {
-          const targetClean = stripTrailingProsePunct(targetRaw);
+          const targetLastEscaped = hasOddPrecedingBackslashes(targetRaw, targetRaw.length - 1);
+          const targetClean = targetLastEscaped ? targetRaw : stripTrailingProsePunct(targetRaw);
           const targetLast = targetRaw[targetRaw.length - 1];
           const targetEndsSentence =
-            (targetLast === '.' || targetLast === '!' || targetLast === '?') && targetClean !== targetRaw;
+            !targetLastEscaped &&
+            (targetLast === '.' || targetLast === '!' || targetLast === '?') &&
+            targetClean !== targetRaw;
           current.hasRedirection = true;
           if (!targetEndsSentence) {
             pendingRedir = true;
@@ -778,21 +1013,30 @@ function parseShellClausesLinear(text) {
       const opChar = text[opPos];
       if (fdLen === 0) {
         if (opPos + 1 < n && text[opPos + 1] === '=') {
+          if (current.tokens.length > 0) {
+            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          }
           i = opPos + (opPos + 2 < n && text[opPos + 2] === '>' ? 3 : 2);
           continue;
         }
         if (opChar === '>' && opPos > 0 && (text[opPos - 1] === '=' || text[opPos - 1] === '-')) {
+          if (current.tokens.length > 0) {
+            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          }
           i = opPos + 1;
           continue;
         }
         if (opChar === '<' && opPos + 1 < n && text[opPos + 1] === '-') {
+          if (current.tokens.length > 0) {
+            current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
+          }
           i = opPos + 2;
           continue;
         }
         if (
           opChar === '<' &&
           opPos + 1 < n &&
-          /[A-Za-z/!]/.test(text[opPos + 1]) &&
+          /[A-Za-z/!?]/.test(text[opPos + 1]) &&
           (opPos === 0 || /[\s([,;:"']/.test(text[opPos - 1]))
         ) {
           let tagEnd = -1;
@@ -807,13 +1051,76 @@ function parseShellClausesLinear(text) {
               break;
             }
           }
-          if (
-            tagEnd !== -1 &&
-            (tagEnd + 1 >= n || /[\s.,;:!?)\]}"']/.test(text[tagEnd + 1]) || text.indexOf('</', tagEnd + 1) !== -1)
-          ) {
-            pendingSkippedAngleTag = true;
-            i = tagEnd + 1;
-            continue;
+          if (tagEnd !== -1) {
+            const tagInner = text.slice(opPos + 1, tagEnd);
+            const afterIdx = tagEnd + 1;
+            let targetProbe = afterIdx;
+            while (targetProbe < n && /[ \t]/.test(text[targetProbe])) {
+              targetProbe += 1;
+            }
+            const isAutoOrSpecial =
+              tagInner.length > 0 &&
+              (tagInner[0] === '!' ||
+                tagInner[0] === '?' ||
+                (tagInner.length > 1 && tagInner[tagInner.length - 1] === '/') ||
+                /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(tagInner) ||
+                /^mailto:/i.test(tagInner));
+            const hasNoOutputTarget =
+              afterIdx >= n ||
+              /[.,;:!?)\]}\r\n]/.test(text[afterIdx]) ||
+              (targetProbe > afterIdx && (targetProbe >= n || /[.,;:!?)\]}|&<>\r\n]/.test(text[targetProbe])));
+            const isMatchedCloseTag =
+              tagInner.length > 1 &&
+              tagInner[0] === '/' &&
+              /^\/[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) &&
+              Boolean(skippedOpenTags?.has(tagInner.slice(1).toLowerCase()));
+            let isPairedHtmlOpenTag = false;
+            let isProsePlaceholderTag = false;
+            if (!isAutoOrSpecial && !hasNoOutputTarget && !isMatchedCloseTag && !hasActiveCommandStarterInSegment(current.tokens)) {
+              if (/^[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) && !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)) {
+                const tagLower = tagInner.toLowerCase();
+                if (getLastCloseTagPos(tagLower) > tagEnd) {
+                  isPairedHtmlOpenTag = true;
+                }
+              }
+              if (
+                !isPairedHtmlOpenTag &&
+                targetProbe > afterIdx &&
+                /^[a-z][a-z0-9-]*$/.test(tagInner) &&
+                !KNOWN_PATH_EXTENSIONLESS_FILES.has(tagInner)
+              ) {
+                let postEnd = targetProbe;
+                while (postEnd < n && !/[\s;|&<>(),.;:!?]/.test(text[postEnd])) {
+                  postEnd += 1;
+                }
+                const postSlice = text.slice(targetProbe, postEnd);
+                if (postSlice && !/["'\\]/.test(postSlice) && PROSE_POST_TAG_WORDS.has(postSlice.toLowerCase())) {
+                  let afterPost = postEnd;
+                  while (afterPost < n && /[ \t]/.test(text[afterPost])) {
+                    afterPost += 1;
+                  }
+                  if (
+                    afterPost >= n ||
+                    (!/["'\\]/.test(text[afterPost]) &&
+                      text.slice(afterPost, afterPost + 2) !== './' &&
+                      text.slice(afterPost, afterPost + 3) !== '../')
+                  ) {
+                    isProsePlaceholderTag = true;
+                  }
+                }
+              }
+            }
+            if (isAutoOrSpecial || hasNoOutputTarget || isMatchedCloseTag || isPairedHtmlOpenTag || isProsePlaceholderTag) {
+              if (isPairedHtmlOpenTag) {
+                if (!skippedOpenTags) {
+                  skippedOpenTags = new Set();
+                }
+                skippedOpenTags.add(tagInner.toLowerCase());
+              }
+              pendingSkippedAngleTag = true;
+              i = tagEnd + 1;
+              continue;
+            }
           }
         }
       }
@@ -855,7 +1162,7 @@ function parseShellClausesLinear(text) {
             nextPos += 1;
           }
         }
-        if (nextPos > fdTargetStart) {
+        if (nextPos > fdTargetStart && (nextPos >= n || /[\s;|&<>().!?,;:]/.test(text[nextPos]))) {
           let fdEndsSentence = false;
           if (
             nextPos < n &&
@@ -909,18 +1216,29 @@ function parseShellClausesLinear(text) {
         i = nextPos > i ? nextPos : i + 1;
         continue;
       }
-      const targetClean = stripTrailingProsePunct(targetRaw);
+      const targetLastEscaped = hasOddPrecedingBackslashes(targetRaw, targetRaw.length - 1);
+      const targetClean = targetLastEscaped ? targetRaw : stripTrailingProsePunct(targetRaw);
       if (
-        fdLen === 0 &&
-        !isMultiCharRedir &&
-        (/^[+-]?\d+(?:\.\d+)*(?:[A-Za-z%]+)?$/.test(targetClean) || /^v\d+(?:\.\d+)*$/i.test(targetClean))
+        isProseNumericOrVersionComparison(
+          current.tokens,
+          targetRaw,
+          targetClean,
+          targetLastEscaped,
+          fdLen,
+          isMultiCharRedir,
+          text,
+          nextPos
+        )
       ) {
+        current.tokens[current.tokens.length - 1].hadSkippedComparison = true;
         i = opPos + 1;
         continue;
       }
       const targetLast = targetRaw[targetRaw.length - 1];
       const targetEndsSentence =
-        (targetLast === '.' || targetLast === '!' || targetLast === '?') && targetClean !== targetRaw;
+        !targetLastEscaped &&
+        (targetLast === '.' || targetLast === '!' || targetLast === '?') &&
+        targetClean !== targetRaw;
       markRedir(targetEndsSentence);
       i = nextPos > i ? nextPos : i + 1;
       continue;
@@ -930,6 +1248,8 @@ function parseShellClausesLinear(text) {
     let value = '';
     let wasQuoted = false;
     let hasRawEq = false;
+    let unprotectedSuffixStart = 0;
+    let lastCharWasEscaped = false;
 
     while (i < n && !/[\s;|&<>()]/.test(text[i])) {
       const c = text[i];
@@ -942,6 +1262,7 @@ function parseShellClausesLinear(text) {
       if (c === '"') {
         if (noMoreDouble) {
           value += c;
+          lastCharWasEscaped = false;
           i += 1;
           continue;
         }
@@ -959,6 +1280,7 @@ function parseShellClausesLinear(text) {
         if (closeDq === -1) {
           noMoreDouble = true;
           value += c;
+          lastCharWasEscaped = false;
           i += 1;
           continue;
         }
@@ -971,6 +1293,8 @@ function parseShellClausesLinear(text) {
             value += text[k];
           }
         }
+        unprotectedSuffixStart = value.length;
+        lastCharWasEscaped = false;
         i = closeDq + 1;
         continue;
       }
@@ -981,12 +1305,14 @@ function parseShellClausesLinear(text) {
           const sameWordClose = hasSingleQuoteCloseBeforeSpace(text, i, n);
           if (sameWordClose === -1) {
             value += c;
+            lastCharWasEscaped = false;
             i += 1;
             continue;
           }
         }
         if (noMoreSingle) {
           value += c;
+          lastCharWasEscaped = false;
           i += 1;
           continue;
         }
@@ -994,16 +1320,20 @@ function parseShellClausesLinear(text) {
         if (closeSq === -1) {
           noMoreSingle = true;
           value += c;
+          lastCharWasEscaped = false;
           i += 1;
           continue;
         }
         if (precededByAlphaNum && !followedByAlphaNum && i + 1 < n && /[\s,.;:!?)]/.test(text[i + 1])) {
           value += c;
+          lastCharWasEscaped = false;
           i += 1;
           continue;
         }
         wasQuoted = true;
         value += text.slice(i + 1, closeSq);
+        unprotectedSuffixStart = value.length;
+        lastCharWasEscaped = false;
         i = closeSq + 1;
         continue;
       }
@@ -1011,11 +1341,14 @@ function parseShellClausesLinear(text) {
         const nextC = text[i + 1];
         if (!/\s/.test(nextC)) {
           value += nextC;
+          unprotectedSuffixStart = value.length;
+          lastCharWasEscaped = true;
           i += 2;
           continue;
         }
       }
       value += c;
+      lastCharWasEscaped = false;
       i += 1;
     }
 
@@ -1024,7 +1357,13 @@ function parseShellClausesLinear(text) {
       continue;
     }
     const raw = text.slice(tokenStart, i);
-    const trimmedClean = stripTrailingProsePunct(value);
+    const unprotectedTail = value.slice(unprotectedSuffixStart);
+    const unprotectedTailClean = stripTrailingProsePunct(unprotectedTail);
+    const hasUnquotedTrailingPunct = unprotectedTailClean !== unprotectedTail;
+    const trimmedClean =
+      wasQuoted && !lastCharWasEscaped
+        ? stripTrailingProsePunct(value)
+        : value.slice(0, unprotectedSuffixStart) + unprotectedTailClean;
     const resolvedClean = trimmedClean || value;
     const hasPaddingSpaces =
       value.length > 0 &&
@@ -1035,10 +1374,6 @@ function parseShellClausesLinear(text) {
       !hasPaddingSpaces &&
       !hasTrailingProsePunct &&
       /^[A-Za-z_][A-Za-z0-9_]*=[^\s]*$/.test(resolvedClean);
-    const rawLast = raw[raw.length - 1];
-    const hasUnquotedTrailingPunct =
-      hasTrailingProsePunct &&
-      (rawLast === '.' || rawLast === ',' || rawLast === ';' || rawLast === ':' || rawLast === '!' || rawLast === '?');
     current.tokens.push({
       raw,
       value,
@@ -1047,6 +1382,7 @@ function parseShellClausesLinear(text) {
       hasPaddingSpaces,
       hasTrailingProsePunct,
       hasUnquotedTrailingPunct,
+      hadSkippedComparison: false,
       isEnvAssign: hasRawEq || isQuotedEnvAssign,
       precededByRedir: pendingRedir,
       precededByAngleTag: pendingSkippedAngleTag,
@@ -1431,130 +1767,6 @@ function scanShellCommandText(text, options = {}) {
   return scanFlatShellClauses(text, options);
 }
 
-function hasSplitOrConcatQuoteCommand(rawText, openIdx, closeIdx, knownNextAngleIdx) {
-  const n = rawText.length;
-  // Walk backward/forward to capture contiguous concatenated tokens like `n"pm"` or `'np''m'`
-  let tokStart = openIdx;
-  while (tokStart > 0 && /[A-Za-z0-9_./\\-]/.test(rawText[tokStart - 1])) {
-    tokStart -= 1;
-  }
-  let tokEnd = closeIdx + 1;
-  while (tokEnd < n) {
-    const nc = rawText[tokEnd];
-    if (nc === '"' || nc === "'") {
-      const q = nc;
-      let nextClose = -1;
-      if (q === '"') {
-        for (let k = tokEnd + 1; k < n; k += 1) {
-          if (rawText[k] === '\\') {
-            k += 1;
-            continue;
-          }
-          if (rawText[k] === '"') {
-            nextClose = k;
-            break;
-          }
-        }
-      } else {
-        nextClose = rawText.indexOf("'", tokEnd + 1);
-      }
-      if (nextClose !== -1) {
-        tokEnd = nextClose + 1;
-        continue;
-      }
-      break;
-    }
-    if (!/[A-Za-z0-9_./\\-]/.test(nc)) {
-      break;
-    }
-    tokEnd += 1;
-  }
-
-  const combinedSpan = rawText.slice(tokStart, tokEnd);
-  let leadClean = '';
-  if (tokStart === openIdx && tokEnd === closeIdx + 1) {
-    const rawInner = rawText.slice(openIdx + 1, closeIdx);
-    if (rawInner && !/[\s"'\\]/.test(rawInner)) {
-      leadClean = stripTrailingProsePunct(rawInner) || rawInner;
-    }
-  }
-  if (!leadClean) {
-    const parsedLead = parseShellClausesLinear(combinedSpan);
-    const leadToken = parsedLead[0]?.tokens?.[0];
-    if (!leadToken) {
-      return { cmd: null, tokEnd };
-    }
-    leadClean = leadToken.trimmedClean;
-  }
-  const leadLower = stripShellBinPrefix(leadClean).toLowerCase();
-  if (!SHELL_SPLIT_QUOTE_VERBS.has(leadLower) && !SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(leadClean)) {
-    return { cmd: null, tokEnd };
-  }
-
-  // Inspect bounded immediate unquoted tail after tokEnd
-  let ws = tokEnd;
-  while (ws < n && /[ \t]/.test(rawText[ws])) {
-    ws += 1;
-  }
-  if (ws === tokEnd && tokEnd < n && !/[<>|&;\n]/.test(rawText[tokEnd])) {
-    return { cmd: null, tokEnd };
-  }
-  if (ws >= n) {
-    return { cmd: null, tokEnd };
-  }
-  const nextCh = rawText[ws];
-  if (',.;:!?)}\n'.includes(nextCh)) {
-    return { cmd: null, tokEnd };
-  }
-  if (knownNextAngleIdx !== undefined && nextCh !== '"' && nextCh !== "'" && nextCh !== '<' && nextCh !== '>') {
-    const maxTailEnd = Math.min(n, ws + 192);
-    if (knownNextAngleIdx === -1 || knownNextAngleIdx >= maxTailEnd) {
-      let wEnd = ws;
-      while (wEnd < maxTailEnd && !/[\s,;:.!?()[\]{}<>|&]/.test(rawText[wEnd])) {
-        wEnd += 1;
-      }
-      if (wEnd > ws && (wEnd >= n || /[\s,;:.!?()[\]{}]/.test(rawText[wEnd]))) {
-        const quickWord = rawText.slice(ws, wEnd).toLowerCase();
-        if (SPLIT_QUOTE_PROSE_STOPWORDS.has(quickWord) && !isRecognizedCliSubcommand(leadLower, quickWord)) {
-          return { cmd: null, tokEnd };
-        }
-      }
-    }
-  }
-  const tailSlice = rawText.slice(ws, Math.min(n, ws + 192));
-  const tailCut = tailSlice.search(/[;\n]|&&|\|\|/);
-  const tailCandidate = (tailCut === -1 ? tailSlice : tailSlice.slice(0, tailCut)).trim();
-  if (!tailCandidate) {
-    return { cmd: null, tokEnd };
-  }
-  const firstTailWordMatch = /^([^\s,;:.!?()[\]{}]+)/.exec(tailCandidate);
-  const firstTailWord = firstTailWordMatch ? firstTailWordMatch[1].toLowerCase() : '';
-  const tailStartsQuotedOrRedir = /^(?:["'<>]|\d+[<>]|&>)/.test(tailCandidate);
-  const candidateClause = `${combinedSpan} ${tailCandidate}`;
-  if (
-    !tailStartsQuotedOrRedir &&
-    SPLIT_QUOTE_PROSE_STOPWORDS.has(firstTailWord) &&
-    !isRecognizedCliSubcommand(leadLower, firstTailWord)
-  ) {
-    if (!/[<>]/.test(tailCandidate)) {
-      return { cmd: null, tokEnd };
-    }
-    const candClauses = parseShellClausesLinear(normalizeInlineEscapedQuotes(candidateClause));
-    const firstCand = candClauses[0];
-    const candReach = getClauseRedirReach(firstCand);
-    const hasAssociatedRedir = Boolean(firstCand?.tokens?.[0]?.precededByRedir || candReach?.[0]);
-    if (!hasAssociatedRedir) {
-      return { cmd: null, tokEnd };
-    }
-  }
-
-  if (scanShellCommandText(candidateClause)) {
-    const firstArg = firstTailWordMatch ? firstTailWordMatch[1] : tailCandidate;
-    return { cmd: `${leadClean} ${firstArg}`.trim(), tokEnd };
-  }
-  return { cmd: null, tokEnd };
-}
-
 function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBareScript = false, stopOnFirst = true } = {}) {
   const n = rawText.length;
   let masked = '';
@@ -1562,18 +1774,6 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   let noMoreDouble = false;
   let noMoreSingle = false;
   let noMoreBacktick = false;
-  let lastSplitWordEnd = -1;
-  let nextAngleIdx = -2;
-  const getNextAngleFrom = (pos) => {
-    if (nextAngleIdx === -1) return -1;
-    if (nextAngleIdx >= pos) return nextAngleIdx;
-    const lt = rawText.indexOf('<', pos);
-    const gt = rawText.indexOf('>', pos);
-    if (lt === -1) nextAngleIdx = gt;
-    else if (gt === -1) nextAngleIdx = lt;
-    else nextAngleIdx = lt < gt ? lt : gt;
-    return nextAngleIdx;
-  };
   const matchedDeps = [];
   const seenMatched = new Set();
   const pushMatched = (dep) => {
@@ -1588,28 +1788,34 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     if (ch !== '"' && ch !== "'" && (!includeBackticks || ch !== '`')) {
       continue;
     }
-    if (i > 0 && /[A-Za-z0-9_./-]/.test(rawText[i - 1])) {
-      // Allow n"pm" / n'pm' only when it forms a command with tail, evaluating each concatenated token once in O(n)
+    if (i > 0 && /[A-Za-z0-9_./\\-]/.test(rawText[i - 1])) {
       if (ch === '`') {
         continue;
       }
       if (ch === "'") {
-        if (i >= lastSplitWordEnd) {
-          const endSq = hasSingleQuoteCloseBeforeSpace(rawText, i, n);
-          if (endSq !== -1 && endSq - i <= 64) {
-            const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endSq, getNextAngleFrom(endSq + 1));
-            lastSplitWordEnd = tokEnd;
-            if (splitCmd) {
-              pushMatched(splitCmd);
-              if (stopOnFirst) return { matchedDeps, remainder: rawText };
+        if (!noMoreSingle) {
+          let endSq = -1;
+          for (let k = i + 1; k < n; k += 1) {
+            if (rawText[k] === "'") {
+              const isInternalApostrophe =
+                /[A-Za-z0-9]/.test(rawText[k - 1]) && k + 1 < n && /[A-Za-z0-9]/.test(rawText[k + 1]);
+              if (!isInternalApostrophe) {
+                endSq = k;
+                break;
+              }
             }
+          }
+          if (endSq === -1) {
+            noMoreSingle = true;
+          } else {
+            i = endSq;
           }
         }
         continue;
       }
-      if (ch === '"' && !noMoreDouble && i >= lastSplitWordEnd) {
+      if (ch === '"' && !noMoreDouble) {
         let endDq = -1;
-        for (let k = i + 1; k < n && k - i <= 64; k += 1) {
+        for (let k = i + 1; k < n; k += 1) {
           if (rawText[k] === '\\') {
             k += 1;
             continue;
@@ -1619,13 +1825,10 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
             break;
           }
         }
-        if (endDq !== -1) {
-          const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endDq, getNextAngleFrom(endDq + 1));
-          lastSplitWordEnd = tokEnd;
-          if (splitCmd) {
-            pushMatched(splitCmd);
-            if (stopOnFirst) return { matchedDeps, remainder: rawText };
-          }
+        if (endDq === -1) {
+          noMoreDouble = true;
+        } else {
+          i = endDq;
         }
       }
       continue;
@@ -1697,15 +1900,6 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
             if (stopOnFirst) return { matchedDeps, remainder: rawText };
           }
         }
-      }
-    }
-
-    if (ch !== '`' && i >= lastSplitWordEnd) {
-      const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, closeIdx, getNextAngleFrom(closeIdx + 1));
-      lastSplitWordEnd = tokEnd;
-      if (splitCmd) {
-        pushMatched(splitCmd);
-        if (stopOnFirst) return { matchedDeps, remainder: rawText };
       }
     }
 
@@ -1885,12 +2079,24 @@ function maskBackticksLinear(text) {
 
 const SHELL_UNAMBIGUOUS_WRAPPER_SET = new Set(['nohup', 'sudo', 'setsid', 'stdbuf', 'builtin']);
 
+function joinRawTokenRange(tokens, start, end) {
+  let out = '';
+  for (let idx = start; idx < end; idx += 1) {
+    if (idx > start) {
+      out += ' ';
+    }
+    out += tokens[idx].raw;
+  }
+  return out;
+}
+
 function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = false } = {}) {
   if (!text || typeof text !== 'string') {
     return [];
   }
   const maskedBt = maskBackticksLinear(text);
-  const unescaped = unescapeInlineShellWords(maskedBt);
+  const normQuotes = normalizeInlineEscapedQuotes(maskedBt);
+  const unescaped = unescapeInlineShellWords(normQuotes);
   const clauses = parseShellClausesLinear(unescaped);
   const isCompound = clauses.length > 1;
   const found = [];
@@ -1949,6 +2155,8 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           if (
             !t.wasQuoted ||
             afterTok.wasQuoted ||
+            prefixHasRedir ||
+            Boolean(redirReach?.[idx]) ||
             !SPLIT_QUOTE_PROSE_STOPWORDS.has(afterLower) ||
             SHELL_WRAPPER_WORD_SET.has(afterLower)
           ) {
@@ -2000,12 +2208,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
                 !targetTok.hasPaddingSpaces &&
                 !/\s/.test(targetTok.trimmedClean)
               ) {
-                const snippet = stripTrailingProsePunct(
-                  tokens
-                    .slice(k, idx + 1)
-                    .map((item) => item.raw)
-                    .join(' ')
-                );
+                const snippet = stripTrailingProsePunct(joinRawTokenRange(tokens, k, idx + 1));
                 if (snippet) {
                   if (stopOnFirst) return [snippet];
                   if (!seenFound.has(snippet)) {
@@ -2038,12 +2241,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
       }
       if (idx >= tokens.length) {
         if (idx > k && ((lastWrapperLower !== '' && (sawWrapperFlag || prefixHasRedir)) || prefixHasRedir)) {
-          const snippet = stripTrailingProsePunct(
-            tokens
-              .slice(k, tokens.length)
-              .map((item) => item.raw)
-              .join(' ')
-          );
+          const snippet = stripTrailingProsePunct(joinRawTokenRange(tokens, k, tokens.length));
           if (snippet) {
             if (stopOnFirst) return [snippet];
             if (!seenFound.has(snippet)) {
@@ -2176,16 +2374,24 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
       if (!matched && idx > k && lastWrapperLower !== '' && hasRedirection) {
         matched = true;
       }
+      if (!matched && headTok.wasQuoted && !headTok.hasTrailingProsePunct && !headTok.hasUnquotedTrailingPunct) {
+        const isShellChain = Boolean(clause.pipedIn || clause.pipedOut || clause.logicalChain);
+        if (
+          (nextArgOk || hasStrongShellPrefix) &&
+          (SHELL_STRICT_CLI_VERBS.has(cmdLower) || SHELL_ZERO_ARG_CLI_VERBS.has(cmdLower))
+        ) {
+          matched = true;
+        } else if (SHELL_COMPOUND_ZERO_ARG_VERBS.has(cmdLower) && remainingCount === 0 && isShellChain) {
+          matched = true;
+        } else if ((cmdLower === 'cd' || cmdLower === 'make') && nextArgOk && (isShellChain || lastWrapperLower !== '')) {
+          matched = true;
+        }
+      }
 
       if (matched) {
         const includeNextInSnippet = Boolean(nextArgOk && !headTok.followedByRedir && !nextTok?.precededByRedir);
         const snippetEnd = includeNextInSnippet ? Math.min(tokens.length, idx + 2) : idx + 1;
-        const snippet = stripTrailingProsePunct(
-          tokens
-            .slice(k, snippetEnd)
-            .map((item) => item.raw)
-            .join(' ')
-        );
+        const snippet = stripTrailingProsePunct(joinRawTokenRange(tokens, k, snippetEnd));
         if (snippet) {
           if (stopOnFirst) {
             return [snippet];

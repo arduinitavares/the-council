@@ -592,6 +592,19 @@ function hasSingleQuoteCloseBeforeSpace(text, openIdx, n) {
   return -1;
 }
 
+function stripTrailingProsePunct(str) {
+  let end = str.length;
+  while (end > 0) {
+    const ch = str[end - 1];
+    if (ch === '.' || ch === ',' || ch === ';' || ch === ':' || ch === '!' || ch === '?') {
+      end -= 1;
+    } else {
+      break;
+    }
+  }
+  return end === str.length ? str : str.slice(0, end);
+}
+
 function parseShellClausesLinear(text) {
   const n = text.length;
   const clauses = [];
@@ -697,8 +710,39 @@ function parseShellClausesLinear(text) {
     if (fdLen > 0 || ch === '<' || ch === '>') {
       const opPos = i + fdLen;
       const opChar = text[opPos];
-      current.hasRedirection = true;
-      pendingRedir = true;
+      if (fdLen === 0) {
+        if (opPos + 1 < n && text[opPos + 1] === '=') {
+          i = opPos + (opPos + 2 < n && text[opPos + 2] === '>' ? 3 : 2);
+          continue;
+        }
+        if (opChar === '>' && opPos > 0 && (text[opPos - 1] === '=' || text[opPos - 1] === '-')) {
+          i = opPos + 1;
+          continue;
+        }
+        if (opChar === '<' && opPos + 1 < n && text[opPos + 1] === '-') {
+          i = opPos + 2;
+          continue;
+        }
+        if (opChar === '<' && opPos + 1 < n && /[A-Za-z/!]/.test(text[opPos + 1])) {
+          let tagEnd = -1;
+          const limit = Math.min(n, opPos + 64);
+          for (let q = opPos + 1; q < limit; q += 1) {
+            const tc = text[q];
+            if (tc === '>') {
+              tagEnd = q;
+              break;
+            }
+            if (/[\s;|&<()"']/.test(tc)) {
+              break;
+            }
+          }
+          if (tagEnd !== -1) {
+            i = tagEnd + 1;
+            continue;
+          }
+        }
+      }
+
       let nextPos = opPos + 1;
       if (opChar === '<' && nextPos < n && text[nextPos] === '<') {
         nextPos += 1;
@@ -710,11 +754,20 @@ function parseShellClausesLinear(text) {
       } else if (opChar === '>' && nextPos < n && (text[nextPos] === '>' || text[nextPos] === '&' || text[nextPos] === '|')) {
         nextPos += 1;
       }
+      const isMultiCharRedir = nextPos > opPos + 1;
       const isFdDup = text[nextPos - 1] === '&';
       while (nextPos < n && /[ \t]/.test(text[nextPos])) {
         nextPos += 1;
       }
+      const markRedir = () => {
+        current.hasRedirection = true;
+        pendingRedir = true;
+        if (current.tokens.length > 0) {
+          current.tokens[current.tokens.length - 1].followedByRedir = true;
+        }
+      };
       if (isFdDup) {
+        const fdTargetStart = nextPos;
         if (nextPos < n && text[nextPos] === '-') {
           nextPos += 1;
         } else {
@@ -722,25 +775,61 @@ function parseShellClausesLinear(text) {
             nextPos += 1;
           }
         }
+        if (nextPos > fdTargetStart) {
+          markRedir();
+        }
         i = nextPos;
         continue;
       }
+      const targetStart = nextPos;
       while (nextPos < n && !/[\s;|&<>()]/.test(text[nextPos])) {
         if (text[nextPos] === '\\' && nextPos + 1 < n) {
           nextPos += 2;
-        } else if (text[nextPos] === '"') {
-          nextPos += 1;
-          while (nextPos < n && text[nextPos] !== '"') {
-            nextPos += text[nextPos] === '\\' ? 2 : 1;
+        } else if (text[nextPos] === '"' && !noMoreDouble) {
+          let closeDq = -1;
+          for (let q = nextPos + 1; q < n; q += 1) {
+            if (text[q] === '\\' && q + 1 < n) {
+              q += 1;
+              continue;
+            }
+            if (text[q] === '"') {
+              closeDq = q;
+              break;
+            }
           }
-          if (nextPos < n) nextPos += 1;
-        } else if (text[nextPos] === "'") {
+          if (closeDq === -1) {
+            noMoreDouble = true;
+            nextPos += 1;
+          } else {
+            nextPos = closeDq + 1;
+          }
+        } else if (text[nextPos] === "'" && !noMoreSingle) {
           const endSq = text.indexOf("'", nextPos + 1);
-          nextPos = endSq === -1 ? nextPos + 1 : endSq + 1;
+          if (endSq === -1) {
+            noMoreSingle = true;
+            nextPos += 1;
+          } else {
+            nextPos = endSq + 1;
+          }
         } else {
           nextPos += 1;
         }
       }
+      const targetRaw = text.slice(targetStart, nextPos);
+      if (!targetRaw) {
+        i = nextPos > i ? nextPos : i + 1;
+        continue;
+      }
+      const targetClean = stripTrailingProsePunct(targetRaw);
+      if (
+        fdLen === 0 &&
+        !isMultiCharRedir &&
+        (/^[+-]?\d+(?:\.\d+)*(?:[A-Za-z%]+)?$/.test(targetClean) || /^v\d+(?:\.\d+)*$/i.test(targetClean))
+      ) {
+        i = opPos + 1;
+        continue;
+      }
+      markRedir();
       i = nextPos > i ? nextPos : i + 1;
       continue;
     }
@@ -843,14 +932,27 @@ function parseShellClausesLinear(text) {
       continue;
     }
     const raw = text.slice(tokenStart, i);
-    const trimmedClean = value.replace(/[.,;:!?]+$/, '');
+    const trimmedClean = stripTrailingProsePunct(value);
+    const resolvedClean = trimmedClean || value;
+    const hasPaddingSpaces =
+      value.length > 0 &&
+      (value[0] === ' ' || value[0] === '\t' || value[value.length - 1] === ' ' || value[value.length - 1] === '\t');
+    const hasTrailingProsePunct = resolvedClean !== value;
+    const isQuotedEnvAssign =
+      wasQuoted &&
+      !hasPaddingSpaces &&
+      !hasTrailingProsePunct &&
+      /^[A-Za-z_][A-Za-z0-9_]*=[^\s]*$/.test(resolvedClean);
     current.tokens.push({
       raw,
       value,
-      trimmedClean: trimmedClean || value,
+      trimmedClean: resolvedClean,
       wasQuoted,
-      isEnvAssign: hasRawEq,
-      precededByRedir: pendingRedir
+      hasPaddingSpaces,
+      hasTrailingProsePunct,
+      isEnvAssign: hasRawEq || isQuotedEnvAssign,
+      precededByRedir: pendingRedir,
+      followedByRedir: false
     });
     pendingRedir = false;
   }
@@ -1236,6 +1338,13 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   let noMoreBacktick = false;
   let lastSplitWordEnd = -1;
   const matchedDeps = [];
+  const seenMatched = new Set();
+  const pushMatched = (dep) => {
+    if (dep && !seenMatched.has(dep)) {
+      seenMatched.add(dep);
+      matchedDeps.push(dep);
+    }
+  };
 
   for (let i = 0; i < n; i += 1) {
     const ch = rawText[i];
@@ -1254,7 +1363,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
             const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endSq);
             lastSplitWordEnd = tokEnd;
             if (splitCmd) {
-              matchedDeps.push(splitCmd);
+              pushMatched(splitCmd);
               if (stopOnFirst) return { matchedDeps, remainder: rawText };
             }
           }
@@ -1277,7 +1386,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
           const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, endDq);
           lastSplitWordEnd = tokEnd;
           if (splitCmd) {
-            matchedDeps.push(splitCmd);
+            pushMatched(splitCmd);
             if (stopOnFirst) return { matchedDeps, remainder: rawText };
           }
         }
@@ -1330,14 +1439,14 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     const inner = rawText.slice(i + 1, closeIdx).trim();
     if (inner) {
       if (ch === '`' && !includeBackticks) {
-        matchedDeps.push(inner);
+        pushMatched(inner);
         if (stopOnFirst) return { matchedDeps, remainder: rawText };
       } else {
         const isSafeEndpoint = includeBackticks && typeof isSingleExternalEndpointToken === 'function' && isSingleExternalEndpointToken(inner);
         if (!isSafeEndpoint) {
           const matchesScript = includeBareScript && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
           if (matchesScript || scanShellCommandText(inner)) {
-            matchedDeps.push(inner);
+            pushMatched(inner);
             if (stopOnFirst) return { matchedDeps, remainder: rawText };
           }
         }
@@ -1348,7 +1457,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
       const { cmd: splitCmd, tokEnd } = hasSplitOrConcatQuoteCommand(rawText, i, closeIdx);
       lastSplitWordEnd = tokEnd;
       if (splitCmd) {
-        matchedDeps.push(splitCmd);
+        pushMatched(splitCmd);
         if (stopOnFirst) return { matchedDeps, remainder: rawText };
       }
     }
@@ -1362,41 +1471,425 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   return { matchedDeps, remainder };
 }
 
-function scanUnquotedRedirectionAndWrapperCommands(remainder) {
-  if (!remainder) {
-    return null;
+const PROSE_STRICT_CLI_VERB_SET = new Set([
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'pytest',
+  'cargo',
+  'kubectl',
+  'netstat',
+  'lsof',
+  'realpath',
+  'readlink',
+  'basename',
+  'dirname',
+  'xargs',
+  'awk',
+  'sed',
+  'wc'
+]);
+const PROSE_AMBIGUOUS_CLI_VERB_SET = new Set([
+  'node',
+  'python',
+  'python3',
+  'bash',
+  'sh',
+  'zsh',
+  'docker',
+  'curl',
+  'grep',
+  'rg',
+  'cat'
+]);
+const PROSE_CLI_SUBCOMMAND_SET = new Set([
+  'test',
+  'run',
+  'exec',
+  'check',
+  'build',
+  'lint',
+  'ci',
+  'audit',
+  'install',
+  'diff',
+  'status',
+  'log',
+  'show',
+  'rev-parse',
+  'publish',
+  'pack',
+  'init',
+  'start',
+  'stop',
+  'bench',
+  'clippy',
+  'doc',
+  'fmt',
+  'clean',
+  'update',
+  'get',
+  'describe',
+  'logs',
+  'apply',
+  'delete'
+]);
+const DOCKER_SUBCOMMAND_SET = new Set([
+  'ps',
+  'run',
+  'exec',
+  'build',
+  'compose',
+  'images',
+  'logs',
+  'inspect',
+  'pull',
+  'push',
+  'info',
+  'version'
+]);
+
+function isLikelyShellFileArg(val) {
+  if (!val || typeof val !== 'string' || /\s/.test(val)) {
+    return false;
   }
-  if (
-    !remainder.includes('<') &&
-    !remainder.includes('>') &&
-    !remainder.includes('=') &&
-    !/\b(?:env|command|builtin|time|nohup|nice|sudo|exec|setsid|stdbuf|timeout)\b/i.test(remainder)
-  ) {
-    return null;
+  const lower = val.toLowerCase();
+  if (KNOWN_PATH_EXTENSIONLESS_FILES.has(val) || KNOWN_DOTFILES.has(lower) || lower.startsWith('.env.')) {
+    return true;
   }
-  const normalized = unescapeInlineShellWords(remainder);
-  const clauses = parseShellClausesLinear(normalized);
+  if (val.includes('/')) {
+    const segs = val.split('/').filter(Boolean);
+    return segs.length > 0 && !isNonPathSlashExpression(val, segs);
+  }
+  if (/^[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,11}$/.test(val)) {
+    return classifyFileCandidate(val) === 'file';
+  }
+  return false;
+}
+
+function maskBackticksLinear(text) {
+  if (!text || !text.includes('`')) {
+    return text;
+  }
+  const n = text.length;
+  let out = '';
+  let cursor = 0;
+  let noMoreSq = false;
+  let noMoreBt = false;
+
+  for (let i = 0; i < n; i += 1) {
+    const c = text[i];
+    if (c === '\\' && i + 1 < n) {
+      i += 1;
+      continue;
+    }
+    if (c === "'" && !noMoreSq) {
+      const precededByAlphaNum = i > 0 && /[A-Za-z0-9]/.test(text[i - 1]);
+      const followedByAlphaNum = i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+      if (precededByAlphaNum && followedByAlphaNum && hasSingleQuoteCloseBeforeSpace(text, i, n) === -1) {
+        continue;
+      }
+      const closeSq = text.indexOf("'", i + 1);
+      if (closeSq === -1) {
+        noMoreSq = true;
+      } else {
+        i = closeSq;
+      }
+      continue;
+    }
+    if (c === '`' && !noMoreBt) {
+      const closeBt = text.indexOf('`', i + 1);
+      if (closeBt === -1) {
+        noMoreBt = true;
+        continue;
+      }
+      out += text.slice(cursor, i) + ' '.repeat(closeBt - i + 1);
+      cursor = closeBt + 1;
+      i = closeBt;
+    }
+  }
+  return cursor === 0 ? text : out + text.slice(cursor);
+}
+
+const SHELL_UNAMBIGUOUS_WRAPPER_SET = new Set(['nohup', 'sudo', 'setsid', 'stdbuf', 'builtin']);
+
+function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = false } = {}) {
+  if (!text || typeof text !== 'string') {
+    return [];
+  }
+  const maskedBt = maskBackticksLinear(text);
+  const unescaped = unescapeInlineShellWords(maskedBt);
+  const clauses = parseShellClausesLinear(unescaped);
   const isCompound = clauses.length > 1;
+  const found = [];
+  const seenFound = stopOnFirst ? null : new Set();
 
   for (let c = 0; c < clauses.length; c += 1) {
     const clause = clauses[c];
     const tokens = clause.tokens;
     let k = 0;
     while (k < tokens.length) {
-      const tok = tokens[k];
-      const strippedLower = stripShellBinPrefix(tok.trimmedClean).toLowerCase();
-      if (tok.precededByRedir || tok.isEnvAssign || SHELL_WRAPPER_WORD_SET.has(strippedLower)) {
-        const res = clauseLooksLikeShellCommandFrom(clause, k, isCompound, { strictProseMode: false });
-        if (res.matched) {
-          return tokens.slice(k, Math.min(tokens.length, (res.headIdx ?? k) + 3)).map((t) => t.raw).join(' ');
-        }
-        k = Math.max(k + 1, res.nextIdx);
+      const startTok = tokens[k];
+      const startStrippedLower = stripShellBinPrefix(startTok.trimmedClean).toLowerCase();
+      if (
+        !startTok.precededByRedir &&
+        !startTok.followedByRedir &&
+        !startTok.isEnvAssign &&
+        !SHELL_KNOWN_LOWER_STARTERS.has(startStrippedLower) &&
+        !startTok.trimmedClean.startsWith('./') &&
+        !startTok.trimmedClean.startsWith('../')
+      ) {
+        k += 1;
         continue;
       }
-      k += 1;
+
+      let idx = k;
+      let hasEnvPrefix = false;
+      let sawWrapperFlag = false;
+
+      while (idx < tokens.length) {
+        const t = tokens[idx];
+        if (idx + 1 < tokens.length && !t.wasQuoted && SHELL_CONTROL_PREFIX_WORDS.has(t.value.toLowerCase())) {
+          idx += 1;
+          continue;
+        }
+        if (t.isEnvAssign && !t.hasTrailingProsePunct && !t.hasPaddingSpaces && idx + 1 < tokens.length) {
+          hasEnvPrefix = true;
+          idx += 1;
+          continue;
+        }
+        const strippedLower = stripShellBinPrefix(t.trimmedClean).toLowerCase();
+        if (
+          SHELL_WRAPPER_WORD_SET.has(strippedLower) &&
+          !t.hasTrailingProsePunct &&
+          !t.hasPaddingSpaces &&
+          !/\s/.test(t.trimmedClean) &&
+          idx + 1 < tokens.length
+        ) {
+          const afterLower = stripShellBinPrefix(tokens[idx + 1].trimmedClean).toLowerCase();
+          if (!t.wasQuoted || !SPLIT_QUOTE_PROSE_STOPWORDS.has(afterLower)) {
+            if (SHELL_UNAMBIGUOUS_WRAPPER_SET.has(strippedLower)) {
+              sawWrapperFlag = true;
+            }
+            idx += 1;
+            let hasCommandLookupFlag = false;
+            const shortValueFlags = SHELL_WRAPPER_SHORT_VALUE_FLAGS.get(strippedLower);
+            const longValueFlags = SHELL_WRAPPER_LONG_VALUE_FLAGS.get(strippedLower);
+            while (idx < tokens.length) {
+              const argTok = tokens[idx];
+              if (argTok.hasPaddingSpaces || /\s/.test(argTok.trimmedClean)) {
+                break;
+              }
+              const arg = argTok.trimmedClean;
+              if (arg === '--') {
+                sawWrapperFlag = true;
+                idx += 1;
+                break;
+              }
+              if (arg.startsWith('--')) {
+                sawWrapperFlag = true;
+                idx += 1;
+                if (!arg.includes('=') && longValueFlags?.has(arg) && idx < tokens.length) {
+                  idx += 1;
+                }
+                continue;
+              }
+              if (arg.startsWith('-') && arg.length > 1 && /[A-Za-z0-9]/.test(arg[1])) {
+                const flagChar = arg[1];
+                if (strippedLower === 'command' && (arg.includes('v') || arg.includes('V'))) {
+                  hasCommandLookupFlag = true;
+                }
+                sawWrapperFlag = true;
+                idx += 1;
+                if (arg.length === 2 && shortValueFlags?.has(flagChar) && idx < tokens.length) {
+                  idx += 1;
+                }
+                continue;
+              }
+              break;
+            }
+            if (hasCommandLookupFlag && idx < tokens.length) {
+              const targetTok = tokens[idx];
+              const targetLower = stripShellBinPrefix(targetTok.trimmedClean).toLowerCase();
+              if (
+                !targetTok.hasPaddingSpaces &&
+                !/\s/.test(targetTok.trimmedClean) &&
+                !SPLIT_QUOTE_PROSE_STOPWORDS.has(targetLower)
+              ) {
+                const snippet = stripTrailingProsePunct(
+                  tokens
+                    .slice(k, idx + 1)
+                    .map((item) => item.raw)
+                    .join(' ')
+                );
+                if (snippet) {
+                  if (stopOnFirst) return [snippet];
+                  if (!seenFound.has(snippet)) {
+                    seenFound.add(snippet);
+                    found.push(snippet);
+                  }
+                }
+                k = Math.max(k + 1, idx + 1);
+                idx = -1;
+                break;
+              }
+            }
+            if (
+              strippedLower === 'timeout' &&
+              idx < tokens.length &&
+              !tokens[idx].hasPaddingSpaces &&
+              /^\d+(?:\.\d+)?[smhd]?$/i.test(tokens[idx].trimmedClean)
+            ) {
+              sawWrapperFlag = true;
+              idx += 1;
+            }
+            continue;
+          }
+        }
+        break;
+      }
+
+      if (idx === -1) {
+        continue;
+      }
+      if (idx >= tokens.length) {
+        k = Math.max(k + 1, idx);
+        continue;
+      }
+
+      const headTok = tokens[idx];
+      const remainingCount = tokens.length - 1 - idx;
+      const hasRedirection =
+        (k === 0 && clause.hasRedirection) || Boolean(tokens[k].precededByRedir) || Boolean(headTok.followedByRedir);
+      const hasStrongShellPrefix = hasEnvPrefix || sawWrapperFlag || hasRedirection;
+
+      if (headTok.hasPaddingSpaces || /\s/.test(headTok.trimmedClean)) {
+        k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+        continue;
+      }
+      if (headTok.hasTrailingProsePunct && (remainingCount > 0 || !hasStrongShellPrefix)) {
+        k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+        continue;
+      }
+
+      const nextTok = remainingCount > 0 ? tokens[idx + 1] : null;
+      const nextVal = nextTok ? nextTok.trimmedClean : '';
+      const nextLower = nextVal.toLowerCase();
+
+      if (headTok.wasQuoted || headTok.raw.includes('\\')) {
+        if (remainingCount < 1 && !hasStrongShellPrefix) {
+          k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+          continue;
+        }
+        if (remainingCount >= 1 && SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower)) {
+          k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+          continue;
+        }
+      }
+
+      const nextArgOk = Boolean(
+        nextTok &&
+          !nextTok.hasPaddingSpaces &&
+          (!headTok.wasQuoted || !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower))
+      );
+
+      const cmdLower = stripShellBinPrefix(headTok.trimmedClean).toLowerCase();
+      let matched = false;
+
+      if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean)) {
+        matched = checkMode || remainingCount > 0 || hasStrongShellPrefix;
+      } else if (cmdLower === 'go') {
+        matched = nextArgOk && SHELL_GO_SUBCOMMANDS.has(nextLower);
+      } else if (cmdLower === 'git') {
+        matched =
+          (nextArgOk && (SHELL_GIT_SUBCOMMANDS.has(nextLower) || /^-[A-Za-z0-9-]/.test(nextVal))) ||
+          (hasStrongShellPrefix && nextArgOk && !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower));
+      } else if (cmdLower === 'make') {
+        matched =
+          (nextArgOk && (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || SHELL_MAKE_TARGETS.has(nextLower))) ||
+          (hasStrongShellPrefix && (remainingCount === 0 || (nextArgOk && !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower))));
+      } else if (cmdLower === 'cd') {
+        matched = nextArgOk && (/^(?:[-./~]|\.\.)/.test(nextVal) || hasStrongShellPrefix);
+      } else if (SHELL_ZERO_ARG_CLI_VERBS.has(cmdLower)) {
+        if (hasStrongShellPrefix) {
+          matched = remainingCount === 0 || nextArgOk;
+        } else if (checkMode && clauses.length === 1 && tokens.length === 1 && !headTok.wasQuoted && !headTok.hasTrailingProsePunct) {
+          matched = true;
+        } else if (nextArgOk) {
+          if (cmdLower === 'ls') {
+            matched = /^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) || isLikelyShellFileArg(nextVal);
+          } else if (cmdLower === 'uname' || cmdLower === 'whoami') {
+            matched = /^-[A-Za-z0-9-]+$/.test(nextVal);
+          } else if (cmdLower === 'printenv') {
+            matched = /^-[A-Za-z0-9-]+$/.test(nextVal) || /^[A-Z_][A-Z0-9_]*$/.test(nextVal);
+          }
+        }
+      } else if (SHELL_COMPOUND_ZERO_ARG_VERBS.has(cmdLower)) {
+        matched = hasStrongShellPrefix || (isCompound && tokens.length === 1 && !headTok.wasQuoted && !headTok.hasTrailingProsePunct);
+      } else if (PROSE_STRICT_CLI_VERB_SET.has(cmdLower)) {
+        matched =
+          hasStrongShellPrefix ||
+          (nextArgOk &&
+            (/^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal) ||
+              PROSE_CLI_SUBCOMMAND_SET.has(nextLower) ||
+              isLikelyShellFileArg(nextVal) ||
+              ((cmdLower === 'awk' ||
+                cmdLower === 'sed' ||
+                cmdLower === 'xargs' ||
+                cmdLower === 'basename' ||
+                cmdLower === 'dirname' ||
+                cmdLower === 'realpath' ||
+                cmdLower === 'readlink' ||
+                cmdLower === 'npx') &&
+                !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) &&
+                (nextTok.wasQuoted || /^[-/\w.]+$/.test(nextVal))) ||
+              (checkMode &&
+                !headTok.wasQuoted &&
+                !nextTok.wasQuoted &&
+                !SPLIT_QUOTE_PROSE_STOPWORDS.has(nextLower) &&
+                /^[-/\w.]+$/.test(nextVal))));
+      } else if (PROSE_AMBIGUOUS_CLI_VERB_SET.has(cmdLower)) {
+        matched =
+          hasStrongShellPrefix ||
+          (nextArgOk &&
+            (/^(?:-[A-Za-z0-9-]+|[./~]|https?:\/\/)/i.test(nextVal) ||
+              isLikelyShellFileArg(nextVal) ||
+              (cmdLower === 'docker' && DOCKER_SUBCOMMAND_SET.has(nextLower)) ||
+              ((cmdLower === 'grep' || cmdLower === 'rg') &&
+                idx + 2 < tokens.length &&
+                !tokens[idx + 2].hasPaddingSpaces &&
+                (/^(?:-[A-Za-z0-9-]+|[./~])/.test(tokens[idx + 2].trimmedClean) ||
+                  isLikelyShellFileArg(tokens[idx + 2].trimmedClean)))));
+      } else if (SHELL_FLAG_OR_PATH_CLI_VERBS.has(cmdLower)) {
+        matched = hasStrongShellPrefix || (nextArgOk && /^(?:-[A-Za-z0-9-]+|[./~])/.test(nextVal));
+      }
+
+      if (matched) {
+        const snippet = stripTrailingProsePunct(
+          tokens
+            .slice(k, Math.min(tokens.length, idx + 2))
+            .map((item) => item.raw)
+            .join(' ')
+        );
+        if (snippet) {
+          if (stopOnFirst) {
+            return [snippet];
+          }
+          if (!seenFound.has(snippet)) {
+            seenFound.add(snippet);
+            found.push(snippet);
+          }
+        }
+        k = Math.max(k + 1, idx + 2);
+        continue;
+      }
+
+      k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
     }
   }
-  return null;
+
+  return found;
 }
 
 function extractProseCommandAndRepoDeps(rawText) {
@@ -1404,49 +1897,60 @@ function extractProseCommandAndRepoDeps(rawText) {
     return [];
   }
   const deps = [];
+  const seenDeps = new Set();
+  const addDep = (dep) => {
+    const clean = typeof dep === 'string' ? dep.trim() : '';
+    if (clean && !seenDeps.has(clean)) {
+      seenDeps.add(clean);
+      deps.push(clean);
+    }
+  };
+
+  let outerText = rawText;
+  if (rawText.includes('$(')) {
+    const normDollar = normalizeInlineEscapedQuotes(rawText);
+    const { closedFrames, topLevelClosed } = findClosedCommandSubstitutions(normDollar);
+    for (let f = 0; f < closedFrames.length; f += 1) {
+      const frame = closedFrames[f];
+      const ownStart = frame.start + (frame.arith ? 3 : 2);
+      const ownEnd = frame.end - 1;
+      if (isFrameOwnBenignFast(normDollar, ownStart, ownEnd, frame.children)) {
+        continue;
+      }
+      const ownText = buildFrameOwnText(normDollar, ownStart, ownEnd, frame.children).trim();
+      if (ownText && scanFlatShellClauses(ownText, { isSubshellOrSubCmd: true, strictProseMode: false, skipQuoteNorm: true })) {
+        addDep(normDollar.slice(frame.start, frame.end));
+        break;
+      }
+    }
+    if (topLevelClosed.length > 0) {
+      outerText = buildFrameOwnText(normDollar, 0, normDollar.length, topLevelClosed);
+    }
+  }
+
   const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
     includeBackticks: true,
     includeBareScript: false,
     stopOnFirst: false
   });
   for (let i = 0; i < matchedDeps.length; i += 1) {
-    if (!deps.includes(matchedDeps[i])) {
-      deps.push(matchedDeps[i]);
-    }
+    addDep(matchedDeps[i]);
   }
 
   const normalizedRemainder = unescapeInlineShellWords(remainder);
-  if (normalizedRemainder.includes('$(')) {
-    const { closedFrames } = findClosedCommandSubstitutions(normalizedRemainder);
-    for (let f = 0; f < closedFrames.length; f += 1) {
-      const frame = closedFrames[f];
-      const ownStart = frame.start + (frame.arith ? 3 : 2);
-      const ownEnd = frame.end - 1;
-      if (isFrameOwnBenignFast(normalizedRemainder, ownStart, ownEnd, frame.children)) {
-        continue;
-      }
-      const ownText = buildFrameOwnText(normalizedRemainder, ownStart, ownEnd, frame.children).trim();
-      if (ownText && scanFlatShellClauses(ownText, { isSubshellOrSubCmd: true, strictProseMode: false, skipQuoteNorm: true })) {
-        const snippet = normalizedRemainder.slice(frame.start, frame.end);
-        if (!deps.includes(snippet)) {
-          deps.push(snippet);
-        }
-        break;
-      }
-    }
-  }
-
   const unquotedMatch = UNQUOTED_PROSE_COMMAND_OR_REPO_REGEX.exec(normalizedRemainder);
   if (unquotedMatch) {
-    const dep = unquotedMatch[0].trim();
-    if (dep && !deps.includes(dep)) {
-      deps.push(dep);
+    addDep(unquotedMatch[0]);
+  } else {
+    const repoPhrase = REPO_WIDE_OR_RUN_PHRASE_REGEX.exec(normalizedRemainder);
+    if (repoPhrase) {
+      addDep(repoPhrase[0]);
     }
   }
 
-  const redirOrWrapMatch = scanUnquotedRedirectionAndWrapperCommands(remainder);
-  if (redirOrWrapMatch && !deps.includes(redirOrWrapMatch)) {
-    deps.push(redirOrWrapMatch);
+  const outerDeps = scanOuterClausesForCommands(outerText, { checkMode: false, stopOnFirst: false });
+  for (let i = 0; i < outerDeps.length; i += 1) {
+    addDep(outerDeps[i]);
   }
 
   return deps;
@@ -1459,6 +1963,28 @@ function hasCheckCommandOrRepoDependency(rawText) {
   if (/`[^`]+`/.test(rawText)) {
     return true;
   }
+
+  let outerText = rawText;
+  if (rawText.includes('$(')) {
+    const normDollar = normalizeInlineEscapedQuotes(rawText);
+    const { closedFrames, topLevelClosed } = findClosedCommandSubstitutions(normDollar);
+    for (let f = 0; f < closedFrames.length; f += 1) {
+      const frame = closedFrames[f];
+      const ownStart = frame.start + (frame.arith ? 3 : 2);
+      const ownEnd = frame.end - 1;
+      if (isFrameOwnBenignFast(normDollar, ownStart, ownEnd, frame.children)) {
+        continue;
+      }
+      const ownText = buildFrameOwnText(normDollar, ownStart, ownEnd, frame.children).trim();
+      if (ownText && scanFlatShellClauses(ownText, { isSubshellOrSubCmd: true, strictProseMode: false, skipQuoteNorm: true })) {
+        return true;
+      }
+    }
+    if (topLevelClosed.length > 0) {
+      outerText = buildFrameOwnText(normDollar, 0, normDollar.length, topLevelClosed);
+    }
+  }
+
   const { matchedDeps, remainder } = scanDelimitedShellSpans(rawText, {
     includeBackticks: false,
     includeBareScript: true,
@@ -1485,7 +2011,7 @@ function hasCheckCommandOrRepoDependency(rawText) {
   if (UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(unescapedRemainder)) {
     return true;
   }
-  if (scanUnquotedRedirectionAndWrapperCommands(remainder)) {
+  if (scanOuterClausesForCommands(outerText, { checkMode: true, stopOnFirst: true }).length > 0) {
     return true;
   }
   return false;
@@ -1895,6 +2421,23 @@ function hasPotentialBroadSyntax(str) {
   return false;
 }
 
+const POSIX_CHAR_CLASS_NAMES = new Set([
+  'alnum',
+  'alpha',
+  'ascii',
+  'blank',
+  'cntrl',
+  'digit',
+  'graph',
+  'lower',
+  'print',
+  'punct',
+  'space',
+  'upper',
+  'word',
+  'xdigit'
+]);
+
 function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
   const len = str.length;
   const closeAt = new Int32Array(len).fill(-1);
@@ -1963,7 +2506,9 @@ function findSegmentCharClasses(str, allowLeadingOuterBrackets = false) {
             const limit = Math.min(segEnd - 1, i + 20);
             for (let p = i + 2; p < limit; p += 1) {
               if (str[p] === delim && str[p + 1] === ']' && p > i + 2) {
-                i = p + 1;
+                if (delim !== ':' || POSIX_CHAR_CLASS_NAMES.has(str.slice(i + 2, p))) {
+                  i = p + 1;
+                }
                 break;
               }
               if (str[p] === ']' || str[p] === '/') {
@@ -2210,22 +2755,42 @@ function parseGlobBracketAtom(value, openIdx, closeIdx) {
       const closeColon = value.indexOf(':]', idx + 2);
       if (closeColon !== -1 && closeColon < closeIdx) {
         const clsName = value.slice(idx + 2, closeColon);
-        if (clsName === 'digit' || clsName === 'xdigit') {
-          setMaskRange(rawMask, 48, 57);
-          if (clsName === 'xdigit') {
-            setMaskRange(rawMask, 65, 70);
-            setMaskRange(rawMask, 97, 102);
+        if (POSIX_CHAR_CLASS_NAMES.has(clsName)) {
+          if (clsName === 'digit' || clsName === 'xdigit') {
+            setMaskRange(rawMask, 48, 57);
+            if (clsName === 'xdigit') {
+              setMaskRange(rawMask, 65, 70);
+              setMaskRange(rawMask, 97, 102);
+            }
+          } else if (clsName === 'lower' || clsName === 'upper' || clsName === 'alpha' || clsName === 'alnum' || clsName === 'word') {
+            if (clsName !== 'upper') setMaskRange(rawMask, 97, 122);
+            if (clsName !== 'lower') setMaskRange(rawMask, 65, 90);
+            if (clsName === 'alnum' || clsName === 'word') setMaskRange(rawMask, 48, 57);
+            if (clsName === 'word') setMaskBit(rawMask, 95);
+          } else if (clsName === 'ascii') {
+            setMaskRange(rawMask, 0, 127);
+          } else if (clsName === 'blank') {
+            setMaskBit(rawMask, 9);
+            setMaskBit(rawMask, 32);
+          } else if (clsName === 'space') {
+            setMaskRange(rawMask, 9, 13);
+            setMaskBit(rawMask, 32);
+          } else if (clsName === 'cntrl') {
+            setMaskRange(rawMask, 0, 31);
+            setMaskBit(rawMask, 127);
+          } else if (clsName === 'graph') {
+            setMaskRange(rawMask, 33, 126);
+          } else if (clsName === 'print') {
+            setMaskRange(rawMask, 32, 126);
+          } else if (clsName === 'punct') {
+            setMaskRange(rawMask, 33, 46);
+            setMaskRange(rawMask, 58, 64);
+            setMaskRange(rawMask, 91, 96);
+            setMaskRange(rawMask, 123, 126);
           }
-        } else if (clsName === 'lower' || clsName === 'alpha' || clsName === 'alnum' || clsName === 'word') {
-          if (clsName !== 'upper') setMaskRange(rawMask, 97, 122);
-          if (clsName !== 'lower') setMaskRange(rawMask, 65, 90);
-          if (clsName === 'alnum' || clsName === 'word') setMaskRange(rawMask, 48, 57);
-          if (clsName === 'word') setMaskBit(rawMask, 95);
-        } else if (clsName === 'upper') {
-          setMaskRange(rawMask, 65, 90);
+          idx = closeColon + 2;
+          continue;
         }
-        idx = closeColon + 2;
-        continue;
       }
     }
     if (idx + 2 < closeIdx && value[idx + 1] === '-') {
@@ -2240,12 +2805,14 @@ function parseGlobBracketAtom(value, openIdx, closeIdx) {
   let mask = rawMask;
   if (negated) {
     mask = new Uint32Array(4);
-    for (let c = 33; c <= 126; c += 1) {
+    for (let c = 1; c <= 127; c += 1) {
       if (c !== 47 && (rawMask[c >> 5] & (1 << (c & 31))) === 0) {
         setMaskBit(mask, c);
       }
     }
   }
+  // Never match path separator '/' across POSIX classes (e.g. [:ascii:], [:graph:], [:print:])
+  mask[47 >> 5] &= ~(1 << (47 & 31));
 
   let canStartStem = false;
   let canBodyStem = false;
@@ -2329,10 +2896,83 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
       top.branches.push(finishedBranch);
       frames.pop();
       const parent = frames[frames.length - 1];
+      let builtOp = top.op;
+      if (top.kind === 'ext' && builtOp === '+') {
+        const emptyCheckStack = [...top.branches];
+        while (emptyCheckStack.length > 0) {
+          const cur = emptyCheckStack.pop();
+          if (
+            cur === EMPTY_SEQ_NODE ||
+            (cur.kind === 'seq' && cur.items.length === 0) ||
+            (cur.kind === 'ext' && (cur.op === '?' || cur.op === '*'))
+          ) {
+            builtOp = '*';
+            break;
+          }
+          if ((cur.kind === 'alt' || (cur.kind === 'ext' && cur.op === '@')) && Array.isArray(cur.branches)) {
+            for (let cb = 0; cb < cur.branches.length; cb += 1) {
+              emptyCheckStack.push(cur.branches[cb]);
+            }
+          }
+        }
+      }
+      let builtBranches = top.branches;
+      if (top.kind !== 'ext' || builtOp !== '!') {
+        builtBranches = [];
+        let hasEmpty = false;
+        const seenChars = new Set();
+        const pushBranch = (br) => {
+          if (br === EMPTY_SEQ_NODE || (br.kind === 'seq' && br.items.length === 0)) {
+            if (!hasEmpty) {
+              hasEmpty = true;
+              builtBranches.push(EMPTY_SEQ_NODE);
+            }
+            return;
+          }
+          if (br.kind === 'char') {
+            if (seenChars.has(br.code)) {
+              return;
+            }
+            seenChars.add(br.code);
+          }
+          builtBranches.push(br);
+        };
+        const stack = [];
+        for (let b = top.branches.length - 1; b >= 0; b -= 1) {
+          stack.push(top.branches[b]);
+        }
+        while (stack.length > 0) {
+          const cur = stack.pop();
+          const canFlatten =
+            top.kind === 'brace' || builtOp === '@'
+              ? cur.kind === 'alt' || (cur.kind === 'ext' && cur.op === '@')
+              : builtOp === '?'
+                ? cur.kind === 'alt' || (cur.kind === 'ext' && (cur.op === '@' || cur.op === '?'))
+                : builtOp === '+'
+                  ? cur.kind === 'alt' || (cur.kind === 'ext' && (cur.op === '@' || cur.op === '+'))
+                  : builtOp === '*'
+                    ? cur.kind === 'alt' ||
+                      (cur.kind === 'ext' &&
+                        (cur.op === '@' || cur.op === '?' || cur.op === '+' || cur.op === '*'))
+                    : false;
+          if (canFlatten && Array.isArray(cur.branches)) {
+            if (cur.kind === 'ext' && (cur.op === '?' || cur.op === '*')) {
+              pushBranch(EMPTY_SEQ_NODE);
+            }
+            for (let cb = cur.branches.length - 1; cb >= 0; cb -= 1) {
+              stack.push(cur.branches[cb]);
+            }
+            continue;
+          }
+          pushBranch(cur);
+        }
+      }
       const built =
-        top.kind === 'brace'
-          ? { kind: 'alt', branches: top.branches }
-          : { kind: 'ext', op: top.op, branches: top.branches };
+        top.kind === 'brace' || (top.kind === 'ext' && builtOp === '@' && builtBranches.length === 1)
+          ? builtBranches.length === 1
+            ? builtBranches[0]
+            : { kind: 'alt', branches: builtBranches }
+          : { kind: 'ext', op: builtOp, branches: builtBranches };
       parent.seqItems.push(built);
       if (i === top.stopIdx) {
         i += 1;
@@ -2554,7 +3194,7 @@ function hasTrieAccept(trie, bits) {
   return false;
 }
 
-function evalRootGlobAstIterative(rootNode, tries) {
+function evalRootGlobAstIterative(rootNode, tries, patternLen = 64) {
   const statePool = [];
   const allocState = () => (statePool.length > 0 ? statePool.pop() : createEmptyNfaState(tries));
   const freeState = (s) => {
@@ -2570,11 +3210,11 @@ function evalRootGlobAstIterative(rootNode, tries) {
   initState.envMask = 1;
   initState.stemFlags = STEM_CAN_START;
 
-  let repeatBudget = 64;
+  let stepBudget = Math.max(16384, patternLen * 64);
   const frames = [];
   let pendingResult = null;
 
-  const pushNode = (node, stateIn, repeatDepth) => {
+  const pushNode = (node, stateIn) => {
     const needsBase =
       node.kind === 'ext' && (node.op === '?' || node.op === '*' || node.op === '!');
     let baseCopy = null;
@@ -2591,7 +3231,7 @@ function evalRootGlobAstIterative(rootNode, tries) {
       baseState: baseCopy,
       accState: null,
       prevPassAcc: null,
-      repeatDepth
+      repeatLeft: node.kind === 'ext' && (node.op === '+' || node.op === '*') ? 32 : 0
     });
   };
 
@@ -2605,9 +3245,12 @@ function evalRootGlobAstIterative(rootNode, tries) {
     pendingResult = resultState;
   };
 
-  pushNode(rootNode, initState, 0);
+  pushNode(rootNode, initState);
 
   while (frames.length > 0) {
+    if (--stepBudget <= 0) {
+      break;
+    }
     const f = frames[frames.length - 1];
 
     if (pendingResult !== null) {
@@ -2657,7 +3300,7 @@ function evalRootGlobAstIterative(rootNode, tries) {
         } else {
           const childIn = allocState();
           copyNfaStateInto(childIn, f.curState);
-          pushNode(item, childIn, f.repeatDepth);
+          pushNode(item, childIn);
           stoppedForChild = true;
           break;
         }
@@ -2692,7 +3335,7 @@ function evalRootGlobAstIterative(rootNode, tries) {
       }
       const childIn = allocState();
       copyNfaStateInto(childIn, f.curState);
-      pushNode(br, childIn, f.repeatDepth + (f.node.op === '+' || f.node.op === '*' ? 1 : 0));
+      pushNode(br, childIn);
       continue;
     }
 
@@ -2703,8 +3346,8 @@ function evalRootGlobAstIterative(rootNode, tries) {
         clearNfaState(f.prevPassAcc);
       }
       const changed = !nfaStatesEqual(f.accState, f.prevPassAcc);
-      if (changed && f.repeatDepth <= 4 && repeatBudget > 0) {
-        repeatBudget -= 1;
+      if (changed && f.repeatLeft > 0) {
+        f.repeatLeft -= 1;
         copyNfaStateInto(f.prevPassAcc, f.accState);
         copyNfaStateInto(f.curState, f.accState);
         f.index = 0;
@@ -2738,7 +3381,7 @@ function doesRootNonStarGlobMatchFile(value, globInfo) {
     globInfo.parenClose,
     globInfo.parenIsExtGlob
   );
-  const finalState = evalRootGlobAstIterative(ast, tries);
+  const finalState = evalRootGlobAstIterative(ast, tries, value.length);
   if ((finalState.envMask & 64) !== 0) {
     return true;
   }
@@ -3158,6 +3801,38 @@ export function extractVerificationDependencies(inputs, options = {}) {
   collectStrings(inputs, strings);
 
   const workspaceFileDeps = [];
+  const fileDepState = new Map();
+  let hasSupersededBounded = false;
+  const addFileDep = (source, range) => {
+    let state = fileDepState.get(source);
+    if (state?.unbounded) {
+      return;
+    }
+    if (!range) {
+      if (state) {
+        state.unbounded = true;
+        state.ranges = null;
+        hasSupersededBounded = true;
+      } else {
+        fileDepState.set(source, { unbounded: true, ranges: null });
+      }
+      workspaceFileDeps.push({ source, unbounded: true });
+      return;
+    }
+    if (!state) {
+      state = { unbounded: false, ranges: new Set() };
+      fileDepState.set(source, state);
+    }
+    const key = `${range.startLine}:${range.endLine}`;
+    if (!state.ranges.has(key)) {
+      state.ranges.add(key);
+      workspaceFileDeps.push({
+        source,
+        startLine: range.startLine,
+        endLine: range.endLine
+      });
+    }
+  };
   const workspaceBroadDeps = [];
   const seenBroad = new Set();
   const externalDeps = [];
@@ -3264,13 +3939,12 @@ export function extractVerificationDependencies(inputs, options = {}) {
         if (startRaw !== undefined) {
           const startLine = Number.parseInt(startRaw, 10);
           const endLine = endRaw !== undefined ? Number.parseInt(endRaw, 10) : startLine;
-          mergeFileDependency(workspaceFileDeps, {
-            source,
+          addFileDep(source, {
             startLine: Math.min(startLine, endLine),
             endLine: Math.max(startLine, endLine)
           });
         } else {
-          mergeFileDependency(workspaceFileDeps, { source, unbounded: true });
+          addFileDep(source, null);
         }
       }
       return `${lead}${' '.repeat(full.length - lead.length)}`;
@@ -3325,8 +3999,12 @@ export function extractVerificationDependencies(inputs, options = {}) {
     }
   }
 
+  const finalFileDeps = hasSupersededBounded
+    ? workspaceFileDeps.filter((item) => item.unbounded || !fileDepState.get(item.source)?.unbounded)
+    : workspaceFileDeps;
+
   return {
-    workspaceFileDeps,
+    workspaceFileDeps: finalFileDeps,
     workspaceBroadDeps,
     externalDeps
   };
@@ -3421,7 +4099,7 @@ function resolveBackingProofs({
       }
     }
   }
-  if (phase === 'DELIBERATION' && Array.isArray(previousCandidate?.clauses)) {
+  if ((phase === 'DELIBERATION' || (phase === 'JUDGE_AUDIT_SYNTHESIS' && Number(round) > 1)) && Array.isArray(previousCandidate?.clauses)) {
     for (const clause of previousCandidate.clauses) {
       if (typeof clause?.proofId === 'string' && clause.proofId.trim()) {
         referencedIds.add(clause.proofId.trim());
@@ -3487,7 +4165,7 @@ function collectPhasePromptTexts({
   if (typeof topic === 'string' && topic.trim()) {
     texts.push(topic);
   }
-  if (phase === 'DELIBERATION' && Array.isArray(clarifications)) {
+  if (Array.isArray(clarifications)) {
     for (const c of clarifications) {
       if (typeof c === 'string' && c.trim()) {
         texts.push(c);
@@ -3509,7 +4187,7 @@ function collectPhasePromptTexts({
       }
     }
   }
-  if (phase === 'DELIBERATION' && previousCandidate && typeof previousCandidate === 'object') {
+  if ((phase === 'DELIBERATION' || (phase === 'JUDGE_AUDIT_SYNTHESIS' && Number(round) > 1)) && previousCandidate && typeof previousCandidate === 'object') {
     if (typeof previousCandidate.summary === 'string') {
       texts.push(previousCandidate.summary);
     }
@@ -3559,6 +4237,7 @@ function collectPhasePromptTexts({
 
 function augmentProofDependencies(proofList, deps) {
   if (!Array.isArray(proofList)) return;
+  const seenBroad = new Set(deps.workspaceBroadDeps);
   for (const proof of proofList) {
     if (!proof || typeof proof !== 'object') continue;
     const originalSource = typeof proof.source === 'string' ? proof.source.trim() : '';
@@ -3591,8 +4270,8 @@ function augmentProofDependencies(proofList, deps) {
         unwrappedSource &&
         !sourceHasConcreteFile &&
         !deps.externalDeps.some((d) => externalSourcesMatch(d, unwrappedSource)) &&
-        !deps.workspaceBroadDeps.includes(unwrappedSource) &&
-        !deps.workspaceBroadDeps.includes(originalSource)
+        !seenBroad.has(unwrappedSource) &&
+        !seenBroad.has(originalSource)
       ) {
         deps.externalDeps.push(unwrappedSource);
       }
@@ -3653,7 +4332,8 @@ function augmentProofDependencies(proofList, deps) {
       const statementIsCommandOrRepo = Boolean(statementMatch);
       if (sourceIsCommandOrRepo || statementIsCommandOrRepo) {
         const label = sourceIsCommandOrRepo ? originalSource : statementMatch.slice(0, 80);
-        if (label && !deps.workspaceBroadDeps.includes(label)) {
+        if (label && !seenBroad.has(label)) {
+          seenBroad.add(label);
           deps.workspaceBroadDeps.push(label);
         }
       }
@@ -3663,8 +4343,8 @@ function augmentProofDependencies(proofList, deps) {
         !sourceIsCommandOrRepo &&
         (!sourceDeps || sourceDeps.externalDeps.length === 0) &&
         !deps.externalDeps.some((d) => externalSourcesMatch(d, unwrappedSource)) &&
-        !deps.workspaceBroadDeps.includes(unwrappedSource) &&
-        !deps.workspaceBroadDeps.includes(originalSource) &&
+        !seenBroad.has(unwrappedSource) &&
+        !seenBroad.has(originalSource) &&
         CHECK_EXTERNAL_SOURCE_REGEX.test(unwrappedSource)
       ) {
         deps.externalDeps.push(unwrappedSource);

@@ -4058,5 +4058,465 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         assert.ok(elapsedMs < 25, `Expected <25ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
       }
     });
+
+    it('ReReview-102 Round 9 fixes: enforces nested glob directories & extensionless char-class paths, and allows quoted relative files & quoted prose filenames in check proofs', async () => {
+      function makeReadinessParams({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        coveredSources = ['src/auth.js'],
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = []
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        };
+      }
+
+      async function runPhaseEngineCase({
+        phase,
+        errorClass,
+        topic,
+        clarifications = [],
+        s1Proof = null,
+        coveredSources = ['src/auth.js']
+      }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s2');
+            }
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) {
+            return s1Proof;
+          }
+          return origProof(ctx);
+        };
+
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (phase === 'JUDGE_AUDIT_SYNTHESIS' && ctx.round === 1) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('judge');
+            }
+          }
+          return origJudge(ctx);
+        };
+
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) {
+              throw makeFault('s1');
+            }
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications,
+            maxClarificationBatches: clarifications.length,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'Round 9 regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              {
+                id: 's1',
+                harness: 'codex',
+                model: 'gpt-6-astra (high)',
+                soul: 'S1',
+                tools: 'read-only',
+                votingTools: 'read-only',
+                cwd: '/repo'
+              },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        await engine.run();
+        return { engine, targetCalls };
+      }
+
+      // 1. Findings 1 & 2: nested brace/extglob directories & extensionless char-class workspace paths
+      const nestedAndCharClassCases = [
+        ['Inspect src/auth.js and src/{a,{b,c}}/', ['src/{a,{b,c}}/']],
+        ['Inspect src/auth.js and (src/{a,{b,c}}/).', ['src/{a,{b,c}}/']],
+        ['Inspect src/auth.js and src/+(a|@(b|c))/', ['src/+(a|@(b|c))/']],
+        ['Inspect src/auth.js and (src/+(a|@(b|c))/).', ['src/+(a|@(b|c))/']],
+        ['Inspect src/auth.js and src/@(a|{b,c})/', ['src/@(a|{b,c})/']],
+        ['Inspect src/auth.js and src/{a,[[:digit:]]}/', ['src/{a,[[:digit:]]}/']],
+        ['Inspect src/auth.js and !(a|+(b|c))/', ['!(a|+(b|c))/']],
+        ['Inspect src/auth.js and foo/[ab]', ['foo/[ab]']],
+        ['Inspect src/auth.js and (foo/[ab]).', ['foo/[ab]']],
+        ['Inspect src/auth.js and foo/[[:digit:]]', ['foo/[[:digit:]]']],
+        ['Inspect src/auth.js and [ab]/foo', ['[ab]/foo']],
+        ['Inspect src/auth.js and foo/+(a|@(b|c))', ['foo/+(a|@(b|c))']],
+        ['Inspect src/auth.js and foo/{a,{b,c}}', ['foo/{a,{b,c}}']]
+      ];
+
+      const sampleAuthProof = {
+        id: 'P1',
+        round: 1,
+        seatId: 's1',
+        status: 'admitted',
+        scope: 'Auth check',
+        kind: 'code',
+        source: 'src/auth.js',
+        statement: 'Auth contract verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        summary: 'R1 candidate',
+        clauses: [{ id: 'C1', context: 'c', conclusion: 'k', citedProofIds: ['P1'] }]
+      };
+      const sampleObjections = [{ id: 'O1', seatId: 's2', targetProofId: 'P1', reason: 'Re-check claim' }];
+
+      for (const [text, expectedBroad] of nestedAndCharClassCases) {
+        const deps = extractVerificationDependencies([text]);
+        assert.deepEqual(
+          deps,
+          {
+            workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+            workspaceBroadDeps: expectedBroad,
+            externalDeps: []
+          },
+          `Finding 1/2: expected broad deps ${JSON.stringify(expectedBroad)} for: ${text}`
+        );
+
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const r1Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({ phase: 'DELIBERATION', round: 1, errorClass, topic: text, coveredSources: ['src/auth.js'] })
+          );
+          const r2Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 2,
+              errorClass,
+              topic: text,
+              clarifications: [text],
+              priorProofs: [sampleAuthProof],
+              previousCandidate: sampleCandidate,
+              openObjections: sampleObjections,
+              coveredSources: ['src/auth.js']
+            })
+          );
+          const judgeVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              topic: text,
+              proofs: [sampleAuthProof],
+              coveredSources: ['src/auth.js']
+            })
+          );
+          const voteVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              topic: text,
+              candidate: sampleCandidate,
+              admittedProofs: [sampleAuthProof],
+              coveredSources: ['src/auth.js']
+            })
+          );
+
+          for (const [label, verdict] of [
+            ['R1_DELIBERATION', r1Verdict],
+            ['R2_DELIBERATION', r2Verdict],
+            ['JUDGE_AUDIT_SYNTHESIS', judgeVerdict],
+            ['VOTING', voteVerdict]
+          ]) {
+            assert.equal(verdict.ready, false, `Finding 1/2: ${label}/${errorClass} must refuse ${text}`);
+            assert.equal(verdict.reasonCode, 'evidence_access_failure');
+            assert.ok(
+              verdict.missingDependencies.includes(expectedBroad[0]),
+              `${label}/${errorClass}: expected missingDependencies to include ${expectedBroad[0]}, got ${JSON.stringify(verdict.missingDependencies)}`
+            );
+          }
+
+          for (const phase of ['R1_DELIBERATION', 'R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+            const run = await runPhaseEngineCase({
+              phase,
+              errorClass,
+              topic: text,
+              coveredSources: ['src/auth.js']
+            });
+            assert.equal(run.targetCalls.length, 1, `Finding 1/2: ${phase}/${errorClass} engine must refuse ${text}`);
+          }
+        }
+      }
+
+      // Non-glob prose & citation slash-list control
+      const citationProseText = 'Verify **[E1]** and *(note)* and [E1]/[E2] and [1]/[2] and seats[0].key in src/auth.js?';
+      assert.deepEqual(extractVerificationDependencies([citationProseText]), {
+        workspaceFileDeps: [{ source: 'src/auth.js', unbounded: true }],
+        workspaceBroadDeps: [],
+        externalDeps: []
+      });
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        assert.equal(
+          evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 1,
+              errorClass,
+              topic: citationProseText,
+              coveredSources: ['src/auth.js']
+            })
+          ).ready,
+          true
+        );
+      }
+
+      // 2. Finding 3: quoted relative non-script check sources permitted when covered, refused when missing; scripts still vetoed
+      const makeCheckProof = ({ source, statement }) => ({
+        id: 'P1',
+        round: 1,
+        seatId: 's1',
+        status: 'admitted',
+        scope: 'File check',
+        kind: 'check',
+        source,
+        statement
+      });
+
+      async function assertCheckProofBehavior({ source, statement, coveredSources, shouldAllow, label }) {
+        const proof = makeCheckProof({ source, statement });
+        for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+          const r2Verdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'DELIBERATION',
+              round: 2,
+              errorClass,
+              priorProofs: [proof],
+              previousCandidate: sampleCandidate,
+              openObjections: sampleObjections,
+              coveredSources
+            })
+          );
+          const judgeVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              proofs: [proof],
+              coveredSources
+            })
+          );
+          const voteVerdict = evaluateToolFreeEvidenceReadiness(
+            makeReadinessParams({
+              phase: 'VOTING',
+              round: 1,
+              errorClass,
+              candidate: sampleCandidate,
+              admittedProofs: [proof],
+              coveredSources
+            })
+          );
+
+          for (const [phaseLabel, verdict] of [
+            ['R2_DELIBERATION', r2Verdict],
+            ['JUDGE_AUDIT_SYNTHESIS', judgeVerdict],
+            ['VOTING', voteVerdict]
+          ]) {
+            assert.equal(verdict.ready, shouldAllow, `${label}: ${phaseLabel}/${errorClass} ready mismatch`);
+          }
+
+          for (const phase of ['R2_DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+            const run = await runPhaseEngineCase({
+              phase,
+              errorClass,
+              topic: 'Inspect src/auth.js.',
+              s1Proof: {
+                scope: 'File check',
+                kind: 'check',
+                source,
+                statement
+              },
+              coveredSources
+            });
+            if (shouldAllow) {
+              assert.equal(run.targetCalls.length, 2, `${label}: ${phase}/${errorClass} must permit tool-free retry`);
+              assert.equal(run.targetCalls[1].tools, 'none');
+              assert.equal(run.targetCalls[1].cwd, undefined);
+            } else {
+              assert.equal(run.targetCalls.length, 1, `${label}: ${phase}/${errorClass} must refuse tool-free retry`);
+            }
+          }
+        }
+      }
+
+      for (const control of [
+        { source: '"./docs/policy.md"', statement: 'Policy check verified.', coveredSources: ['src/auth.js', 'docs/policy.md'] },
+        { source: '"./src/auth.js"', statement: 'Auth check verified.', coveredSources: ['src/auth.js'] },
+        { source: "'./src/auth.js'", statement: 'Auth check verified.', coveredSources: ['src/auth.js'] },
+        { source: '`./src/auth.js`', statement: 'Auth check verified.', coveredSources: ['src/auth.js'] }
+      ]) {
+        await assertCheckProofBehavior({ ...control, shouldAllow: true, label: `Finding 3 allowed ${control.source}` });
+      }
+
+      // Missing-file negative controls for quoted relative non-script files
+      await assertCheckProofBehavior({
+        source: '"./docs/policy.md"',
+        statement: 'Policy check verified.',
+        coveredSources: ['src/auth.js'],
+        shouldAllow: false,
+        label: 'Finding 3 missing uncovered ./docs/policy.md'
+      });
+
+      // Executable scripts still vetoed even when covered in evidence
+      for (const scriptSource of ['"./scripts/verify.sh"', "'./scripts/verify.sh'", './scripts/verify.sh', '"./gradlew"']) {
+        await assertCheckProofBehavior({
+          source: scriptSource,
+          statement: 'Script execution verified.',
+          coveredSources: ['src/auth.js', 'scripts/verify.sh', 'gradlew'],
+          shouldAllow: false,
+          label: `Finding 3 executable veto ${scriptSource}`
+        });
+      }
+
+      // 3. Finding 4: quoted filenames, package specifiers, and keys in prose check statements allowed when covered, refused when missing; real commands vetoed
+      for (const control of [
+        {
+          source: 'src/auth.js',
+          statement: 'The value in "cat.md" is constant.',
+          coveredSources: ['src/auth.js', 'cat.md']
+        },
+        {
+          source: 'src/auth.js',
+          statement: 'The values in "cat.md", \'ls.js\', "pytest.ini", and "./docs/policy.md" are constant.',
+          coveredSources: ['src/auth.js', 'cat.md', 'ls.js', 'pytest.ini', 'docs/policy.md']
+        },
+        {
+          source: 'src/auth.js',
+          statement: 'Imports "node:fs" and "node-fetch" and keys "cat", "node", "git", "sh", "make", "env" are valid.',
+          coveredSources: ['src/auth.js']
+        }
+      ]) {
+        await assertCheckProofBehavior({ ...control, shouldAllow: true, label: `Finding 4 prose allowed (${control.statement})` });
+      }
+
+      // Missing-file negative control for quoted filename in prose
+      await assertCheckProofBehavior({
+        source: 'src/auth.js',
+        statement: 'The value in "cat.md" is constant.',
+        coveredSources: ['src/auth.js'],
+        shouldAllow: false,
+        label: 'Finding 4 missing uncovered cat.md'
+      });
+
+      // Real quoted commands in check proof statements still vetoed
+      for (const cmdStatement of [
+        'Verified via "uname -a" output.',
+        "Verified via 'cat README' output.",
+        'Verified via "ls" output.',
+        'Verified via "./scripts/verify.sh" output.',
+        'Verified via "head -n 5 src/auth.js" output.'
+      ]) {
+        await assertCheckProofBehavior({
+          source: 'src/auth.js',
+          statement: cmdStatement,
+          coveredSources: ['src/auth.js', 'README', 'scripts/verify.sh'],
+          shouldAllow: false,
+          label: `Finding 4 quoted command veto (${cmdStatement})`
+        });
+      }
+
+      // 4. 48KB linear-time regression probes for nested braces & nested extglobs
+      extractVerificationDependencies(['warmup src/{a,{b,c}}/ src/+(a|@(b|c))/']);
+      for (const [label, payload] of [
+        ['nested-braces-48k', 'src/' + '{a,'.repeat(8000) + 'b' + '}'.repeat(8000) + '/'],
+        ['nested-extglob-48k', 'src/' + '+(a|'.repeat(6000) + 'b' + ')'.repeat(6000) + '/']
+      ]) {
+        const t0 = performance.now();
+        const deps = extractVerificationDependencies([payload]);
+        const elapsedMs = performance.now() - t0;
+        assert.ok(elapsedMs < 25, `Expected <25ms for ${label}, got ${elapsedMs.toFixed(2)}ms`);
+        assert.equal(deps.workspaceBroadDeps.length, 1, `Expected 1 broad dep for ${label}`);
+      }
+    });
   });
 });

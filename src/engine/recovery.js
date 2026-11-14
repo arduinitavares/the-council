@@ -29,12 +29,7 @@ const BROAD_RUN_SCAN_REGEX = /[^\s"'`<>;]+/g;
 const DIRECTORY_CANDIDATE_REGEX = /^(?:\.\.?\/|\/)?(?:[A-Za-z0-9_.-]+\/)+$/;
 const NON_STAR_PATH_SKELETON_REGEX =
   /^(?:\.\.?\/|\/)?\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\/\.?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*$/;
-const CHAR_CLASS_GLOB_REPLACE_REGEX = /\[[^[\]\s]+\]/g;
-const BRACE_LIST_GLOB_REPLACE_REGEX = /\{[^{},\s]+(?:,[^{},\s]+)+\}/g;
-const EXT_GLOB_REPLACE_REGEX = /[@+?!]\([^()\s]+\)/g;
-const CHAR_CLASS_GLOB_TEST_REGEX = /\[[^[\]\s]+\]/;
-const BRACE_LIST_GLOB_TEST_REGEX = /\{[^{},\s]+(?:,[^{},\s]+)+\}/;
-const EXT_GLOB_TEST_REGEX = /[@+?!]\([^()\s]+\)/;
+const CITATION_TAG_SLASH_LIST_REGEX = /^\[(?:[EPCO])?\d+\](?:\/\[(?:[EPCO])?\d+\])+$/;
 const QUERY_PARAM_ASSIGN_REGEX = /\?[^?/\s=]*=/;
 
 const RECOGNIZED_DOMAIN_TLDS = Object.freeze([
@@ -154,14 +149,20 @@ const NAMED_EXTERNAL_STANDARD_REGEX = new RegExp(
 );
 const CLI_COMMAND_VERB_SOURCE =
   '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\\s+test|make|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|uname|cat|ls|whoami|printenv|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+const QUOTED_ZERO_ARG_CLI_VERB_SOURCE = '(?:uname|ls|whoami|printenv|go\\s+test)';
 const QUOTED_STRICT_CLI_VERB_SOURCE =
-  '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|go\\s+test|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|uname|cat|ls|whoami|printenv|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+  '(?:npm|npx|pnpm|yarn|node|pytest|python3?|cargo|bash|sh|zsh|git|grep|rg|curl|docker|kubectl|cat|netstat|lsof|realpath|readlink|basename|dirname|xargs|awk|sed|wc)';
+const SHELL_EXEC_SCRIPT_PATH_DQUOTE_SOURCE =
+  '\\.\\.?\\/(?:[^"\\s]*\\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^"\\s]*\\/)?(?:gradlew|mvnw|configure))(?=$|\\s|")';
+const SHELL_EXEC_SCRIPT_PATH_SQUOTE_SOURCE =
+  '\\.\\.?\\/(?:[^\'\\s]*\\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\'\\s]*\\/)?(?:gradlew|mvnw|configure))(?=$|\\s|\')';
+const SHELL_EXEC_SCRIPT_TOKEN_REGEX =
+  /^\.\.?\/(?:[^\s]+\.(?:sh|bash|zsh|fish|ps1|bat|cmd|command)|(?:[^\s]*\/)?(?:gradlew|mvnw|configure))(?:\s|$)/i;
 const CHECK_COMMAND_OR_REPO_REGEX = new RegExp(
   '(?:' +
     '`[^`]+`' +
-    `|"(?:\\.\\/[^"\\s]+|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\b[^"]*))"` +
-    `|'(?:\\.\\/[^'\\s]+|${QUOTED_STRICT_CLI_VERB_SOURCE}(?:\\b[^']*))'` +
-    `|(?:["'])\\s*(?:make|head|tail|find|stat|ps|df|du|env|which)\\b\\s*(?:-[A-Za-z0-9]+|[./~]|$)[^"']*["']` +
+    `|(?<![A-Za-z0-9_./-])"(?:${SHELL_EXEC_SCRIPT_PATH_DQUOTE_SOURCE}[^"]*|${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+\\S[^"]*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S[^"]*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~])[^"]*)"` +
+    `|(?<![A-Za-z0-9_./-])'(?:${SHELL_EXEC_SCRIPT_PATH_SQUOTE_SOURCE}[^']*|${QUOTED_ZERO_ARG_CLI_VERB_SOURCE}(?:\\s+\\S[^']*)?|${QUOTED_STRICT_CLI_VERB_SOURCE}\\s+\\S[^']*|(?:make|head|tail|find|stat|ps|df|du|env|which)\\s+(?:-[A-Za-z0-9]+|[./~])[^']*)'` +
     `|\\b${CLI_COMMAND_VERB_SOURCE}\\b(?:\\s+[-/\\w.]|$)` +
     '|\\b(?:head|tail|find|stat|ps|df|du|env|which)\\b\\s+(?:-[A-Za-z0-9]+|[./~])' +
     '|\\b(?:entire|whole|across(?:\\s+the)?)\\s+(?:repo|repository|codebase|workspace)\\b' +
@@ -560,25 +561,170 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
   return 'leave';
 }
 
-function inspectNonStarGlob(value) {
-  const hasCharClass = CHAR_CLASS_GLOB_TEST_REGEX.test(value);
-  const hasBraceList = BRACE_LIST_GLOB_TEST_REGEX.test(value);
-  const hasExtGlob = EXT_GLOB_TEST_REGEX.test(value);
-  const hasQuestionGlob = value.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(value);
+function analyzeNonStarGlob(value) {
+  if (!value || CITATION_TAG_SLASH_LIST_REGEX.test(value)) {
+    return {
+      hasNonStarGlob: false,
+      hasCharClass: false,
+      hasBraceList: false,
+      hasExtGlob: false,
+      hasQuestionGlob: false,
+      skeleton: value
+    };
+  }
+
+  const n = value.length;
+  const bracketClose = new Int32Array(n).fill(-1);
+  const braceClose = new Int32Array(n).fill(-1);
+  const parenClose = new Int32Array(n).fill(-1);
+  const parenIsExtGlob = new Uint8Array(n);
+
+  let hasCharClass = false;
+  let hasBraceList = false;
+  let hasExtGlob = false;
+
+  // Pass 1a: Pre-pair POSIX character classes [...] within each '/' segment in O(n).
+  const bracketStack = [];
+  for (let i = 0; i < n; i++) {
+    const ch = value[i];
+    if (ch === '/') {
+      bracketStack.length = 0;
+      continue;
+    }
+    if (ch === '[') {
+      if (bracketStack.length === 0) {
+        bracketStack.push({ open: i, posixInner: false });
+      } else {
+        const top = bracketStack[bracketStack.length - 1];
+        const next = i + 1 < n ? value[i + 1] : '';
+        if (!top.posixInner && (next === ':' || next === '.' || next === '=')) {
+          bracketStack.push({ open: i, posixInner: true });
+        }
+      }
+      continue;
+    }
+    if (ch === ']' && bracketStack.length > 0) {
+      const top = bracketStack[bracketStack.length - 1];
+      if (top.posixInner) {
+        const expectedDelim = value[top.open + 1];
+        if (i > top.open + 2 && value[i - 1] === expectedDelim) {
+          bracketStack.pop();
+        }
+        continue;
+      }
+      const isInitialLiteralClose =
+        i === top.open + 1 ||
+        (i === top.open + 2 && (value[top.open + 1] === '!' || value[top.open + 1] === '^'));
+      if (isInitialLiteralClose) {
+        continue;
+      }
+      bracketStack.pop();
+      bracketClose[top.open] = i;
+      hasCharClass = true;
+    }
+  }
+
+  // Pass 1b: Pre-pair nested {...} brace lists and extglob (...) in O(n), skipping paired [...] and clearing crossing stacks.
+  const braceStack = [];
+  const parenStack = [];
+  for (let i = 0; i < n; i++) {
+    if (bracketClose[i] !== -1) {
+      i = bracketClose[i];
+      continue;
+    }
+    const ch = value[i];
+    if (ch === '{') {
+      braceStack.push({
+        open: i,
+        commaCount: 0,
+        lastSegmentStart: i + 1,
+        hasEmptyAlt: false
+      });
+    } else if (ch === ',') {
+      if (braceStack.length > 0) {
+        const topBrace = braceStack[braceStack.length - 1];
+        const topParen = parenStack.length > 0 ? parenStack[parenStack.length - 1] : null;
+        if (!topParen || topBrace.open > topParen.open) {
+          if (i === topBrace.lastSegmentStart) {
+            topBrace.hasEmptyAlt = true;
+          }
+          topBrace.commaCount += 1;
+          topBrace.lastSegmentStart = i + 1;
+        }
+      }
+    } else if (ch === '}') {
+      if (braceStack.length > 0) {
+        const topBrace = braceStack.pop();
+        if (i === topBrace.lastSegmentStart) {
+          topBrace.hasEmptyAlt = true;
+        }
+        let crossed = false;
+        while (parenStack.length > 0 && parenStack[parenStack.length - 1].open > topBrace.open) {
+          parenStack.pop();
+          crossed = true;
+        }
+        if (!crossed && topBrace.commaCount >= 1 && !topBrace.hasEmptyAlt) {
+          braceClose[topBrace.open] = i;
+          hasBraceList = true;
+        }
+      }
+    } else if (ch === '(') {
+      const prev = i > 0 ? value[i - 1] : '';
+      const isExt = prev === '@' || prev === '+' || prev === '?' || prev === '!';
+      parenStack.push({ open: i, isExt });
+    } else if (ch === ')') {
+      if (parenStack.length > 0) {
+        const topParen = parenStack.pop();
+        let crossed = false;
+        while (braceStack.length > 0 && braceStack[braceStack.length - 1].open > topParen.open) {
+          braceStack.pop();
+          crossed = true;
+        }
+        if (!crossed && topParen.isExt && i > topParen.open + 1) {
+          parenClose[topParen.open] = i;
+          parenIsExtGlob[topParen.open] = 1;
+          hasExtGlob = true;
+        }
+      }
+    }
+  }
+
+  // Pass 2: Collapse outermost matched non-star glob spans to 'x' in O(n).
+  let skeleton = '';
+  let i = 0;
+  while (i < n) {
+    if (bracketClose[i] !== -1) {
+      skeleton += 'x';
+      i = bracketClose[i] + 1;
+      continue;
+    }
+    if (braceClose[i] !== -1) {
+      skeleton += 'x';
+      i = braceClose[i] + 1;
+      continue;
+    }
+    if (i + 1 < n && parenClose[i + 1] !== -1 && parenIsExtGlob[i + 1] === 1) {
+      skeleton += 'x';
+      i = parenClose[i + 1] + 1;
+      continue;
+    }
+    skeleton += value[i];
+    i += 1;
+  }
+
+  const hasQuestionGlob = skeleton.includes('?') && !QUERY_PARAM_ASSIGN_REGEX.test(value);
+  if (hasQuestionGlob) {
+    skeleton = skeleton.replace(/\?+/g, 'x');
+  }
+
   return {
     hasNonStarGlob: hasCharClass || hasBraceList || hasExtGlob || hasQuestionGlob,
+    hasCharClass,
     hasBraceList,
-    hasExtGlob
+    hasExtGlob,
+    hasQuestionGlob,
+    skeleton
   };
-}
-
-function replaceNonStarGlobGroups(value) {
-  return value
-    .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
-    .replace(CHAR_CLASS_GLOB_REPLACE_REGEX, 'x')
-    .replace(BRACE_LIST_GLOB_REPLACE_REGEX, 'x')
-    .replace(EXT_GLOB_REPLACE_REGEX, 'x')
-    .replace(/\?+/g, 'x');
 }
 
 function extractBroadFromSubSpan(run, subStart, subEnd) {
@@ -660,20 +806,20 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
   if (trimmed.includes('*')) {
     looksBroad = hasRelativePrefix || trimmed.includes('/') || trimmed.includes('.');
   } else if (trimmed.endsWith('/')) {
-    const { hasNonStarGlob } = inspectNonStarGlob(candidate);
-    const skeleton = hasNonStarGlob ? replaceNonStarGlobGroups(candidate) : candidate;
+    const { hasNonStarGlob, skeleton } = analyzeNonStarGlob(candidate);
+    const resolvedSkeleton = hasNonStarGlob ? skeleton : candidate;
     looksBroad =
-      DIRECTORY_CANDIDATE_REGEX.test(skeleton) &&
-      skeleton.length > 1 &&
-      /[A-Za-z0-9_-]/.test(skeleton);
+      DIRECTORY_CANDIDATE_REGEX.test(resolvedSkeleton) &&
+      resolvedSkeleton.length > 1 &&
+      /[A-Za-z0-9_-]/.test(resolvedSkeleton);
   } else if (hasRelativePrefix || trimmed.includes('/')) {
     const candidateBase = candidate.replace(/:\d+(?:-\d+)?$/, '');
-    const { hasNonStarGlob, hasBraceList, hasExtGlob } = inspectNonStarGlob(candidateBase);
+    const { hasNonStarGlob, hasCharClass, hasBraceList, hasExtGlob, skeleton } =
+      analyzeNonStarGlob(candidateBase);
     if (hasNonStarGlob) {
-      const skeleton = replaceNonStarGlobGroups(candidateBase);
       looksBroad =
         NON_STAR_PATH_SKELETON_REGEX.test(skeleton) &&
-        (hasExtGlob || hasBraceList || classifyFileCandidate(skeleton) === 'file');
+        (hasCharClass || hasExtGlob || hasBraceList || classifyFileCandidate(skeleton) === 'file');
     }
   }
 
@@ -1232,9 +1378,7 @@ function augmentProofDependencies(proofList, deps) {
           )
       );
       const isExecutableScriptSource = Boolean(
-        trimmedOriginalSource &&
-          ((isQuoteOrBacktickWrapped && /^\.\//.test(sourceTextToInspect.trim())) ||
-            /^\.\.?\/[^\s]+\.(?:sh|bash|zsh|ps1|bat|cmd)$/i.test(sourceTextToInspect.trim()))
+        trimmedOriginalSource && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(sourceTextToInspect.trim())
       );
       const sourceIsCommandOrRepo =
         Boolean(originalSource) &&

@@ -31,9 +31,11 @@ flowchart TD
 ### Task 1: Harness Workspace Resolution, PID-Safe Provider Errors, Ephemeral Copy Hygiene & Antigravity Denial Envelopes
 
 **Files:**
-- Modify: `src/types.js:178-305`
+- Modify: `src/types.js:178-305` (add `'HeadlessToolDeniedError'` to `ErrorClass`, plus `retryEffortFallback` and `selfContainedInput` on `CouncilConfig`)
 - Modify: `src/harness/cli-runner.js:3357-3399,3820-4406`
 - Modify: `src/harness/adapter.js:1-165,490-650`
+- Modify: `src/harness/index.js` (re-export `HeadlessToolDeniedError`, `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX`, `resolveAttemptExecutionWorkspace`)
+- Modify: `src/index.js` (re-export `HeadlessToolDeniedError`)
 - Modify: `src/harness/antigravity.js:65-88,125-186,230-286`
 - Modify: `src/harness/codex.js:70-95,135-199,248-306`
 - Modify: `src/harness/cursor.js:60-85,123-184,232-287`
@@ -43,9 +45,9 @@ flowchart TD
 **Interfaces:**
 - Consumes: Adapter invocation arguments (`role`, `phase`, `participant`, `state`, `tools`, `cwd`, `callerContext`, `adapter`).
 - Produces:
-  - `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX` (defined in `src/harness/cli-runner.js`, re-exported from `src/harness/adapter.js`).
-  - `HeadlessToolDeniedError` (exported from `src/harness/adapter.js`; created in `cli-runner.js` via `createHeadlessToolDeniedError` with `.code === 'HEADLESS_TOOL_DENIED'` and wrapped by `HarnessAdapter.prototype.classifyError`).
-  - `resolveAttemptExecutionWorkspace({ role, phase, participant, state, tools, cwd, callerContext, adapter })` exported from `src/harness/adapter.js`.
+  - `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX` (defined in `src/harness/cli-runner.js`, re-exported from `src/harness/adapter.js` and `src/harness/index.js`).
+  - `HeadlessToolDeniedError` (exported from `src/harness/adapter.js`, `src/harness/index.js`, and `src/index.js`; created in `cli-runner.js` via `createHeadlessToolDeniedError` with `.code === 'HEADLESS_TOOL_DENIED'` and wrapped by `HarnessAdapter.prototype.classifyError` / `AntigravityAdapter.prototype.classifyError`).
+  - `resolveAttemptExecutionWorkspace({ role, phase, participant, state, tools, cwd, callerContext, adapter })` exported from `src/harness/adapter.js` and `src/harness/index.js`.
   - `stripKnownBenignAntigravityWarning(stderr)`, `hasExplicitProviderErrorSignature(text)`, and `listAntigravityModels(options)` exported from `src/harness/cli-runner.js`.
   - `context._invocationMeta` (`{ effectiveTools, configuredWorkspaceCwd, effectiveCwd, trustedEphemeralRoots?, forbiddenWorkspaceRoots? }`).
 
@@ -59,12 +61,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { HeadlessToolDeniedError as RootHeadlessToolDeniedError } from '../../src/index.js';
+import { HeadlessToolDeniedError as HarnessIndexHeadlessToolDeniedError } from '../../src/harness/index.js';
 import {
   PROVIDER_HTTP_429_REGEX,
   PROVIDER_HTTP_AUTH_REGEX,
   HeadlessToolDeniedError,
   QuotaExhaustionError,
   HarnessExecutionError,
+  InvalidResponseError,
   resolveAttemptExecutionWorkspace
 } from '../../src/harness/adapter.js';
 import {
@@ -80,7 +85,26 @@ import { CodexAdapter } from '../../src/harness/codex.js';
 import { CursorAdapter } from '../../src/harness/cursor.js';
 
 describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral copy hygiene & Antigravity denial envelopes', () => {
-  it('resolves effectiveTools and effectiveCwd identically to adapter precedence and clears cwd when tools === "none"', () => {
+  it('exports HeadlessToolDeniedError across adapter.js, harness/index.js, and src/index.js', () => {
+    assert.equal(RootHeadlessToolDeniedError, HeadlessToolDeniedError);
+    assert.equal(HarnessIndexHeadlessToolDeniedError, HeadlessToolDeniedError);
+  });
+
+  it('resolves effectiveTools and effectiveCwd identically to adapter precedence, including adapter.cwd and empty seat/state cwd', () => {
+    const adapterWithDirectCwd = { cwd: '/repo/direct-adapter', config: { cwd: '/repo/config-adapter' } };
+    const resAdapterCwd = resolveAttemptExecutionWorkspace({
+      role: 'seat',
+      phase: 'DELIBERATION',
+      participant: { id: 's1', cwd: '' },
+      state: { cwd: '   ' },
+      adapter: adapterWithDirectCwd
+    });
+    assert.deepEqual(resAdapterCwd, {
+      effectiveTools: 'read-only',
+      configuredWorkspaceCwd: '/repo/direct-adapter',
+      effectiveCwd: '/repo/direct-adapter'
+    });
+
     const adapter = { config: { cwd: '/repo/adapter' } };
     const resNone = resolveAttemptExecutionWorkspace({
       role: 'seat',
@@ -107,8 +131,8 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
     });
     assert.deepEqual(resSeatVoting, {
       effectiveTools: 'read-only',
-      configuredWorkspaceCwd: '/repo/adapter',
-      effectiveCwd: '/repo/adapter'
+      configuredWorkspaceCwd: '/repo/state',
+      effectiveCwd: '/repo/state'
     });
 
     const resJudge = resolveAttemptExecutionWorkspace({
@@ -134,9 +158,10 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
     }
 
     assert.equal(PROVIDER_HTTP_429_REGEX.test('HTTP 429 Too Many Requests from upstream'), true);
-    assert.equal(PROVIDER_HTTP_429_REGEX.test('status=429 rate limit exceeded'), true);
+    assert.equal(PROVIDER_HTTP_429_REGEX.test('status=429 rate_limit'), true);
     assert.equal(PROVIDER_HTTP_AUTH_REGEX.test('HTTP 401 Unauthorized: invalid token'), true);
     assert.equal(PROVIDER_HTTP_AUTH_REGEX.test('status: 403 Forbidden'), true);
+    assert.equal(hasExplicitProviderErrorSignature('Notice: forbidden characters in filename'), false);
 
     for (const AdapterClass of [AntigravityAdapter, CodexAdapter, CursorAdapter]) {
       const adapter = new AdapterClass();
@@ -176,8 +201,9 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
         assert.equal(fs.existsSync(path.join(isolated.effectiveCwd, '.codegraph')), false);
         assert.equal(fs.existsSync(path.join(isolated.effectiveCwd, 'packages', 'sub', '.CodeGraph')), false);
         assert.equal(fs.existsSync(path.join(isolated.effectiveCwd, 'src', 'index.js')), true);
-        assert.deepEqual(ctx._invocationMeta.trustedEphemeralRoots, [isolated.effectiveCwd]);
+        assert.ok(ctx._invocationMeta.trustedEphemeralRoots.includes(isolated.effectiveCwd));
         assert.ok(ctx._invocationMeta.forbiddenWorkspaceRoots.includes(path.resolve(repoDir)));
+        assert.ok(ctx._invocationMeta.forbiddenWorkspaceRoots.includes(fs.realpathSync(repoDir)));
       } finally {
         await isolated.cleanup();
       }
@@ -202,12 +228,13 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
     }
   });
 
-  it('strips only exact benign WORKSPACE_STATE stderr line and enforces exact exitCode 0 and nonzero Antigravity precedence', async () => {
-    const benign = stripKnownBenignAntigravityWarning(
-      '[antigravity] WORKSPACE_STATE: skipping unreadable workspace directory\n'
+  it('strips only exact --mode plan warning line and enforces exact exitCode 0 precedence including empty-response PID warnings', async () => {
+    const cleaned = stripKnownBenignAntigravityWarning(
+      'warning: --mode plan has no effect while slash command expansion is disabled.\nOther error line\n'
     );
-    assert.equal(benign.trim(), '');
+    assert.equal(cleaned, 'Other error line');
 
+    // 1. Primary output + deniedActions => succeeds without throwing (#97 preserved)
     const okWithDenied = await runAntigravityCli(
       'Return JSON',
       { cwd: process.cwd(), model: 'gemini-4-argon-low' },
@@ -216,16 +243,17 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
           exitCode: 0,
           stdout: JSON.stringify({
             response: '{"ok":true}',
-            deniedActions: [{ tool: 'read_file', reason: 'outside root' }],
-            finishedReason: 'STOP'
+            denied_actions: [{ tool: 'read_file', reason: 'outside root' }],
+            finished_reason: 'STOP'
           }),
-          stderr: '[antigravity] WORKSPACE_STATE: skipping unreadable workspace directory\n'
+          stderr: 'warning: --mode plan has no effect while slash command expansion is disabled.\n'
         })
       }
     );
     assert.equal(okWithDenied.output, '{"ok":true}');
     assert.equal(okWithDenied.trace.deniedActions.length, 1);
 
+    // 2. Empty primary output + denied_actions + exitCode 0 => HeadlessToolDeniedError preserving exitCode: 0 & sanitized stderr
     await assert.rejects(
       () => runAntigravityCli(
         'Return JSON',
@@ -235,10 +263,10 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
             exitCode: 0,
             stdout: JSON.stringify({
               response: '',
-              deniedActions: [{ tool: 'list_dir', path: '/Users/secret/host', reason: 'Permission denied' }],
-              finishedReason: 'STOP'
+              denied_actions: [{ tool: 'list_dir', path: 'src', reason: 'Permission denied' }],
+              finished_reason: 'STOP'
             }),
-            stderr: '[antigravity] WORKSPACE_STATE: skipping unreadable workspace directory\nPermission denied reading workspace\n'
+            stderr: 'warning: --mode plan has no effect while slash command expansion is disabled.\nHeadless denial detail\n'
           })
         }
       ),
@@ -246,12 +274,44 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
         assert.equal(err.code, 'HEADLESS_TOOL_DENIED');
         assert.equal(err.exitCode, 0);
         assert.ok(Array.isArray(err.deniedActions) && err.deniedActions.length === 1);
-        assert.ok(!err.stderr.includes('WORKSPACE_STATE: skipping unreadable workspace directory'));
-        assert.ok(err.stderr.includes('Permission denied reading workspace'));
+        assert.ok(!err.stderr.includes('--mode plan has no effect'));
+        assert.ok(err.stderr.includes('Headless denial detail'));
         return true;
       }
     );
 
+    // 3. Empty primary output + harmless (node:429)/(node:401)/(node:403) warnings + exitCode 0 => returns "" cleanly (becomes InvalidResponseError downstream)
+    for (const pid of [429, 401, 403]) {
+      const adapter = new AntigravityAdapter({
+        cliRunner: async () => ({
+          output: '',
+          trace: normalizeProviderTrace({
+            durationMs: 100,
+            outcome: 'error',
+            stderr: `(node:${pid}) ExperimentalWarning: Example harmless warning`
+          })
+        })
+      });
+      const resEmpty = await runAntigravityCli(
+        'Return JSON',
+        { cwd: process.cwd(), model: 'gemini-4-argon-low' },
+        {
+          runner: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({ response: '' }),
+            stderr: `(node:${pid}) ExperimentalWarning: Example harmless warning\n`
+          })
+        }
+      );
+      assert.equal(resEmpty.output, '');
+      assert.match(resEmpty.trace.stderr, new RegExp(`node:${pid}`));
+      await assert.rejects(
+        () => adapter.executeSeat({ seat: { id: 's1', model: 'gemini-4-argon-low' }, topic: 'T' }),
+        (err) => err instanceof InvalidResponseError
+      );
+    }
+
+    // 4. Adapter classifyError preserves HeadlessToolDeniedError with exitCode: 0, trace, and retryable flag
     const adapter = new AntigravityAdapter();
     const classified = adapter.classifyError(
       Object.assign(new Error('denied'), {
@@ -267,6 +327,7 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
     assert.equal(classified.exitCode, 0);
     assert.equal(classified.deniedActions.length, 1);
 
+    // 5. Empty output + exitCode 0 + explicit 429 in envelope/stderr => throws with quota signature
     await assert.rejects(
       () => runAntigravityCli(
         'Return JSON',
@@ -279,7 +340,7 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
           })
         }
       ),
-      (err) => err.isQuotaFault === true || /429|RESOURCE_EXHAUSTED/i.test(err.message)
+      (err) => /429|RESOURCE_EXHAUSTED/i.test(err.message)
     );
   });
 
@@ -307,33 +368,29 @@ describe('Issue #102 Task 1: Workspace resolution, PID-safe errors, ephemeral co
 Run: `node --test test/unit/issue-102-harness-workspace-and-denial.test.js`
 Expected: FAIL (`SyntaxError` / missing exports).
 
-- [ ] **Step 3: Implement updates in `src/types.js`, `cli-runner.js`, `adapter.js`, and all adapters**
+- [ ] **Step 3: Implement updates in `src/types.js`, `cli-runner.js`, `adapter.js`, `harness/index.js`, `src/index.js`, and all adapters**
 
 1. Update `src/types.js`:
-```diff
-  * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
-+ * @property {boolean} [retryEffortFallback] - Explicit opt-in bounded effort fallback on retryable timeouts/denials.
-+ * @property {Object} [selfContainedInput] - Caller-attested self-contained contract permitting tool-free recovery.
-  * @property {EvidenceItem[]} [evidence] - Pre-collected grounded evidence items passed to seats and judge.
-```
+   - Add `'HeadlessToolDeniedError'` to `ErrorClass`.
+   - Add optional `retryEffortFallback` (`boolean`) and `selfContainedInput` (`Object`) to `CouncilConfig`.
 
 2. Update `src/harness/cli-runner.js`:
-   - Define and export PID-safe regexes, Antigravity helpers, `listAntigravityModels`:
+   - Export Spec §3's exact PID-safe matchers and Antigravity helpers:
      ```javascript
      export const PROVIDER_HTTP_429_REGEX =
-       /(?:\bHTTP(?:\/\d+(?:\.\d+)?)?\s+429\b|\bstatus(?:\s*code)?\s*[:=]\s*429\b|\bcode\s*[:=]\s*["']?429["']?|\b429\s+Too Many Requests\b|\bRESOURCE_EXHAUSTED\b)/i;
+       /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*429\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*429\b|"status"\s*:\s*429\b|"code"\s*:\s*429\b|\b429\s+(?:too\s+many\s+requests|resource[\s_-]*exhausted|rate[\s_-]*limit))/i;
 
      export const PROVIDER_HTTP_AUTH_REGEX =
-       /(?:\bHTTP(?:\/\d+(?:\.\d+)?)?\s+(?:401|403)\b|\bstatus(?:\s*code)?\s*[:=]\s*(?:401|403)\b|\bcode\s*[:=]\s*["']?(?:401|403)["']?|\b(?:401\s+Unauthorized|403\s+Forbidden|UNAUTHENTICATED|PERMISSION_DENIED)\b)/i;
+       /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*(?:401|403)\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*(?:401|403)\b|"status"\s*:\s*(?:401|403)\b|"code"\s*:\s*(?:401|403)\b|\b(?:401|403)\s+(?:unauthorized|forbidden|unauthenticated|permission[\s_-]*denied))/i;
 
-     const BENIGN_AGY_WORKSPACE_STATE_LINE =
-       /^\s*\[antigravity\]\s+WORKSPACE_STATE:\s+skipping unreadable workspace directory\s*$/i;
+     const BENIGN_AGY_MODE_PLAN_WARNING_LINE =
+       /^[ \t]*warning:\s+--mode\s+plan\s+has\s+no\s+effect\s+while\s+slash\s+command\s+expansion\s+is\s+disabled\.?[ \t]*$/i;
 
      export function stripKnownBenignAntigravityWarning(stderr) {
        if (typeof stderr !== 'string' || !stderr) return '';
        return stderr
          .split(/\r?\n/)
-         .filter((line) => !BENIGN_AGY_WORKSPACE_STATE_LINE.test(line))
+         .filter((line) => !BENIGN_AGY_MODE_PLAN_WARNING_LINE.test(line))
          .join('\n')
          .trim();
      }
@@ -343,7 +400,9 @@ Expected: FAIL (`SyntaxError` / missing exports).
        return (
          PROVIDER_HTTP_429_REGEX.test(text) ||
          PROVIDER_HTTP_AUTH_REGEX.test(text) ||
-         /\b(?:rate[- ]limit(?:ed|ing)?|quota\s+exceeded|too many requests|authentication required|invalid api key|unauthorized|forbidden)\b/i.test(text)
+         /\b(?:resource_exhausted|rate_limit_error|overloaded_error|quota\s+window\s+exhausted|token_budget_exceeded|quota\s+exceeded)\b/i.test(text) ||
+         /\b(?:unauthenticated|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key|permission_denied)\b/i.test(text) ||
+         /\b(?:model_not_found|unknown\s+model|unsupported\s+model|invalid_argument)\b/i.test(text)
        );
      }
 
@@ -357,18 +416,18 @@ Expected: FAIL (`SyntaxError` / missing exports).
        err.stderr = options.stderr ?? '';
        err.isRetryable = options.isRetryable ?? true;
        err.isQuotaFault = false;
+       if (options._providerCallRecorded) {
+         err._providerCallRecorded = true;
+       }
        return err;
      }
 
      export async function listAntigravityModels(options = {}) {
        const runner = typeof options.runner === 'function' ? options.runner : null;
        const timeoutMs = options.timeoutMs ?? 15000;
-       let res;
-       if (runner) {
-         res = await runner({ command: 'agy', args: ['models'], timeoutMs });
-       } else {
-         res = await execCliProcess('agy', ['models'], { timeoutMs, signal: options.signal });
-       }
+       const res = runner
+         ? await runner({ command: 'agy', args: ['models'], timeoutMs })
+         : await execCliProcess('agy', ['models'], { timeoutMs, signal: options.signal });
        if (!res || res.exitCode !== 0) {
          return { ok: false, selectors: [], raw: res?.stdout || '', error: res?.stderr || 'agy models failed' };
        }
@@ -389,16 +448,29 @@ Expected: FAIL (`SyntaxError` / missing exports).
      }
      ```
    - Update `normalizeProviderTrace` to retain optional `stderr`, `deniedActions`, `envelopeError`, `finishedReason` when present on `rawTrace`.
-   - Update `recordProviderCall` to retain optional `phase`, `round`, `attempt`, `requestedModel`, `requestedEffort`, `effectiveEffort`, `capabilityProvenance`, `fallbackApplied`, `fallbackReason` from `record` or `context?.retryDiagnostics`.
-   - Update `parseAntigravityOutput` to capture `deniedActions`, `envelopeError`, `finishedReason` from parsed JSON payloads and check `deniedActions` in addition to `toolCalls` for `.council` / host `forbiddenStateAccess`.
-   - Replace `hasDotCouncilEntry` with `requiresIsolatedSafeWorkspaceCopy(dirPath)` (case-insensitive check for `.council`, `.codegraph`, or symlinks whose name/target matches `.council`/`.codegraph`), update `copySafeWorkspace` to exclude `.council`, `.codegraph`, and `node_modules` at every depth + symlinks pointing to `.council`/`.codegraph` targets, and update `prepareIsolatedCliWorkspace` to canonicalize `effectiveCwd` and `env.PWD` via `fs.realpathSync` across all 3 branches (`ENOENT` fallback to `path.resolve(cwd)`) while attaching `trustedEphemeralRoots` and `forbiddenWorkspaceRoots` on `context._invocationMeta` only when `council-safe-cwd-*` is materialized.
-   - Update `runAntigravityCli` to implement both precedence tables from Spec §3:
-     - `exitCode === 0`: (1) usable primary output succeeds while keeping `trace.deniedActions`; (2) `forbiddenStateAccess` throws `createForbiddenStateAccessError`; (3) `deniedActions.length > 0` without primary output throws `createHeadlessToolDeniedError(..., { exitCode: 0, deniedActions, trace, stderr: sanitizedStderr })`; (4) structured `envelopeError` or `hasExplicitProviderErrorSignature(sanitizedStderr)` throws explicit error (`isQuotaFault: true` on 429/quota); (5) otherwise throw empty output `HarnessExecutionError`-compatible error with `sanitizedStderr`.
-     - Nonzero exit / thrown error: inspect `sanitizedStderr` + `envelopeError` with `hasExplicitProviderErrorSignature` first, else check `deniedActions` before generic non-zero error; ignore bare `(node:429)` / `(node:401)` / `(node:403)` warnings and benign `WORKSPACE_STATE` warning.
+   - Update `recordProviderCall` to preserve optional `phase`, `round`, `attempt`, `requestedModel`, `requestedEffort`, `effectiveEffort`, `capabilityProvenance`, `fallbackApplied`, `fallbackReason` from `record` or `context?.retryDiagnostics`.
+   - Update `parseAntigravityOutput(rawStdout, { forbiddenWorkspaceRoots })` to extract sanitized `deniedActions` (`json.denied_actions` / `json.deniedActions`), `envelopeError` (`json.error`), `finishedReason`, and `forbiddenStateAccess` (scanning **both** `toolCalls` and `deniedActions`).
+   - Replace `hasDotCouncilEntry` with `requiresIsolatedSafeWorkspaceCopy(dirPath)` (checks case-insensitively for `.council` OR `.codegraph`, returning `false` on `ENOENT`/`ENOTDIR` and rethrowing permission errors).
+   - Update `copySafeWorkspace` to omit `.council`, `.codegraph` (case-insensitive), and `node_modules` at every depth, plus symlinks whose targets traverse them.
+   - Update `prepareIsolatedCliWorkspace` to canonicalize `effectiveCwd` and `env.PWD` (delete `OLDPWD` & `INIT_CWD`) via `fs.realpathSync` across all 3 branches (`ENOENT` fallback to `path.resolve(cwd)`), and ONLY in the `council-safe-cwd-*` copy branch populate:
+     ```javascript
+     if (context && typeof context === 'object') {
+       context._invocationMeta = context._invocationMeta || {};
+       context._invocationMeta.trustedEphemeralRoots = [...new Set([tempSafeCwd, realTempSafeCwd])];
+       context._invocationMeta.forbiddenWorkspaceRoots = [...new Set([resolvedRoot, realRoot])];
+     }
+     ```
+   - Update `runAntigravityCli` to enforce Spec §3's exact `exitCode === 0` 5-step order (using `diagnosticStderr = stripKnownBenignAntigravityWarning(stderr)`):
+     1. `parsedOut.forbiddenStateAccess === true` -> record provider call (`exitCode: 0`, `trace.outcome: 'error'`), throw `FORBIDDEN_STATE_ACCESS` (`_providerCallRecorded: true`).
+     2. Non-empty `resolvedOutput` (`resolvedOutput.trim().length > 0`) -> record `trace.outcome: parsedOut.hasFailureMetadata ? 'error' : 'success'` (with non-empty `diagnosticStderr` on `trace.stderr`) and return `{ output: resolvedOutput, trace }` verbatim.
+     3. Empty `resolvedOutput` (`""`) with `parsedOut.deniedActions.length > 0` -> record provider call (`exitCode: 0`, `trace` with `outcome: 'error'`, `deniedActions`, `stderr: diagnosticStderr`) and throw `createHeadlessToolDeniedError(..., { exitCode: 0, deniedActions, stderr: diagnosticStderr, trace, _providerCallRecorded: true })`.
+     4. Empty `resolvedOutput` (`""`) with `deniedActions.length === 0` AND (`parsedOut.envelopeError` non-empty OR `hasExplicitProviderErrorSignature(diagnosticStderr)`) -> record provider call (`exitCode: 0`, `trace.outcome: 'error'`) and throw sanitized CLI `Error` (`exitCode: 0`, `stderr: [parsedOut.envelopeError, diagnosticStderr].filter(Boolean).join(' — ')`, `trace`, `_providerCallRecorded: true`).
+     5. Empty `resolvedOutput` (`""`) otherwise (including `{"response":""}` and harmless `(node:429)` / `(node:401)` / `(node:403)` warnings) -> record provider call (`exitCode: 0`, `trace.outcome: 'error'`, attaching `trace.stderr: diagnosticStderr` if non-empty) and **return `{ output: '', trace }` without throwing**.
+   - Update `runAntigravityCli`'s nonzero `catch (err)`: strip only `BENIGN_AGY_MODE_PLAN_WARNING_LINE` from `err.stderr`, parse `err.stdout` when non-empty, escalate `FORBIDDEN_STATE_ACCESS` first, preserve `ABORT_ERR` / `ETIMEDOUT` / `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` second, convert to `HeadlessToolDeniedError` (preserving actual nonzero `exitCode`, `stderr`, `deniedActions`, `trace`) when `parsedErr?.deniedActions.length > 0` and no quota/auth signature is present, otherwise attach `parsedErr?.envelopeError` + `errorTrace`, record `providerCalls` once (`_providerCallRecorded = true`), and rethrow.
 
-3. Update `src/harness/adapter.js`:
-   - Re-export `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX` from `./cli-runner.js`.
-   - Export `HeadlessToolDeniedError` and `resolveAttemptExecutionWorkspace`:
+3. Update `src/harness/adapter.js`, `src/harness/index.js`, and `src/index.js`:
+   - Re-export `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX` from `./cli-runner.js` in `adapter.js`.
+   - Export `HeadlessToolDeniedError` and `resolveAttemptExecutionWorkspace` from `adapter.js`, re-export from `src/harness/index.js`, and re-export `HeadlessToolDeniedError` from `src/index.js`:
      ```javascript
      export { PROVIDER_HTTP_429_REGEX, PROVIDER_HTTP_AUTH_REGEX };
 
@@ -425,30 +497,40 @@ Expected: FAIL (`SyntaxError` / missing exports).
        callerContext,
        adapter
      } = {}) {
-       const firstNonEmpty = (...vals) => {
-         for (const v of vals) {
-           if (typeof v === 'string' && v.trim().length > 0) return v.trim();
-         }
-         return undefined;
-       };
+       const isVoting = phase === 'VOTING' || phase === 'confirming';
        let effectiveTools;
-       if (tools !== undefined) {
-         effectiveTools = tools;
-       } else if (role === 'seat' && phase === 'VOTING') {
-         effectiveTools = participant?.votingTools || participant?.tools || callerContext?.tools || 'none';
+       if (tools === 'none' || callerContext?.tools === 'none') {
+         effectiveTools = 'none';
+       } else if (role === 'judge') {
+         effectiveTools = tools ?? callerContext?.tools ?? participant?.tools ?? 'read-only';
        } else {
-         effectiveTools = participant?.tools || callerContext?.tools || 'read-only';
+         effectiveTools =
+           tools ??
+           callerContext?.tools ??
+           (isVoting ? participant?.votingTools ?? participant?.tools : participant?.tools) ??
+           'read-only';
        }
-       const configuredWorkspaceCwd = firstNonEmpty(cwd, callerContext?.cwd, participant?.cwd, state?.cwd, adapter?.config?.cwd);
+
+       const configuredWorkspaceCwd = [
+         cwd,
+         callerContext?.cwd,
+         participant?.cwd,
+         state?.cwd,
+         adapter?.cwd,
+         adapter?.config?.cwd
+       ]
+         .find((c) => typeof c === 'string' && c.trim())
+         ?.trim();
+
        const effectiveCwd = effectiveTools === 'none' ? undefined : configuredWorkspaceCwd;
        return { effectiveTools, configuredWorkspaceCwd, effectiveCwd };
      }
      ```
-   - In `HarnessAdapter.prototype.classifyError`, handle `err instanceof HeadlessToolDeniedError || err?.code === 'HEADLESS_TOOL_DENIED'`, and swap bare `/\b(?:401|403)\b/` & `/\b429\b/` with `PROVIDER_HTTP_AUTH_REGEX` & `PROVIDER_HTTP_429_REGEX`.
+   - In `HarnessAdapter.prototype.classifyError`, handle `err instanceof HeadlessToolDeniedError || err?.code === 'HEADLESS_TOOL_DENIED'` (preserving `exitCode`, `stderr`, `deniedActions`, `trace`), and replace bare `/\b(?:401|403)\b/` & `/\b429\b/` with `PROVIDER_HTTP_AUTH_REGEX` & `PROVIDER_HTTP_429_REGEX`.
 
 4. Update `src/harness/antigravity.js`, `src/harness/codex.js`, `src/harness/cursor.js`, and `src/harness/mock.js`:
-   - Replace bare `/\b429\b/` checks with `PROVIDER_HTTP_429_REGEX`.
-   - Call `resolveAttemptExecutionWorkspace({ role, phase, participant, state, tools, cwd, callerContext: context, adapter: this })` in `executeSeat*` and `executeJudge*`, write `{ effectiveTools, configuredWorkspaceCwd, effectiveCwd }` into `(context._invocationMeta ||= {})`, and forward `_invocationMeta` and `retryDiagnostics: context?.retryDiagnostics` inside the dispatch `context` object.
+   - Replace bare `/\b429\b/` checks with `PROVIDER_HTTP_429_REGEX`; handle `HeadlessToolDeniedError` cleanly in `AntigravityAdapter.prototype.classifyError`.
+   - Call `resolveAttemptExecutionWorkspace({ role, phase, participant, state, tools, cwd, callerContext: context, adapter: this })` in `executeSeat*` and `executeJudge*`, write `{ effectiveTools, configuredWorkspaceCwd, effectiveCwd }` into `(context._invocationMeta ||= {})`, and forward `_invocationMeta` + `retryDiagnostics: context?.retryDiagnostics` inside the dispatch `context` object.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -458,7 +540,7 @@ Expected: PASS (0 failed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/types.js src/harness/cli-runner.js src/harness/adapter.js src/harness/antigravity.js src/harness/codex.js src/harness/cursor.js src/harness/mock.js test/unit/issue-102-harness-workspace-and-denial.test.js
+git add src/types.js src/harness/cli-runner.js src/harness/adapter.js src/harness/index.js src/index.js src/harness/antigravity.js src/harness/codex.js src/harness/cursor.js src/harness/mock.js test/unit/issue-102-harness-workspace-and-denial.test.js
 git commit -m "fix(harness): add workspace meta capture, PID-safe errors, .codegraph exclusion, and headless denial envelope"
 ```
 
@@ -501,7 +583,7 @@ import { CouncilEngine } from '../../src/engine/council-engine.js';
 import { MockAdapter } from '../../src/harness/mock.js';
 
 describe('Issue #102 Task 2: Portable citation normalization, forbidden path/artifact guards & read caps', () => {
-  it('strips ONLY trustedEphemeralRoots to repo-relative paths while leaving non-matching/other temp/host paths intact for rejection', () => {
+  it('strips ONLY valid relative subpaths under trustedEphemeralRoots while leaving .. traversal, .council, and untrusted temp/host paths for rejection', () => {
     const trustedRoot = path.join(os.tmpdir(), 'council-safe-cwd-seat1');
     const otherSeatRoot = path.join(os.tmpdir(), 'council-safe-cwd-other');
     const normalized = normalizeTrustedInvocationCitations(
@@ -518,6 +600,33 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
     assert.equal(normalized.statement, 'Verified src/engine/config.js and prose... with ellipsis.');
     assert.equal(validateProof(normalized, { forbiddenWorkspaceRoots: ['/Users/aaat/repo'] }).valid, true);
 
+    // <trustedRoot>/../outside.js MUST remain unstripped and fail validation
+    const traversal = normalizeTrustedInvocationCitations(
+      {
+        scope: 'Harness',
+        kind: 'citation',
+        source: `${trustedRoot}/../outside.js:3`,
+        statement: 'Attempted escape'
+      },
+      { trustedEphemeralRoots: [trustedRoot] }
+    );
+    assert.ok(traversal.source.includes('..'));
+    assert.equal(validateProof(traversal, { forbiddenWorkspaceRoots: ['/Users/aaat/repo'] }).valid, false);
+
+    // <trustedRoot>/.council/state.json MUST remain unstripped and fail validation
+    const councilTarget = normalizeTrustedInvocationCitations(
+      {
+        scope: 'Harness',
+        kind: 'citation',
+        source: `${trustedRoot}/.council/state.json:1`,
+        statement: 'Attempted state leak'
+      },
+      { trustedEphemeralRoots: [trustedRoot] }
+    );
+    assert.ok(councilTarget.source.includes('.council'));
+    assert.equal(validateProof(councilTarget, { forbiddenWorkspaceRoots: ['/Users/aaat/repo'] }).valid, false);
+
+    // Foreign temp root MUST fail validation
     const tampered = normalizeTrustedInvocationCitations(
       {
         scope: 'Harness',
@@ -554,7 +663,7 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
     }
   });
 
-  it('emits phase-specific read caps (5-8 R1, 3-5 R2+/Vote/Judge, 0 uncited) and forbids echoing temp paths without regressing #96', () => {
+  it('emits phase-specific read caps (5-8 R1, 3-5 R2+/Vote/Judge incl. Round 2+ objections, 0 uncited) without regressing #96', () => {
     const soul = STANDARD_SOULS.ARCHITECT;
     const pR1 = formatDeliberationPrompt({
       soul,
@@ -565,7 +674,7 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
       tools: 'read-only'
     });
     assert.match(pR1, /5.?8/);
-    assert.match(pR1, /temporary.*paths|repository-relative paths/i);
+    assert.match(pR1, /repository-relative/i);
 
     const pR2 = formatDeliberationPrompt({
       soul,
@@ -589,14 +698,17 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
     });
     assert.match(pVote, /3.?5/);
 
-    const pJudgeCited = formatJudgePrompt({
+    // Judge with uncited conceptual proof MUST still get 3-5 spot-check budget when Round 2+ open objection cites a workspace file
+    const pJudgeWithCitedObjection = formatJudgePrompt({
       judge: { id: 'j', cwd: '/Users/secret/repo' },
       topic: 'Topic',
-      round: 1,
-      proofs: [{ id: 'P1', statement: 'Check', source: 'src/a.js:10' }],
+      round: 2,
+      previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+      openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P0', reason: 'Check src/engine/council-engine.js:42 mismatch' }],
+      proofs: [{ id: 'P1', statement: 'Concept', source: 'internal reasoning' }],
       tools: 'read-only'
     });
-    assert.match(pJudgeCited, /3.?5/);
+    assert.match(pJudgeWithCitedObjection, /3.?5/);
 
     const pJudgeUncited = formatJudgePrompt({
       judge: { id: 'j', cwd: '/Users/secret/repo' },
@@ -670,6 +782,12 @@ function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const PARENT_TRAVERSAL_REGEX = /(?:^|[\\/\s"'`(=])\.\.(?:[\\/]|(?=$|\s|["'`]))/;
+const FORBIDDEN_ARTIFACT_REGEX =
+  /(?:^|[\\/\s"'`])\.council(?:[\\/\s"'`]|$)|\blatest\.js\b|\*\.meta\.json|\*\.events\.jsonl|\btelemetry-summary(?:\.\*|\.[a-z0-9]+)?\b|\b[a-z0-9._-]+\.(?:meta\.json|events\.jsonl)\b/i;
+const UNSTRIPPED_TEMP_ROOT_REGEX =
+  /(?:\/|\\|[a-z]:\\)[^\s"'`<>]*?council-(?:safe|seat)-cwd-[a-z0-9_-]+/i;
+
 export function normalizeTrustedInvocationCitations(payload, invocationMeta) {
   const roots = Array.isArray(invocationMeta?.trustedEphemeralRoots)
     ? invocationMeta.trustedEphemeralRoots.filter((r) => typeof r === 'string' && r.length > 0)
@@ -682,10 +800,14 @@ export function normalizeTrustedInvocationCitations(payload, invocationMeta) {
     for (const root of sorted) {
       const normalized = root.replace(/[\\/]+$/, '');
       if (!normalized) continue;
-      const prefixRe = new RegExp(`${escapeRegex(normalized)}[\\\\/]+`, 'g');
-      out = out.replace(prefixRe, '');
-      const exactRe = new RegExp(`${escapeRegex(normalized)}(?![A-Za-z0-9._\\-\\\\/])`, 'g');
-      out = out.replace(exactRe, '.');
+      // Only strip <trustedRoot>/<relPath> when <relPath> is non-empty, has zero '..' segments, and does not target .council
+      const prefixRe = new RegExp(`${escapeRegex(normalized)}[\\\\/]+([^\\s"'`<>)]+)`, 'g');
+      out = out.replace(prefixRe, (fullMatch, relPath) => {
+        if (!relPath || PARENT_TRAVERSAL_REGEX.test(relPath) || /(?:^|[\\/])\.council(?:[\\/]|$)/i.test(relPath)) {
+          return fullMatch;
+        }
+        return relPath.replace(/\\/g, '/');
+      });
     }
     return out;
   };
@@ -702,12 +824,6 @@ export function normalizeTrustedInvocationCitations(payload, invocationMeta) {
   };
   return walk(payload);
 }
-
-const PARENT_TRAVERSAL_REGEX = /(?:^|[\\/\s"'`(=])\.\.(?:[\\/]|(?=$|\s|["'`]))/;
-const FORBIDDEN_ARTIFACT_REGEX =
-  /(?:^|[\\/\s"'`])\.council(?:[\\/\s"'`]|$)|\blatest\.js\b|\*\.meta\.json|\*\.events\.jsonl|\btelemetry-summary(?:\.\*|\.[a-z0-9]+)?\b|\b[a-z0-9._-]+\.(?:meta\.json|events\.jsonl)\b/i;
-const UNSTRIPPED_TEMP_ROOT_REGEX =
-  /(?:\/|\\|[a-z]:\\)[^\s"'`<>]*?council-(?:safe|seat)-cwd-[a-z0-9_-]+/i;
 
 export function validateCitationFields(fields = [], options = {}) {
   const errors = [];
@@ -737,39 +853,17 @@ export function validateCitationFields(fields = [], options = {}) {
 }
 ```
 
-Update `validateProof(input, options = {})` at the end of `src/proofs/validator.js` to run:
-```javascript
-  const citationCheck = validateCitationFields(
-    [
-      { label: 'proof.scope', text: input.scope },
-      { label: 'proof.source', text: input.source },
-      { label: 'proof.statement', text: input.statement }
-    ],
-    options
-  );
-  if (!citationCheck.valid) errors.push(...citationCheck.errors);
-```
+Update `validateProof(input, options = {})` to run `validateCitationFields([{ label: 'proof.scope', text: input.scope }, { label: 'proof.source', text: input.source }, { label: 'proof.statement', text: input.statement }], options)` and append any errors.
 
 2. Update `src/seats/soul.js`:
-```diff
- export const ANTI_CHEATING_RULE =
-   'STRICT ANTI-CHEATING RULE: Never read, grep, or inspect ".council/" (including ".council/runs/", ".council/telemetry/", ".council/runs/latest.js", "latest.js", "*.meta.json", "*.events.jsonl", "telemetry-summary.*", run snapshots, or telemetry files). Isolated workspace copies already omit ".council/" physically, so NEVER pass ".council", "latest.js", "*.meta.json", "*.events.jsonl", or "telemetry-summary.*" in CLI flags, negative globs or exclude pathspecs, or tool/MCP search queries. Accessing ".council/" or passing those patterns violates blind deliberation independence and immediately invalidates your turn.';
- 
- const ISOLATED_WORKSPACE_PATH_DIRECTIVE =
--  'Inspect workspace files strictly via relative paths rooted at "." (your current working directory is already the attached workspace, materialized as an isolated .council-free workspace copy when ".council" exists on the host). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths to shell, file, or search tools—even when an absolute host path appears verbatim in the Topic Handoff, Clarifications, or [E#] baseline evidence—because accessing host workspace roots triggers FORBIDDEN_STATE_ACCESS.';
-+  'Inspect workspace files strictly via relative paths rooted at "." (your current working directory is already the attached workspace, materialized as an isolated .council-free workspace copy when ".council" exists on the host). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths to shell, file, or search tools—even when an absolute host path appears verbatim in the Topic Handoff, Clarifications, or [E#] baseline evidence—because accessing host workspace roots triggers FORBIDDEN_STATE_ACCESS. Never echo temporary copy directory names, raw temp filesystem paths, or host repository paths in your final citations — cite repository-relative paths (e.g. src/file.js:10) only.';
- 
- const CLARIFICATION_WORKSPACE_DIRECTIVE =
--  'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files strictly via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy when ".council" exists on the host); if no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS.';
-+  'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files strictly via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy when ".council" exists on the host); if no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS. Cite repository-relative paths only, never temporary copy directory names.';
-```
-And in `formatDeliberationPrompt` (`384`): add read budget guidance `Cap local file reads to at most ${isRebuttal || resolvedRound > 1 ? '3–5' : '5–8'} targeted reads within "." so you finish within your turn timeout.` when `hasWorkspaceCwd && resolvedEvidence.length === 0`.
-And in `formatVotingPrompt` (`504`): add `Cap local file reads to at most 3–5 targeted spot-check reads within ".".` when `hasWorkspaceCwd && resolvedEvidence.length === 0`.
-And in `formatJudgePrompt` (`683-693`): compute `hasCitedProofSource = proofs.some((p) => /(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|\.[a-z]{1,6}(?::\d+)?)/i.test(String(p?.source || '')))`, emitting `Cap spot-check reads to at most 3–5 targeted reads within "." (without re-opening settled Prior-Round Admitted Proofs).` when true, or `Use 0 local workspace reads for uncited/conceptual proofs unless directly verifying a cited source.` when false.
+   - In `ISOLATED_WORKSPACE_PATH_DIRECTIVE` (`207-208`) and `CLARIFICATION_WORKSPACE_DIRECTIVE` (`210-211`): keep every Issue `#96` token, note that `.` is an isolated `.council`-free and `.codegraph`-free workspace copy when `.council` or `.codegraph` exists on host, prefer native read/search tools (`Read`/`read_file`, `Glob`, `Grep`, `LS`) over headless `Bash`/`codegraph` CLI when sufficient, and forbid echoing temporary copy directory names, raw temp filesystem paths, or host repository paths in final citations (`cite repository-relative paths only`).
+   - In `formatDeliberationPrompt` (`384`): add read cap `5–8` targeted reads on Round 1 and `3–5` targeted reads on Round 2+/rebuttal (addressing `Unresolved Objections` without re-inspecting settled clauses).
+   - In `formatVotingPrompt` (`504`): add `Cap local file reads to at most 3–5 targeted spot-check reads within "."`.
+   - In `formatJudgePrompt` (`683-693`): check workspace path citations across **both** current-round `proofs` AND `resolvedOpenObjections`; emit `3–5` targeted spot-check reads when either cites workspace paths, or `0 local workspace reads` when neither does (without reopening `Prior-Round Admitted Proofs`).
 
-3. Wire `normalizeTrustedInvocationCitations` & `validateCitationFields` in `src/engine/council-engine.js` around `SUBMIT_PROOF` (`validateDelibWave`), `CAST_VOTE` (`validateVoteWave`), and `JUDGE_AUDIT_AND_SYNTHESIZE` (before `_step`). Merge `[slot.invocationMeta?.forbiddenWorkspaceRoots, seat.cwd, this.config.cwd]` when calling `validateProof` and `validateCitationFields`.
+3. Wire `normalizeTrustedInvocationCitations` & `validateCitationFields` in `src/engine/council-engine.js` around `SUBMIT_PROOF` (`validateDelibWave`), `CAST_VOTE` (`validateVoteWave`), and `JUDGE_AUDIT_AND_SYNTHESIZE` (before `_step`). Merge `[slot.invocationMeta?.forbiddenWorkspaceRoots, seat.cwd, this.config.cwd]` into `forbiddenWorkspaceRoots`.
 
-4. Append a unit assertion block in `test/unit/issue-96-soul-isolated-workspace.test.js` confirming relative-`.` citation rules and read caps do not break `#96`.
+4. Append a test block in `test/unit/issue-96-soul-isolated-workspace.test.js` asserting the read caps and anti-temp-path rules while keeping all `#96` assertions green.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -812,7 +906,7 @@ git commit -m "fix(citations): normalize trusted ephemeral citations, guard temp
   - `test/unit/challenger-m5-it2-1-stress.test.js:734-815` (`2e`)
 
 **Interfaces:**
-- Consumes: `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX`, `HeadlessToolDeniedError`, `resolveAttemptExecutionWorkspace` from `src/harness/adapter.js`; `parseModelAndEffort`, `extractCanonicalBaseModel`, `downshiftEffort` from `src/harness/cli-runner.js`.
+- Consumes: `PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX`, `HeadlessToolDeniedError`, `resolveAttemptExecutionWorkspace` from `src/harness/adapter.js`; `parseModelAndEffort`, `extractCanonicalBaseModel` from `src/harness/cli-runner.js`.
 - Produces: `extractVerificationDependencies`, `evaluateToolFreeEvidenceReadiness`, `resolveRetryModelAndEffort`, `validateRetryFallbackCapability`, `planParticipantRecovery` in `src/engine/recovery.js`, re-exported via `src/engine/index.js`.
 
 - [ ] **Step 1: Write the failing test**
@@ -826,13 +920,13 @@ import {
   extractVerificationDependencies,
   evaluateToolFreeEvidenceReadiness,
   resolveRetryModelAndEffort,
+  validateRetryFallbackCapability,
   planParticipantRecovery,
   resolveConfig,
   CouncilEngine
 } from '../../src/engine/index.js';
 import { MockAdapter } from '../../src/harness/mock.js';
 import {
-  TimeoutError,
   HeadlessToolDeniedError,
   InvalidResponseError,
   QuotaExhaustionError
@@ -841,64 +935,76 @@ import { transitionCouncil } from '../../src/machine/reducer.js';
 import { createInitialCouncilState } from '../../src/machine/state.js';
 
 describe('Issue #102 Task 3: Centralized recovery policy, readiness veto, single tool-free guard & opt-in effort fallback', () => {
-  it('extracts file and URL verification dependencies while ignoring copyright/prose tokens', () => {
+  it('extracts file/line/broad/URL verification dependencies while ignoring prose/version numbers', () => {
     const deps = extractVerificationDependencies([
-      'Inspect src/auth.js:10 and docs/spec.md plus https://example.com/rfc.txt (node v22.1.0).'
+      'Inspect src/auth.js:120-145, src/engine/, and https://datatracker.ietf.org/doc/html/rfc9110 (node v22.1.0).'
     ]);
-    assert.deepEqual(deps.files, ['src/auth.js', 'docs/spec.md']);
-    assert.deepEqual(deps.urls, ['https://example.com/rfc.txt']);
+    assert.deepEqual(deps.workspaceFileDeps, [{ source: 'src/auth.js', startLine: 120, endLine: 145 }]);
+    assert.ok(deps.workspaceBroadDeps.includes('src/engine/'));
+    assert.deepEqual(deps.externalDeps, ['https://datatracker.ietf.org/doc/html/rfc9110']);
   });
 
-  it('rejects filename-only [E1] stubs and unverified cwd timeouts without matching selfContainedInput', () => {
-    const resNoOptIn = evaluateToolFreeEvidenceReadiness({
-      phase: 'DELIBERATION',
-      round: 1,
-      topic: 'Verify token expiry in src/auth.js',
-      evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
-      originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
-    });
-    assert.equal(resNoOptIn.ready, false);
-    assert.equal(resNoOptIn.reasonCode, 'evidence_not_self_contained');
-
+  it('rejects partial/irrelevant [E1] stubs, roundScope round_1_only in Round 2, and unverified cwd timeouts without matching selfContainedInput', () => {
     const resStub = evaluateToolFreeEvidenceReadiness({
       phase: 'DELIBERATION',
       round: 1,
-      topic: 'Verify token expiry in src/auth.js',
+      errorClass: 'TimeoutError',
+      topic: 'Using [E1], verify token expiry in src/auth.js',
       evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
-      selfContainedInput: { phases: ['DELIBERATION'], roundScope: 'all_rounds' },
       originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
     });
     assert.equal(resStub.ready, false);
 
-    const resConceptualContradiction = evaluateToolFreeEvidenceReadiness({
+    // Partial line coverage { startLine: 1, endLine: 5 } MUST be refused when topic cites unbounded src/auth.js or lines 120-145
+    const resPartial = evaluateToolFreeEvidenceReadiness({
       phase: 'DELIBERATION',
       round: 1,
-      topic: 'Check https://example.com/live-spec before answering',
-      evidence: [],
+      errorClass: 'TimeoutError',
+      topic: 'Verify token expiry in src/auth.js:120-145',
+      evidence: [{ id: 'E1', label: 'Header', source: 'src/auth.js', text: '// Copyright 2026' }],
       selfContainedInput: {
         phases: ['DELIBERATION'],
-        roundScope: 'all_rounds',
+        coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: { startLine: 1, endLine: 5 } }]
+      },
+      originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+    });
+    assert.equal(resPartial.ready, false);
+
+    // Round > 1 requires roundScope === 'all_rounds' (default is 'round_1_only')
+    const resRound2Blocked = evaluateToolFreeEvidenceReadiness({
+      phase: 'DELIBERATION',
+      round: 2,
+      errorClass: 'TimeoutError',
+      topic: 'Conceptual topic',
+      previousCandidate: { round: 1, summary: 'Prev', clauses: [] },
+      openObjections: [{ id: 'O1', seatId: 's2', proofId: 'P1', reason: 'Dispute' }],
+      selfContainedInput: {
+        phases: ['DELIBERATION'],
         conceptualNoExternalVerification: true
       }
     });
-    assert.equal(resConceptualContradiction.ready, false);
+    assert.equal(resRound2Blocked.ready, false);
 
+    // Valid complete_artifact covers unbounded or enclosing line range
     const resCovered = evaluateToolFreeEvidenceReadiness({
       phase: 'DELIBERATION',
       round: 1,
+      errorClass: 'TimeoutError',
       topic: 'Verify src/auth.js',
-      evidence: [{ id: 'E1', label: 'Auth', source: 'src/auth.js:1-40', text: 'export function check() {}' }],
+      evidence: [{ id: 'E1', label: 'Auth', source: 'src/auth.js', text: 'export function checkTokenExpiry() { return true; }' }],
       selfContainedInput: {
         phases: ['DELIBERATION'],
-        roundScope: 'all_rounds',
-        coveredArtifacts: ['src/auth.js']
-      }
+        coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+      },
+      originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
     });
     assert.equal(resCovered.ready, true);
   });
 
-  it('enforces single tool-free recovery across subsequent InvalidResponseError/QuotaExhaustionError while preserving multi-retry when tools were never stripped', () => {
+  it('enforces single tool-free recovery across subsequent errors and exact terminationKind values', () => {
     const decisionAfterToolFree = planParticipantRecovery({
+      participantId: 's1',
+      role: 'seat',
       error: new InvalidResponseError('Bad JSON after tool-free retry', { harness: 'mock', seatId: 's1' }),
       errorClass: 'InvalidResponseError',
       isRetryable: true,
@@ -909,10 +1015,12 @@ describe('Issue #102 Task 3: Centralized recovery policy, readiness veto, single
       toolFreeRecoveryUsed: true,
       originalAttemptTools: 'none'
     });
-    assert.equal(decisionAfterToolFree.allowRetry, false);
+    assert.equal(decisionAfterToolFree.canRetry, false);
     assert.equal(decisionAfterToolFree.terminationKind, 'tool_free_already_used');
 
     const decisionNormalQuotaRetry = planParticipantRecovery({
+      participantId: 's1',
+      role: 'seat',
       error: new QuotaExhaustionError('HTTP 429', { harness: 'mock', seatId: 's1' }),
       errorClass: 'QuotaExhaustionError',
       isRetryable: true,
@@ -926,53 +1034,77 @@ describe('Issue #102 Task 3: Centralized recovery policy, readiness veto, single
       harness: 'antigravity',
       model: 'gemini-4-argon-high'
     });
-    assert.equal(decisionNormalQuotaRetry.allowRetry, true);
+    assert.equal(decisionNormalQuotaRetry.canRetry, true);
     assert.equal(decisionNormalQuotaRetry.nextTools, 'read-only');
     assert.equal(decisionNormalQuotaRetry.nextModel, 'gemini-4-argon-high');
-    assert.equal(decisionNormalQuotaRetry.nextToolFreeRecoveryUsed, false);
+    assert.equal(decisionNormalQuotaRetry.setsToolFreeRecoveryUsed, false);
+    assert.equal(decisionNormalQuotaRetry.retryDiagnostics.fallbackApplied, false);
+    assert.equal(decisionNormalQuotaRetry.retryDiagnostics.attempt, 2);
   });
 
-  it('preserves flag-off compatibility for CONFLICTING_MODEL_EFFORT and caps opt-in fallback at medium without raising low', () => {
+  it('preserves flag-off compatibility, handles composer-2.5/unverified selectors, and checks static capability matrices', () => {
     const flagOff = resolveConfig({
       retryEffortFallback: false,
       seats: [
-        { id: 's1', harness: 'antigravity', model: 'gemini-4-argon-high', reasoningEffort: 'low', soul: 'S' },
+        { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', reasoningEffort: 'low', soul: 'S' },
         { id: 's2', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'A' }
       ]
     });
     assert.equal(flagOff.retryEffortFallback, false);
 
+    const composerPlan = resolveRetryModelAndEffort({
+      harness: 'cursor',
+      model: 'composer-2.5',
+      retryEffortFallback: true
+    });
+    assert.equal(composerPlan.supported, true);
+    assert.equal(composerPlan.effectiveModel, 'composer-2.5');
+    assert.equal(composerPlan.requestedEffort, null);
+    assert.equal(composerPlan.effectiveEffort, null);
+    assert.equal(composerPlan.fallbackApplied, false);
+    assert.equal(composerPlan.provenance, 'adapter_static_policy');
+
     const keepLow = resolveRetryModelAndEffort({
       harness: 'antigravity',
-      model: 'gemini-4-argon-low',
+      model: 'claude-opus-5-5-low',
       retryEffortFallback: true,
-      capabilityCatalog: { selectors: ['gemini-4-argon-low', 'gemini-4-argon-medium'], source: 'live_cli_catalog' }
+      capabilityCatalog: { selectors: ['claude-opus-5-5-low', 'claude-opus-5-5-medium'], source: 'live_cli_catalog' }
     });
     assert.equal(keepLow.supported, true);
     assert.equal(keepLow.effectiveEffort, 'low');
 
-    const capMedium = resolveRetryModelAndEffort({
-      harness: 'antigravity',
-      model: 'gemini-4-argon-high',
-      retryEffortFallback: true,
-      capabilityCatalog: { selectors: ['gemini-4-argon-high', 'gemini-4-argon-medium'], source: 'live_cli_catalog' }
+    const capCodexMedium = resolveRetryModelAndEffort({
+      harness: 'codex',
+      model: 'gpt-6-astra',
+      reasoningEffort: 'max',
+      retryEffortFallback: true
     });
-    assert.equal(capMedium.supported, true);
-    assert.equal(capMedium.requestedEffort, 'high');
-    assert.equal(capMedium.effectiveEffort, 'medium');
-    assert.equal(capMedium.effectiveModel, 'gemini-4-argon-medium');
+    assert.equal(capCodexMedium.supported, true);
+    assert.equal(capCodexMedium.effectiveModel, 'gpt-6-astra (medium)');
+    assert.equal(capCodexMedium.effectiveEffort, 'medium');
+    assert.equal(capCodexMedium.provenance, 'adapter_static_policy');
+
+    const unverifiedDated = validateRetryFallbackCapability({
+      config: {
+        seats: [{ id: 's1', harness: 'antigravity', model: 'claude-opus-5-5-20260501' }]
+      },
+      catalogByHarness: {}
+    });
+    assert.equal(unverifiedDated.valid, false);
+    assert.match(unverifiedDated.errors[0], /UNSUPPORTED_MODEL_EFFORT/);
 
     const conflictOptIn = resolveRetryModelAndEffort({
-      harness: 'antigravity',
-      model: 'gemini-4-argon-high',
+      harness: 'codex',
+      model: 'gpt-6-astra (max)',
       explicitReasoningEffort: 'low',
+      hasExplicitReasoningEffort: true,
       retryEffortFallback: true
     });
     assert.equal(conflictOptIn.supported, false);
     assert.equal(conflictOptIn.errorCode, 'CONFLICTING_MODEL_EFFORT');
   });
 
-  it('excuses HeadlessToolDeniedError or TimeoutError without retry when selfContainedInput is absent and preserves #95 valid siblings before collapse', async () => {
+  it('excuses HeadlessToolDeniedError or TimeoutError with evidence_access_failure when selfContainedInput is absent and preserves #95 valid siblings', async () => {
     const mockHarness = new MockAdapter();
     let seat1Calls = 0;
     mockHarness.executeSeatProof = async ({ seat }) => {
@@ -1004,7 +1136,7 @@ describe('Issue #102 Task 3: Centralized recovery policy, readiness veto, single
     assert.equal(seat1Calls, 1);
     const excused = engine.state.seats.find((s) => s.id === 's1');
     assert.equal(excused.status, 'excused');
-    assert.match(excused.excusedReason, /evidence_not_self_contained|self-contained/i);
+    assert.match(excused.excusedReason, /Tool-free recovery refused \(insufficient self-contained evidence:/);
     assert.equal(engine.state.proofs.length, 1);
   });
 
@@ -1018,7 +1150,22 @@ describe('Issue #102 Task 3: Centralized recovery policy, readiness veto, single
       judge: { id: 'j', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'J' }
     });
     state = transitionCouncil(state, { type: 'BEGIN_ROUND' });
-    const diag = { phase: 'DELIBERATION', round: 1, attempt: 2, requestedEffort: 'high', effectiveEffort: 'medium', fallbackApplied: true, fallbackReason: 'timeout_tool_free_and_effort_cap' };
+    const diag = {
+      participantId: 's1',
+      role: 'seat',
+      phase: 'DELIBERATION',
+      round: 1,
+      attempt: 1,
+      requestedModel: 'gemini-4-argon-high',
+      requestedEffort: 'high',
+      effectiveModel: 'gemini-4-argon-medium',
+      effectiveEffort: 'medium',
+      capabilityProvenance: 'adapter_static_policy',
+      fallbackEnabled: true,
+      fallbackApplied: true,
+      fallbackReason: 'TimeoutError',
+      tools: 'none'
+    };
     state = transitionCouncil(state, { type: 'RETRY_SEAT', seatId: 's1', retryDiagnostics: diag });
     assert.deepEqual(state.seats[0].activeRetryDiagnostics, diag);
     assert.equal(state.seats[0].retryDiagnosticsHistory.length, 1);
@@ -1040,58 +1187,168 @@ Expected: FAIL (`Cannot find module '../../src/engine/recovery.js'`).
 Create `src/engine/recovery.js`:
 
 ```javascript
-import { parseModelAndEffort, extractCanonicalBaseModel } from '../harness/cli-runner.js';
+import { parseModelAndEffort, extractCanonicalBaseModel, downshiftEffort } from '../harness/cli-runner.js';
 
-const FILE_EXT_REGEX =
-  /(?:^|[\s"'`(])((?:\.{0,2}\/)?(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|mjs|cjs|ts|tsx|jsx|py|go|rs|java|rb|php|sh|json|md|yaml|yml|toml|html|css|sql))(?::\d+(?:-\d+)?)?/g;
-const URL_REGEX = /\bhttps?:\/\/[^\s"'`)<>]+/gi;
+const FILE_PATH_TOKEN_REGEX =
+  /(?:^|[\s"'`(])((?:\.{0,2}\/)?(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|mjs|cjs|ts|tsx|jsx|py|go|rs|java|rb|php|sh|json|md|yaml|yml|toml|html|css|sql))(?::(\d+)(?:-(\d+))?)?/g;
+const BROAD_DIR_OR_GLOB_REGEX =
+  /(?:^|[\s"'`(])((?:src|lib|test|tests|packages|apps|docs|config|configs|bin)\/[A-Za-z0-9._/*-]*\/|[A-Za-z0-9._-]+\/\*\*|[A-Za-z0-9._-]+\/\*)/g;
+const URL_REGEX = /\b(?:https?|file):\/\/[^\s"'`)<>]+/gi;
+
+const STATIC_CATALOG = Object.freeze({
+  codex: {
+    models: new Set(['gpt-6-astra', 'gpt-6.1-sol']),
+    efforts: new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+  },
+  antigravity: {
+    models: new Set(['gemini-4-argon', 'gemini-4-carbon', 'claude-opus-5-5', 'claude-sonnet-5-5']),
+    efforts: new Set(['low', 'medium', 'high'])
+  },
+  cursor: {
+    grokEfforts: new Set(['low', 'medium', 'high', 'xhigh'])
+  }
+});
 
 export function extractVerificationDependencies(inputTexts) {
   const texts = Array.isArray(inputTexts) ? inputTexts : [inputTexts];
-  const files = [];
-  const urls = [];
+  const workspaceFileMap = new Map();
+  const workspaceBroadSet = new Set();
+  const externalSet = new Set();
+
   for (const raw of texts) {
     if (typeof raw !== 'string' || !raw) continue;
     const withoutUrls = raw.replace(URL_REGEX, (u) => {
-      if (!urls.includes(u)) urls.push(u);
+      externalSet.add(u);
       return ' ';
     });
-    let match;
-    FILE_EXT_REGEX.lastIndex = 0;
-    while ((match = FILE_EXT_REGEX.exec(withoutUrls)) !== null) {
-      const candidate = match[1].replace(/^\.\//, '');
-      if (!files.includes(candidate)) files.push(candidate);
+
+    BROAD_DIR_OR_GLOB_REGEX.lastIndex = 0;
+    let broadMatch;
+    while ((broadMatch = BROAD_DIR_OR_GLOB_REGEX.exec(withoutUrls)) !== null) {
+      workspaceBroadSet.add(broadMatch[1].replace(/^\.\//, ''));
+    }
+
+    FILE_PATH_TOKEN_REGEX.lastIndex = 0;
+    let fileMatch;
+    while ((fileMatch = FILE_PATH_TOKEN_REGEX.exec(withoutUrls)) !== null) {
+      const source = fileMatch[1].replace(/^\.\//, '');
+      const startLine = fileMatch[2] ? Number(fileMatch[2]) : null;
+      const endLine = fileMatch[3] ? Number(fileMatch[3]) : startLine;
+      const existing = workspaceFileMap.get(source);
+      if (!existing) {
+        workspaceFileMap.set(source, startLine ? { source, startLine, endLine } : { source, unbounded: true });
+      } else if (!startLine) {
+        workspaceFileMap.set(source, { source, unbounded: true });
+      } else if (!existing.unbounded) {
+        workspaceFileMap.set(source, {
+          source,
+          startLine: Math.min(existing.startLine, startLine),
+          endLine: Math.max(existing.endLine, endLine)
+        });
+      }
     }
   }
-  return { files, urls };
+
+  return {
+    workspaceFileDeps: Array.from(workspaceFileMap.values()),
+    workspaceBroadDeps: Array.from(workspaceBroadSet),
+    externalDeps: Array.from(externalSet)
+  };
 }
 
-function matchesSelfContainedScope(contract, phase, round) {
-  if (!contract || typeof contract !== 'object') return false;
-  const phases = Array.isArray(contract.phases) ? contract.phases : ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'];
-  if (!phases.includes(phase)) return false;
-  if (contract.roundScope === 'all_rounds') return true;
-  if (Array.isArray(contract.rounds)) return contract.rounds.includes(round);
-  if (typeof contract.round === 'number') return contract.round === round;
-  return true;
+function matchesArtifactCoverage(dep, coveredArtifacts, evidenceById) {
+  for (const entry of coveredArtifacts || []) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.source !== dep.source) continue;
+    const ev = evidenceById.get(entry.evidenceId);
+    if (!ev || typeof ev.text !== 'string' || ev.text.trim().length === 0) continue;
+    if (entry.coverage === 'complete_artifact') return true;
+    if (
+      !dep.unbounded &&
+      entry.coverage &&
+      typeof entry.coverage.startLine === 'number' &&
+      typeof entry.coverage.endLine === 'number' &&
+      entry.coverage.startLine <= dep.startLine &&
+      entry.coverage.endLine >= dep.endLine
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function evaluateToolFreeEvidenceReadiness({
   phase,
   round = 1,
+  errorClass = 'TimeoutError',
   topic = '',
   clarifications = [],
   evidence = [],
   proofs = [],
   candidate = null,
-  selfContainedInput = null
+  previousCandidate = null,
+  openObjections = [],
+  admittedProofs = [],
+  selfContainedInput = null,
+  originalInvocationMeta = null
 } = {}) {
-  if (!matchesSelfContainedScope(selfContainedInput, phase, round)) {
+  const effectiveCwd = originalInvocationMeta?.effectiveCwd;
+  const originalTools = originalInvocationMeta?.effectiveTools || 'read-only';
+
+  // Already-tool-free attempt (originalTools === 'none')
+  if (originalTools === 'none') {
+    if (errorClass === 'HeadlessToolDeniedError') {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'HeadlessToolDeniedError cannot recover when tools were already "none"' };
+    }
+    if (phase === 'DELIBERATION' && round === 1 && !String(topic || '').trim()) {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'Missing topic for Round 1 deliberation recovery' };
+    }
+    if (phase === 'DELIBERATION' && round > 1 && (!previousCandidate || !openObjections?.length)) {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'Missing previousCandidate or openObjections for Round 2+ deliberation' };
+    }
+    if (phase === 'JUDGE_AUDIT_SYNTHESIS' && (!proofs || proofs.length === 0)) {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'Missing roundProofs for Judge recovery' };
+    }
+    if (phase === 'VOTING' && !candidate) {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'Missing candidate for Voting recovery' };
+    }
+    return { ready: true, reasonCode: 'already_tool_free_prereqs_met', reason: 'phase prerequisites present' };
+  }
+
+  // Tool-removing recovery requires opt-in selfContainedInput contract matching phase & roundScope
+  if (!selfContainedInput || typeof selfContainedInput !== 'object') {
     return {
       ready: false,
-      reasonCode: 'evidence_not_self_contained',
-      reason: `Tool-free recovery refused in ${phase}: selfContainedInput does not opt into ${phase} round ${round}`
+      reasonCode: 'evidence_access_failure',
+      reason: `missing selfContainedInput contract for ${phase} round ${round}`
     };
+  }
+  const phases = Array.isArray(selfContainedInput.phases) ? selfContainedInput.phases : [];
+  if (!phases.includes(phase)) {
+    return {
+      ready: false,
+      reasonCode: 'evidence_access_failure',
+      reason: `selfContainedInput.phases does not include ${phase}`
+    };
+  }
+  const roundScope = selfContainedInput.roundScope || 'round_1_only';
+  if (round > 1 && roundScope !== 'all_rounds') {
+    return {
+      ready: false,
+      reasonCode: 'evidence_access_failure',
+      reason: `selfContainedInput.roundScope (${roundScope}) does not permit round ${round}`
+    };
+  }
+
+  // Phase prerequisite checks
+  if (phase === 'DELIBERATION' && round > 1 && (!previousCandidate || !openObjections?.length)) {
+    return { ready: false, reasonCode: 'evidence_access_failure', reason: 'missing previousCandidate or openObjections for Round 2+' };
+  }
+  if (phase === 'JUDGE_AUDIT_SYNTHESIS' && (!proofs || proofs.length === 0)) {
+    return { ready: false, reasonCode: 'evidence_access_failure', reason: 'missing roundProofs for Judge synthesis' };
+  }
+  if (phase === 'VOTING' && (!candidate || !admittedProofs)) {
+    return { ready: false, reasonCode: 'evidence_access_failure', reason: 'missing candidate or admittedProofs for Voting' };
   }
 
   const promptTexts = [topic];
@@ -1099,49 +1356,105 @@ export function evaluateToolFreeEvidenceReadiness({
     if (c?.question) promptTexts.push(c.question);
     if (c?.answer) promptTexts.push(c.answer);
   }
-  if (phase === 'JUDGE_AUDIT_SYNTHESIS' || phase === 'VOTING') {
+  if (phase === 'DELIBERATION' && round > 1) {
+    for (const o of openObjections || []) {
+      if (o?.reason) promptTexts.push(o.reason);
+    }
+  }
+  if (phase === 'JUDGE_AUDIT_SYNTHESIS') {
     for (const p of proofs || []) {
       if (p?.source) promptTexts.push(p.source);
       if (p?.statement) promptTexts.push(p.statement);
+      if (p?.kind === 'benchmark' || p?.kind === 'check') {
+        if (p?.source) promptTexts.push(p.source);
+      }
+    }
+    for (const o of openObjections || []) {
+      if (o?.reason) promptTexts.push(o.reason);
     }
   }
-  if (phase === 'VOTING' && candidate) {
-    if (candidate.summary) promptTexts.push(candidate.summary);
-    for (const cl of candidate.clauses || []) {
+  if (phase === 'VOTING') {
+    if (candidate?.summary) promptTexts.push(candidate.summary);
+    for (const cl of candidate?.clauses || []) {
       if (cl?.conclusion) promptTexts.push(cl.conclusion);
+    }
+    for (const p of admittedProofs || []) {
+      if (p?.source) promptTexts.push(p.source);
+      if (p?.statement) promptTexts.push(p.statement);
+    }
+    for (const o of openObjections || []) {
+      if (o?.reason) promptTexts.push(o.reason);
     }
   }
 
   const deps = extractVerificationDependencies(promptTexts);
-  const coveredArtifacts = Array.isArray(selfContainedInput.coveredArtifacts) ? selfContainedInput.coveredArtifacts : [];
-  const coveredUrls = Array.isArray(selfContainedInput.coveredUrls) ? selfContainedInput.coveredUrls : [];
-  const hasSubstantiveEvidence = Array.isArray(evidence) && evidence.some((e) => typeof e?.text === 'string' && e.text.trim().length > 0 && !/^\s*\/\/\s*copyright\b/i.test(e.text.trim()));
-
-  const missingFiles = deps.files.filter(
-    (f) => !coveredArtifacts.some((cov) => cov === f || f.endsWith(cov) || cov.endsWith(f))
-  );
-  const missingUrls = deps.urls.filter((u) => !coveredUrls.includes(u));
-
-  if (selfContainedInput.conceptualNoExternalVerification === true) {
-    if (missingFiles.length > 0 || missingUrls.length > 0) {
-      return {
-        ready: false,
-        reasonCode: 'evidence_not_self_contained',
-        reason: `Tool-free recovery refused: conceptualNoExternalVerification cannot cover explicit dependencies (${[...missingFiles, ...missingUrls].join(', ')})`
-      };
-    }
-    return { ready: true, reasonCode: 'conceptual_self_contained_verified' };
-  }
-
-  if (missingFiles.length > 0 || missingUrls.length > 0 || (!hasSubstantiveEvidence && (deps.files.length > 0 || deps.urls.length > 0))) {
+  if (deps.workspaceBroadDeps.length > 0) {
     return {
       ready: false,
-      reasonCode: 'evidence_not_self_contained',
-      reason: `Tool-free recovery refused: uncovered dependencies (${[...missingFiles, ...missingUrls].join(', ') || 'missing grounded evidence text'})`
+      reasonCode: 'evidence_access_failure',
+      reason: `broad directory/glob dependency cannot be self-contained (${deps.workspaceBroadDeps.join(', ')})`
     };
   }
 
-  return { ready: true, reasonCode: 'self_contained_input_verified' };
+  const coveredArtifacts = Array.isArray(selfContainedInput.coveredArtifacts) ? selfContainedInput.coveredArtifacts : [];
+  if (selfContainedInput.conceptualNoExternalVerification === true) {
+    if (effectiveCwd !== undefined) {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: 'conceptualNoExternalVerification invalid when effectiveCwd is attached' };
+    }
+    if (errorClass !== 'TimeoutError') {
+      return { ready: false, reasonCode: 'evidence_access_failure', reason: `conceptualNoExternalVerification invalid for ${errorClass}` };
+    }
+    if (deps.workspaceFileDeps.length > 0 || deps.externalDeps.length > 0) {
+      return {
+        ready: false,
+        reasonCode: 'evidence_access_failure',
+        reason: `conceptualNoExternalVerification contradicts extracted dependencies`
+      };
+    }
+    return { ready: true, reasonCode: 'conceptual_self_contained_verified', reason: 'conceptual contract verified' };
+  }
+
+  if (effectiveCwd !== undefined && phase === 'DELIBERATION' && round === 1 && deps.workspaceFileDeps.length === 0 && coveredArtifacts.length === 0) {
+    return {
+      ready: false,
+      reasonCode: 'evidence_access_failure',
+      reason: 'open-ended Round 1 workspace exploration cannot execute tool-free without coveredArtifacts'
+    };
+  }
+
+  const evidenceById = new Map();
+  for (const e of evidence || []) {
+    if (e?.id) evidenceById.set(e.id, e);
+  }
+
+  for (const dep of deps.workspaceFileDeps) {
+    if (!matchesArtifactCoverage(dep, coveredArtifacts, evidenceById)) {
+      return {
+        ready: false,
+        reasonCode: 'evidence_access_failure',
+        reason: `missing complete/enclosing coveredArtifacts entry for ${dep.source}`
+      };
+    }
+  }
+  for (const ext of deps.externalDeps) {
+    if (!matchesArtifactCoverage({ source: ext, unbounded: true }, coveredArtifacts, evidenceById)) {
+      return {
+        ready: false,
+        reasonCode: 'evidence_access_failure',
+        reason: `missing complete_artifact coveredArtifacts entry for ${ext}`
+      };
+    }
+  }
+
+  if (effectiveCwd !== undefined && coveredArtifacts.length === 0) {
+    return {
+      ready: false,
+      reasonCode: 'evidence_access_failure',
+      reason: 'effectiveCwd attached without coveredArtifacts'
+    };
+  }
+
+  return { ready: true, reasonCode: 'self_contained_input_verified', reason: 'coveredArtifacts verified' };
 }
 
 export function resolveRetryModelAndEffort({
@@ -1149,26 +1462,42 @@ export function resolveRetryModelAndEffort({
   model = '',
   reasoningEffort,
   explicitReasoningEffort,
+  hasExplicitReasoningEffort = false,
   retryEffortFallback = false,
-  capabilityCatalog = null
+  capabilityCatalog = null,
+  verifiedCapabilities = null
 } = {}) {
   const parsed = parseModelAndEffort(model, reasoningEffort);
-  const requestedEffort = explicitReasoningEffort || parsed.effort || 'high';
-  const selectorHasExplicitEffort = Boolean(parsed.hasExplicitEffort && explicitReasoningEffort && parsed.effort !== explicitReasoningEffort);
+  const inlineEffort = parsed.hasExplicitEffort ? parsed.effort : null;
 
-  if (retryEffortFallback && selectorHasExplicitEffort) {
+  if (retryEffortFallback && hasExplicitReasoningEffort && inlineEffort && explicitReasoningEffort && inlineEffort !== explicitReasoningEffort) {
     return {
       supported: false,
       errorCode: 'CONFLICTING_MODEL_EFFORT',
-      reason: `Model "${model}" effort conflicts with explicit reasoningEffort "${explicitReasoningEffort}"`,
+      reason: `Inline effort "${inlineEffort}" on "${model}" conflicts with explicit reasoningEffort "${explicitReasoningEffort}"`,
       requestedModel: model,
       effectiveModel: model,
-      requestedEffort: parsed.effort,
-      effectiveEffort: parsed.effort,
+      requestedEffort: inlineEffort,
+      effectiveEffort: inlineEffort,
+      provenance: 'unverified',
       fallbackApplied: false
     };
   }
 
+  const baseModel = extractCanonicalBaseModel(model);
+  if (baseModel === 'composer-2.5' || (harness === 'cursor' && model === 'composer-2.5')) {
+    return {
+      supported: true,
+      requestedModel: model,
+      effectiveModel: 'composer-2.5',
+      requestedEffort: null,
+      effectiveEffort: null,
+      provenance: 'adapter_static_policy',
+      fallbackApplied: false
+    };
+  }
+
+  const requestedEffort = inlineEffort || (hasExplicitReasoningEffort ? explicitReasoningEffort : reasoningEffort) || parsed.effort || 'high';
   if (!retryEffortFallback) {
     return {
       supported: true,
@@ -1176,61 +1505,96 @@ export function resolveRetryModelAndEffort({
       effectiveModel: model,
       requestedEffort,
       effectiveEffort: requestedEffort,
-      capabilityProvenance: capabilityCatalog?.source || 'unchanged_flag_off',
+      provenance: null,
       fallbackApplied: false
     };
   }
 
-  const effectiveEffort = requestedEffort === 'low' ? 'low' : 'medium';
-  const baseModel = extractCanonicalBaseModel(model);
+  const effectiveEffort = requestedEffort === 'low' ? 'low' : downshiftEffort(requestedEffort, 'medium');
+  const fallbackApplied = requestedEffort !== effectiveEffort;
+
+  // Build synchronized effectiveModel selector per harness
+  let effectiveModel = model;
   if (harness === 'antigravity') {
-    const dated = /\bclaude-(?:sonnet|opus)-5-5-\d{8}\b/i.test(model);
-    if (dated && !capabilityCatalog?.selectors?.includes(model)) {
+    effectiveModel = `${baseModel}-${effectiveEffort}`;
+    if (Array.isArray(capabilityCatalog?.selectors) && capabilityCatalog.selectors.length > 0) {
+      const supported = capabilityCatalog.selectors.includes(effectiveModel);
       return {
-        supported: false,
-        errorCode: 'effort_fallback_unsupported',
-        reason: `Unverified date-stamped Antigravity selector "${model}"`,
+        supported,
+        ...(supported ? {} : { errorCode: 'UNSUPPORTED_MODEL_EFFORT', reason: `Antigravity selector "${effectiveModel}" not found in live CLI catalog` }),
         requestedModel: model,
-        effectiveModel: model,
+        effectiveModel,
         requestedEffort,
         effectiveEffort,
-        capabilityProvenance: 'unverified',
-        fallbackApplied: false
+        provenance: 'live_cli_catalog',
+        fallbackApplied: supported && fallbackApplied
       };
     }
-    const targetSelector = model.replace(/-(?:low|medium|high)$/i, '') + `-${effectiveEffort}`;
-    if (Array.isArray(capabilityCatalog?.selectors) && !capabilityCatalog.selectors.includes(targetSelector)) {
+    const isDated = /\bclaude-(?:sonnet|opus)-5-5-\d{8}\b/i.test(model);
+    if (isDated || !STATIC_CATALOG.antigravity.models.has(baseModel) || !STATIC_CATALOG.antigravity.efforts.has(effectiveEffort)) {
+      const explicitOk = Array.isArray(verifiedCapabilities?.selectors) && verifiedCapabilities.selectors.includes(effectiveModel);
       return {
-        supported: false,
-        errorCode: 'effort_fallback_unsupported',
-        reason: `Antigravity selector "${targetSelector}" not present in live catalog`,
+        supported: explicitOk,
+        ...(explicitOk ? {} : { errorCode: 'UNSUPPORTED_MODEL_EFFORT', reason: `Unverified Antigravity retry target "${effectiveModel}"` }),
         requestedModel: model,
-        effectiveModel: targetSelector,
+        effectiveModel,
         requestedEffort,
         effectiveEffort,
-        capabilityProvenance: capabilityCatalog.source || 'live_cli_catalog',
-        fallbackApplied: false
+        provenance: explicitOk ? 'adapter_static_policy' : 'unverified',
+        fallbackApplied: explicitOk && fallbackApplied
       };
     }
     return {
       supported: true,
       requestedModel: model,
-      effectiveModel: targetSelector,
+      effectiveModel,
       requestedEffort,
       effectiveEffort,
-      capabilityProvenance: capabilityCatalog?.source || 'static_adapter_catalog',
-      fallbackApplied: requestedEffort !== effectiveEffort
+      provenance: 'adapter_static_policy',
+      fallbackApplied
     };
   }
 
+  if (harness === 'codex') {
+    effectiveModel = `${baseModel} (${effectiveEffort})`;
+    const supported = STATIC_CATALOG.codex.models.has(baseModel) && STATIC_CATALOG.codex.efforts.has(effectiveEffort);
+    return {
+      supported,
+      ...(supported ? {} : { errorCode: 'UNSUPPORTED_MODEL_EFFORT', reason: `Unverified Codex retry target "${effectiveModel}"` }),
+      requestedModel: model,
+      effectiveModel,
+      requestedEffort,
+      effectiveEffort,
+      provenance: supported ? 'adapter_static_policy' : 'unverified',
+      fallbackApplied: supported && fallbackApplied
+    };
+  }
+
+  if (harness === 'cursor') {
+    effectiveModel = baseModel === 'grok-4.7' ? `grok-4.7-${effectiveEffort}` : model;
+    const supported = baseModel === 'grok-4.7' && STATIC_CATALOG.cursor.grokEfforts.has(effectiveEffort);
+    return {
+      supported,
+      ...(supported ? {} : { errorCode: 'UNSUPPORTED_MODEL_EFFORT', reason: `Unverified Cursor retry target "${effectiveModel}"` }),
+      requestedModel: model,
+      effectiveModel,
+      requestedEffort,
+      effectiveEffort,
+      provenance: supported ? 'adapter_static_policy' : 'unverified',
+      fallbackApplied: supported && fallbackApplied
+    };
+  }
+
+  // Mock adapter / custom test harness
+  effectiveModel = model.includes('(') ? `${baseModel} (${effectiveEffort})` : model;
   return {
     supported: true,
     requestedModel: model,
-    effectiveModel: model.includes('(') ? `${baseModel} (${effectiveEffort})` : model,
+    effectiveModel,
     requestedEffort,
     effectiveEffort,
-    capabilityProvenance: capabilityCatalog?.source || 'static_adapter_catalog',
-    fallbackApplied: requestedEffort !== effectiveEffort
+    provenance: 'adapter_static_policy',
+    fallbackApplied
   };
 }
 
@@ -1242,9 +1606,11 @@ export function validateRetryFallbackCapability({ config = {}, catalogByHarness 
       harness: p.harness,
       model: p.model,
       reasoningEffort: p.reasoningEffort,
-      explicitReasoningEffort: p._explicitReasoningEffort,
+      explicitReasoningEffort: p.reasoningEffort,
+      hasExplicitReasoningEffort: Boolean(p._explicitReasoningEffort),
       retryEffortFallback: true,
-      capabilityCatalog: catalogByHarness[p.harness]
+      capabilityCatalog: catalogByHarness[p.harness],
+      verifiedCapabilities: p.verifiedCapabilities
     });
     if (!res.supported) {
       errors.push(`${p.id || 'participant'}: [${res.errorCode}] ${res.reason}`);
@@ -1254,6 +1620,8 @@ export function validateRetryFallbackCapability({ config = {}, catalogByHarness 
 }
 
 export function planParticipantRecovery({
+  participantId = '',
+  role = 'seat',
   error,
   errorClass = 'HarnessError',
   isRetryable = false,
@@ -1270,98 +1638,111 @@ export function planParticipantRecovery({
   evidence = [],
   proofs = [],
   candidate = null,
+  previousCandidate = null,
+  openObjections = [],
+  admittedProofs = [],
   selfContainedInput = null,
   originalInvocationMeta = null,
   harness = 'mock',
   model = '',
   reasoningEffort,
   explicitReasoningEffort,
+  hasExplicitReasoningEffort = false,
   retryEffortFallback = false,
-  capabilityCatalog = null
+  capabilityCatalog = null,
+  verifiedCapabilities = null
 } = {}) {
+  const primaryFaultReason = error?.message || errorClass;
   if (!isRetryable) {
-    return { allowRetry: false, terminationKind: 'non_retryable', reason: error?.message || 'Non-retryable error' };
+    return { canRetry: false, terminationKind: 'non_retryable', reason: primaryFaultReason };
   }
   if (retries >= maxRetries) {
-    return { allowRetry: false, terminationKind: 'retries_exhausted', reason: `Exhausted retries (${retries}/${maxRetries})` };
+    return { canRetry: false, terminationKind: 'retries_exhausted', reason: `Exhausted retries (${retries}/${maxRetries})` };
   }
   if (toolFreeRecoveryUsed) {
     return {
-      allowRetry: false,
+      canRetry: false,
       terminationKind: 'tool_free_already_used',
       reason: 'Tool-free recovery already attempted in this phase'
     };
   }
   if (remainingBudget <= 0 || remainingBudget < minViable) {
-    return { allowRetry: false, terminationKind: 'budget_exhausted', reason: `Remaining budget ${remainingBudget}ms below minimum viable ${minViable}ms` };
+    return { canRetry: false, terminationKind: 'budget_exhausted', reason: `Remaining budget ${remainingBudget}ms below minimum viable ${minViable}ms` };
   }
 
   const isToolRemovalError = errorClass === 'TimeoutError' || errorClass === 'HeadlessToolDeniedError';
   const removesTools = isToolRemovalError && originalAttemptTools !== 'none';
-  let nextTools = removesTools ? 'none' : originalAttemptTools;
-  let nextCwd = removesTools ? undefined : originalInvocationMeta?.configuredWorkspaceCwd;
-  let nextToolFreeRecoveryUsed = toolFreeRecoveryUsed;
+  const nextTools = removesTools ? 'none' : originalAttemptTools;
+  const nextCwd = removesTools ? undefined : originalInvocationMeta?.configuredWorkspaceCwd;
 
-  if (removesTools) {
+  if (removesTools || (isToolRemovalError && originalAttemptTools === 'none')) {
     const readiness = evaluateToolFreeEvidenceReadiness({
       phase,
       round,
+      errorClass,
       topic,
       clarifications,
       evidence,
       proofs,
       candidate,
+      previousCandidate,
+      openObjections,
+      admittedProofs,
       selfContainedInput,
-      originalInvocationMeta
+      originalInvocationMeta: {
+        ...(originalInvocationMeta || {}),
+        effectiveTools: originalAttemptTools
+      }
     });
     if (!readiness.ready) {
-      return { allowRetry: false, terminationKind: readiness.reasonCode, reason: readiness.reason };
+      return {
+        canRetry: false,
+        terminationKind: 'evidence_access_failure',
+        reason: `Tool-free recovery refused (insufficient self-contained evidence: ${readiness.reason}): ${primaryFaultReason}`
+      };
     }
-    nextToolFreeRecoveryUsed = true;
   }
 
-  let effortPlan = {
-    supported: true,
-    requestedModel: model,
-    effectiveModel: model,
-    requestedEffort: reasoningEffort,
-    effectiveEffort: reasoningEffort,
-    capabilityProvenance: 'unchanged',
-    fallbackApplied: false
-  };
-  if (retryEffortFallback && isToolRemovalError) {
-    effortPlan = resolveRetryModelAndEffort({
-      harness,
-      model,
-      reasoningEffort,
-      explicitReasoningEffort,
-      retryEffortFallback: true,
-      capabilityCatalog
-    });
-    if (!effortPlan.supported) {
-      return { allowRetry: false, terminationKind: effortPlan.errorCode || 'effort_fallback_unsupported', reason: effortPlan.reason };
-    }
+  let effortPlan = resolveRetryModelAndEffort({
+    harness,
+    model,
+    reasoningEffort,
+    explicitReasoningEffort,
+    hasExplicitReasoningEffort,
+    retryEffortFallback: Boolean(retryEffortFallback && isToolRemovalError),
+    capabilityCatalog,
+    verifiedCapabilities
+  });
+  if (!effortPlan.supported) {
+    return {
+      canRetry: false,
+      terminationKind: 'unsupported_fallback',
+      reason: `[${effortPlan.errorCode}] ${effortPlan.reason}`
+    };
   }
 
   return {
-    allowRetry: true,
+    canRetry: true,
     nextTools,
     nextCwd,
     nextModel: effortPlan.effectiveModel,
     nextReasoningEffort: effortPlan.effectiveEffort,
-    nextToolFreeRecoveryUsed,
+    setsToolFreeRecoveryUsed: removesTools,
     retryDiagnostics: {
+      participantId,
+      role,
       phase,
       round,
-      attempt: retries + 2,
+      attempt: retries + 1,
       requestedModel: effortPlan.requestedModel,
-      effectiveModel: effortPlan.effectiveModel,
       requestedEffort: effortPlan.requestedEffort,
+      effectiveModel: effortPlan.effectiveModel,
       effectiveEffort: effortPlan.effectiveEffort,
-      tools: nextTools,
-      capabilityProvenance: effortPlan.capabilityProvenance,
-      fallbackApplied: effortPlan.fallbackApplied || removesTools,
-      fallbackReason: removesTools ? `${errorClass}_tool_free_recovery` : effortPlan.fallbackApplied ? `${errorClass}_effort_cap` : 'ordinary_retry'
+      capabilityProvenance: effortPlan.provenance,
+      fallbackEnabled: Boolean(retryEffortFallback),
+      fallbackApplied: effortPlan.fallbackApplied,
+      fallbackReason: effortPlan.fallbackApplied ? errorClass : null,
+      tools: nextTools
     }
   };
 }
@@ -1369,10 +1750,10 @@ export function planParticipantRecovery({
 
 Then integrate cleanly into:
 - `src/engine/index.js`: add `export * from './recovery.js';`.
-- `src/engine/config.js`: validate boolean `retryEffortFallback` (default `false`) and optional object `selfContainedInput`; in `resolveConfig`, preserve flag-off behavior and attach non-enumerable `_explicitReasoningEffort` before merging defaults.
-- `src/machine/state.js`: add `activeRetryDiagnostics: null, retryDiagnosticsHistory: []` to initial `judge` and every `seat`.
-- `src/machine/reducer.js`: clone and update `activeRetryDiagnostics` / `retryDiagnosticsHistory` on `RETRY_SEAT` & `RETRY_JUDGE`, and reset `activeRetryDiagnostics: null` on `BEGIN_ROUND`, `SUBMIT_PROOF` (seat), `START_JUDGING` (seats + judge), `JUDGE_AUDIT_AND_SYNTHESIZE` (judge), `CAST_VOTE` (seat), `EXCUSE_SEAT` (seat), terminal `JUDGE_FAULT`, and `succeed` completed phases.
-- `src/engine/council-engine.js`: use `PROVIDER_HTTP_429_REGEX` & `PROVIDER_HTTP_AUTH_REGEX` at `_classifyFaultStatus` / `_classifyErrorClass`; add `'HeadlessToolDeniedError'` to `knownClasses`; trim `[seat.cwd, this.config.cwd]` in `initRoster`; implement centralized `_planParticipantRecovery(...)` used identically by `_evaluateSeatFaultRetryability`, `_willSeatFaultExcuseAndCollapseQuorum`, Delib Wave-0 & retry waves, Judge loop, and Vote Wave-0 & retry waves (preserving Issue `#95` pre-collapse commits and tracking `toolFreeRecoveryUsed` + per-attempt `invocationMeta`).
+- `src/engine/config.js`: validate boolean `retryEffortFallback` (default `false`) and optional object `selfContainedInput`; in `resolveConfig`, attach non-enumerable `_explicitReasoningEffort: Boolean(rawParticipant?.reasoningEffort !== undefined || rawParticipant?.['reasoning-effort'] !== undefined)` on judge and each seat BEFORE merging defaults while preserving `retryEffortFallback: false` legacy precedence unchanged.
+- `src/machine/state.js`: initialize `activeRetryDiagnostics: null, retryDiagnosticsHistory: []` on `judge` and every `seat`.
+- `src/machine/reducer.js`: clone and set `activeRetryDiagnostics` & append `retryDiagnosticsHistory` on `RETRY_SEAT` & `RETRY_JUDGE`; reset `activeRetryDiagnostics: null` on `BEGIN_ROUND`, `SUBMIT_PROOF` (seat), `START_JUDGING` (all seats & judge), `JUDGE_AUDIT_AND_SYNTHESIZE` (judge), `CAST_VOTE` (seat), `EXCUSE_SEAT` (seat), terminal `JUDGE_FAULT`, and `succeed` completed phases.
+- `src/engine/council-engine.js`: use `PROVIDER_HTTP_429_REGEX` & `PROVIDER_HTTP_AUTH_REGEX` at `_classifyFaultStatus` / `_classifyErrorClass`; add `'HeadlessToolDeniedError'` to `knownClasses`; trim `[seat.cwd, this.config.cwd]` in `initRoster`; implement centralized `_planParticipantRecovery(...)` used identically by `_evaluateSeatFaultRetryability`, `_willSeatFaultExcuseAndCollapseQuorum`, Delib Wave-0 & retry waves, Judge loop, and Vote Wave-0 & retry waves (preserving Issue `#95` pre-collapse commits and tracking `toolFreeRecoveryUsed` + fresh per-attempt `invocationMeta`).
 
 - [ ] **Step 4: Migrate the 11 legacy test suites cleanly**
 
@@ -1388,12 +1769,16 @@ Then integrate cleanly into:
    - `test/unit/challenger-m7-1-stress.test.js` (`287, 355-505` for `1.4, 2.1, 2.2`)
 2. Update `test/unit/issue-85-rebuttal-downshift.test.js:981-1060` (which runs with `cwd: tmpDir`) to pass:
    ```javascript
-   evidence: [{ id: 'E1', label: 'Spec', source: 'rebuttal-spec.md', text: 'Rebuttal specification fixture text' }],
-   selfContainedInput: { phases: ['DELIBERATION'], roundScope: 'all_rounds', coveredArtifacts: ['rebuttal-spec.md'] }
+   evidence: [{ id: 'E1', label: 'Spec', source: 'rebuttal-spec.md', text: 'Self-contained rebuttal fixture.' }],
+   selfContainedInput: {
+     phases: ['DELIBERATION'],
+     roundScope: 'all_rounds',
+     coveredArtifacts: [{ source: 'rebuttal-spec.md', evidenceId: 'E1', coverage: 'complete_artifact' }]
+   }
    ```
 3. Align Amendment #3's 3 impacted multi-retry tests:
    - `test/unit/challenger-m7-1-stress.test.js:224-230` (`1.3`): set `tools: 'none'` on `multi-retry-seat` so 3-step cumulative timeout budget verification runs without triggering tool removal.
-   - `test/unit/challenger-m5-it2-1-stress.test.js:734-815` (`2e`) and `test/unit/voting.test.js:355-430`: add `selfContainedInput: { phases: ['VOTING'], roundScope: 'all_rounds', conceptualNoExternalVerification: true }`; update assertion on Attempt 1 `TimeoutError` (`tools -> 'none'`) followed by Attempt 2 `InvalidResponseError` to verify immediate termination (`calls.length === 2`, excused with `tool_free_already_used` even with `maxRetriesPerSeat: 2`), AND add a companion case starting with `votingTools: 'none'` confirming 3 attempts still execute when tools were never stripped.
+   - `test/unit/challenger-m5-it2-1-stress.test.js:734-815` (`2e`) and `test/unit/voting.test.js:355-430`: add `selfContainedInput: { phases: ['VOTING'], roundScope: 'all_rounds', conceptualNoExternalVerification: true }`; update assertion on Attempt 1 `TimeoutError` (`tools -> 'none'`) followed by Attempt 2 `InvalidResponseError` to verify immediate termination (`calls.length === 2`, excused without a 3rd attempt even with `maxRetriesPerSeat: 2`), AND add a companion case starting with `votingTools: 'none'` confirming 3 attempts (`QuotaExhaustionError -> InvalidResponseError -> accept`) still execute when tools were never stripped.
 
 - [ ] **Step 5: Run tests to verify everything passes**
 
@@ -1431,13 +1816,30 @@ git commit -m "feat(recovery): centralize tool-free readiness, effort fallback, 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { VisualizerLiveWatcher } from '../../src/visualizer/live-watcher.js';
 import { buildTelemetryRecord } from '../../src/telemetry/ledger.js';
 import { parseCliArgs, runCli, HELP_TEXT } from '../../src/cli/index.js';
 
 describe('Issue #102 Task 4: Sparse replay deltas, ledger retry history, CLI preflight & visualizer rendering', () => {
   it('initializes clean retry fields at step 0, retains omitted sparse deltas across steps, and clears activeRetryDiagnostics only on explicit null', () => {
-    const diag = { phase: 'DELIBERATION', round: 1, attempt: 2, requestedEffort: 'high', effectiveEffort: 'medium', fallbackApplied: true, fallbackReason: 'TimeoutError_tool_free_and_effort_cap' };
+    const diag = {
+      participantId: 's1',
+      role: 'seat',
+      phase: 'DELIBERATION',
+      round: 1,
+      attempt: 1,
+      requestedModel: 'gemini-4-argon-high',
+      requestedEffort: 'high',
+      effectiveModel: 'gemini-4-argon-medium',
+      effectiveEffort: 'medium',
+      capabilityProvenance: 'adapter_static_policy',
+      fallbackEnabled: true,
+      fallbackApplied: true,
+      fallbackReason: 'TimeoutError',
+      tools: 'none'
+    };
     const finalState = {
       topic: 'Replay test',
       round: 1,
@@ -1449,8 +1851,8 @@ describe('Issue #102 Task 4: Sparse replay deltas, ledger retry history, CLI pre
     const steps = [
       { type: 'BEGIN_ROUND', seatChanges: [{ id: 's1', status: 'thinking' }] },
       { type: 'RETRY_SEAT', seatChanges: [{ id: 's1', status: 'thinking', activeRetryDiagnostics: diag, retryDiagnosticsHistory: [diag] }] },
-      { type: 'CAST_VOTE', seatChanges: [{ id: 's1', status: 'accepted' }] }, // omits retry fields -> must RETAIN diag and [diag]!
-      { type: 'SUBMIT_PROOF', seatChanges: [{ id: 's1', status: 'proof_submitted', activeRetryDiagnostics: null }] } // explicit null clears active!
+      { type: 'CAST_VOTE', seatChanges: [{ id: 's1', status: 'accepted' }] },
+      { type: 'SUBMIT_PROOF', seatChanges: [{ id: 's1', status: 'proof_submitted', activeRetryDiagnostics: null }] }
     ];
     const replayedAt0 = VisualizerLiveWatcher.prototype._rehydrateStepAt.call({}, { finalState, steps }, 0);
     assert.equal(replayedAt0.seats[0].activeRetryDiagnostics, null);
@@ -1470,7 +1872,22 @@ describe('Issue #102 Task 4: Sparse replay deltas, ledger retry history, CLI pre
   });
 
   it('preserves retryDiagnosticsHistory in telemetry ledger without altering canonical modelKey', () => {
-    const diag = { phase: 'DELIBERATION', requestedEffort: 'high', effectiveEffort: 'medium', fallbackApplied: true };
+    const diag = {
+      participantId: 's1',
+      role: 'seat',
+      phase: 'DELIBERATION',
+      round: 1,
+      attempt: 1,
+      requestedModel: 'gemini-4-argon-high',
+      requestedEffort: 'high',
+      effectiveModel: 'gemini-4-argon-medium',
+      effectiveEffort: 'medium',
+      capabilityProvenance: 'adapter_static_policy',
+      fallbackEnabled: true,
+      fallbackApplied: true,
+      fallbackReason: 'TimeoutError',
+      tools: 'none'
+    };
     const record = buildTelemetryRecord({
       config: { topic: 'T' },
       state: {
@@ -1484,22 +1901,50 @@ describe('Issue #102 Task 4: Sparse replay deltas, ledger retry history, CLI pre
     assert.equal(record.seats[0].model, 'gemini-4-argon-high');
   });
 
-  it('parses --retry-effort-fallback and documents it in HELP_TEXT while enforcing --live conflict validation', async () => {
+  it('parses --retry-effort-fallback, rejects explicit same-seat CONFLICTING_MODEL_EFFORT in --live preflight, and lets inline win when reasoningEffort is inherited globally', async () => {
     assert.match(HELP_TEXT, /--retry-effort-fallback/);
     const parsed = parseCliArgs(['run', '--mock', '--topic', 'Test', '--retry-effort-fallback']);
     assert.equal(parsed.retryEffortFallback, true);
 
-    let stderrStr = '';
-    const exitCode = await runCli(
-      ['run', '--live', '--topic', 'Conflict check', '--retry-effort-fallback', '--seat-models', 'antigravity:gemini-4-argon-high', '--reasoning-effort', 'low'],
-      {
-        stdout: { write: () => {}, isTTY: false },
-        stderr: { write: (s) => { stderrStr += s; } },
-        exit: (c) => c
-      }
-    );
-    assert.equal(exitCode, 1);
-    assert.match(stderrStr, /CONFLICTING_MODEL_EFFORT|conflict/i);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-102-cli-'));
+    const conflictConfigPath = path.join(tmpDir, 'conflict.json');
+    fs.writeFileSync(conflictConfigPath, JSON.stringify({
+      topic: 'Same-seat explicit conflict check',
+      retryEffortFallback: true,
+      judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Judge' },
+      seats: [
+        { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', reasoningEffort: 'low', soul: 'A' },
+        { id: 's2', harness: 'codex', model: 'gpt-6.1-sol (high)', soul: 'B' }
+      ]
+    }));
+
+    try {
+      let stderrStr = '';
+      const exitCode = await runCli(
+        ['run', '--live', '--retry-effort-fallback', '--config', conflictConfigPath],
+        {
+          stdout: { write: () => {}, isTTY: false },
+          stderr: { write: (s) => { stderrStr += s; } },
+          exit: (c) => c
+        }
+      );
+      assert.equal(exitCode, 1);
+      assert.match(stderrStr, /CONFLICTING_MODEL_EFFORT/);
+
+      // Inherited global --reasoning-effort low with inline --seat-models antigravity:gemini-4-argon-high must NOT raise CONFLICTING_MODEL_EFFORT
+      let globalErr = '';
+      await runCli(
+        ['run', '--mock', '--retry-effort-fallback', '--topic', 'Global inherited effort', '--seat-models', 'codex:gpt-6-astra (max),codex:gpt-6.1-sol (high)', '--reasoning-effort', 'low', '--json'],
+        {
+          stdout: { write: () => {}, isTTY: false },
+          stderr: { write: (s) => { globalErr += s; } },
+          exit: (c) => c
+        }
+      );
+      assert.equal(/CONFLICTING_MODEL_EFFORT/.test(globalErr), false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('renders retry fallback diagnostics badges safely in src/visualizer/index.html', () => {
@@ -1528,7 +1973,7 @@ Expected: FAIL (`--retry-effort-fallback` unrecognized / `activeRetryDiagnostics
    - In `buildTelemetryRecord`, add `retryDiagnosticsHistory: Array.isArray(seat.retryDiagnosticsHistory) ? [...seat.retryDiagnosticsHistory] : []` to each seat record and to `record.judge`.
 3. In `src/cli/index.js`:
    - Add `--retry-effort-fallback` boolean option to `HELP_TEXT`, `parseCliArgs`, and `buildCliFlagsForConfig`.
-   - When `--live && config.retryEffortFallback`: fetch `listAntigravityModels()` if any Antigravity participant exists and validate with `validateRetryFallbackCapability({ config, catalogByHarness })`, writing clear errors to `stderr` and returning exit code `1` on `CONFLICTING_MODEL_EFFORT` or unsupported retry target.
+   - When `--live && config.retryEffortFallback`: fetch `listAntigravityModels()` if any Antigravity participant exists and validate with `validateRetryFallbackCapability({ config, catalogByHarness })`, writing clear errors (`CONFLICTING_MODEL_EFFORT` or `UNSUPPORTED_MODEL_EFFORT`) to `stderr` and returning exit code `1`.
    - Surface retry attribution in `--verbose` events, human verdict summary (`Judge`, `Seat Roll Call`, `Excused Seats`), and `--json` summary payload.
 4. In `src/visualizer/index.html` (`2203-2254`):
    - Render `activeRetryDiagnostics` and `retryDiagnosticsHistory` compact badges inside both `judgeHtml` and `seatsHtml`, escaping all dynamic values via `escapeHtml(...)`.
@@ -1586,11 +2031,11 @@ Dispatch a fresh Astra review (`gpt-6-astra`) via Orca against the frozen diff (
 1. **Spec coverage (`§0`–`§7` + 5 User Amendments + 11 Legacy Test Suites):**
    - `§0` State/Reducer & `#95` pre-collapse conservation -> Task 3 & Task 4.
    - `§1` Unified recovery readiness + negative omission veto + caller-attested `selfContainedInput` -> Task 3 (`src/engine/recovery.js`).
-   - `§2` Shared workspace resolver `resolveAttemptExecutionWorkspace` -> Task 1 (`src/harness/adapter.js` + all 4 adapters).
+   - `§2` Shared workspace resolver `resolveAttemptExecutionWorkspace` + `HeadlessToolDeniedError` exports -> Task 1 & Task 3.
    - `§3` Antigravity `exitCode === 0` 5-step envelope precedence + PID-safe `429`/`401`/`403` + `.codegraph` exclusion + `fs.realpathSync` -> Task 1 (`cli-runner.js`, `adapter.js`).
-   - `§4` Trusted ephemeral citation normalization + path traversal/artifact/forbidden root guards + `soul.js` read caps -> Task 2.
+   - `§4` Trusted ephemeral citation normalization (rejecting `<trustedRoot>/../outside.js` and `<trustedRoot>/.council/state.json`) + path traversal/artifact/forbidden root guards + `soul.js` read caps -> Task 2.
    - `§5` Opt-in `--retry-effort-fallback` & `retryEffortFallback === false` `CONFLICTING_MODEL_EFFORT` scoping + `agy models` preflight -> Tasks 1, 3, 4.
-   - `§6` Sparse replay deltas (`hasOwnProperty`) in `_rehydrateStepAt` & `_buildBundleScript` + visualizer badges -> Task 4.
-   - `§7` Exact 11 legacy test suites (`9` `conceptualNoExternalVerification`, `1` `cwd: tmpDir`, `3` Amendment #3 multi-retry alignments) -> Task 3.
+   - `§6` Exact `retryDiagnostics` schema + sparse replay deltas (`hasOwnProperty`) in `_rehydrateStepAt` & `_buildBundleScript` + visualizer badges -> Task 4.
+   - `§7` Exact 11 legacy test suites (`9` `conceptualNoExternalVerification`, `1` `cwd: tmpDir` with `complete_artifact`, `3` Amendment #3 multi-retry alignments) -> Task 3.
 2. **Placeholder scan:** Zero `TODO`/`TBD`/unimplemented references.
-3. **Type & signature consistency:** Every exported identifier (`PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX`, `HeadlessToolDeniedError`, `resolveAttemptExecutionWorkspace`, `stripKnownBenignAntigravityWarning`, `hasExplicitProviderErrorSignature`, `listAntigravityModels`, `normalizeTrustedInvocationCitations`, `validateCitationFields`, `extractVerificationDependencies`, `evaluateToolFreeEvidenceReadiness`, `resolveRetryModelAndEffort`, `validateRetryFallbackCapability`, `planParticipantRecovery`, `activeRetryDiagnostics`, `retryDiagnosticsHistory`) matches cleanly across Tasks 1–4.
+3. **Type & signature consistency:** Every exported identifier (`PROVIDER_HTTP_429_REGEX`, `PROVIDER_HTTP_AUTH_REGEX`, `HeadlessToolDeniedError`, `resolveAttemptExecutionWorkspace`, `stripKnownBenignAntigravityWarning`, `hasExplicitProviderErrorSignature`, `listAntigravityModels`, `normalizeTrustedInvocationCitations`, `validateCitationFields`, `extractVerificationDependencies`, `evaluateToolFreeEvidenceReadiness`, `resolveRetryModelAndEffort`, `validateRetryFallbackCapability`, `planParticipantRecovery`, `activeRetryDiagnostics`, `retryDiagnosticsHistory`) and return contract (`canRetry`, `setsToolFreeRecoveryUsed`, `terminationKind`, `provenance`) matches Spec `§0`–`§7` verbatim.

@@ -7374,7 +7374,8 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         'Inspect src/auth.js. Verify < README "cat" output.',
         'Inspect src/auth.js. Verify env output > result.',
         'Inspect src/auth.js. Verify "env" -0 > result.',
-        'Inspect src/auth.js. Verify exec 2> err.log.'
+        'Inspect src/auth.js. Verify exec 2> err.log.',
+        'Inspect src/auth.js. Notes 2>&1. "cat" key in src/auth.js is valid.'
       ];
       for (const topic of redirectionTopics) {
         const deps = extractVerificationDependencies([topic]);
@@ -7435,7 +7436,6 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         'Inspect src/auth.js. Keys "cat" and "node" in src/auth.js are valid. Notes <section> and >quote do not invoke shell commands.',
         'Inspect src/auth.js. Keys "cat", "node", and "sh" in Notes <section> and >quote do not invoke shell commands.',
         'Inspect src/auth.js. Notes >quote. "cat" key in src/auth.js is valid.',
-        'Inspect src/auth.js. Notes 2>&1. "cat" key in src/auth.js is valid.',
         'Inspect src/auth.js. Target Node >= 22, node > 22, python < 3.12, and git -> main or node => callback are valid.'
       ];
       for (const proseTopic of positiveProseControls) {
@@ -9170,7 +9170,8 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         'Inspect src/auth.js. Target <em><b>node</em> > 22</b>, python < 3.12.',
         'Inspect src/auth.js. Target <em><b>node </em> > 22</b>, python < 3.12.',
         'Inspect src/auth.js. Target <em><b>node > 22</em></b>, python < 3.12.',
-        'Inspect src/auth.js. Target <t1><t2><t3><t4><t5><t6><t7><t8><t9>node</t9></t8></t7></t6></t5></t4></t3></t2></t1></t0> > 22, python < 3.12.'
+        'Inspect src/auth.js. Target <t1><t2><t3><t4><t5><t6><t7><t8><t9>node</t9></t8></t7></t6></t5></t4></t3></t2></t1></t0> > 22, python < 3.12.',
+        'Inspect src/auth.js. Notes 2>&1.'
       ];
 
       for (const topic of mustRefuseTopics) {
@@ -9262,8 +9263,7 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         'Inspect src/auth.js. Target <t1><t2><t3><t4><t5><t6><t7><t8><t9>node</t9></t8></t7></t6></t5></t4></t3></t2></t1> > 22, python < 3.12.',
         'Inspect src/auth.js. Target <a><b><i><u><s><code><span><em><strong><t1><t2><t3><t4><t5>node</t5></t4></t3></t2></t1></strong></em></span></code></s></u></i></b></a> > 22, python < 3.12.',
         'Inspect src/auth.js. Target <d1><d2><d3><d4><d5><d6><d7><d8><d9><d10><d11><d12>node > 22</d12></d11></d10></d9></d8></d7></d6></d5></d4></d3></d2></d1>, python < 3.12.',
-        'Inspect src/auth.js. Notes >quote.',
-        'Inspect src/auth.js. Notes 2>&1.'
+        'Inspect src/auth.js. Notes >quote.'
       ];
       for (const proseTopic of positiveProseControls) {
         const deps = extractVerificationDependencies([proseTopic]);
@@ -9739,6 +9739,449 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         { name: 'r23-em2-fdless-48k', unit: '<em>2</em> >/tmp/err; ', expectBroad: true }
       ];
       for (const probe of stressProbes) {
+        extractVerificationDependencies([probe.unit.repeat(200)]);
+        const repeatCount = Math.ceil(49152 / Buffer.byteLength(probe.unit, 'utf8'));
+        const payload = probe.unit.repeat(repeatCount);
+        assert.ok(Buffer.byteLength(payload, 'utf8') >= 48000, `Expected >=48KB for ${probe.name}`);
+        const t0 = performance.now();
+        const deps = extractVerificationDependencies([payload]);
+        const elapsedMs = performance.now() - t0;
+        assert.ok(elapsedMs < 20, `Expected <20ms for ${probe.name}, got ${elapsedMs.toFixed(2)}ms`);
+        if (probe.expectBroad) {
+          assert.ok(deps.workspaceBroadDeps.length > 0, `Expected broad deps for ${probe.name}`);
+        } else {
+          assert.deepEqual(deps.workspaceBroadDeps, [], `Expected 0 broad deps for ${probe.name}`);
+        }
+      }
+    });
+
+    it('ReReview-102 Round 24 fixes: captures echo/printf 2>1, preserves FD duplications/closures, allows spaced Markdown blockquotes, and passes <20ms 48KB stress probes', async () => {
+      const sampleAuthProof = {
+        id: 'P1',
+        seatId: 's1',
+        round: 1,
+        kind: 'claim',
+        source: 'src/auth.js',
+        statement: 'Token expiry verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+      const defaultCovered = ['src/auth.js'];
+
+      function buildReadinessInputs({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = [],
+        coveredSources = defaultCovered
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo' }
+        };
+      }
+
+      function runPlanParticipant({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = []
+      }) {
+        const isJudge = phase === 'JUDGE_AUDIT_SYNTHESIS';
+        return planParticipantRecovery({
+          participantId: isJudge ? 'judge' : 's1',
+          role: isJudge ? 'judge' : 'seat',
+          error:
+            errorClass === 'TimeoutError'
+              ? { message: `${phase} timeout`, code: 'ETIMEDOUT' }
+              : { message: `${phase} tool denied`, code: 'HEADLESS_TOOL_DENIED' },
+          errorClass,
+          isRetryable: true,
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          requestedModel: 'gpt-6-astra',
+          requestedEffort: 'high',
+          phase,
+          round,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: defaultCovered.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: defaultCovered.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        });
+      }
+
+      async function executePhaseEngine({ phase, errorClass, topic = 'Inspect src/auth.js.', clarifications = [], s1Proof = null }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+        const makeFault = (participantId) =>
+          errorClass === 'TimeoutError'
+            ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+            : new HeadlessToolDeniedError(`${phase} tool denied`, {
+                harness: 'codex',
+                seatId: participantId,
+                exitCode: 0,
+                isRetryable: true
+              });
+
+        mock.executeSeatProof = async (ctx) => {
+          if (
+            (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') ||
+            (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2')
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault(ctx.seat.id);
+          }
+          if (ctx.round === 1 && ctx.seat.id === 's1' && s1Proof) return s1Proof;
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeFault('s1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications,
+            maxClarificationBatches: 0,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: defaultCovered.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'R24 regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: defaultCovered.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+        const enginePlan = engine._planParticipantRecovery({
+          participant: { id: 's1', status: 'active' },
+          role: 'seat',
+          error: makeFault('s1'),
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          totalBudgetMs: 50000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          currentModel: 'gpt-6-astra',
+          currentReasoningEffort: 'high',
+          phase: 'DELIBERATION',
+          round: 1,
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        });
+        await engine.run();
+        return { targetCalls, enginePlan };
+      }
+
+      const readinessPhaseCases = [
+        ['DELIBERATION', 1, {}],
+        ['DELIBERATION', 2, { priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, { proofs: [sampleAuthProof] }],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, { proofs: [sampleAuthProof], priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['VOTING', 1, { candidate: sampleCandidate, admittedProofs: [sampleAuthProof] }]
+      ];
+
+      const mustRefuseTexts = [
+        'Inspect src/auth.js. echo ok 2>1',
+        'Inspect src/auth.js; echo ok 2>1',
+        'Inspect src/auth.js. echo 2>1',
+        'Inspect src/auth.js. "echo" ok 2>1',
+        'Inspect src/auth.js. printf ok 2>1',
+        'Inspect src/auth.js. printf "%s" ok 2>1',
+        'Inspect src/auth.js.\n> echo ok 2>1',
+        'Inspect src/auth.js. 2>&1',
+        'Inspect src/auth.js. 2>&-',
+        'Inspect src/auth.js. 2<&0',
+        'Inspect src/auth.js. 2>&3-',
+        'Inspect src/auth.js. 2<&-',
+        'Inspect src/auth.js. >&1',
+        'Inspect src/auth.js. <&0',
+        'Inspect src/auth.js. >&-',
+        'Inspect src/auth.js.\n> /tmp/err',
+        'Inspect src/auth.js.\n> out.txt',
+        'Inspect src/auth.js.\n> Makefile',
+        'Inspect src/auth.js.\n> .env',
+        'Inspect src/auth.js.\n> result',
+        'Inspect src/auth.js.\n> out echo ok',
+        'Inspect src/auth.js.\n> out pwd',
+        'Inspect src/auth.js.\n> out "cat" output',
+        'Inspect src/auth.js.\n> >/tmp/err',
+        'Inspect src/auth.js.\n> > /tmp/err',
+        'Inspect src/auth.js; > This is not a line-start blockquote'
+      ];
+
+      for (const topic of mustRefuseTexts) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.ok(
+          deps.workspaceBroadDeps.length >= 1,
+          `Expected broad dep for ${JSON.stringify(topic)}, got ${JSON.stringify(deps)}`
+        );
+      }
+
+      const mustAllowTexts = [
+        'Inspect src/auth.js.\n> This is explanatory prose.',
+        'Inspect src/auth.js.\n> Second spaced blockquote without trailing period',
+        'Inspect src/auth.js.\r\n  >\tIndented CRLF tab-spaced blockquote prose.',
+        'Inspect src/auth.js.\n> > Nested spaced blockquote prose.',
+        'Inspect src/auth.js.\n>\n> Multi-line blockquote with empty separator line.',
+        'Inspect src/auth.js.\n> Latency < 20ms is required, and node 22 > 20, and python 3 > 2.',
+        'Inspect src/auth.js.\n> Keys "cat" and "node" in src/auth.js are valid.',
+        'Inspect src/auth.js.\n> src/auth.js validates token expiry.',
+        'Inspect src/auth.js.\n>note',
+        'Inspect src/auth.js. 2>1',
+        'Inspect src/auth.js. Ratio 2>1 holds.',
+        'Inspect src/auth.js. Ensure ratio 2>1 holds.'
+      ];
+
+      for (const topic of mustAllowTexts) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.deepEqual(
+          deps.workspaceBroadDeps,
+          [],
+          `Expected 0 broad deps for ${JSON.stringify(topic)}, got ${JSON.stringify(deps.workspaceBroadDeps)}`
+        );
+      }
+
+      const matrixRefuse = [
+        'Inspect src/auth.js. echo ok 2>1',
+        'Inspect src/auth.js. printf ok 2>1',
+        'Inspect src/auth.js. 2>&1',
+        'Inspect src/auth.js. 2>&-',
+        'Inspect src/auth.js. 2<&0',
+        'Inspect src/auth.js. 2>&3-',
+        'Inspect src/auth.js.\n> /tmp/err',
+        'Inspect src/auth.js.\n> result',
+        'Inspect src/auth.js.\n> out pwd',
+        'Inspect src/auth.js.\n> > /tmp/err',
+        'Inspect src/auth.js; > This is not a line-start blockquote'
+      ];
+
+      const matrixAllow = [
+        'Inspect src/auth.js.\n> This is explanatory prose.',
+        'Inspect src/auth.js.\r\n  >\tIndented CRLF tab-spaced blockquote prose.',
+        'Inspect src/auth.js.\n> > Nested spaced blockquote prose.',
+        'Inspect src/auth.js.\n>\n> Multi-line blockquote with empty separator line.',
+        'Inspect src/auth.js.\n> Latency < 20ms is required, and node 22 > 20, and python 3 > 2.',
+        'Inspect src/auth.js.\n> Keys "cat" and "node" in src/auth.js are valid.',
+        'Inspect src/auth.js. 2>1',
+        'Inspect src/auth.js. Ensure ratio 2>1 holds.'
+      ];
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        for (const [phaseName, round, extra] of readinessPhaseCases) {
+          for (const topic of matrixRefuse) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, false, `Expected readiness refusal for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(readiness.reasonCode, 'evidence_access_failure');
+            const plan = runPlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, false, `Expected planParticipantRecovery refusal for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(plan.terminationKind, 'evidence_access_failure');
+
+            if (phaseName === 'DELIBERATION' && round === 1) {
+              const clarPlan = runPlanParticipant({
+                phase: phaseName,
+                round,
+                errorClass,
+                clarifications: [{ batch: 1, answer: topic }]
+              });
+              assert.equal(clarPlan.canRetry, false, `Expected R1 clarification refusal for ${JSON.stringify(topic)} (${errorClass})`);
+              assert.equal(clarPlan.terminationKind, 'evidence_access_failure');
+            }
+          }
+
+          for (const topic of matrixAllow) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, true, `Expected readiness approval for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass}), got ${JSON.stringify(readiness)}`);
+            const plan = runPlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, true, `Expected planParticipantRecovery approval for ${JSON.stringify(topic)} in ${phaseName} R${round} (${errorClass}), got ${JSON.stringify(plan)}`);
+            assert.equal(plan.nextTools, 'none');
+            assert.equal(plan.terminationKind, null);
+          }
+        }
+
+        for (const checkText of matrixRefuse) {
+          for (const [field, sourceVal, stmtVal] of [
+            ['source', checkText, 'Checked src/auth.js'],
+            ['statement', 'Command verification', checkText]
+          ]) {
+            const checkProof = {
+              id: 'P1',
+              seatId: 's1',
+              round: 1,
+              kind: 'check',
+              source: sourceVal,
+              statement: stmtVal
+            };
+            for (const [phaseName, round, extra] of readinessPhaseCases.slice(1)) {
+              const adjusted =
+                phaseName === 'DELIBERATION'
+                  ? { ...extra, priorProofs: [checkProof] }
+                  : phaseName === 'JUDGE_AUDIT_SYNTHESIS'
+                    ? { ...extra, proofs: [checkProof] }
+                    : { ...extra, admittedProofs: [checkProof] };
+              const plan = runPlanParticipant({ phase: phaseName, round, errorClass, ...adjusted });
+              assert.equal(plan.canRetry, false, `Expected kind:check (${field}) refusal for ${JSON.stringify(checkText)} in ${phaseName} R${round} (${errorClass})`);
+              assert.equal(plan.terminationKind, 'evidence_access_failure');
+            }
+          }
+        }
+
+        for (const enginePhase of allFivePhases) {
+          for (const topic of [
+            'Inspect src/auth.js. echo ok 2>1',
+            'Inspect src/auth.js. 2>&1',
+            'Inspect src/auth.js. 2>&-',
+            'Inspect src/auth.js. 2<&0',
+            'Inspect src/auth.js. 2>&3-',
+            'Inspect src/auth.js.\n> /tmp/err',
+            'Inspect src/auth.js.\n> result',
+            'Inspect src/auth.js; > This is not a line-start blockquote'
+          ]) {
+            const out = await executePhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, false);
+            assert.equal(out.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(out.targetCalls.length, 1, `Expected engine refusal (1 attempt) for ${JSON.stringify(topic)} in ${enginePhase} (${errorClass})`);
+          }
+          for (const topic of [
+            'Inspect src/auth.js.\n> This is explanatory prose.',
+            'Inspect src/auth.js.\n> > Nested spaced blockquote prose.',
+            'Inspect src/auth.js. 2>1'
+          ]) {
+            const out = await executePhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, true);
+            assert.equal(out.enginePlan.nextTools, 'none');
+            assert.equal(out.enginePlan.terminationKind, null);
+            assert.equal(out.targetCalls.length, 2, `Expected engine tool-free recovery (2 attempts) for ${JSON.stringify(topic)} in ${enginePhase} (${errorClass})`);
+            assert.equal(out.targetCalls[1].tools, 'none');
+            assert.equal(out.targetCalls[1].cwd, undefined);
+          }
+        }
+      }
+
+      const r24StressProbes = [
+        { name: 'r24-spaced-blockquote-48k', unit: '> This is explanatory prose.\n', expectBroad: false },
+        { name: 'r24-echo-2gt1-48k', unit: 'echo ok 2>1; ', expectBroad: true },
+        { name: 'r24-fddup-2gtamp1-48k', unit: '2>&1; ', expectBroad: true }
+      ];
+      for (const probe of r24StressProbes) {
         extractVerificationDependencies([probe.unit.repeat(200)]);
         const repeatCount = Math.ceil(49152 / Buffer.byteLength(probe.unit, 'utf8'));
         const payload = probe.unit.repeat(repeatCount);

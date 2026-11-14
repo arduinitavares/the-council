@@ -242,7 +242,9 @@ const SHELL_FLAG_OR_PATH_CLI_VERBS = new Set([
   'env',
   'which',
   'command',
-  'type'
+  'type',
+  'echo',
+  'printf'
 ]);
 const SHELL_SPLIT_QUOTE_VERBS = new Set([
   ...SHELL_ZERO_ARG_CLI_VERBS,
@@ -1302,6 +1304,166 @@ function isProseNumericOrVersionComparison(
   return true;
 }
 
+const BLOCKQUOTE_PROSE_LEAD_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'all',
+  'any',
+  'each',
+  'every',
+  'no',
+  'some',
+  'both',
+  'either',
+  'neither',
+  'if',
+  'when',
+  'where',
+  'while',
+  'because',
+  'since',
+  'although',
+  'though',
+  'unless',
+  'until',
+  'before',
+  'after',
+  'ensure',
+  'verify',
+  'confirm',
+  'check',
+  'inspect',
+  'review',
+  'note',
+  'notes',
+  'see',
+  'summary',
+  'context',
+  'background',
+  'rationale',
+  'important',
+  'warning',
+  'caution',
+  'tip',
+  'example'
+]);
+
+function matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n) {
+  let restStart = opPos + 1;
+  const hadSpaceAfterGt = restStart < n && (text[restStart] === ' ' || text[restStart] === '\t');
+  while (restStart < n && (text[restStart] === ' ' || text[restStart] === '\t')) {
+    restStart += 1;
+  }
+  if (restStart >= n || text[restStart] === '\r' || text[restStart] === '\n') {
+    return hadSpaceAfterGt || opPos + 1 >= n || text[opPos + 1] === '\r' || text[opPos + 1] === '\n'
+      ? { nextIndex: restStart, keepLineStart: false }
+      : null;
+  }
+  if (
+    hadSpaceAfterGt &&
+    text[restStart] === '>' &&
+    (restStart + 1 >= n ||
+      text[restStart + 1] === ' ' ||
+      text[restStart + 1] === '\t' ||
+      text[restStart + 1] === '\r' ||
+      text[restStart + 1] === '\n')
+  ) {
+    return { nextIndex: restStart, keepLineStart: true };
+  }
+  if (!hadSpaceAfterGt) {
+    return null;
+  }
+  let firstEnd = restStart;
+  const firstLim = Math.min(n, restStart + 128);
+  while (firstEnd < firstLim && !/[\s;|&<>()]/.test(text[firstEnd])) {
+    firstEnd += 1;
+  }
+  if (firstEnd === restStart || firstEnd === firstLim) {
+    return null;
+  }
+  const firstRaw = text.slice(restStart, firstEnd);
+  if (
+    firstRaw[0] === '/' ||
+    firstRaw.startsWith('./') ||
+    firstRaw.startsWith('../') ||
+    firstRaw.startsWith('~/') ||
+    /[$`\\=]/.test(firstRaw)
+  ) {
+    return null;
+  }
+  const firstClean = stripTrailingProsePunct(firstRaw);
+  const firstLower = firstClean.toLowerCase();
+  const firstIsFile = isLikelyShellFileArg(firstClean);
+  const isLowerBareShellTarget =
+    /^[a-z0-9_][a-z0-9_.-]*$/.test(firstRaw) &&
+    !/^\d+\.$/.test(firstRaw) &&
+    !BLOCKQUOTE_PROSE_LEAD_WORDS.has(firstLower) &&
+    !SPLIT_QUOTE_PROSE_STOPWORDS.has(firstLower);
+
+  let afterFirst = firstEnd;
+  while (afterFirst < n && (text[afterFirst] === ' ' || text[afterFirst] === '\t')) {
+    afterFirst += 1;
+  }
+  if (afterFirst >= n || /[\r\n;|&)]/.test(text[afterFirst])) {
+    return null;
+  }
+  if (text[afterFirst] === '<' || text[afterFirst] === '>' || text[afterFirst] === '(') {
+    if (
+      firstIsFile ||
+      /["']/.test(firstRaw) ||
+      firstRaw === '-' ||
+      (isLowerBareShellTarget && !VERSIONED_RUNTIME_NOUNS.has(firstLower))
+    ) {
+      return null;
+    }
+    return { nextIndex: restStart, keepLineStart: false };
+  }
+
+  let secondEnd = afterFirst;
+  const secondLim = Math.min(n, afterFirst + 128);
+  while (secondEnd < secondLim && !/[\s;|&<>()]/.test(text[secondEnd])) {
+    secondEnd += 1;
+  }
+  if (secondEnd === afterFirst || secondEnd === secondLim) {
+    return null;
+  }
+  const secondRaw = text.slice(afterFirst, secondEnd);
+  const secondClean = stripTrailingProsePunct(secondRaw);
+  const secondLower = stripShellBinPrefix(secondClean).toLowerCase();
+  const secondLooksLikeCommandHead =
+    secondRaw[0] === '/' ||
+    secondRaw.startsWith('./') ||
+    secondRaw.startsWith('../') ||
+    secondRaw.startsWith('~/') ||
+    /["'$`\\=]/.test(secondRaw) ||
+    isShellStarterVerbLower(secondLower) ||
+    SHELL_CONTROL_PREFIX_WORDS.has(secondLower);
+
+  if (/["']/.test(firstRaw)) {
+    const unquotedFirst = firstClean.replace(/^["']+|["']+$/g, '');
+    if (
+      !unquotedFirst ||
+      isLikelyShellFileArg(unquotedFirst) ||
+      secondLooksLikeCommandHead ||
+      !/^[A-Za-z]{2,}$/.test(secondClean)
+    ) {
+      return null;
+    }
+    return { nextIndex: restStart, keepLineStart: false };
+  }
+  if (firstIsFile) {
+    if (secondLooksLikeCommandHead || !/^[A-Za-z]{2,}$/.test(secondClean)) {
+      return null;
+    }
+    return { nextIndex: restStart, keepLineStart: false };
+  }
+  if ((isLowerBareShellTarget || firstRaw === '-') && secondLooksLikeCommandHead) {
+    return null;
+  }
+  return { nextIndex: restStart, keepLineStart: false };
+}
+
 function parseShellClausesLinear(text) {
   const n = text.length;
   const clauses = [];
@@ -1346,6 +1508,7 @@ function parseShellClausesLinear(text) {
     current.standaloneRedirs.push(rawSnippet);
   };
   let lastCloseTagPosMap = undefined;
+  let atMarkdownLineStart = true;
   let segTokenCount = 0;
   let segHardStarterCount = 0;
   let pendingQuotedVerbIdx = -1;
@@ -1482,10 +1645,15 @@ function parseShellClausesLinear(text) {
       break;
     }
     const ch = text[i];
+    const lineStartHere = atMarkdownLineStart;
+    atMarkdownLineStart = false;
 
     // Clause separators: &&, ||, ;, |, \n
     if (ch === '\n' || ch === ';') {
       pushClause();
+      if (ch === '\n') {
+        atMarkdownLineStart = true;
+      }
       i += 1;
       continue;
     }
@@ -2049,6 +2217,16 @@ function parseShellClausesLinear(text) {
         nextPos += 1;
       }
       const isMultiCharRedir = nextPos > opPos + 1;
+      if (fdLen === 0 && opChar === '>' && !isMultiCharRedir && lineStartHere && !pendingSkippedAngleTag) {
+        const bqMatch = matchMarkdownBlockquotePrefixAtLineStart(text, opPos, n);
+        if (bqMatch !== null) {
+          if (bqMatch.keepLineStart) {
+            atMarkdownLineStart = true;
+          }
+          i = bqMatch.nextIndex;
+          continue;
+        }
+      }
       const isFdDup = text[nextPos - 1] === '&';
       while (nextPos < n && /[ \t]/.test(text[nextPos])) {
         nextPos += 1;
@@ -2085,6 +2263,7 @@ function parseShellClausesLinear(text) {
             fdEndsSentence = true;
             nextPos += 1;
           }
+          recordStandaloneRedir(text.slice(i, nextPos));
           markRedir(fdEndsSentence);
           i = nextPos;
           continue;
@@ -2972,9 +3151,8 @@ function scanShellCommandTextInner(text, options = {}) {
                   leadP.isEnvAssign ||
                   lastP.hasRedirection ||
                   SHELL_SPLIT_QUOTE_VERBS.has(lp) ||
-                  SHELL_COMPOUND_ZERO_ARG_VERBS.has(lp) ||
-                  lp === 'echo' ||
-                  lp === 'printf';
+                  SHELL_FLAG_OR_PATH_CLI_VERBS.has(lp) ||
+                  SHELL_COMPOUND_ZERO_ARG_VERBS.has(lp);
               }
             }
           }

@@ -393,7 +393,107 @@ const SPLIT_QUOTE_PROSE_STOPWORDS = new Set([
   'matches'
 ]);
 
+function isHorizontalWsCode(cc) {
+  return cc === 32 || cc === 9 || cc === 13 || cc === 11 || cc === 12;
+}
+
+function trimHorizontalWs(str) {
+  let start = 0;
+  let end = str.length;
+  while (start < end && isHorizontalWsCode(str.charCodeAt(start))) {
+    start += 1;
+  }
+  while (end > start && isHorizontalWsCode(str.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  return start === 0 && end === str.length ? str : str.slice(start, end);
+}
+
+function trimLeadingHorizontalWs(str) {
+  let start = 0;
+  const len = str.length;
+  while (start < len && isHorizontalWsCode(str.charCodeAt(start))) {
+    start += 1;
+  }
+  return start === 0 ? str : str.slice(start);
+}
+
+function isAsciiAlphaNumCode(cc) {
+  return (cc >= 97 && cc <= 122) || (cc >= 65 && cc <= 90) || (cc >= 48 && cc <= 57);
+}
+
+function isDelimitedQuotePrefixCode(cc) {
+  return isAsciiAlphaNumCode(cc) || cc === 95 || cc === 46 || cc === 47 || cc === 92 || cc === 45;
+}
+
+function isShellTokenDelimiterAt(text, idx) {
+  const cc = text.charCodeAt(idx);
+  if (cc <= 32) {
+    return cc === 32 || cc === 10 || cc === 9 || cc === 13 || cc === 11 || cc === 12;
+  }
+  if (cc <= 127) {
+    return cc === 59 || cc === 124 || cc === 38 || cc === 60 || cc === 62 || cc === 40 || cc === 41;
+  }
+  return /\s/.test(text[idx]);
+}
+
+function isTrailingApostropheBoundaryAt(text, idx) {
+  const cc = text.charCodeAt(idx);
+  if (cc <= 32) {
+    return cc === 32 || cc === 10 || cc === 9 || cc === 13 || cc === 11 || cc === 12;
+  }
+  if (cc <= 127) {
+    return cc === 44 || cc === 46 || cc === 59 || cc === 58 || cc === 33 || cc === 63 || cc === 41;
+  }
+  return /\s/.test(text[idx]);
+}
+
+function hasPotentialFileCandidateChar(str) {
+  if (str.indexOf('.') !== -1 || str.indexOf('/') !== -1 || str.indexOf(':') !== -1) {
+    return true;
+  }
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str.charCodeAt(i);
+    if (c >= 65 && c <= 90) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toAsciiLowerFast(str) {
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str.charCodeAt(i);
+    if ((c >= 65 && c <= 90) || c > 127) {
+      return str.toLowerCase();
+    }
+  }
+  return str;
+}
+
+function findNextNonApostropheSingleQuote(str, fromIdx, len) {
+  let pos = fromIdx;
+  while (pos < len) {
+    const idx = str.indexOf("'", pos);
+    if (idx === -1) {
+      return -1;
+    }
+    const isInternalApostrophe =
+      isAsciiAlphaNumCode(str.charCodeAt(idx - 1)) &&
+      idx + 1 < len &&
+      isAsciiAlphaNumCode(str.charCodeAt(idx + 1));
+    if (!isInternalApostrophe) {
+      return idx;
+    }
+    pos = idx + 1;
+  }
+  return -1;
+}
+
 function stripShellBinPrefix(word) {
+  if (!word || word.charCodeAt(0) !== 47) {
+    return word;
+  }
   return word.replace(/^(?:\/usr\/local\/bin\/|\/usr\/bin\/|\/bin\/)/i, '');
 }
 
@@ -488,10 +588,17 @@ function unescapeInlineShellWords(text) {
 }
 
 function findClosedCommandSubstitutions(text) {
-  const n = text.length;
-  if (!text || !text.includes('$(')) {
+  if (!text) {
     return { closedFrames: [], topLevelClosed: [] };
   }
+  const firstDp = text.indexOf('$(');
+  if (firstDp === -1 || text.indexOf(')', firstDp + 2) === -1) {
+    return { closedFrames: [], topLevelClosed: [] };
+  }
+  if (activeReadinessCache && activeReadinessCache.cmdSubs.has(text)) {
+    return activeReadinessCache.cmdSubs.get(text);
+  }
+  const n = text.length;
   const topState = { start: -1, inDouble: false, inSingle: false, noMoreSingle: false, parenDepth: 0, arith: false, children: null };
   const frameStack = [];
   const closedFrames = [];
@@ -573,7 +680,11 @@ function findClosedCommandSubstitutions(text) {
     }
   }
 
-  return { closedFrames, topLevelClosed };
+  const res = { closedFrames, topLevelClosed };
+  if (activeReadinessCache) {
+    activeReadinessCache.cmdSubs.set(text, res);
+  }
+  return res;
 }
 
 function buildFrameOwnText(text, startIdx, endIdx, children) {
@@ -727,32 +838,18 @@ function isShellStarterVerbLower(lower) {
   );
 }
 
-function countTagInList(list, tagLower) {
-  if (!list) {
-    return 0;
-  }
-  let count = 0;
-  for (let idx = 0; idx < list.length; idx += 1) {
-    if (list[idx] === tagLower) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function skipMatchedCloseTagsAt(text, pos, n, openTagCounts = null, localOpenedTags = null, consumedTags = null) {
+function skipMatchedCloseTagsAt(text, pos, n, openTagStack = null, localOpenedStack = null, consumedOpenCount = 0) {
   let q = pos;
   while (q < n && /[ \t]/.test(text[q])) {
     q += 1;
   }
-  if (!openTagCounts && (!localOpenedTags || localOpenedTags.length === 0)) {
-    return { pos: q, consumedTags };
+  let openIdx = openTagStack ? openTagStack.length - 1 - consumedOpenCount : -1;
+  let localIdx = localOpenedStack ? localOpenedStack.length - 1 : -1;
+  if (openIdx < 0 && localIdx < 0) {
+    return { pos: q, consumedOpenCount };
   }
-  let used = consumedTags;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (!(q + 2 < n && text[q] === '<' && text[q + 1] === '/' && /[A-Za-z]/.test(text[q + 2]))) {
-      break;
-    }
+  let usedOpenCount = consumedOpenCount;
+  while (q + 2 < n && text[q] === '<' && text[q + 1] === '/' && /[A-Za-z]/.test(text[q + 2])) {
     const closeLim = Math.min(n, q + 32);
     let c = q + 2;
     while (c < closeLim && /[A-Za-z0-9-]/.test(text[c])) {
@@ -762,31 +859,37 @@ function skipMatchedCloseTagsAt(text, pos, n, openTagCounts = null, localOpenedT
       break;
     }
     const tagLower = text.slice(q + 2, c).toLowerCase();
-    const avail =
-      (openTagCounts ? openTagCounts.get(tagLower) ?? 0 : 0) +
-      countTagInList(localOpenedTags, tagLower) -
-      countTagInList(used, tagLower);
-    if (avail <= 0) {
+    if (localIdx >= 0) {
+      if (localOpenedStack[localIdx] !== tagLower) {
+        break;
+      }
+      localIdx -= 1;
+    } else if (openIdx >= 0) {
+      if (openTagStack[openIdx] !== tagLower) {
+        break;
+      }
+      openIdx -= 1;
+      usedOpenCount += 1;
+    } else {
       break;
     }
-    used = used ? [...used, tagLower] : [tagLower];
     q = c + 1;
     while (q < n && /[ \t]/.test(text[q])) {
       q += 1;
     }
   }
-  return { pos: q, consumedTags: used };
+  return { pos: q, consumedOpenCount: usedOpenCount };
 }
 
 function isFollowedByComparisonOpAt(
   text,
   pos,
   n,
-  openTagCounts = null,
-  localOpenedTags = null,
-  consumedTags = null
+  openTagStack = null,
+  localOpenedStack = null,
+  consumedOpenCount = 0
 ) {
-  const { pos: q } = skipMatchedCloseTagsAt(text, pos, n, openTagCounts, localOpenedTags, consumedTags);
+  const { pos: q } = skipMatchedCloseTagsAt(text, pos, n, openTagStack, localOpenedStack, consumedOpenCount);
   if (q >= n) {
     return false;
   }
@@ -808,9 +911,9 @@ function startsCoordinatedComparisonAt(
   text,
   pos,
   n,
-  openTagCounts = null,
+  openTagStack = null,
   getLastCloseTagPos = null,
-  consumedTags = null
+  consumedOpenCount = 0
 ) {
   let p = pos;
   while (p < n && /[ \t]/.test(text[p])) {
@@ -819,8 +922,8 @@ function startsCoordinatedComparisonAt(
   if (p >= n) {
     return false;
   }
-  let localOpenedTags = null;
-  for (let depth = 0; depth < 8; depth += 1) {
+  let localOpenedStack = null;
+  while (p < n) {
     if (!(text[p] === '<' && p + 1 < n && /[A-Za-z]/.test(text[p + 1]))) {
       break;
     }
@@ -837,10 +940,10 @@ function startsCoordinatedComparisonAt(
     if (KNOWN_PATH_EXTENSIONLESS_FILES.has(tagRaw) || !getLastCloseTagPos || getLastCloseTagPos(tagLower) <= t) {
       break;
     }
-    if (!localOpenedTags) {
-      localOpenedTags = [];
+    if (!localOpenedStack) {
+      localOpenedStack = [];
     }
-    localOpenedTags.push(tagLower);
+    localOpenedStack.push(tagLower);
     p = t + 1;
     while (p < n && /[ \t]/.test(text[p])) {
       p += 1;
@@ -868,16 +971,16 @@ function startsCoordinatedComparisonAt(
   ) {
     return false;
   }
-  return isFollowedByComparisonOpAt(text, wEnd, n, openTagCounts, localOpenedTags, consumedTags);
+  return isFollowedByComparisonOpAt(text, wEnd, n, openTagStack, localOpenedStack, consumedOpenCount);
 }
 
 function isLikelyShellTokenAt(
   text,
   pos,
   n,
-  openTagCounts = null,
-  localOpenedTags = null,
-  consumedTags = null
+  openTagStack = null,
+  localOpenedStack = null,
+  consumedOpenCount = 0
 ) {
   if (pos >= n) {
     return false;
@@ -906,14 +1009,14 @@ function isLikelyShellTokenAt(
     if (
       VERSIONED_RUNTIME_NOUNS.has(lowerTok) &&
       rawTok === cleanTok &&
-      isFollowedByComparisonOpAt(text, end, n, openTagCounts, localOpenedTags, consumedTags)
+      isFollowedByComparisonOpAt(text, end, n, openTagStack, localOpenedStack, consumedOpenCount)
     ) {
       return false;
     }
     if (
       lowerTok === 'git' &&
       rawTok === cleanTok &&
-      isFollowedByComparisonOpAt(text, end, n, openTagCounts, localOpenedTags, consumedTags)
+      isFollowedByComparisonOpAt(text, end, n, openTagStack, localOpenedStack, consumedOpenCount)
     ) {
       return false;
     }
@@ -934,7 +1037,7 @@ function isProseNumericOrVersionComparison(
   segTokenCount,
   segHardStarterCount,
   hasPriorComparisonContext,
-  openTagCounts,
+  openTagStack,
   getLastCloseTagPos
 ) {
   if (fdLen !== 0 || isMultiCharRedir || targetLastEscaped || /["'\\]/.test(targetRaw)) {
@@ -966,11 +1069,11 @@ function isProseNumericOrVersionComparison(
   const n = text.length;
   const targetPunct = targetRaw.slice(targetClean.length);
   let afterTargetPos = nextPos;
-  const postClose = skipMatchedCloseTagsAt(text, afterTargetPos, n, openTagCounts, null, null);
+  const postClose = skipMatchedCloseTagsAt(text, afterTargetPos, n, openTagStack, null, 0);
   afterTargetPos = postClose.pos;
-  const preConsumedTags = postClose.consumedTags;
+  const preConsumedOpenCount = postClose.consumedOpenCount;
   let effectivePunct = targetPunct;
-  if (effectivePunct === '' && preConsumedTags && afterTargetPos < n && /[,.;:!?]/.test(text[afterTargetPos])) {
+  if (effectivePunct === '' && preConsumedOpenCount > 0 && afterTargetPos < n && /[,.;:!?]/.test(text[afterTargetPos])) {
     let punctEnd = afterTargetPos + 1;
     while (punctEnd < n && /[,.;:!?]/.test(text[punctEnd])) {
       punctEnd += 1;
@@ -984,10 +1087,15 @@ function isProseNumericOrVersionComparison(
     }
   }
   const targetHasNonCommaPunct = effectivePunct.length > 0 && effectivePunct !== ',';
+  const coordinatedAfterComma =
+    effectivePunct === ',' &&
+    afterTargetPos < n &&
+    startsCoordinatedComparisonAt(text, afterTargetPos, n, openTagStack, getLastCloseTagPos, preConsumedOpenCount);
   if (
     !targetHasNonCommaPunct &&
+    !coordinatedAfterComma &&
     afterTargetPos < n &&
-    isLikelyShellTokenAt(text, afterTargetPos, n, openTagCounts, null, preConsumedTags)
+    isLikelyShellTokenAt(text, afterTargetPos, n, openTagStack, null, preConsumedOpenCount)
   ) {
     return false;
   }
@@ -1001,37 +1109,33 @@ function isProseNumericOrVersionComparison(
     ) {
       return false;
     }
-    let hasAffirmativeProseContext = hasPriorComparisonContext;
+    let hasAffirmativeProseContext = hasPriorComparisonContext || coordinatedAfterComma;
     if (!hasAffirmativeProseContext && effectivePunct === ',' && afterTargetPos < n) {
-      if (startsCoordinatedComparisonAt(text, afterTargetPos, n, openTagCounts, getLastCloseTagPos, preConsumedTags)) {
+      let cwEnd = afterTargetPos;
+      const cwLim = Math.min(n, afterTargetPos + 16);
+      while (cwEnd < cwLim && /[A-Za-z]/.test(text[cwEnd])) {
+        cwEnd += 1;
+      }
+      const cwLower = cwEnd > afterTargetPos ? text.slice(afterTargetPos, cwEnd).toLowerCase() : '';
+      if ((cwLower === 'and' || cwLower === 'or') && cwEnd < n && /[ \t]/.test(text[cwEnd])) {
+        hasAffirmativeProseContext = startsCoordinatedComparisonAt(
+          text,
+          cwEnd,
+          n,
+          openTagStack,
+          getLastCloseTagPos,
+          preConsumedOpenCount
+        );
+      } else if (
+        segTokenCount === 2 &&
+        tokens.length >= 2 &&
+        !tokens[tokens.length - 2].wasQuoted &&
+        !tokens[tokens.length - 2].hasUnquotedTrailingPunct &&
+        SUBORDINATE_COMPARISON_INTRODUCERS.has(tokens[tokens.length - 2].trimmedClean.toLowerCase()) &&
+        !/[\r\n;|&).,;:!?]/.test(text[afterTargetPos]) &&
+        !isLikelyShellTokenAt(text, afterTargetPos, n, openTagStack, null, preConsumedOpenCount)
+      ) {
         hasAffirmativeProseContext = true;
-      } else {
-        let cwEnd = afterTargetPos;
-        const cwLim = Math.min(n, afterTargetPos + 16);
-        while (cwEnd < cwLim && /[A-Za-z]/.test(text[cwEnd])) {
-          cwEnd += 1;
-        }
-        const cwLower = cwEnd > afterTargetPos ? text.slice(afterTargetPos, cwEnd).toLowerCase() : '';
-        if ((cwLower === 'and' || cwLower === 'or') && cwEnd < n && /[ \t]/.test(text[cwEnd])) {
-          hasAffirmativeProseContext = startsCoordinatedComparisonAt(
-            text,
-            cwEnd,
-            n,
-            openTagCounts,
-            getLastCloseTagPos,
-            preConsumedTags
-          );
-        } else if (
-          segTokenCount === 2 &&
-          tokens.length >= 2 &&
-          !tokens[tokens.length - 2].wasQuoted &&
-          !tokens[tokens.length - 2].hasUnquotedTrailingPunct &&
-          SUBORDINATE_COMPARISON_INTRODUCERS.has(tokens[tokens.length - 2].trimmedClean.toLowerCase()) &&
-          !/[\r\n;|&).,;:!?]/.test(text[afterTargetPos]) &&
-          !isLikelyShellTokenAt(text, afterTargetPos, n, openTagCounts, null, preConsumedTags)
-        ) {
-          hasAffirmativeProseContext = true;
-        }
       }
     }
     if (!hasAffirmativeProseContext && effectivePunct === '' && afterTargetPos < n) {
@@ -1053,15 +1157,15 @@ function isProseNumericOrVersionComparison(
               text,
               afterConnPos,
               n,
-              openTagCounts,
+              openTagStack,
               getLastCloseTagPos,
-              preConsumedTags
+              preConsumedOpenCount
             );
           } else if (
             PROSE_PREDICATE_POST_COMPARISON_WORDS.has(nextLower) &&
             afterConnPos < n &&
             !/[\r\n;|&).,;:!?]/.test(text[afterConnPos]) &&
-            !isLikelyShellTokenAt(text, afterConnPos, n, openTagCounts, null, preConsumedTags)
+            !isLikelyShellTokenAt(text, afterConnPos, n, openTagStack, null, preConsumedOpenCount)
           ) {
             hasAffirmativeProseContext = true;
           }
@@ -1083,6 +1187,7 @@ function parseShellClausesLinear(text) {
   let current = {
     tokens: [],
     hasRedirection: false,
+    standaloneRedirs: null,
     isFunctionWrap: false,
     pipedIn: false,
     pipedOut: false,
@@ -1090,28 +1195,34 @@ function parseShellClausesLinear(text) {
   };
   let pendingRedir = false;
   let pendingSkippedAngleTag = false;
-  let openTagCounts = null;
+  let openTagStack = null;
   let clearOpenTagsAtWhitespace = false;
-  const hasOpenTag = (tagLower) => Boolean(openTagCounts && (openTagCounts.get(tagLower) ?? 0) > 0);
+  const hasTopOpenTag = (tagLower) =>
+    Boolean(openTagStack && openTagStack.length > 0 && openTagStack[openTagStack.length - 1] === tagLower);
   const pushOpenTag = (tagLower) => {
-    if (!openTagCounts) {
-      openTagCounts = new Map();
+    if (!openTagStack) {
+      openTagStack = [tagLower];
+    } else {
+      openTagStack.push(tagLower);
     }
-    openTagCounts.set(tagLower, (openTagCounts.get(tagLower) ?? 0) + 1);
   };
-  const consumeOpenTag = (tagLower) => {
-    if (!openTagCounts) {
+  const popOpenTag = () => {
+    if (!openTagStack || openTagStack.length === 0) {
       return;
     }
-    const prev = openTagCounts.get(tagLower) ?? 0;
-    if (prev <= 1) {
-      openTagCounts.delete(tagLower);
-      if (openTagCounts.size === 0) {
-        openTagCounts = null;
-      }
-    } else {
-      openTagCounts.set(tagLower, prev - 1);
+    openTagStack.pop();
+    if (openTagStack.length === 0) {
+      openTagStack = null;
     }
+  };
+  const recordStandaloneRedir = (rawSnippet) => {
+    if (!rawSnippet) {
+      return;
+    }
+    if (!current.standaloneRedirs) {
+      current.standaloneRedirs = [];
+    }
+    current.standaloneRedirs.push(rawSnippet);
   };
   let lastCloseTagPosMap = undefined;
   let segTokenCount = 0;
@@ -1147,7 +1258,7 @@ function parseShellClausesLinear(text) {
     commaConjReady = false;
   };
   const markSegmentRedir = (targetEndsSentence) => {
-    openTagCounts = null;
+    openTagStack = null;
     clearOpenTagsAtWhitespace = false;
     clearCommaComparisonState();
     if (targetEndsSentence) {
@@ -1200,22 +1311,30 @@ function parseShellClausesLinear(text) {
   let i = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
+  let nextBsPos = -2;
 
   const pushClause = () => {
     if (current.tokens.length > 0 || current.hasRedirection) {
       clauses.push(current);
+      current = {
+        tokens: [],
+        hasRedirection: false,
+        standaloneRedirs: null,
+        isFunctionWrap: false,
+        pipedIn: false,
+        pipedOut: false,
+        logicalChain: false
+      };
+    } else {
+      current.standaloneRedirs = null;
+      current.isFunctionWrap = false;
+      current.pipedIn = false;
+      current.pipedOut = false;
+      current.logicalChain = false;
     }
-    current = {
-      tokens: [],
-      hasRedirection: false,
-      isFunctionWrap: false,
-      pipedIn: false,
-      pipedOut: false,
-      logicalChain: false
-    };
     pendingRedir = false;
     pendingSkippedAngleTag = false;
-    openTagCounts = null;
+    openTagStack = null;
     clearOpenTagsAtWhitespace = false;
     resetSegmentState();
     clearCommaComparisonState();
@@ -1223,11 +1342,11 @@ function parseShellClausesLinear(text) {
 
   while (i < n) {
     const wsStart = i;
-    while (i < n && /[ \t\r\v\f]/.test(text[i])) {
+    while (i < n && isHorizontalWsCode(text.charCodeAt(i))) {
       i += 1;
     }
     if (clearOpenTagsAtWhitespace && i > wsStart) {
-      openTagCounts = null;
+      openTagStack = null;
       clearOpenTagsAtWhitespace = false;
     }
     if (i >= n) {
@@ -1264,10 +1383,11 @@ function parseShellClausesLinear(text) {
         continue;
       }
       if (i + 1 < n && text[i + 1] === '>') {
+        const redirStart = i;
         i += i + 2 < n && text[i + 2] === '>' ? 3 : 2;
         while (i < n && /[ \t]/.test(text[i])) i += 1;
         const targetStart = i;
-        while (i < n && !/[\s;|&<>()]/.test(text[i])) {
+        while (i < n && !isShellTokenDelimiterAt(text, i)) {
           if (text[i] === '\\' && i + 1 < n) {
             i += 2;
           } else if (text[i] === '"' && !noMoreDouble) {
@@ -1310,6 +1430,7 @@ function parseShellClausesLinear(text) {
             (targetLast === '.' || targetLast === '!' || targetLast === '?') &&
             targetClean !== targetRaw;
           current.hasRedirection = true;
+          recordStandaloneRedir(text.slice(redirStart, i));
           if (!targetEndsSentence) {
             pendingRedir = true;
           }
@@ -1360,13 +1481,13 @@ function parseShellClausesLinear(text) {
       }
       if (k < n && (text[k] === '<' || text[k] === '>')) {
         let isDigitBeforeMatchedCloseTag = false;
-        if (openTagCounts && text[k] === '<' && k + 2 < n && text[k + 1] === '/' && /[A-Za-z]/.test(text[k + 2])) {
+        if (openTagStack && text[k] === '<' && k + 2 < n && text[k + 1] === '/' && /[A-Za-z]/.test(text[k + 2])) {
           const closeLim = Math.min(n, k + 32);
           let c = k + 2;
           while (c < closeLim && /[A-Za-z0-9-]/.test(text[c])) {
             c += 1;
           }
-          if (c > k + 2 && c < closeLim && text[c] === '>' && hasOpenTag(text.slice(k + 2, c).toLowerCase())) {
+          if (c > k + 2 && c < closeLim && text[c] === '>' && hasTopOpenTag(text.slice(k + 2, c).toLowerCase())) {
             isDigitBeforeMatchedCloseTag = true;
           }
         }
@@ -1436,10 +1557,10 @@ function parseShellClausesLinear(text) {
               tagInner.length > 1 &&
               tagInner[0] === '/' &&
               /^\/[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) &&
-              hasOpenTag(tagInner.slice(1).toLowerCase());
+              hasTopOpenTag(tagInner.slice(1).toLowerCase());
             if (!hasTagBoundaryBefore) {
               if (isMatchedCloseTag) {
-                consumeOpenTag(tagInner.slice(1).toLowerCase());
+                popOpenTag();
                 pendingSkippedAngleTag = true;
                 i = tagEnd + 1;
                 continue;
@@ -1461,11 +1582,18 @@ function parseShellClausesLinear(text) {
                   (tagInner.length > 1 && tagInner[tagInner.length - 1] === '/') ||
                   /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(tagInner) ||
                   /^mailto:/i.test(tagInner));
+              const isUnmatchedCloseTag = Boolean(
+                tagInner.length > 1 &&
+                  tagInner[0] === '/' &&
+                  /^\/[A-Za-z][A-Za-z0-9-]*$/.test(tagInner) &&
+                  !isMatchedCloseTag
+              );
               let hasNoOutputTarget =
-                afterIdx >= n ||
-                /[;\r\n)}\]]/.test(text[afterIdx]) ||
-                (targetProbe > afterIdx && (targetProbe >= n || /[;)\]}|&<>\r\n]/.test(text[targetProbe])));
-              if (!hasNoOutputTarget && afterIdx < n && /[.,:!?]/.test(text[afterIdx])) {
+                !isUnmatchedCloseTag &&
+                (afterIdx >= n ||
+                  /[;\r\n)}\]]/.test(text[afterIdx]) ||
+                  (targetProbe > afterIdx && (targetProbe >= n || /[;)\]}|&<>\r\n]/.test(text[targetProbe]))));
+              if (!isUnmatchedCloseTag && !hasNoOutputTarget && afterIdx < n && /[.,:!?]/.test(text[afterIdx])) {
                 if (afterIdx + 1 >= n || /[\s)\]}]/.test(text[afterIdx + 1])) {
                   if (text[afterIdx] === '.' || text[afterIdx] === '!' || text[afterIdx] === '?') {
                     hasNoOutputTarget = true;
@@ -1474,7 +1602,7 @@ function parseShellClausesLinear(text) {
                     while (afterPunct < n && /[ \t]/.test(text[afterPunct])) {
                       afterPunct += 1;
                     }
-                    if (afterPunct >= n || !isLikelyShellTokenAt(text, afterPunct, n, openTagCounts)) {
+                    if (afterPunct >= n || !isLikelyShellTokenAt(text, afterPunct, n, openTagStack)) {
                       hasNoOutputTarget = true;
                     }
                   }
@@ -1488,7 +1616,7 @@ function parseShellClausesLinear(text) {
                   if (getLastCloseTagPos(tagLower) > tagEnd) {
                     let pairedTargetLooksShell = false;
                     if (targetProbe > afterIdx && targetProbe < n) {
-                      pairedTargetLooksShell = isLikelyShellTokenAt(text, targetProbe, n, openTagCounts, [tagLower]);
+                      pairedTargetLooksShell = isLikelyShellTokenAt(text, targetProbe, n, openTagStack, [tagLower]);
                       if (!pairedTargetLooksShell) {
                         let wEnd = targetProbe;
                         const wLimit = Math.min(n, targetProbe + 64);
@@ -1501,7 +1629,7 @@ function parseShellClausesLinear(text) {
                           while (afterW < n && /[ \t]/.test(text[afterW])) {
                             afterW += 1;
                           }
-                          if (afterW < n && isLikelyShellTokenAt(text, afterW, n, openTagCounts, [tagLower])) {
+                          if (afterW < n && isLikelyShellTokenAt(text, afterW, n, openTagStack, [tagLower])) {
                             pairedTargetLooksShell = true;
                           }
                         }
@@ -1555,12 +1683,12 @@ function parseShellClausesLinear(text) {
                           while (afterQ < n && /[ \t]/.test(text[afterQ])) {
                             afterQ += 1;
                           }
-                          isProsePlaceholderTag = afterQ >= n || !isLikelyShellTokenAt(text, afterQ, n, openTagCounts);
+                          isProsePlaceholderTag = afterQ >= n || !isLikelyShellTokenAt(text, afterQ, n, openTagStack);
                         }
                       } else if (text[afterPost] === '<') {
                         isProsePlaceholderTag = afterPost + 1 < n && /[a-z/]/.test(text[afterPost + 1]);
                       } else {
-                        isProsePlaceholderTag = !isLikelyShellTokenAt(text, afterPost, n, openTagCounts);
+                        isProsePlaceholderTag = !isLikelyShellTokenAt(text, afterPost, n, openTagStack);
                       }
                     }
                   }
@@ -1570,7 +1698,7 @@ function parseShellClausesLinear(text) {
                 if (isPairedHtmlOpenTag) {
                   pushOpenTag(tagInner.toLowerCase());
                 } else if (isMatchedCloseTag) {
-                  consumeOpenTag(tagInner.slice(1).toLowerCase());
+                  popOpenTag();
                 }
                 pendingSkippedAngleTag = true;
                 i = tagEnd + 1;
@@ -1635,7 +1763,7 @@ function parseShellClausesLinear(text) {
         }
       }
       const targetStart = nextPos;
-      while (nextPos < n && !/[\s;|&<>()]/.test(text[nextPos])) {
+      while (nextPos < n && !isShellTokenDelimiterAt(text, nextPos)) {
         if (text[nextPos] === '\\' && nextPos + 1 < n) {
           nextPos += 2;
         } else if (text[nextPos] === '"' && !noMoreDouble) {
@@ -1692,7 +1820,7 @@ function parseShellClausesLinear(text) {
           segTokenCount,
           segHardStarterCount,
           hasPriorComparisonContext,
-          openTagCounts,
+          openTagStack,
           getLastCloseTagPos
         )
       ) {
@@ -1707,6 +1835,11 @@ function parseShellClausesLinear(text) {
         !targetLastEscaped &&
         (targetLast === '.' || targetLast === '!' || targetLast === '?') &&
         targetClean !== targetRaw;
+      if (fdLen > 0) {
+        const redirSnippetEnd =
+          opChar === '<' && targetRaw.startsWith('/') && nextPos < n && text[nextPos] === '>' ? nextPos + 1 : nextPos;
+        recordStandaloneRedir(text.slice(i, redirSnippetEnd));
+      }
       markRedir(targetEndsSentence);
       i = nextPos > i ? nextPos : i + 1;
       continue;
@@ -1719,7 +1852,7 @@ function parseShellClausesLinear(text) {
     let unprotectedSuffixStart = 0;
     let lastCharWasEscaped = false;
 
-    while (i < n && !/[\s;|&<>()]/.test(text[i])) {
+    while (i < n && !isShellTokenDelimiterAt(text, i)) {
       const c = text[i];
       if (c === '=' && i > tokenStart && !wasQuoted && !hasRawEq) {
         const prefix = text.slice(tokenStart, i);
@@ -1734,8 +1867,29 @@ function parseShellClausesLinear(text) {
           i += 1;
           continue;
         }
+        const nextDq = text.indexOf('"', i + 1);
+        if (nextDq === -1) {
+          noMoreDouble = true;
+          value += c;
+          lastCharWasEscaped = false;
+          i += 1;
+          continue;
+        }
+        if (nextBsPos !== -1 && nextBsPos <= i) {
+          nextBsPos = text.indexOf('\\', i + 1);
+        }
+        const nextBs = nextBsPos;
+        if (nextBs === -1 || nextBs > nextDq) {
+          wasQuoted = true;
+          const dqSlice = text.slice(i + 1, nextDq);
+          value = value ? value + dqSlice : dqSlice;
+          unprotectedSuffixStart = value.length;
+          lastCharWasEscaped = false;
+          i = nextDq + 1;
+          continue;
+        }
         let closeDq = -1;
-        for (let k = i + 1; k < n; k += 1) {
+        for (let k = nextBs; k < n; k += 1) {
           if (text[k] === '\\' && k + 1 < n) {
             k += 1;
             continue;
@@ -1753,13 +1907,18 @@ function parseShellClausesLinear(text) {
           continue;
         }
         wasQuoted = true;
-        for (let k = i + 1; k < closeDq; k += 1) {
+        let segStart = i + 1;
+        for (let k = nextBs; k < closeDq; k += 1) {
           if (text[k] === '\\' && k + 1 < closeDq && (text[k + 1] === '"' || text[k + 1] === '\\' || text[k + 1] === '$')) {
+            if (k > segStart) value += text.slice(segStart, k);
             value += text[k + 1];
             k += 1;
-          } else {
-            value += text[k];
+            segStart = k + 1;
           }
+        }
+        if (segStart < closeDq) {
+          const tailSlice = text.slice(segStart, closeDq);
+          value = value ? value + tailSlice : tailSlice;
         }
         unprotectedSuffixStart = value.length;
         lastCharWasEscaped = false;
@@ -1767,8 +1926,8 @@ function parseShellClausesLinear(text) {
         continue;
       }
       if (c === "'") {
-        const precededByAlphaNum = i > tokenStart && /[A-Za-z0-9]/.test(text[i - 1]);
-        const followedByAlphaNum = i + 1 < n && /[A-Za-z0-9]/.test(text[i + 1]);
+        const precededByAlphaNum = i > tokenStart && isAsciiAlphaNumCode(text.charCodeAt(i - 1));
+        const followedByAlphaNum = i + 1 < n && isAsciiAlphaNumCode(text.charCodeAt(i + 1));
         if (precededByAlphaNum && followedByAlphaNum) {
           const sameWordClose = hasSingleQuoteCloseBeforeSpace(text, i, n);
           if (sameWordClose === -1) {
@@ -1792,7 +1951,7 @@ function parseShellClausesLinear(text) {
           i += 1;
           continue;
         }
-        if (precededByAlphaNum && !followedByAlphaNum && i + 1 < n && /[\s,.;:!?)]/.test(text[i + 1])) {
+        if (precededByAlphaNum && !followedByAlphaNum && i + 1 < n && isTrailingApostropheBoundaryAt(text, i + 1)) {
           value += c;
           lastCharWasEscaped = false;
           i += 1;
@@ -1815,9 +1974,32 @@ function parseShellClausesLinear(text) {
           continue;
         }
       }
-      value += c;
-      lastCharWasEscaped = false;
+      const runStart = i;
       i += 1;
+      while (i < n) {
+        const cc = text.charCodeAt(i);
+        if (
+          cc <= 32 ||
+          cc > 126 ||
+          cc === 34 ||
+          cc === 38 ||
+          cc === 39 ||
+          cc === 40 ||
+          cc === 41 ||
+          cc === 59 ||
+          cc === 60 ||
+          cc === 61 ||
+          cc === 62 ||
+          cc === 92 ||
+          cc === 124
+        ) {
+          break;
+        }
+        i += 1;
+      }
+      const runSlice = text.slice(runStart, i);
+      value = value ? value + runSlice : runSlice;
+      lastCharWasEscaped = false;
     }
 
     if (i === tokenStart) {
@@ -1825,8 +2007,8 @@ function parseShellClausesLinear(text) {
       continue;
     }
     const raw = text.slice(tokenStart, i);
-    const unprotectedTail = value.slice(unprotectedSuffixStart);
-    const unprotectedTailClean = stripTrailingProsePunct(unprotectedTail);
+    const unprotectedTail = unprotectedSuffixStart >= value.length ? '' : value.slice(unprotectedSuffixStart);
+    const unprotectedTailClean = unprotectedTail ? stripTrailingProsePunct(unprotectedTail) : '';
     const hasUnquotedTrailingPunct = unprotectedTailClean !== unprotectedTail;
     const trimmedClean =
       wasQuoted && !lastCharWasEscaped
@@ -1841,11 +2023,14 @@ function parseShellClausesLinear(text) {
       wasQuoted &&
       !hasPaddingSpaces &&
       !hasTrailingProsePunct &&
+      resolvedClean.indexOf('=') !== -1 &&
       /^[A-Za-z_][A-Za-z0-9_]*=[^\s]*$/.test(resolvedClean);
+    const strippedLower = toAsciiLowerFast(stripShellBinPrefix(resolvedClean));
     const tokObj = {
       raw,
       value,
       trimmedClean: resolvedClean,
+      strippedLower,
       wasQuoted,
       hasPaddingSpaces,
       hasTrailingProsePunct,
@@ -1899,7 +2084,7 @@ function parseShellClausesLinear(text) {
         clearCommaComparisonState();
       }
     } else if (!isArrowPrefixToken) {
-      const tokLower = stripShellBinPrefix(tokObj.trimmedClean).toLowerCase();
+      const tokLower = tokObj.strippedLower;
       if (wasAwaitingComparisonRhs) {
         rhsCompletedComparison = true;
         rhsCompletedVersionComparison = wasAwaitingVersionRhs;
@@ -1961,8 +2146,8 @@ function parseShellClausesLinear(text) {
         tokObj.isEnvAssign ||
         tokObj.precededByRedir ||
         tokObj.followedByRedir ||
-        tokObj.raw.includes('\\') ||
-        SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(tokObj.trimmedClean)
+        (nextBsPos !== -1 && tokObj.raw.indexOf('\\') !== -1) ||
+        (tokObj.trimmedClean.charCodeAt(0) === 46 && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(tokObj.trimmedClean))
       ) {
         segHardStarterCount += 1;
       } else if (isVerb) {
@@ -2253,7 +2438,10 @@ function clauseLooksLikeShellCommandFrom(clause, startIdx, isCompound, options =
 }
 
 function clauseLooksLikeShellCommand(clause, isCompound, options = {}) {
-  return clauseLooksLikeShellCommandFrom(clause, 0, isCompound, options).matched;
+  if (clauseLooksLikeShellCommandFrom(clause, 0, isCompound, options).matched) {
+    return true;
+  }
+  return Boolean(clause?.standaloneRedirs && clause.standaloneRedirs.length > 0);
 }
 
 const SHELL_KNOWN_LOWER_STARTERS = new Set([
@@ -2285,7 +2473,24 @@ function scanFlatShellClauses(text, options = {}) {
   return false;
 }
 
-function scanShellCommandText(text, options = {}) {
+let activeReadinessCache = null;
+
+function scanShellCommandText(text, options) {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  const canMemo = activeReadinessCache !== null && options === undefined;
+  if (canMemo && activeReadinessCache.shellCmd.has(text)) {
+    return activeReadinessCache.shellCmd.get(text);
+  }
+  const res = scanShellCommandTextInner(text, options || {});
+  if (canMemo) {
+    activeReadinessCache.shellCmd.set(text, res);
+  }
+  return res;
+}
+
+function scanShellCommandTextInner(text, options = {}) {
   if (!text || typeof text !== 'string') {
     return false;
   }
@@ -2377,11 +2582,32 @@ function scanShellCommandText(text, options = {}) {
 
 function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBareScript = false, stopOnFirst = true } = {}) {
   const n = rawText.length;
-  let masked = '';
+  if (
+    rawText.indexOf('"') === -1 &&
+    rawText.indexOf("'") === -1 &&
+    (!includeBackticks || rawText.indexOf('`') === -1)
+  ) {
+    return { matchedDeps: [], remainder: rawText };
+  }
+  const delimCacheKey =
+    activeReadinessCache &&
+    rawText &&
+    rawText.indexOf('`') === -1 &&
+    rawText.indexOf('./') === -1 &&
+    rawText.indexOf('../') === -1
+      ? trimLeadingHorizontalWs(rawText)
+      : null;
+  if (delimCacheKey !== null && activeReadinessCache.delimSpans.has(delimCacheKey)) {
+    return activeReadinessCache.delimSpans.get(delimCacheKey);
+  }
+  let innerEvalCache = null;
+  let maskedParts = null;
   let cursor = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
   let noMoreBacktick = false;
+  let nextBsPos = -2;
+  const pad64 = '                                                                ';
   const matchedDeps = [];
   const seenMatched = new Set();
   const pushMatched = (dep) => {
@@ -2392,27 +2618,18 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   };
 
   for (let i = 0; i < n; i += 1) {
-    const ch = rawText[i];
-    if (ch !== '"' && ch !== "'" && (!includeBackticks || ch !== '`')) {
+    const cc = rawText.charCodeAt(i);
+    if (cc !== 34 && cc !== 39 && (!includeBackticks || cc !== 96)) {
       continue;
     }
-    if (i > 0 && /[A-Za-z0-9_./\\-]/.test(rawText[i - 1])) {
+    const ch = cc === 34 ? '"' : cc === 39 ? "'" : '`';
+    if (i > 0 && isDelimitedQuotePrefixCode(rawText.charCodeAt(i - 1))) {
       if (ch === '`') {
         continue;
       }
       if (ch === "'") {
         if (!noMoreSingle) {
-          let endSq = -1;
-          for (let k = i + 1; k < n; k += 1) {
-            if (rawText[k] === "'") {
-              const isInternalApostrophe =
-                /[A-Za-z0-9]/.test(rawText[k - 1]) && k + 1 < n && /[A-Za-z0-9]/.test(rawText[k + 1]);
-              if (!isInternalApostrophe) {
-                endSq = k;
-                break;
-              }
-            }
-          }
+          const endSq = findNextNonApostropheSingleQuote(rawText, i + 1, n);
           if (endSq === -1) {
             noMoreSingle = true;
           } else {
@@ -2422,21 +2639,33 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
         continue;
       }
       if (ch === '"' && !noMoreDouble) {
-        let endDq = -1;
-        for (let k = i + 1; k < n; k += 1) {
-          if (rawText[k] === '\\') {
-            k += 1;
-            continue;
-          }
-          if (rawText[k] === '"') {
-            endDq = k;
-            break;
-          }
-        }
-        if (endDq === -1) {
+        const nextDq = rawText.indexOf('"', i + 1);
+        if (nextDq === -1) {
           noMoreDouble = true;
         } else {
-          i = endDq;
+          if (nextBsPos !== -1 && nextBsPos <= i) {
+            nextBsPos = rawText.indexOf('\\', i + 1);
+          }
+          if (nextBsPos === -1 || nextBsPos > nextDq) {
+            i = nextDq;
+          } else {
+            let endDq = -1;
+            for (let k = nextBsPos; k < n; k += 1) {
+              if (rawText[k] === '\\') {
+                k += 1;
+                continue;
+              }
+              if (rawText[k] === '"') {
+                endDq = k;
+                break;
+              }
+            }
+            if (endDq === -1) {
+              noMoreDouble = true;
+            } else {
+              i = endDq;
+            }
+          }
         }
       }
       continue;
@@ -2447,31 +2676,35 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
 
     let closeIdx = -1;
     if (ch === '"') {
-      for (let k = i + 1; k < n; k += 1) {
-        if (rawText[k] === '\\') {
-          k += 1;
-          continue;
-        }
-        if (rawText[k] === '"') {
-          closeIdx = k;
-          break;
-        }
-      }
-      if (closeIdx === -1) {
+      const nextDq = rawText.indexOf('"', i + 1);
+      if (nextDq === -1) {
         noMoreDouble = true;
         continue;
       }
-    } else if (ch === "'") {
-      for (let k = i + 1; k < n; k += 1) {
-        if (rawText[k] === "'") {
-          const isInternalApostrophe =
-            /[A-Za-z0-9]/.test(rawText[k - 1]) && k + 1 < n && /[A-Za-z0-9]/.test(rawText[k + 1]);
-          if (!isInternalApostrophe) {
+      if (nextBsPos !== -1 && nextBsPos <= i) {
+        nextBsPos = rawText.indexOf('\\', i + 1);
+      }
+      const nextBs = nextBsPos;
+      if (nextBs === -1 || nextBs > nextDq) {
+        closeIdx = nextDq;
+      } else {
+        for (let k = nextBs; k < n; k += 1) {
+          if (rawText[k] === '\\') {
+            k += 1;
+            continue;
+          }
+          if (rawText[k] === '"') {
             closeIdx = k;
             break;
           }
         }
+        if (closeIdx === -1) {
+          noMoreDouble = true;
+          continue;
+        }
       }
+    } else if (ch === "'") {
+      closeIdx = findNextNonApostropheSingleQuote(rawText, i + 1, n);
       if (closeIdx === -1) {
         noMoreSingle = true;
         continue;
@@ -2490,34 +2723,62 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
         pushMatched(inner);
         if (stopOnFirst) return { matchedDeps, remainder: rawText };
       } else {
-        const isSafeEndpoint = includeBackticks && typeof isSingleExternalEndpointToken === 'function' && isSingleExternalEndpointToken(inner);
-        if (!isSafeEndpoint) {
-          const matchesScript = includeBareScript && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
-          let innerMatchesCmd = false;
-          if (!matchesScript) {
-            if (!/[\s;|&<>()$`\\"']/.test(inner)) {
-              const simpleWord = stripShellBinPrefix(stripTrailingProsePunct(inner) || inner).toLowerCase();
-              innerMatchesCmd =
-                SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
-            } else {
-              innerMatchesCmd = scanShellCommandText(inner);
+        let didMatchInner = innerEvalCache ? innerEvalCache.get(inner) : undefined;
+        if (didMatchInner === undefined) {
+          const isSafeEndpoint =
+            includeBackticks &&
+            typeof isSingleExternalEndpointToken === 'function' &&
+            isSingleExternalEndpointToken(inner);
+          if (isSafeEndpoint) {
+            didMatchInner = false;
+          } else {
+            const startsDot = inner.charCodeAt(0) === 46;
+            const matchesScript = includeBareScript && startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner);
+            let innerMatchesCmd = false;
+            if (!matchesScript) {
+              if (!/[\s;|&<>()$`\\"']/.test(inner)) {
+                const simpleWord = toAsciiLowerFast(stripShellBinPrefix(stripTrailingProsePunct(inner) || inner));
+                innerMatchesCmd =
+                  SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
+              } else {
+                innerMatchesCmd = scanShellCommandText(inner);
+              }
             }
+            didMatchInner = Boolean(matchesScript || innerMatchesCmd);
           }
-          if (matchesScript || innerMatchesCmd) {
-            pushMatched(inner);
-            if (stopOnFirst) return { matchedDeps, remainder: rawText };
+          if (!innerEvalCache) {
+            innerEvalCache = new Map();
           }
+          innerEvalCache.set(inner, didMatchInner);
+        }
+        if (didMatchInner) {
+          pushMatched(inner);
+          if (stopOnFirst) return { matchedDeps, remainder: rawText };
         }
       }
     }
 
-    masked += rawText.slice(cursor, i) + ' '.repeat(closeIdx - i + 1);
+    if (!maskedParts) maskedParts = [];
+    if (i > cursor) maskedParts.push(rawText.slice(cursor, i));
+    const spanLen = closeIdx - i + 1;
+    maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
     cursor = closeIdx + 1;
     i = closeIdx;
   }
 
-  const remainder = cursor === 0 ? rawText : masked + rawText.slice(cursor);
-  return { matchedDeps, remainder };
+  let finalResult;
+  if (cursor === 0) {
+    finalResult = { matchedDeps, remainder: rawText };
+  } else {
+    if (cursor < n) {
+      maskedParts.push(rawText.slice(cursor));
+    }
+    finalResult = { matchedDeps, remainder: maskedParts.join('') };
+  }
+  if (delimCacheKey !== null && (!stopOnFirst || matchedDeps.length === 0)) {
+    activeReadinessCache.delimSpans.set(delimCacheKey, finalResult);
+  }
+  return finalResult;
 }
 
 const PROSE_STRICT_CLI_VERB_SET = new Set([
@@ -2702,10 +2963,17 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
   if (!text || typeof text !== 'string') {
     return [];
   }
-  const maskedBt = maskBackticksLinear(text);
-  const normQuotes = normalizeInlineEscapedQuotes(maskedBt);
-  const unescaped = unescapeInlineShellWords(normQuotes);
-  const clauses = parseShellClausesLinear(unescaped);
+  const outerCacheKey = activeReadinessCache ? trimHorizontalWs(text) : null;
+  let clauses = outerCacheKey !== null ? activeReadinessCache.outerClauses.get(outerCacheKey) : undefined;
+  if (!clauses) {
+    const maskedBt = maskBackticksLinear(outerCacheKey ?? text);
+    const normQuotes = normalizeInlineEscapedQuotes(maskedBt);
+    const unescaped = unescapeInlineShellWords(normQuotes);
+    clauses = parseShellClausesLinear(unescaped);
+    if (outerCacheKey !== null) {
+      activeReadinessCache.outerClauses.set(outerCacheKey, clauses);
+    }
+  }
   const isCompound = clauses.length > 1;
   const found = [];
   const seenFound = stopOnFirst ? null : new Set();
@@ -2714,17 +2982,18 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
     const clause = clauses[c];
     const tokens = clause.tokens;
     const redirReach = getClauseRedirReach(clause);
+    let clauseMatched = false;
     let k = 0;
     while (k < tokens.length) {
       const startTok = tokens[k];
-      const startStrippedLower = stripShellBinPrefix(startTok.trimmedClean).toLowerCase();
+      const startStrippedLower = startTok.strippedLower;
       if (
         !startTok.precededByRedir &&
         !startTok.followedByRedir &&
         !startTok.isEnvAssign &&
         !SHELL_KNOWN_LOWER_STARTERS.has(startStrippedLower) &&
-        !startTok.trimmedClean.startsWith('./') &&
-        !startTok.trimmedClean.startsWith('../')
+        (startTok.trimmedClean.charCodeAt(0) !== 46 ||
+          (!startTok.trimmedClean.startsWith('./') && !startTok.trimmedClean.startsWith('../')))
       ) {
         k += 1;
         continue;
@@ -2750,7 +3019,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           idx += 1;
           continue;
         }
-        const strippedLower = stripShellBinPrefix(t.trimmedClean).toLowerCase();
+        const strippedLower = t.strippedLower;
         if (
           SHELL_WRAPPER_WORD_SET.has(strippedLower) &&
           !t.hasTrailingProsePunct &&
@@ -2759,7 +3028,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           idx + 1 < tokens.length
         ) {
           const afterTok = tokens[idx + 1];
-          const afterLower = stripShellBinPrefix(afterTok.trimmedClean).toLowerCase();
+          const afterLower = afterTok.strippedLower;
           if (
             !t.wasQuoted ||
             afterTok.wasQuoted ||
@@ -2819,6 +3088,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
                 const snippet = stripTrailingProsePunct(joinRawTokenRange(tokens, k, idx + 1));
                 if (snippet) {
                   if (stopOnFirst) return [snippet];
+                  clauseMatched = true;
                   if (!seenFound.has(snippet)) {
                     seenFound.add(snippet);
                     found.push(snippet);
@@ -2852,6 +3122,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           const snippet = stripTrailingProsePunct(joinRawTokenRange(tokens, k, tokens.length));
           if (snippet) {
             if (stopOnFirst) return [snippet];
+            clauseMatched = true;
             if (!seenFound.has(snippet)) {
               seenFound.add(snippet);
               found.push(snippet);
@@ -2866,7 +3137,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
 
       const headTok = tokens[idx];
       const remainingCount = tokens.length - 1 - idx;
-      const cmdLower = stripShellBinPrefix(headTok.trimmedClean).toLowerCase();
+      const cmdLower = headTok.strippedLower;
       const nextTok = remainingCount > 0 ? tokens[idx + 1] : null;
       const nextVal = nextTok ? nextTok.trimmedClean : '';
       const nextLower = nextVal.toLowerCase();
@@ -2901,7 +3172,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
 
       if (headTok.isEnvAssign && hasRedirection) {
         matched = true;
-      } else if (SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean)) {
+      } else if (headTok.trimmedClean.charCodeAt(0) === 46 && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(headTok.trimmedClean)) {
         matched = checkMode || remainingCount > 0 || hasStrongShellPrefix;
       } else if (cmdLower === 'go') {
         matched =
@@ -3004,6 +3275,7 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
           if (stopOnFirst) {
             return [snippet];
           }
+          clauseMatched = true;
           if (!seenFound.has(snippet)) {
             seenFound.add(snippet);
             found.push(snippet);
@@ -3014,6 +3286,21 @@ function scanOuterClausesForCommands(text, { checkMode = false, stopOnFirst = fa
       }
 
       k = Math.max(k + 1, idx + (idx === k ? 1 : 0));
+    }
+
+    if (!clauseMatched && clause.standaloneRedirs && clause.standaloneRedirs.length > 0) {
+      for (let r = 0; r < clause.standaloneRedirs.length; r += 1) {
+        const snippet = stripTrailingProsePunct(clause.standaloneRedirs[r]);
+        if (snippet) {
+          if (stopOnFirst) {
+            return [snippet];
+          }
+          if (!seenFound.has(snippet)) {
+            seenFound.add(snippet);
+            found.push(snippet);
+          }
+        }
+      }
     }
   }
 
@@ -3210,7 +3497,12 @@ function isExplicitlyDelimitedMatch(sourceText, offset, matchLength) {
 }
 
 function isSingleExternalEndpointToken(value) {
-  if (typeof value !== 'string' || !value || /\s/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    (value.indexOf('.') === -1 && value.indexOf(':') === -1) ||
+    /\s/.test(value)
+  ) {
     return false;
   }
   const isValidUrlToken =
@@ -3535,13 +3827,13 @@ function classifyFileCandidate(rawToken, startRaw, endRaw) {
 
 function hasPotentialBroadSyntax(str) {
   for (let i = 0; i < str.length; i += 1) {
-    const ch = str[i];
-    if (ch === '*' || ch === '/' || ch === '?' || ch === '[' || ch === '{') {
+    const cc = str.charCodeAt(i);
+    if (cc === 42 || cc === 47 || cc === 63 || cc === 91 || cc === 123) {
       return true;
     }
-    if (ch === '(' && i > 0) {
-      const prev = str[i - 1];
-      if (prev === '@' || prev === '+' || prev === '!') {
+    if (cc === 40 && i > 0) {
+      const prev = str.charCodeAt(i - 1);
+      if (prev === 64 || prev === 43 || prev === 33) {
         return true;
       }
     }
@@ -4084,6 +4376,16 @@ function canAbsorbBranchChild(topKind, builtOp, child) {
   return false;
 }
 
+function getLiteralSeqKey(node) {
+  if (node.kind !== 'seq' || node.items.length === 0 || node.items.length > 32) return null;
+  let s = '';
+  for (let m = 0; m < node.items.length; m += 1) {
+    if (node.items[m].kind !== 'char') return null;
+    s += String.fromCharCode(node.items[m].code);
+  }
+  return s;
+}
+
 function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClose, parenIsExtGlob) {
   const n = value.length;
   const frames = [{ kind: 'root', stopIdx: n, sep: null, op: null, branches: null, seqItems: [] }];
@@ -4111,6 +4413,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
       let builtBranches = top.branches;
       let hasEmptyBranch = false;
       let seenChars = null;
+      let seenLiterals = null;
       let nullable = top.kind === 'ext' ? builtOp === '?' || builtOp === '*' || anyNullable : anyNullable;
 
       if (top.kind !== 'ext' || builtOp !== '!') {
@@ -4163,6 +4466,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
           builtBranches = bestChild.branches;
           hasEmptyBranch = Boolean(bestChild.hasEmptyBranch);
           seenChars = bestChild.seenChars || null;
+          seenLiterals = bestChild.seenLiterals || null;
         } else {
           builtBranches = [];
         }
@@ -4185,6 +4489,21 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
               return;
             }
             seenChars.add(br.code);
+          } else if (br.kind === 'seq') {
+            const litKey = getLiteralSeqKey(br);
+            if (litKey !== null) {
+              if (!seenLiterals) {
+                seenLiterals = new Set();
+                for (let e = 0; e < builtBranches.length; e += 1) {
+                  const ek = getLiteralSeqKey(builtBranches[e]);
+                  if (ek !== null) seenLiterals.add(ek);
+                }
+              }
+              if (seenLiterals.has(litKey)) {
+                return;
+              }
+              seenLiterals.add(litKey);
+            }
           }
           builtBranches.push(br);
         };
@@ -4221,7 +4540,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
         top.kind === 'brace' || (top.kind === 'ext' && builtOp === '@' && builtBranches.length === 1)
           ? builtBranches.length === 1
             ? builtBranches[0]
-            : { kind: 'alt', branches: builtBranches, hasEmptyBranch, nullable, seenChars }
+            : { kind: 'alt', branches: builtBranches, hasEmptyBranch, nullable, seenChars, seenLiterals }
           : {
               kind: 'ext',
               op: builtOp,
@@ -4229,6 +4548,7 @@ function parseRootGlobAst(value, bracketClose, braceClose, braceIsSeq, parenClos
               hasEmptyBranch,
               nullable,
               seenChars,
+              seenLiterals,
               mIn1: -1,
               mOut1: -1,
               mIn2: -1,
@@ -5121,6 +5441,9 @@ function extractBroadFromSubSpan(run, subStart, subEnd) {
 }
 
 function extractAndMaskBroadWorkspaceDeps(masked, seenBroad, workspaceBroadDeps) {
+  if (!hasPotentialBroadSyntax(masked)) {
+    return masked;
+  }
   return masked.replace(BROAD_RUN_SCAN_REGEX, (run) => {
     if (!hasPotentialBroadSyntax(run)) {
       return run;
@@ -5307,72 +5630,82 @@ export function extractVerificationDependencies(inputs, options = {}) {
     }
   }
 
-  for (const text of strings) {
+  const uniqueStrings = strings.length > 1 ? Array.from(new Set(strings)) : strings;
+  for (const text of uniqueStrings) {
     // 0. Extract explicitly delimited single-token external URLs/endpoints first so
     //    embedded parentheses, brackets, `..`, and trailing punctuation stay verbatim.
-    let masked = text.replace(EXPLICIT_DELIMITED_TOKEN_REGEX, (fullMatch, offset, sourceStr) => {
-      const endOffset = offset + fullMatch.length;
-      const prevChar = offset > 0 ? sourceStr[offset - 1] : '';
-      const nextChar = endOffset < sourceStr.length ? sourceStr[endOffset] : '';
-      if (
-        (prevChar && /[A-Za-z0-9_/-]/.test(prevChar)) ||
-        (nextChar && /[A-Za-z0-9_/-]/.test(nextChar))
-      ) {
-        return fullMatch;
-      }
-      const inner = fullMatch.slice(1, -1);
-      if (!isSingleExternalEndpointToken(inner)) {
-        return fullMatch;
-      }
-      const key = canonicalizeExternalDepKey(inner);
-      if (!seenExternal.has(key)) {
-        seenExternal.add(key);
-        externalDeps.push(inner);
-      }
-      return ' '.repeat(fullMatch.length);
-    });
+    let masked =
+      text.indexOf('.') !== -1 || text.indexOf(':') !== -1
+        ? text.replace(EXPLICIT_DELIMITED_TOKEN_REGEX, (fullMatch, offset, sourceStr) => {
+            const endOffset = offset + fullMatch.length;
+            const prevChar = offset > 0 ? sourceStr[offset - 1] : '';
+            const nextChar = endOffset < sourceStr.length ? sourceStr[endOffset] : '';
+            if (
+              (prevChar && /[A-Za-z0-9_/-]/.test(prevChar)) ||
+              (nextChar && /[A-Za-z0-9_/-]/.test(nextChar))
+            ) {
+              return fullMatch;
+            }
+            const inner = fullMatch.slice(1, -1);
+            if (!isSingleExternalEndpointToken(inner)) {
+              return fullMatch;
+            }
+            const key = canonicalizeExternalDepKey(inner);
+            if (!seenExternal.has(key)) {
+              seenExternal.add(key);
+              externalDeps.push(inner);
+            }
+            return ' '.repeat(fullMatch.length);
+          })
+        : text;
 
     // 1a. Extract external URI scheme URLs first and mask them so URL paths
     //     or embedded standard tokens are not misclassified or duplicated.
-    masked = masked.replace(URL_REGEX, (rawUrl, ...args) => {
-      const offset = args[args.length - 2];
-      const sourceStr = args[args.length - 1];
-      const cleaned = cleanProseEndpointToken(rawUrl, sourceStr, offset);
-      if (!cleaned || /^[a-z][a-z0-9+.-]*:\/\/$/i.test(cleaned)) {
-        return rawUrl;
-      }
-      const urlKey = `url:${cleaned}`;
-      if (!seenExternal.has(urlKey)) {
-        seenExternal.add(urlKey);
-        externalDeps.push(cleaned);
-      }
-      return ' '.repeat(cleaned.length) + rawUrl.slice(cleaned.length);
-    });
+    if (masked.indexOf('://') !== -1) {
+      masked = masked.replace(URL_REGEX, (rawUrl, ...args) => {
+        const offset = args[args.length - 2];
+        const sourceStr = args[args.length - 1];
+        const cleaned = cleanProseEndpointToken(rawUrl, sourceStr, offset);
+        if (!cleaned || /^[a-z][a-z0-9+.-]*:\/\/$/i.test(cleaned)) {
+          return rawUrl;
+        }
+        const urlKey = `url:${cleaned}`;
+        if (!seenExternal.has(urlKey)) {
+          seenExternal.add(urlKey);
+          externalDeps.push(cleaned);
+        }
+        return ' '.repeat(cleaned.length) + rawUrl.slice(cleaned.length);
+      });
+    }
 
     // 1b. Extract bare external endpoints with path/query/hash suffixes (and optional port)
     //     BEFORE ellipsis masking and glob matching so embedded `..` (e.g. `openapi.org/api?token=a..b`)
     //     and port-qualified wildcards (e.g. `openapi.org:443/api*`) stay intact.
-    masked = masked.replace(BARE_DOMAIN_WITH_SUFFIX_REGEX, (rawDomain, ...args) => {
-      const offset = args[args.length - 2];
-      const sourceStr = args[args.length - 1];
-      const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
-      const normalized = cleaned.trim();
-      if (!normalized || isSemanticVersionToken(normalized) || !parseBareDomainEndpoint(normalized)) {
-        return rawDomain;
-      }
-      const domainKey = canonicalizeExternalDepKey(normalized);
-      if (!seenExternal.has(domainKey)) {
-        seenExternal.add(domainKey);
-        externalDeps.push(normalized);
-      }
-      return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
-    });
+    if (masked.indexOf('.') !== -1) {
+      masked = masked.replace(BARE_DOMAIN_WITH_SUFFIX_REGEX, (rawDomain, ...args) => {
+        const offset = args[args.length - 2];
+        const sourceStr = args[args.length - 1];
+        const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
+        const normalized = cleaned.trim();
+        if (!normalized || isSemanticVersionToken(normalized) || !parseBareDomainEndpoint(normalized)) {
+          return rawDomain;
+        }
+        const domainKey = canonicalizeExternalDepKey(normalized);
+        if (!seenExternal.has(domainKey)) {
+          seenExternal.add(domainKey);
+          externalDeps.push(normalized);
+        }
+        return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
+      });
+    }
 
     // 2. Mask ellipses (`...`, `..`) before glob/file/standard extraction, preserving exact sequence braces `{a..b}`.
-    masked = masked.replace(
-      /\{(?:-?\d+\.\.-?\d+(?:\.\.-?\d+)?|[A-Za-z]\.\.[A-Za-z](?:\.\.-?\d+)?)\}|\.{2,}/g,
-      (m) => (m.startsWith('{') ? m : ' '.repeat(m.length))
-    );
+    if (masked.indexOf('..') !== -1) {
+      masked = masked.replace(
+        /\{(?:-?\d+\.\.-?\d+(?:\.\.-?\d+)?|[A-Za-z]\.\.[A-Za-z](?:\.\.-?\d+)?)\}|\.{2,}/g,
+        (m) => (m.startsWith('{') ? m : ' '.repeat(m.length))
+      );
+    }
 
     // 3. Extract broad workspace globs and directory references (`src/**`, `**/*.js`, `src/engine/`, `src/*[0-9].js`),
     //    leaving unprefixed bare domains with trailing slashes or wildcards intact for external detection.
@@ -5380,44 +5713,48 @@ export function extractVerificationDependencies(inputs, options = {}) {
 
     // 4. Extract concrete workspace files BEFORE named external standards so file paths like
     //    `src/openapi.js` or `docs/rfc9110.md` are recorded as files and masked from standard matching.
-    masked = masked.replace(FILE_CANDIDATE_REGEX, (full, lead, rawToken, startRaw, endRaw) => {
-      const decision = classifyFileCandidate(rawToken, startRaw, endRaw);
-      if (decision === 'leave') {
-        return full;
-      }
-      if (decision === 'file') {
-        const source = normalizeWorkspacePath(rawToken);
-        if (startRaw !== undefined) {
-          const startLine = Number.parseInt(startRaw, 10);
-          const endLine = endRaw !== undefined ? Number.parseInt(endRaw, 10) : startLine;
-          addFileDep(source, {
-            startLine: Math.min(startLine, endLine),
-            endLine: Math.max(startLine, endLine)
-          });
-        } else {
-          addFileDep(source, null);
+    if (hasPotentialFileCandidateChar(masked)) {
+      masked = masked.replace(FILE_CANDIDATE_REGEX, (full, lead, rawToken, startRaw, endRaw) => {
+        const decision = classifyFileCandidate(rawToken, startRaw, endRaw);
+        if (decision === 'leave') {
+          return full;
         }
-      }
-      return `${lead}${' '.repeat(full.length - lead.length)}`;
-    });
+        if (decision === 'file') {
+          const source = normalizeWorkspacePath(rawToken);
+          if (startRaw !== undefined) {
+            const startLine = Number.parseInt(startRaw, 10);
+            const endLine = endRaw !== undefined ? Number.parseInt(endRaw, 10) : startLine;
+            addFileDep(source, {
+              startLine: Math.min(startLine, endLine),
+              endLine: Math.max(startLine, endLine)
+            });
+          } else {
+            addFileDep(source, null);
+          }
+        }
+        return `${lead}${' '.repeat(full.length - lead.length)}`;
+      });
+    }
 
     // 5a. Extract complete bare external domains/endpoints BEFORE named standards so
     //     standard-prefixed hosts like `openapi.org/api*` or `ietf.org/api*` are not split.
-    masked = masked.replace(BARE_DOMAIN_ENDPOINT_REGEX, (rawDomain, ...args) => {
-      const offset = args[args.length - 2];
-      const sourceStr = args[args.length - 1];
-      const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
-      const normalized = cleaned.trim();
-      if (!normalized || isSemanticVersionToken(normalized)) {
-        return rawDomain;
-      }
-      const domainKey = canonicalizeExternalDepKey(normalized);
-      if (!seenExternal.has(domainKey)) {
-        seenExternal.add(domainKey);
-        externalDeps.push(normalized);
-      }
-      return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
-    });
+    if (masked.indexOf('.') !== -1) {
+      masked = masked.replace(BARE_DOMAIN_ENDPOINT_REGEX, (rawDomain, ...args) => {
+        const offset = args[args.length - 2];
+        const sourceStr = args[args.length - 1];
+        const cleaned = cleanProseEndpointToken(rawDomain, sourceStr, offset);
+        const normalized = cleaned.trim();
+        if (!normalized || isSemanticVersionToken(normalized)) {
+          return rawDomain;
+        }
+        const domainKey = canonicalizeExternalDepKey(normalized);
+        if (!seenExternal.has(domainKey)) {
+          seenExternal.add(domainKey);
+          externalDeps.push(normalized);
+        }
+        return ' '.repeat(cleaned.length) + rawDomain.slice(cleaned.length);
+      });
+    }
 
     // 5b. Extract named external standards/identifiers across remaining non-domain text
     //     before version tokens are ignored so `OpenAPI 3.1.0` stays intact.
@@ -5437,7 +5774,7 @@ export function extractVerificationDependencies(inputs, options = {}) {
     });
   }
 
-  for (const rawInputStr of strings) {
+  for (const rawInputStr of uniqueStrings) {
     if (!rawInputStr || typeof rawInputStr !== 'string') {
       continue;
     }
@@ -5933,6 +6270,21 @@ function doesCoveredArtifactSatisfyExternalDep(extSource, artifact, evidenceById
  * @returns {{ ready: boolean, reasonCode: string|null, reason: string|null, missingDependencies: string[] }}
  */
 export function evaluateToolFreeEvidenceReadiness(params = {}) {
+  const prevCache = activeReadinessCache;
+  activeReadinessCache = prevCache || {
+    shellCmd: new Map(),
+    outerClauses: new Map(),
+    cmdSubs: new Map(),
+    delimSpans: new Map()
+  };
+  try {
+    return evaluateToolFreeEvidenceReadinessCore(params);
+  } finally {
+    activeReadinessCache = prevCache;
+  }
+}
+
+function evaluateToolFreeEvidenceReadinessCore(params = {}) {
   const {
     phase = 'DELIBERATION',
     round = 1,

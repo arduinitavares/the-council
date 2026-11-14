@@ -15,6 +15,7 @@ import {
 } from '../../src/seats/soul.js';
 import { CouncilEngine } from '../../src/engine/council-engine.js';
 import { MockAdapter } from '../../src/harness/mock.js';
+import { InvalidResponseError, TimeoutError } from '../../src/harness/adapter.js';
 
 describe('Issue #102 Task 2: Portable citation normalization, forbidden path/artifact guards & read caps', () => {
   it('strips ONLY valid relative subpaths under trustedEphemeralRoots while leaving .. traversal, .council, and untrusted temp/host paths for rejection', () => {
@@ -346,10 +347,10 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
         maxRounds: 2,
         maxRetriesPerSeat: 2,
         cwd: forbiddenRoot,
-        judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-5.4 (high)', maxRetries: 2 },
+        judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (high)', maxRetries: 2 },
         seats: [
-          { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only', cwd: forbiddenRoot },
-          { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' }
+          { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', cwd: forbiddenRoot },
+          { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' }
         ]
       },
       { harnessResolver: () => mock }
@@ -375,5 +376,181 @@ describe('Issue #102 Task 2: Portable citation normalization, forbidden path/art
     assert.ok(!s1Objection.reason.includes(forbiddenRoot));
     assert.ok(!s1Objection.reason.includes(trustedRoot));
     assert.match(s1Objection.reason, /src\/auth\.js:12/);
+  });
+
+  it('preserves in-place _invocationMeta mutations across Delib Retry, Judge, Vote Wave 0, and Vote Retry without mutating originalInvocationMeta', async () => {
+    const baseWorkspace = '/tmp/live-workspace-inplace-102';
+    const delibRetryTrustedRoot = path.join(os.tmpdir(), 'council-inplace-delib-retry');
+    const judgeForbiddenRoot = '/Users/private/inplace-judge-forbidden';
+    const judgeTrustedRoot = path.join(os.tmpdir(), 'council-inplace-judge');
+    const vote0ForbiddenRoot = '/Users/private/inplace-vote0-forbidden';
+    const voteRetryTrustedRoot = path.join(os.tmpdir(), 'council-inplace-vote-retry');
+
+    const mock = new MockAdapter();
+    let delibCalls = 0;
+    let judgeCalls = 0;
+    let voteCalls = 0;
+    let s3TimeoutCalls = 0;
+
+    const origProof = mock.executeSeatProof.bind(mock);
+    mock.executeSeatProof = async (ctx) => {
+      if (ctx.seat.id === 's1') {
+        assert.equal(ctx._invocationMeta, ctx.context._invocationMeta, 'Delib attempt args._invocationMeta and context._invocationMeta must share one live object');
+        delibCalls += 1;
+        if (ctx.round === 1 && delibCalls === 1) {
+          throw new InvalidResponseError('Transient parse failure before Delib Retry', {
+            harness: 'codex',
+            seatId: 's1'
+          });
+        }
+        // Mutate IN PLACE without replacing ctx._invocationMeta reference
+        ctx._invocationMeta.trustedEphemeralRoots.push(delibRetryTrustedRoot);
+        return {
+          scope: 'auth-middleware',
+          kind: 'check',
+          statement: `Delib retry verified ${path.join(delibRetryTrustedRoot, 'src/auth.js:15')}`,
+          source: 'direct tool observation'
+        };
+      }
+      if (ctx.seat.id === 's3-timeout') {
+        assert.equal(ctx._invocationMeta, ctx.context._invocationMeta);
+        s3TimeoutCalls += 1;
+        // Mutate effectiveTools IN PLACE before TimeoutError — must not corrupt originalInvocationMeta
+        ctx._invocationMeta.effectiveTools = 'none';
+        if (s3TimeoutCalls === 1) {
+          throw new TimeoutError('Seat timed out after read-only loop', {
+            harness: 'codex',
+            seatId: 's3-timeout',
+            timeoutMs: 1000
+          });
+        }
+        return origProof(ctx);
+      }
+      return origProof(ctx);
+    };
+
+    const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+    mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+      assert.equal(ctx._invocationMeta, ctx.context._invocationMeta, 'Judge args._invocationMeta and context._invocationMeta must share one live object');
+      judgeCalls += 1;
+      const base = await origJudge(ctx);
+      if (judgeCalls === 1) {
+        // Push custom forbidden root IN PLACE without reassigning ctx._invocationMeta
+        ctx._invocationMeta.forbiddenWorkspaceRoots.push(judgeForbiddenRoot);
+        return {
+          ...base,
+          summary: `Judge leaked ${judgeForbiddenRoot}/secret.md`,
+          clauses: [{ id: 'C1', context: 'ctx', conclusion: 'ok' }],
+          proofDecisions: base.proofDecisions
+        };
+      }
+      ctx._invocationMeta.trustedEphemeralRoots.push(judgeTrustedRoot);
+      return {
+        ...base,
+        summary: `Judge normalized ${path.join(judgeTrustedRoot, 'src/auth.js:20')}`,
+        clauses: (base.clauses || []).map((c, idx) =>
+          idx === 0
+            ? { ...c, context: 'Auth', conclusion: `Clean ${path.join(judgeTrustedRoot, 'src/auth.js:20')}` }
+            : c
+        )
+      };
+    };
+
+    const origVote = mock.executeSeatVote.bind(mock);
+    mock.executeSeatVote = async (ctx) => {
+      if (ctx.seat.id === 's1') {
+        assert.equal(ctx._invocationMeta, ctx.context._invocationMeta, 'Vote args._invocationMeta and context._invocationMeta must share one live object');
+        voteCalls += 1;
+        if (ctx.round === 1 && voteCalls === 1) {
+          // Vote Wave 0: push custom forbidden root IN PLACE
+          ctx._invocationMeta.forbiddenWorkspaceRoots.push(vote0ForbiddenRoot);
+          return {
+            vote: 'accept',
+            reason: `Saw ${vote0ForbiddenRoot}/private.js`,
+            note: 'leaked in vote wave 0'
+          };
+        }
+        if (ctx.round === 1 && voteCalls === 2) {
+          // Vote Retry: push trusted ephemeral root IN PLACE
+          ctx._invocationMeta.trustedEphemeralRoots.push(voteRetryTrustedRoot);
+          const s1Proof = (ctx.state?.proofs || []).find((p) => p.seatId === 's1' && p.round === 1);
+          return {
+            vote: 'object',
+            proofId: s1Proof?.id || 'P1',
+            reason: `Verified via ${path.join(voteRetryTrustedRoot, 'src/auth.js:33')}`,
+            note: 'in-place trusted root normalized'
+          };
+        }
+        return { vote: 'accept' };
+      }
+      return origVote(ctx);
+    };
+
+    const engine = new CouncilEngine(
+      {
+        topic: 'Audit src/auth.js in-place _invocationMeta propagation across all phases',
+        evidence: [
+          {
+            id: 'E1',
+            label: 'src/auth.js snapshot',
+            source: 'src/auth.js',
+            text: '[E1] Complete snapshot of src/auth.js'
+          }
+        ],
+        minQuorum: 2,
+        maxRounds: 2,
+        maxRetriesPerSeat: 2,
+        cwd: baseWorkspace,
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Complete workspace snapshot',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          coveredArtifacts: [{ source: 'src/auth.js', evidenceId: 'E1', coverage: 'complete_artifact' }]
+        },
+        judge: { id: 'judge-astra', harness: 'codex', model: 'gpt-6-astra (high)', maxRetries: 2 },
+        seats: [
+          {
+            id: 's1',
+            harness: 'codex',
+            model: 'gpt-6-astra (high)',
+            soul: 'S1',
+            tools: 'read-only',
+            votingTools: 'read-only',
+            cwd: baseWorkspace
+          },
+          { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
+          { id: 's3-timeout', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S3', tools: 'read-only' }
+        ]
+      },
+      { harnessResolver: () => mock }
+    );
+
+    const result = await engine.run();
+    assert.equal(result.ok, true, `Expected consensus after in-place metadata propagation; got ${JSON.stringify(result.verdict)}`);
+    assert.equal(delibCalls, 3, 's1 Delib Wave 0 failure + Delib Retry + Round 2');
+    assert.equal(judgeCalls, 3, 'Judge Attempt 0 blocked by in-place forbiddenRoot + Retry 1 succeeded + Round 2');
+    assert.equal(voteCalls, 3, 's1 Vote Wave 0 blocked by in-place forbiddenRoot + Vote Retry succeeded + Round 2');
+
+    const p1 = engine.state.proofs.find((p) => p.seatId === 's1' && p.round === 1);
+    assert.ok(p1);
+    assert.ok(!p1.statement.includes(delibRetryTrustedRoot), 'Delib Retry in-place trustedEphemeralRoot must be normalized');
+    assert.match(p1.statement, /src\/auth\.js:15/);
+
+    assert.ok(!engine.state.candidate.summary.includes(judgeTrustedRoot), 'Judge in-place trustedEphemeralRoot must be normalized');
+    assert.match(engine.state.candidate.summary, /src\/auth\.js:20/);
+
+    const s1Objection = (engine.state.objections || []).find((o) => o.seatId === 's1' && o.round === 1);
+    assert.ok(s1Objection);
+    assert.ok(!s1Objection.reason.includes(voteRetryTrustedRoot), 'Vote Retry in-place trustedEphemeralRoot must be normalized');
+    assert.match(s1Objection.reason, /src\/auth\.js:33/);
+
+    // s3-timeout mutated ctx._invocationMeta.effectiveTools = 'none' in place before throwing TimeoutError,
+    // yet originalInvocationMeta snapshot remained 'read-only' so Round 1 retry marked tool-free recovery used
+    const s3 = engine.state.seats.find((s) => s.id === 's3-timeout');
+    assert.equal(s3TimeoutCalls, 3);
+    assert.equal(s3.status, 'accepted');
+    assert.equal(s3.retryDiagnosticsHistory[0].tools, 'none');
+    assert.equal(engine._seatToolFreeUsed.get('1:DELIBERATION:s3-timeout'), true);
   });
 });

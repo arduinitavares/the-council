@@ -501,6 +501,10 @@ export class CouncilEngine {
     this._dynamicSeatConfigs = new Map();
     this._seatToolFreeUsed = new Map();
     this.catalogByHarness = options.catalogByHarness || this.config.catalogByHarness || {};
+    this.verifiedCapabilitiesByHarness =
+      options.verifiedCapabilitiesByHarness || this.config.verifiedCapabilitiesByHarness || {};
+    this.verifiedCapabilities =
+      options.verifiedCapabilities ?? this.config.verifiedCapabilities ?? null;
     this.aborted = Boolean(this.signal?.aborted);
     this._defaultMockAdapter = null;
 
@@ -900,6 +904,17 @@ export class CouncilEngine {
     return roots;
   }
 
+  _cloneInvocationMeta(meta) {
+    if (!meta || typeof meta !== 'object') {
+      return null;
+    }
+    return {
+      ...meta,
+      trustedEphemeralRoots: Array.isArray(meta.trustedEphemeralRoots) ? [...meta.trustedEphemeralRoots] : [],
+      forbiddenWorkspaceRoots: Array.isArray(meta.forbiddenWorkspaceRoots) ? [...meta.forbiddenWorkspaceRoots] : []
+    };
+  }
+
   _seedAttemptInvocationMeta({ role, phase, participant, tools, cwd, attemptContext, adapter }) {
     const resolved = resolveAttemptExecutionWorkspace({
       role,
@@ -912,17 +927,71 @@ export class CouncilEngine {
       callerContext: attemptContext,
       adapter
     });
-    const seeded = {
+    const liveMeta = {
       trustedEphemeralRoots: [],
       forbiddenWorkspaceRoots: [],
       ...resolved
     };
-    attemptContext._invocationMeta = seeded;
-    return {
-      ...seeded,
-      trustedEphemeralRoots: [...(seeded.trustedEphemeralRoots || [])],
-      forbiddenWorkspaceRoots: [...(seeded.forbiddenWorkspaceRoots || [])]
-    };
+    const originalMeta = this._cloneInvocationMeta(liveMeta);
+    attemptContext._invocationMeta = liveMeta;
+    return { liveMeta, originalMeta };
+  }
+
+  _resolvePostAttemptInvocationMeta(execArgs, attemptContext, liveMeta) {
+    if (execArgs?._invocationMeta && execArgs._invocationMeta !== liveMeta) {
+      return execArgs._invocationMeta;
+    }
+    if (attemptContext?._invocationMeta && attemptContext._invocationMeta !== liveMeta) {
+      return attemptContext._invocationMeta;
+    }
+    return liveMeta;
+  }
+
+  _lookupByHarness(map, harness) {
+    if (!map || typeof map !== 'object') {
+      return null;
+    }
+    const rawKey = typeof harness === 'string' ? harness.trim() : '';
+    const lowerKey = rawKey.toLowerCase();
+    if (lowerKey && Object.prototype.hasOwnProperty.call(map, lowerKey)) {
+      return map[lowerKey];
+    }
+    if (rawKey && Object.prototype.hasOwnProperty.call(map, rawKey)) {
+      return map[rawKey];
+    }
+    if (lowerKey) {
+      for (const [k, v] of Object.entries(map)) {
+        if (String(k || '').trim().toLowerCase() === lowerKey) {
+          return v;
+        }
+      }
+    }
+    return null;
+  }
+
+  _resolveVerifiedCapabilitiesForHarness(participant, configParticipant, harness) {
+    const explicit =
+      participant?.verifiedCapabilities ??
+      configParticipant?.verifiedCapabilities ??
+      this._lookupByHarness(this.verifiedCapabilitiesByHarness, harness);
+    if (explicit !== null && explicit !== undefined) {
+      return explicit;
+    }
+    const topLevel = this.verifiedCapabilities;
+    if (!topLevel || typeof topLevel !== 'object' || Array.isArray(topLevel) || topLevel instanceof Set) {
+      return topLevel ?? null;
+    }
+    const lowerKey = String(harness || '').trim().toLowerCase();
+    if (lowerKey && !Object.prototype.hasOwnProperty.call(topLevel, lowerKey)) {
+      const matched = this._lookupByHarness(topLevel, harness);
+      if (matched !== null && matched !== undefined) {
+        return {
+          ...topLevel,
+          [lowerKey]: matched
+        };
+      }
+    }
+    return topLevel;
   }
 
   _normalizeAndValidateProof(proofInput, invocationMeta, participant) {
@@ -1108,6 +1177,14 @@ export class CouncilEngine {
         ? Boolean(toolFreeRecoveryUsed)
         : Boolean(this._seatToolFreeUsed?.get(toolFreeKey));
 
+    const harnessKey = String(harness || '').trim().toLowerCase();
+    const capabilityCatalog = this._lookupByHarness(this.catalogByHarness, harness);
+    const verifiedCapabilities = this._resolveVerifiedCapabilitiesForHarness(
+      participant,
+      configParticipant,
+      harness
+    );
+
     const plan = planParticipantRecovery({
       participantId: participant?.id || 'judge',
       role,
@@ -1133,12 +1210,13 @@ export class CouncilEngine {
       admittedProofs,
       selfContainedInput: this.config.selfContainedInput,
       originalInvocationMeta: effectiveMeta,
-      harness,
+      harness: harnessKey || harness,
       model: rawModel,
       reasoningEffort: resolvedEffort,
       hasExplicitReasoningEffort,
       retryEffortFallback: Boolean(this.config.retryEffortFallback),
-      capabilityCatalog: this.catalogByHarness?.[harness] || null
+      capabilityCatalog,
+      verifiedCapabilities
     });
 
     return {
@@ -1607,7 +1685,7 @@ export class CouncilEngine {
               signal: delibWaveSignal,
               retryDiagnostics: null
             };
-        slot.originalInvocationMeta = this._seedAttemptInvocationMeta({
+        const { liveMeta: delibLiveMeta, originalMeta: delibOriginalMeta } = this._seedAttemptInvocationMeta({
           role: 'seat',
           phase: 'DELIBERATION',
           participant: callSeat,
@@ -1616,9 +1694,8 @@ export class CouncilEngine {
           attemptContext: callContext,
           adapter: slot.harness
         });
-        slot.originalAttemptTools = slot.originalInvocationMeta.effectiveTools;
-        const initialMetaRef = slot.originalInvocationMeta;
-        callContext._invocationMeta = initialMetaRef;
+        slot.originalInvocationMeta = delibOriginalMeta;
+        slot.originalAttemptTools = delibOriginalMeta.effectiveTools;
         const delibCallExtras = slot.isRebuttal
           ? {
               rebuttalMode: true,
@@ -1641,7 +1718,7 @@ export class CouncilEngine {
           tools: callTools,
           ...(callTools !== 'none' && callSeat.cwd !== undefined ? { cwd: callSeat.cwd } : {}),
           retryDiagnostics: null,
-          _invocationMeta: initialMetaRef,
+          _invocationMeta: delibLiveMeta,
           telemetry: this.telemetry,
           ...delibCallExtras
         };
@@ -1668,10 +1745,7 @@ export class CouncilEngine {
           return;
         }
         slot.seatElapsedMs += Date.now() - t0;
-        slot.invocationMeta =
-          execArgs._invocationMeta && execArgs._invocationMeta !== initialMetaRef
-            ? execArgs._invocationMeta
-            : callContext._invocationMeta || slot.originalInvocationMeta;
+        slot.invocationMeta = this._resolvePostAttemptInvocationMeta(execArgs, callContext, delibLiveMeta);
         slot.proofInput = proofInput;
         slot.error = null;
         slot.needsValidation = true;
@@ -1854,7 +1928,7 @@ export class CouncilEngine {
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
                 };
-            const retryInitialMetaRef = this._seedAttemptInvocationMeta({
+            const { liveMeta: retryLiveMeta } = this._seedAttemptInvocationMeta({
               role: 'seat',
               phase: 'DELIBERATION',
               participant: slot.currentSeatConfig,
@@ -1887,7 +1961,7 @@ export class CouncilEngine {
                 ? { cwd: slot.currentSeatConfig.cwd }
                 : {}),
               retryDiagnostics: slot.retryDiagnostics || null,
-              _invocationMeta: retryInitialMetaRef,
+              _invocationMeta: retryLiveMeta,
               telemetry: this.telemetry,
               ...delibRetryExtras
             };
@@ -1912,10 +1986,7 @@ export class CouncilEngine {
               return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
-            slot.invocationMeta =
-              retryExecArgs._invocationMeta && retryExecArgs._invocationMeta !== retryInitialMetaRef
-                ? retryExecArgs._invocationMeta
-                : retryContext._invocationMeta || retryInitialMetaRef;
+            slot.invocationMeta = this._resolvePostAttemptInvocationMeta(retryExecArgs, retryContext, retryLiveMeta);
             slot.proofInput = proofInput;
             slot.error = null;
             slot.needsValidation = true;
@@ -2080,7 +2151,7 @@ export class CouncilEngine {
           retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
           ...(currentJudgeConfig.reasoningEffort ? { reasoningEffort: currentJudgeConfig.reasoningEffort } : {})
         };
-        const judgeInitialMetaRef = this._seedAttemptInvocationMeta({
+        const { liveMeta: judgeLiveMeta, originalMeta: judgeSeededOriginalMeta } = this._seedAttemptInvocationMeta({
           role: 'judge',
           phase: 'JUDGE_AUDIT_SYNTHESIS',
           participant: currentJudgeConfig,
@@ -2090,12 +2161,8 @@ export class CouncilEngine {
           adapter: judgeHarness
         });
         if (judgeRoundRetries === 0 && judgeOriginalInvocationMeta === null) {
-          judgeOriginalInvocationMeta = {
-            ...judgeInitialMetaRef,
-            trustedEphemeralRoots: [...(judgeInitialMetaRef.trustedEphemeralRoots || [])],
-            forbiddenWorkspaceRoots: [...(judgeInitialMetaRef.forbiddenWorkspaceRoots || [])]
-          };
-          judgeOriginalAttemptTools = judgeInitialMetaRef.effectiveTools;
+          judgeOriginalInvocationMeta = judgeSeededOriginalMeta;
+          judgeOriginalAttemptTools = judgeSeededOriginalMeta.effectiveTools;
         }
         const judgeExecArgs = {
           judge: currentJudgeConfig,
@@ -2110,7 +2177,7 @@ export class CouncilEngine {
             ? { cwd: currentJudgeConfig.cwd }
             : {}),
           retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
-          _invocationMeta: judgeInitialMetaRef,
+          _invocationMeta: judgeLiveMeta,
           telemetry: this.telemetry,
           signal: judgeSignal,
           context: judgeContext
@@ -2134,10 +2201,11 @@ export class CouncilEngine {
           break;
         }
 
-        const judgeInvocationMeta =
-          judgeExecArgs._invocationMeta && judgeExecArgs._invocationMeta !== judgeInitialMetaRef
-            ? judgeExecArgs._invocationMeta
-            : judgeContext._invocationMeta || judgeInitialMetaRef;
+        const judgeInvocationMeta = this._resolvePostAttemptInvocationMeta(
+          judgeExecArgs,
+          judgeContext,
+          judgeLiveMeta
+        );
         const judgeValidation = this._normalizeAndValidateJudge(
           synthesisResult,
           judgeInvocationMeta,
@@ -2447,7 +2515,7 @@ export class CouncilEngine {
             ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
             : {})
         };
-        const initialMetaRef = this._seedAttemptInvocationMeta({
+        const { liveMeta: voteLiveMeta, originalMeta: voteOriginalMeta } = this._seedAttemptInvocationMeta({
           role: 'seat',
           phase: 'VOTING',
           participant: slot.currentSeatConfig,
@@ -2456,12 +2524,8 @@ export class CouncilEngine {
           attemptContext: voteContext,
           adapter: slot.seatHarness
         });
-        slot.originalInvocationMeta = {
-          ...initialMetaRef,
-          trustedEphemeralRoots: [...(initialMetaRef.trustedEphemeralRoots || [])],
-          forbiddenWorkspaceRoots: [...(initialMetaRef.forbiddenWorkspaceRoots || [])]
-        };
-        slot.originalAttemptTools = slot.originalInvocationMeta.effectiveTools;
+        slot.originalInvocationMeta = voteOriginalMeta;
+        slot.originalAttemptTools = voteOriginalMeta.effectiveTools;
         const voteExecArgs = {
           seat: slot.currentSeatConfig,
           soul: slot.seat.soul,
@@ -2475,7 +2539,7 @@ export class CouncilEngine {
             ? { cwd: slot.currentSeatConfig.cwd }
             : {}),
           retryDiagnostics: null,
-          _invocationMeta: initialMetaRef,
+          _invocationMeta: voteLiveMeta,
           telemetry: this.telemetry,
           signal: voteWaveSignal,
           context: voteContext
@@ -2503,10 +2567,7 @@ export class CouncilEngine {
           return;
         }
         slot.seatElapsedMs += Date.now() - t0;
-        slot.invocationMeta =
-          voteExecArgs._invocationMeta && voteExecArgs._invocationMeta !== initialMetaRef
-            ? voteExecArgs._invocationMeta
-            : voteContext._invocationMeta || slot.originalInvocationMeta;
+        slot.invocationMeta = this._resolvePostAttemptInvocationMeta(voteExecArgs, voteContext, voteLiveMeta);
         slot.voteResult = voteResult;
         slot.error = null;
         slot.needsValidation = true;
@@ -2679,7 +2740,7 @@ export class CouncilEngine {
                 ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                 : {})
             };
-            const retryInitialMetaRef = this._seedAttemptInvocationMeta({
+            const { liveMeta: voteRetryLiveMeta } = this._seedAttemptInvocationMeta({
               role: 'seat',
               phase: 'VOTING',
               participant: slot.currentSeatConfig,
@@ -2701,7 +2762,7 @@ export class CouncilEngine {
                 ? { cwd: slot.currentSeatConfig.cwd }
                 : {}),
               retryDiagnostics: slot.retryDiagnostics || null,
-              _invocationMeta: retryInitialMetaRef,
+              _invocationMeta: voteRetryLiveMeta,
               telemetry: this.telemetry,
               signal: voteRetrySignal,
               context: voteRetryContext
@@ -2727,10 +2788,11 @@ export class CouncilEngine {
               return;
             }
             slot.seatElapsedMs += Date.now() - retryT0;
-            slot.invocationMeta =
-              voteRetryExecArgs._invocationMeta && voteRetryExecArgs._invocationMeta !== retryInitialMetaRef
-                ? voteRetryExecArgs._invocationMeta
-                : voteRetryContext._invocationMeta || retryInitialMetaRef;
+            slot.invocationMeta = this._resolvePostAttemptInvocationMeta(
+              voteRetryExecArgs,
+              voteRetryContext,
+              voteRetryLiveMeta
+            );
             slot.voteResult = voteResult;
             slot.error = null;
             slot.needsValidation = true;

@@ -925,8 +925,8 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
           maxRetriesPerSeat: 2,
           cwd: '/tmp/live-workspace-102',
           seats: [
-            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
-            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'read-only' }
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'read-only' }
           ]
         },
         { harnessResolver: () => mock }
@@ -966,8 +966,8 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
           maxRetriesPerSeat: 2,
           cwd: '/tmp/global-live-cwd',
           seats: [
-            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
-            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' },
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
             { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
           ]
         },
@@ -1043,9 +1043,9 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
             ]
           },
           seats: [
-            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
-            { id: 's2', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S2', tools: 'none' },
-            { id: 's3', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S3', tools: 'none', votingTools: 'none' }
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S2', tools: 'none' },
+            { id: 's3', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S3', tools: 'none', votingTools: 'none' }
           ]
         },
         { harnessResolver: () => mock }
@@ -1079,17 +1079,33 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       const origProof = mock.executeSeatProof.bind(mock);
       mock.executeSeatProof = async (ctx) => {
         if (ctx.seat.id === 's1') {
-          s1Contexts.push({ model: ctx.model, reasoningEffort: ctx.reasoningEffort, tools: ctx.tools, retryDiagnostics: ctx.retryDiagnostics });
+          s1Contexts.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            tools: ctx.tools,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
           if (s1Contexts.length === 1) {
-            throw new TimeoutError('Timeout on gpt-5.4 high', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
+            throw new TimeoutError('Timeout on gpt-6-astra (high)', { timeoutMs: 1000, harness: 'codex', seatId: 's1' });
           }
         } else if (ctx.seat.id === 's2') {
-          s2Contexts.push({ model: ctx.model, reasoningEffort: ctx.reasoningEffort, retryDiagnostics: ctx.retryDiagnostics });
+          s2Contexts.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
           if (s2Contexts.length === 1) {
             throw new TimeoutError('Timeout on composer-2.5', { timeoutMs: 1000, harness: 'cursor', seatId: 's2' });
           }
         } else if (ctx.seat.id === 's3') {
-          s3Contexts.push({ model: ctx.model, retryDiagnostics: ctx.retryDiagnostics });
+          s3Contexts.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
           if (s3Contexts.length === 1) {
             throw new QuotaExhaustionError('Rate limited 429', { harness: 'codex', seatId: 's3' });
           }
@@ -1114,16 +1130,16 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
             conceptualNoExternalVerification: true
           },
           seats: [
-            { id: 's1', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S1', tools: 'read-only' },
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only' },
             { id: 's2', harness: 'cursor', model: 'composer-2.5', soul: 'S2', tools: 'none' },
-            { id: 's3', harness: 'codex', model: 'gpt-5.4 (high)', soul: 'S3', tools: 'none' },
-            { id: 's4-pid', harness: 'gemini', model: 'gemini-3.1-pro-preview', soul: 'S4', tools: 'none' }
+            { id: 's3', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S3', tools: 'none' },
+            { id: 's4-pid', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'S4', tools: 'none' }
           ]
         },
         {
           harnessResolver: () => mock,
           catalogByHarness: {
-            codex: ['gpt-5.4 (high)', 'gpt-5.4 (medium)'],
+            codex: ['gpt-6-astra (high)', 'gpt-6-astra (medium)'],
             cursor: ['composer-2.5']
           }
         }
@@ -1132,20 +1148,35 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       const result = await engine.run();
       assert.equal(result.ok, true);
 
-      // Wave 0 has null retryDiagnostics; Retry 1 carries structured retryDiagnostics + effort downshift for explicit high
+      // Wave 0 has null retryDiagnostics; Retry 1 carries structured retryDiagnostics + real seat/context model & effort downshift
       assert.equal(s1Contexts[0].retryDiagnostics, null);
+      assert.equal(s1Contexts[0].seatModel, 'gpt-6-astra (high)');
+      assert.equal(s1Contexts[0].seatReasoningEffort, null);
       assert.equal(s1Contexts[1].tools, 'none');
+      assert.equal(s1Contexts[1].seatModel, 'gpt-6-astra (medium)');
+      assert.equal(s1Contexts[1].seatReasoningEffort, 'medium');
+      assert.equal(s1Contexts[1].contextReasoningEffort, 'medium');
       assert.equal(s1Contexts[1].retryDiagnostics?.attempt, 1);
       assert.equal(s1Contexts[1].retryDiagnostics?.fallbackApplied, true);
+      assert.equal(s1Contexts[1].retryDiagnostics?.effectiveModel, 'gpt-6-astra (medium)');
       assert.equal(s1Contexts[1].retryDiagnostics?.effectiveEffort, 'medium');
 
       // composer-2.5 must never receive an invented reasoningEffort
       assert.equal(s2Contexts[0].retryDiagnostics, null);
+      assert.equal(s2Contexts[0].seatModel, 'composer-2.5');
+      assert.equal(s2Contexts[0].seatReasoningEffort, null);
+      assert.equal(s2Contexts[1].seatModel, 'composer-2.5');
+      assert.equal(s2Contexts[1].seatReasoningEffort, null);
+      assert.equal(s2Contexts[1].contextReasoningEffort, null);
       assert.equal(s2Contexts[1].retryDiagnostics?.effectiveEffort, null);
       assert.equal(s2Contexts[1].retryDiagnostics?.fallbackApplied, false);
 
       // QuotaExhaustionError must preserve requested effort (fallbackApplied: false)
       assert.equal(s3Contexts[0].retryDiagnostics, null);
+      assert.equal(s3Contexts[0].seatModel, 'gpt-6-astra (high)');
+      assert.equal(s3Contexts[1].seatModel, 'gpt-6-astra (high)');
+      assert.equal(s3Contexts[1].seatReasoningEffort, 'high');
+      assert.equal(s3Contexts[1].contextReasoningEffort, 'high');
       assert.equal(s3Contexts[1].retryDiagnostics?.fallbackApplied, false);
       assert.equal(s3Contexts[1].retryDiagnostics?.effectiveEffort, 'high');
 
@@ -1153,6 +1184,113 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
       const s4 = engine.state.seats.find((s) => s.id === 's4-pid');
       assert.notEqual(s4.status, 'fault_quota', 'PID 429 must never trigger fault_quota');
       assert.equal(engine._classifyErrorClass(new Error('(node:429) (node:401) (node:403) Warning')), 'HarnessExecutionError');
+    });
+
+    it('looks up catalogByHarness case-insensitively and forwards verifiedCapabilities / verifiedCapabilitiesByHarness into planParticipantRecovery', async () => {
+      const mock = new MockAdapter();
+      const s1Calls = [];
+      const s2Calls = [];
+      const s3Calls = [];
+
+      const origProof = mock.executeSeatProof.bind(mock);
+      mock.executeSeatProof = async (ctx) => {
+        if (ctx.seat.id === 's1-agy-case') {
+          s1Calls.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
+          if (s1Calls.length === 1) {
+            throw new TimeoutError('Timeout on mixed-case Antigravity seat', { timeoutMs: 1000, harness: 'antigravity', seatId: 's1-agy-case' });
+          }
+        } else if (ctx.seat.id === 's2-codex-verified') {
+          s2Calls.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
+          if (s2Calls.length === 1) {
+            throw new TimeoutError('Timeout on custom codex seat verified by verifiedCapabilitiesByHarness', { timeoutMs: 1000, harness: 'codex', seatId: 's2-codex-verified' });
+          }
+        } else if (ctx.seat.id === 's3-top-verified') {
+          s3Calls.push({
+            seatModel: ctx.seat?.model,
+            seatReasoningEffort: ctx.seat?.reasoningEffort ?? null,
+            contextReasoningEffort: ctx.context?.reasoningEffort ?? null,
+            retryDiagnostics: ctx.retryDiagnostics
+          });
+          if (s3Calls.length === 1) {
+            throw new TimeoutError('Timeout on seat verified by top-level verifiedCapabilities', { timeoutMs: 1000, harness: 'codex', seatId: 's3-top-verified' });
+          }
+        }
+        return origProof(ctx);
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Mixed-case catalog and verifiedCapabilities lookup verification',
+          minQuorum: 2,
+          maxRounds: 1,
+          maxRetriesPerSeat: 1,
+          retryEffortFallback: true,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Inline spec',
+            phases: ['DELIBERATION'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
+          seats: [
+            { id: 's1-agy-case', harness: 'Antigravity', model: 'gemini-custom-preview (high)', soul: 'S1', tools: 'none' },
+            { id: 's2-codex-verified', harness: 'Codex', model: 'codex-experimental-high', soul: 'S2', tools: 'none' },
+            { id: 's3-top-verified', harness: 'Cursor', model: 'grok-experimental (high)', soul: 'S3', tools: 'none' }
+          ]
+        },
+        {
+          harnessResolver: () => mock,
+          catalogByHarness: {
+            antigravity: ['gemini-custom-preview-high', 'gemini-custom-preview-medium']
+          },
+          verifiedCapabilitiesByHarness: {
+            codex: {
+              models: ['codex-experimental-high', 'codex-experimental-medium'],
+              source: 'live_cli_catalog'
+            }
+          },
+          verifiedCapabilities: {
+            Cursor: {
+              models: ['grok-experimental-high', 'grok-experimental-medium']
+            },
+            source: 'live_cli_catalog'
+          }
+        }
+      );
+
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      // s1: mixed-case harness 'Antigravity' resolved lowercased catalogByHarness.antigravity
+      assert.equal(s1Calls.length, 2);
+      assert.equal(s1Calls[1].seatModel, 'gemini-custom-preview-medium');
+      assert.equal(s1Calls[1].contextReasoningEffort, 'medium');
+      assert.equal(s1Calls[1].retryDiagnostics?.fallbackApplied, true);
+      assert.equal(s1Calls[1].retryDiagnostics?.capabilityProvenance, 'live_cli_catalog');
+
+      // s2: mixed-case harness 'Codex' resolved verifiedCapabilitiesByHarness.codex
+      assert.equal(s2Calls.length, 2);
+      assert.equal(s2Calls[1].seatModel, 'codex-experimental (medium)');
+      assert.equal(s2Calls[1].contextReasoningEffort, 'medium');
+      assert.equal(s2Calls[1].retryDiagnostics?.fallbackApplied, true);
+      assert.equal(s2Calls[1].retryDiagnostics?.capabilityProvenance, 'live_cli_catalog');
+
+      // s3: top-level verifiedCapabilities with mixed-case 'Cursor' key + source preserved
+      assert.equal(s3Calls.length, 2);
+      assert.equal(s3Calls[1].seatModel, 'grok-experimental-medium');
+      assert.equal(s3Calls[1].contextReasoningEffort, 'medium');
+      assert.equal(s3Calls[1].retryDiagnostics?.fallbackApplied, true);
+      assert.equal(s3Calls[1].retryDiagnostics?.capabilityProvenance, 'live_cli_catalog');
     });
   });
 });

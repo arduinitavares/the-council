@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { VisualizerLiveWatcher, getTransitionSummary } from '../../src/visualizer/live-watcher.js';
 import { CouncilTelemetryEmitter } from '../../src/telemetry/emitter.js';
 import { buildRunTelemetryRecord, canonicalizeModelKey, persistRunTelemetry } from '../../src/telemetry/ledger.js';
+import { HELP_TEXT, parseCliArgs, runCli } from '../../src/cli/index.js';
 
 function makeDiag(overrides = {}) {
   return {
@@ -759,5 +760,519 @@ describe('Issue #102 Task 4: Sparse replay deltas, ledger retry history & visual
     assert.match(seatsHtmlOut, /&lt;img src=x onerror=alert\(1\)&gt;/);
     assert.match(seatsHtmlOut, /&lt;script&gt;alert\(2\)&lt;\/script&gt;/);
     assert.match(seatsHtmlOut, /&lt;svg onload=alert\(3\)&gt;/);
+  });
+});
+
+describe('Issue #102 Wave 2 CLI integration & retry effort fallback', () => {
+  function createCapturedIo(extra = {}) {
+    let stdout = '';
+    let stderr = '';
+    const exitCodes = [];
+    return {
+      get stdout() {
+        return stdout;
+      },
+      get stderr() {
+        return stderr;
+      },
+      get exitCodes() {
+        return exitCodes;
+      },
+      io: {
+        stdout: {
+          write: (msg) => {
+            stdout += String(msg);
+            return true;
+          }
+        },
+        stderr: {
+          write: (msg) => {
+            stderr += String(msg);
+            return true;
+          }
+        },
+        exit: (code) => {
+          exitCodes.push(code);
+          return code;
+        },
+        ...extra
+      }
+    };
+  }
+
+  async function createMockHarnessPair() {
+    const { MockAdapter } = await import('../../src/harness/mock.js');
+    const adapters = [];
+    const byName = new Map();
+    const getOrCreate = (harnessName) => {
+      const key = String(harnessName || '').toLowerCase();
+      if (!byName.has(key)) {
+        const adapter = new MockAdapter({ name: key || 'mock' });
+        adapter.validateModel = () => true;
+        byName.set(key, adapter);
+        adapters.push(adapter);
+      }
+      return byName.get(key);
+    };
+    return {
+      adapters,
+      harnessRegistry: { get: (name) => getOrCreate(name) },
+      harnessResolver: (name) => getOrCreate(name)
+    };
+  }
+
+  function createNoopLiveWatcher(events = []) {
+    return new Proxy(
+      {},
+      {
+        get(_, prop) {
+          if (prop === 'then') return undefined;
+          if (prop === 'url') return 'http://127.0.0.1:0';
+          if (prop === 'port') return 0;
+          return async (...args) => {
+            events.push({ method: String(prop), args });
+            return { url: 'http://127.0.0.1:0', port: 0 };
+          };
+        }
+      }
+    );
+  }
+
+  function createFailIfTouchedWatcher() {
+    return new Proxy(
+      {},
+      {
+        get(_, prop) {
+          if (prop === 'then') return undefined;
+          throw new Error(`liveWatcher.${String(prop)} must not be touched on preflight failure`);
+        }
+      }
+    );
+  }
+
+  function writeTempConfig(obj) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-102-'));
+    const filePath = path.join(dir, 'council.json');
+    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), 'utf8');
+    return {
+      dir,
+      filePath,
+      cleanup: () => fs.rmSync(dir, { recursive: true, force: true })
+    };
+  }
+
+  it('documents --retry-effort-fallback in HELP_TEXT and parses boolean + --reasoning-effort flags cleanly', () => {
+    assert.match(HELP_TEXT, /--retry-effort-fallback/);
+
+    const parsed = parseCliArgs(['run', '--mock', '--topic', 'Test', '--retry-effort-fallback']);
+    assert.equal(parsed.retryEffortFallback, true);
+    assert.equal(parsed.values.retryEffortFallback, true);
+
+    const parsedDefault = parseCliArgs(['run', '--mock', '--topic', 'Test']);
+    assert.equal(parsedDefault.retryEffortFallback, false);
+    assert.equal(parsedDefault.values.retryEffortFallback, false);
+
+    const parsedEffort = parseCliArgs([
+      'run',
+      '--mock',
+      '--topic',
+      'Test',
+      '--reasoning-effort',
+      'low',
+      '--retry-effort-fallback'
+    ]);
+    assert.equal(parsedEffort.values['reasoning-effort'], 'low');
+    assert.equal(parsedEffort.retryEffortFallback, true);
+  });
+
+  it('rejects CONFLICTING_MODEL_EFFORT during --live --retry-effort-fallback preflight with exit 1 and zero provider calls', async () => {
+    const tmp = writeTempConfig({
+      judge: { harness: 'codex', model: 'gpt-6-astra (high)', soul: 'Impartial Judge' },
+      seats: [
+        { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', reasoningEffort: 'low', soul: 'Systems Engineer' },
+        { id: 's2', harness: 'cursor', model: 'grok-4.7-high', soul: 'Skeptic Reviewer' }
+      ]
+    });
+
+    try {
+      const pair = await createMockHarnessPair();
+      const cap = createCapturedIo({
+        outputDir: tmp.dir,
+        telemetryDir: tmp.dir,
+        liveWatcher: createFailIfTouchedWatcher(),
+        harnessRegistry: pair.harnessRegistry,
+        harnessResolver: pair.harnessResolver
+      });
+
+      const exitCode = await runCli(
+        ['run', '--live', '-c', tmp.filePath, '--topic', 'Conflict preflight', '--retry-effort-fallback'],
+        cap.io
+      );
+
+      assert.equal(exitCode, 1);
+      assert.match(cap.stderr, /CONFLICTING_MODEL_EFFORT/);
+      const totalProviderCalls = pair.adapters.reduce((sum, a) => sum + a.callCount.seats + a.callCount.judge, 0);
+      assert.equal(totalProviderCalls, 0);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('rejects UNSUPPORTED_MODEL_EFFORT when live Antigravity catalog lacks -medium and passes once present', async () => {
+    const tmp = writeTempConfig({
+      judge: { harness: 'codex', model: 'gpt-6-astra (high)', soul: 'Impartial Judge' },
+      seats: [
+        { id: 's1', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Systems Engineer' },
+        { id: 's2', harness: 'cursor', model: 'grok-4.7-high', soul: 'Skeptic Reviewer' }
+      ]
+    });
+
+    try {
+      // Case 1: missing gemini-4-argon-medium -> exit 1 with UNSUPPORTED_MODEL_EFFORT and zero provider calls
+      let probeCallsFail = 0;
+      const failPair = await createMockHarnessPair();
+      const failCap = createCapturedIo({
+        outputDir: tmp.dir,
+        telemetryDir: tmp.dir,
+        liveWatcher: createFailIfTouchedWatcher(),
+        listAntigravityModels: async () => {
+          probeCallsFail += 1;
+          return { ok: true, selectors: ['gemini-4-argon-high'], raw: 'gemini-4-argon-high\n' };
+        },
+        harnessRegistry: failPair.harnessRegistry,
+        harnessResolver: failPair.harnessResolver
+      });
+
+      const failExit = await runCli(
+        ['run', '--live', '-c', tmp.filePath, '--topic', 'Catalog miss', '--retry-effort-fallback'],
+        failCap.io
+      );
+
+      assert.equal(probeCallsFail, 1);
+      assert.equal(failExit, 1);
+      assert.match(failCap.stderr, /UNSUPPORTED_MODEL_EFFORT/);
+      assert.equal(
+        failPair.adapters.reduce((sum, a) => sum + a.callCount.seats + a.callCount.judge, 0),
+        0
+      );
+
+      // Case 2: gemini-4-argon-medium present -> preflight passes and live run completes cleanly
+      let probeCallsPass = 0;
+      const watcherEvents = [];
+      const passPair = await createMockHarnessPair();
+      const passCap = createCapturedIo({
+        outputDir: tmp.dir,
+        telemetryDir: tmp.dir,
+        liveWatcher: createNoopLiveWatcher(watcherEvents),
+        listAntigravityModels: async () => {
+          probeCallsPass += 1;
+          return {
+            ok: true,
+            selectors: ['gemini-4-argon-high', 'gemini-4-argon-medium'],
+            raw: 'gemini-4-argon-high\ngemini-4-argon-medium\n'
+          };
+        },
+        harnessRegistry: passPair.harnessRegistry,
+        harnessResolver: passPair.harnessResolver
+      });
+
+      const passExit = await runCli(
+        ['run', '--live', '-c', tmp.filePath, '--topic', 'Catalog hit', '--retry-effort-fallback', '--json'],
+        passCap.io
+      );
+
+      assert.equal(probeCallsPass, 1);
+      assert.equal(passExit, 0, passCap.stderr);
+      assert.doesNotMatch(passCap.stderr, /UNSUPPORTED_MODEL_EFFORT|CONFLICTING_MODEL_EFFORT/);
+      const parsedJson = JSON.parse(passCap.stdout);
+      assert.equal(parsedJson.retryEffortFallback, true);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('does not trigger CONFLICTING_MODEL_EFFORT when global --reasoning-effort low combines with inline (max) seats', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-102-global-'));
+
+    try {
+      // Part A: CLI --reasoning-effort low + config with inline codex:gpt-6-astra (max) + antigravity:gemini-4-argon-high
+      const inlineCfgPath = path.join(dir, 'inline-only.json');
+      fs.writeFileSync(
+        inlineCfgPath,
+        JSON.stringify(
+          {
+            judge: { harness: 'codex', model: 'gpt-6-astra (high)', soul: 'Impartial Judge' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems Engineer' },
+              { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Distributed Architect' }
+            ]
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      const cliPair = await createMockHarnessPair();
+      const cliCap = createCapturedIo({
+        outputDir: dir,
+        telemetryDir: dir,
+        liveWatcher: createNoopLiveWatcher(),
+        catalogByHarness: {
+          antigravity: ['gemini-4-argon-high', 'gemini-4-argon-medium']
+        },
+        harnessRegistry: cliPair.harnessRegistry,
+        harnessResolver: cliPair.harnessResolver
+      });
+
+      const cliExit = await runCli(
+        [
+          'run',
+          '--live',
+          '-c',
+          inlineCfgPath,
+          '--topic',
+          'Inherited global effort CLI',
+          '--reasoning-effort',
+          'low',
+          '--retry-effort-fallback',
+          '--json'
+        ],
+        cliCap.io
+      );
+
+      assert.equal(cliExit, 0, cliCap.stderr);
+      assert.doesNotMatch(cliCap.stderr, /CONFLICTING_MODEL_EFFORT/);
+
+      // Part B: config file with retryEffortFallback: true + global reasoningEffort: 'low' NOT clobbered when CLI flag omitted
+      const cfgPath = path.join(dir, 'global-effort.json');
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify(
+          {
+            reasoningEffort: 'low',
+            retryEffortFallback: true,
+            judge: { harness: 'codex', model: 'gpt-6-astra (high)', soul: 'Impartial Judge' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Systems Engineer' },
+              { id: 's2', harness: 'antigravity', model: 'gemini-4-argon-high', soul: 'Distributed Architect' }
+            ]
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      let probeCalled = 0;
+      const cfgPair = await createMockHarnessPair();
+      const cfgCap = createCapturedIo({
+        outputDir: dir,
+        telemetryDir: dir,
+        liveWatcher: createNoopLiveWatcher(),
+        listAntigravityModels: async () => {
+          probeCalled += 1;
+          return { ok: true, selectors: ['gemini-4-argon-high', 'gemini-4-argon-medium'] };
+        },
+        harnessRegistry: cfgPair.harnessRegistry,
+        harnessResolver: cfgPair.harnessResolver
+      });
+
+      const cfgExit = await runCli(['run', '--live', '-c', cfgPath, '--topic', 'Inherited global effort cfg', '--json'], cfgCap.io);
+
+      assert.equal(probeCalled, 1);
+      assert.equal(cfgExit, 0, cfgCap.stderr);
+      assert.doesNotMatch(cfgCap.stderr, /CONFLICTING_MODEL_EFFORT/);
+      const cfgJson = JSON.parse(cfgCap.stdout);
+      assert.equal(cfgJson.retryEffortFallback, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes retryFallback diagnostics fields in --mock --retry-effort-fallback --json output', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-102-mock-'));
+    try {
+      const cap = createCapturedIo({ outputDir: dir, telemetryDir: dir });
+      const exitCode = await runCli(
+        ['run', '--mock', '--topic', 'Mock smoke fallback', '--retry-effort-fallback', '--json'],
+        cap.io
+      );
+
+      assert.equal(exitCode, 0, cap.stderr);
+      const payload = JSON.parse(cap.stdout);
+      assert.equal(payload.retryEffortFallback, true);
+      assert.ok(payload.state?.judge);
+      assert.equal(payload.state.judge.activeRetryDiagnostics, null);
+      assert.ok(Array.isArray(payload.state.judge.retryDiagnosticsHistory));
+      assert.ok(Array.isArray(payload.state.seats) && payload.state.seats.length > 0);
+      for (const seat of payload.state.seats) {
+        assert.equal(seat.activeRetryDiagnostics, null);
+        assert.ok(Array.isArray(seat.retryDiagnosticsHistory));
+      }
+      assert.ok(Array.isArray(payload.providerCalls));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders attributed retry diagnostics across --verbose, human summary (Judge/Roll Call/Excused), and --json', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-cli-102-report-'));
+    try {
+      const seatRetryDiag = makeDiag({
+        participantId: 's1',
+        role: 'seat',
+        phase: 'DELIBERATION',
+        round: 1,
+        attempt: 1,
+        requestedModel: 'gemini-4-argon-high',
+        requestedEffort: 'high',
+        effectiveModel: 'gemini-4-argon-medium',
+        effectiveEffort: 'medium',
+        tools: 'read-only',
+        capabilityProvenance: 'live_cli_catalog',
+        fallbackApplied: true,
+        fallbackReason: 'timeout_capped_to_medium'
+      });
+      const excusedSeatDiag = makeDiag({
+        participantId: 's2',
+        role: 'seat',
+        phase: 'DELIBERATION',
+        round: 1,
+        attempt: 1,
+        requestedModel: 'gpt-6-astra (max)',
+        requestedEffort: 'max',
+        effectiveModel: 'gpt-6-astra (medium)',
+        effectiveEffort: 'medium',
+        tools: 'none',
+        capabilityProvenance: 'adapter_static_policy',
+        fallbackApplied: true,
+        fallbackReason: 'malformed_json_capped_to_medium'
+      });
+      const judgeRetryDiag = makeDiag({
+        participantId: 'judge',
+        role: 'judge',
+        phase: 'JUDGING',
+        round: 1,
+        attempt: 1,
+        requestedModel: 'gpt-6-astra (high)',
+        requestedEffort: 'high',
+        effectiveModel: 'gpt-6-astra (medium)',
+        effectiveEffort: 'medium',
+        tools: 'read-only',
+        capabilityProvenance: 'adapter_static_policy',
+        fallbackApplied: true,
+        fallbackReason: 'timeout_capped_to_medium'
+      });
+      const attributedCalls = [
+        {
+          participantId: 's1',
+          role: 'seat',
+          phase: 'DELIBERATION',
+          round: 1,
+          attempt: 1,
+          harness: 'antigravity',
+          requestedModel: 'gemini-4-argon-high',
+          requestedEffort: 'high',
+          model: 'gemini-4-argon-medium',
+          effectiveEffort: 'medium',
+          tools: 'read-only',
+          capabilityProvenance: 'live_cli_catalog',
+          fallbackApplied: true,
+          fallbackReason: 'timeout_capped_to_medium'
+        }
+      ];
+
+      function decorateEngine(engine) {
+        const origRun = engine.run.bind(engine);
+        engine.run = async (...args) => {
+          const base = await origRun(...args);
+          engine.getTelemetry().emitStateTransition(
+            { type: 'RETRY_SEAT', seatId: 's1', retryDiagnostics: seatRetryDiag },
+            base.state
+          );
+          engine.getTelemetry().emitStateTransition(
+            { type: 'RETRY_JUDGE', seatId: 'judge', retryDiagnostics: judgeRetryDiag },
+            base.state
+          );
+          const decoratedSeats = base.state.seats.map((seat, idx) => {
+            if (idx === 0) {
+              return { ...seat, id: 's1', retryDiagnosticsHistory: [seatRetryDiag] };
+            }
+            if (idx === 1) {
+              return {
+                ...seat,
+                id: 's2',
+                status: 'excused',
+                excusedReason: 'Exhausted retries',
+                retryDiagnosticsHistory: [excusedSeatDiag]
+              };
+            }
+            return seat;
+          });
+          return {
+            ...base,
+            providerCalls: attributedCalls,
+            state: {
+              ...base.state,
+              judge: {
+                ...base.state.judge,
+                retryDiagnosticsHistory: [judgeRetryDiag]
+              },
+              seats: decoratedSeats
+            }
+          };
+        };
+      }
+
+      // Human + --verbose mode
+      const humanCap = createCapturedIo({
+        outputDir: dir,
+        telemetryDir: dir,
+        onEngine: decorateEngine
+      });
+      const humanExit = await runCli(
+        ['run', '--mock', '--topic', 'Attribution human/verbose', '--retry-effort-fallback', '--verbose'],
+        humanCap.io
+      );
+
+      assert.equal(humanExit, 0, humanCap.stderr);
+      assert.match(humanCap.stderr, /RETRY_SEAT/);
+      assert.match(humanCap.stderr, /RETRY_JUDGE/);
+      assert.match(humanCap.stderr, /gemini-4-argon-high \(high\) -> gemini-4-argon-medium \(medium\)/);
+      assert.match(humanCap.stderr, /tools: read-only/);
+      assert.match(humanCap.stderr, /timeout_capped_to_medium/);
+
+      assert.match(humanCap.stdout, /Judge\s*:/);
+      assert.match(humanCap.stdout, /gpt-6-astra \(high\) -> gpt-6-astra \(medium\)/);
+      assert.match(humanCap.stdout, /Seat Roll Call:/);
+      assert.match(humanCap.stdout, /gemini-4-argon-high \(high\) -> gemini-4-argon-medium \(medium\)/);
+      assert.match(humanCap.stdout, /Excused Seats:/);
+      assert.match(humanCap.stdout, /malformed_json_capped_to_medium/);
+
+      // --json mode
+      const jsonCap = createCapturedIo({
+        outputDir: dir,
+        telemetryDir: dir,
+        onEngine: decorateEngine
+      });
+      const jsonExit = await runCli(
+        ['run', '--mock', '--topic', 'Attribution json', '--retry-effort-fallback', '--json'],
+        jsonCap.io
+      );
+
+      assert.equal(jsonExit, 0, jsonCap.stderr);
+      const parsed = JSON.parse(jsonCap.stdout);
+      assert.equal(parsed.retryEffortFallback, true);
+      assert.equal(parsed.state.judge.retryDiagnosticsHistory.length, 1);
+      assert.equal(parsed.state.judge.retryDiagnosticsHistory[0].effectiveEffort, 'medium');
+      assert.equal(parsed.state.seats[0].retryDiagnosticsHistory.length, 1);
+      assert.equal(parsed.state.seats[0].retryDiagnosticsHistory[0].fallbackReason, 'timeout_capped_to_medium');
+      assert.equal(parsed.state.seats[1].retryDiagnosticsHistory[0].fallbackReason, 'malformed_json_capped_to_medium');
+      assert.equal(parsed.providerCalls[0].effectiveEffort, 'medium');
+      assert.equal(parsed.providerCalls[0].fallbackApplied, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -12377,5 +12377,392 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         }
       }
     });
+
+    it('ReReview-102 Round 30 fixes: allows literal non-shell code fences and unmatched backtick runs in kind:"check" proof statements while preserving unsafe command vetoes across all 20 combinations', async () => {
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+      const r30ReadinessPhaseCases = [
+        ['DELIBERATION', 1, 'proofs'],
+        ['DELIBERATION', 2, 'priorProofs'],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, 'proofs'],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, 'both'],
+        ['VOTING', 1, 'admittedProofs']
+      ];
+
+      function buildR30Proof(statement) {
+        return {
+          id: 'P1',
+          seatId: 's1',
+          round: 1,
+          status: 'admitted',
+          scope: 'Verify auth token expiry',
+          kind: 'check',
+          source: 'src/auth.js',
+          statement
+        };
+      }
+
+      function buildR30ReadinessInputs({ phase, round, errorClass, mode, statement, coveredSources = ['src/auth.js'] }) {
+        const checkProof = buildR30Proof(statement);
+        const extra = {};
+        if (phase === 'DELIBERATION' && round === 1) {
+          extra.proofs = [checkProof];
+        } else if (phase === 'DELIBERATION' && round === 2) {
+          extra.priorProofs = [checkProof];
+          extra.previousCandidate = sampleCandidate;
+          extra.openObjections = sampleObjections;
+        } else if (phase === 'JUDGE_AUDIT_SYNTHESIS' && round === 1) {
+          extra.proofs = [checkProof];
+        } else if (phase === 'JUDGE_AUDIT_SYNTHESIS' && round === 2) {
+          extra.proofs = [checkProof];
+          extra.priorProofs = [checkProof];
+          extra.previousCandidate = sampleCandidate;
+          extra.openObjections = sampleObjections;
+        } else if (phase === 'VOTING') {
+          extra.candidate = sampleCandidate;
+          extra.admittedProofs = [checkProof];
+        } else if (mode === 'proofs') {
+          extra.proofs = [checkProof];
+        }
+        return {
+          phase,
+          round,
+          errorClass,
+          topic: 'Inspect src/auth.js.',
+          clarifications: [],
+          proofs: [],
+          priorProofs: [],
+          openObjections: [],
+          admittedProofs: [],
+          ...extra,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        };
+      }
+
+      function runR30PlanParticipant(params) {
+        const isJudge = params.phase === 'JUDGE_AUDIT_SYNTHESIS';
+        const errorClass = params.errorClass;
+        return planParticipantRecovery({
+          ...buildR30ReadinessInputs(params),
+          participantId: isJudge ? 'judge' : 's1',
+          role: isJudge ? 'judge' : 'seat',
+          error:
+            errorClass === 'TimeoutError'
+              ? { message: `${params.phase} timeout`, code: 'ETIMEDOUT' }
+              : { message: `${params.phase} tool denied`, code: 'HEADLESS_TOOL_DENIED' },
+          isRetryable: true,
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          requestedModel: 'gpt-6-astra',
+          requestedEffort: 'high'
+        });
+      }
+
+      function makeR30Fault(phase, errorClass, participantId) {
+        return errorClass === 'TimeoutError'
+          ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+          : new HeadlessToolDeniedError(`${phase} tool denied`, {
+              harness: 'codex',
+              seatId: participantId,
+              exitCode: 0,
+              isRetryable: true
+            });
+      }
+
+      function makeR30EngineConfig({ maxRounds = 1, coveredSources = ['src/auth.js'] } = {}) {
+        return {
+          topic: 'Inspect src/auth.js.',
+          clarifications: [],
+          maxClarificationBatches: 1,
+          minQuorum: 2,
+          maxRounds,
+          maxRetriesPerSeat: 1,
+          maxRetriesPerJudge: 1,
+          cwd: '/repo',
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            label: `Artifact ${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'R30 check-proof regression matrix',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+            { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+            { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+          ]
+        };
+      }
+
+      async function executeR30PhaseEngine({ phase, errorClass, statement }) {
+        if (phase === 'R1_DELIBERATION') {
+          const checkProof = buildR30Proof(statement);
+          const engine = new CouncilEngine(makeR30EngineConfig({ maxRounds: 1 }));
+          engine.initRoster();
+          engine.state = { ...engine.state, phase: 'DELIBERATION', round: 1, proofs: [checkProof] };
+          const enginePlan = engine._planParticipantRecovery({
+            participant: engine.state.seats[0],
+            role: 'seat',
+            phase: 'DELIBERATION',
+            round: 1,
+            error: makeR30Fault('R1_DELIBERATION', errorClass, 's1'),
+            remainingBudget: 50000,
+            totalBudgetMs: 60000
+          });
+          return { targetCalls: [{ tools: enginePlan.canRetry ? enginePlan.nextTools : 'read-only' }], enginePlan };
+        }
+
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        mock.executeSeatProof = async (ctx) => {
+          if (ctx.round === 1 && ctx.seat.id === 's1') {
+            return {
+              scope: 'Verify auth token expiry',
+              kind: 'check',
+              source: 'src/auth.js',
+              statement
+            };
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR30Fault(phase, errorClass, 's2');
+          }
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR30Fault(phase, errorClass, 'judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR30Fault(phase, errorClass, 's1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          makeR30EngineConfig({
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1
+          }),
+          { harnessResolver: () => mock }
+        );
+
+        const checkPhase = phase.startsWith('JUDGE_') ? 'JUDGE_AUDIT_SYNTHESIS' : phase === 'VOTING' ? 'VOTING' : 'DELIBERATION';
+        const checkRound = phase.endsWith('_R2') || phase === 'R2_DELIBERATION' ? 2 : 1;
+        const targetId = checkPhase === 'JUDGE_AUDIT_SYNTHESIS' ? 'judge' : phase === 'R2_DELIBERATION' ? 's2' : 's1';
+        let enginePlan = null;
+        const origEnginePlan = engine._planParticipantRecovery.bind(engine);
+        engine._planParticipantRecovery = (arg) => {
+          const res = origEnginePlan(arg);
+          if (arg?.participant?.id === targetId && arg?.phase === checkPhase && Number(arg?.round || 1) === checkRound) {
+            enginePlan = res;
+          }
+          return res;
+        };
+        await engine.run();
+        assert.ok(enginePlan, `Expected live _planParticipantRecovery capture for ${phase} (${errorClass})`);
+        return { targetCalls, enginePlan };
+      }
+
+      const tick = String.fromCharCode(96);
+      const slow = Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n')
+        .join('')
+        .padEnd(48000, ' ');
+      const crash = ('Inspect src/auth.js.\r' + (tick.repeat(3) + 'txt\r').repeat(6800)).padEnd(48000, ' ');
+      const crashLf = ('Inspect src/auth.js.\n' + (tick.repeat(3) + 'txt\n').repeat(6800)).padEnd(48000, ' ');
+      const crashCrlf = ('Inspect src/auth.js.\r\n' + (tick.repeat(3) + 'txt\r\n').repeat(5995)).padEnd(48000, ' ');
+      const crashTildeCr = ('Inspect src/auth.js.\r' + ('~~~txt\r').repeat(6800)).padEnd(48000, ' ');
+      const slowAuthLf = (
+        'Inspect src/auth.js.\n' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n').join('')
+      ).padEnd(48000, ' ');
+      const slowAuthCr = (
+        'Inspect src/auth.js.\r' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\r').join('')
+      ).padEnd(48000, ' ');
+      const slowAuthCrlf = (
+        'Inspect src/auth.js.\r\n' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\r\n').join('')
+      )
+        .slice(0, 48000)
+        .padEnd(48000, ' ');
+      const crashWithRedir = (
+        'Inspect src/auth.js.\r' +
+        (tick.repeat(3) + 'txt\r').repeat(6798) +
+        '2>&1\r'
+      ).padEnd(48000, ' ');
+      const slowWithCmd = (
+        'Inspect src/auth.js.\n' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n').join('') +
+        'npm test\n'
+      ).padEnd(48000, ' ');
+
+      const r30AllowCheckStatements = [
+        slow,
+        crash,
+        crashLf,
+        crashCrlf,
+        crashTildeCr,
+        slowAuthLf,
+        slowAuthCr,
+        slowAuthCrlf,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\njust plain prose\n~~~`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\njust plain prose\n~~~\n`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\necho ok\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\r${tick.repeat(4)}txt\r${tick.repeat(3)}sh\rjust plain prose\r${tick.repeat(3)}\r${tick.repeat(4)}`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}txt\n--heading\n${tick.repeat(3)}\n~~~`,
+        'Inspect src/auth.js.\n~~~txt\nEach node checks git history and file status.\n~~~',
+        `Inspect src/auth.js.\n> ~~~txt\n> ${tick.repeat(3)}sh\n> just plain prose\n> ~~~`,
+        `Inspect src/auth.js.\n- ~~~txt\n  ${tick.repeat(3)}sh\n  just plain prose\n  ~~~`,
+        `Inspect src/auth.js. verify${tick}token${tick}, ${tick}id${tick}, and ${tick}It isn't${tick} an issue.`
+      ];
+      const r30RefuseCheckStatements = [
+        crashWithRedir,
+        slowWithCmd,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\nnpm test\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\necho -n ok\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\r${tick.repeat(4)}txt\r${tick.repeat(3)}txt\r2>&-\r${tick.repeat(4)}`,
+        'Inspect src/auth.js.\n~~~txt\n"npm test"\n~~~',
+        `Inspect src/auth.js.\n~~~txt\n${tick}npm test${tick}\n~~~`,
+        'Inspect src/auth.js.\n~~~txt\n./scripts/verify.sh\n~~~',
+        'Inspect src/auth.js.\n~~~sh\njust plain prose\n~~~',
+        `Checked ${tick}ls${tick} output.`,
+        `Checked ${tick}pwd${tick} output.`,
+        `Checked ${tick}pytest${tick} output.`,
+        `Checked ${tick}ruff --check${tick} output.`,
+        `Inspect src/auth.js. ${tick}> note echo ok${tick}`
+      ];
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        for (const [phaseName, round, mode] of r30ReadinessPhaseCases) {
+          for (const statement of r30AllowCheckStatements) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR30ReadinessInputs({ phase: phaseName, round, errorClass, mode, statement })
+            );
+            assert.equal(readiness.ready, true, `Expected R30 check-proof readiness approval in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement.slice(0, 80))}`);
+
+            const plan = runR30PlanParticipant({ phase: phaseName, round, errorClass, mode, statement });
+            assert.equal(plan.canRetry, true, `Expected R30 check-proof planner approval in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement.slice(0, 80))}`);
+            assert.equal(plan.nextTools, 'none');
+            assert.equal(plan.terminationKind, null);
+          }
+          for (const statement of r30RefuseCheckStatements) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR30ReadinessInputs({ phase: phaseName, round, errorClass, mode, statement })
+            );
+            assert.equal(readiness.ready, false, `Expected R30 check-proof readiness refusal in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement.slice(0, 80))}`);
+            assert.equal(readiness.reasonCode, 'evidence_access_failure');
+
+            const plan = runR30PlanParticipant({ phase: phaseName, round, errorClass, mode, statement });
+            assert.equal(plan.canRetry, false, `Expected R30 check-proof planner refusal in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement.slice(0, 80))}`);
+            assert.equal(plan.terminationKind, 'evidence_access_failure');
+          }
+        }
+
+        for (const enginePhase of allFivePhases) {
+          for (const statement of r30AllowCheckStatements) {
+            const out = await executeR30PhaseEngine({ phase: enginePhase, errorClass, statement });
+            assert.equal(out.enginePlan.canRetry, true, `Expected live engine approval for ${enginePhase} (${errorClass}) on ${JSON.stringify(statement.slice(0, 80))}`);
+            assert.equal(out.enginePlan.nextTools, 'none');
+            assert.equal(out.enginePlan.terminationKind, null);
+            if (enginePhase !== 'R1_DELIBERATION') {
+              assert.equal(out.targetCalls.length, 2);
+              assert.equal(out.targetCalls[1].tools, 'none');
+              assert.equal(out.targetCalls[1].cwd, undefined);
+            }
+          }
+          for (const statement of r30RefuseCheckStatements) {
+            const out = await executeR30PhaseEngine({ phase: enginePhase, errorClass, statement });
+            assert.equal(out.enginePlan.canRetry, false, `Expected live engine refusal for ${enginePhase} (${errorClass}) on ${JSON.stringify(statement.slice(0, 80))}`);
+            assert.equal(out.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(out.targetCalls.length, 1);
+          }
+        }
+      }
+
+      // Multi-sample exact 48,000-byte warmed latency suite on kind:"check" proof readiness (5 warmups + 10 timed samples)
+      const r30LatencyWorkloads = [
+        { name: 'r30-proof-slow-backticks-48k', payload: slow, expectReady: true },
+        { name: 'r30-proof-crash-cr-48k', payload: crash, expectReady: true },
+        { name: 'r30-proof-crash-tilde-cr-48k', payload: crashTildeCr, expectReady: true },
+        { name: 'r30-proof-slow-auth-cr-48k', payload: slowAuthCr, expectReady: true },
+        { name: 'r30-proof-slow-auth-crlf-48k', payload: slowAuthCrlf, expectReady: true },
+        { name: 'r30-proof-crash-with-redir-48k', payload: crashWithRedir, expectReady: false }
+      ];
+      for (const workload of r30LatencyWorkloads) {
+        assert.equal(Buffer.byteLength(workload.payload, 'utf8'), 48000, `Expected exact 48000B payload for ${workload.name}`);
+        const readinessArgs = buildR30ReadinessInputs({
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          statement: workload.payload
+        });
+        for (let w = 0; w < 5; w += 1) {
+          evaluateToolFreeEvidenceReadiness(readinessArgs);
+        }
+        for (let s = 0; s < 10; s += 1) {
+          const t0 = performance.now();
+          const readiness = evaluateToolFreeEvidenceReadiness(readinessArgs);
+          const ms = performance.now() - t0;
+          assert.ok(ms < 20, `Expected <20ms warmed proof readiness sample #${s + 1} for ${workload.name}, got ${ms.toFixed(2)}ms`);
+          assert.equal(readiness.ready, workload.expectReady);
+        }
+      }
+    });
   });
 });

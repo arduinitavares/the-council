@@ -4016,7 +4016,8 @@ function scanDelimitedShellSpans(
     stopOnFirst = true,
     skipCodeFences = true,
     allowMarkdownBlockquotes = true,
-    needRemainder = true
+    needRemainder = true,
+    checkMode = false
   } = {}
 ) {
   const n = rawText.length;
@@ -4034,7 +4035,7 @@ function scanDelimitedShellSpans(
     rawText.indexOf('`') === -1 &&
     rawText.indexOf('./') === -1 &&
     rawText.indexOf('../') === -1
-      ? `${allowMarkdownBlockquotes ? '1' : '0'}${skipCodeFences ? '1' : '0'}:${rawText}`
+      ? `${allowMarkdownBlockquotes ? '1' : '0'}${skipCodeFences ? '1' : '0'}${checkMode ? '1' : '0'}:${rawText}`
       : null;
   if (delimCacheKey !== null && activeReadinessCache.delimSpans.has(delimCacheKey)) {
     return activeReadinessCache.delimSpans.get(delimCacheKey);
@@ -4095,7 +4096,7 @@ function scanDelimitedShellSpans(
         pushMatched(inner);
         if (stopOnFirst) return true;
       } else {
-        const innerEvalKey = `${isBacktick ? '1:' : '0:'}${isFence ? 'F:' : ''}${inner}`;
+        const innerEvalKey = `${isBacktick ? '1:' : '0:'}${isFence ? 'F:' : ''}${checkMode ? 'C:' : ''}${inner}`;
         let didMatchInner = innerEvalCache ? innerEvalCache.get(innerEvalKey) : undefined;
         if (didMatchInner === undefined) {
           const isSafeEndpoint =
@@ -4112,17 +4113,21 @@ function scanDelimitedShellSpans(
               if (!/[\s;|&<>()$`\\"']/.test(inner)) {
                 const simpleWord = toAsciiLowerFast(stripShellBinPrefix(stripTrailingProsePunct(inner) || inner));
                 innerMatchesCmd =
-                  SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) || (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
+                  SHELL_ZERO_ARG_CLI_VERBS.has(simpleWord) ||
+                  (checkMode && isBacktick && (simpleWord === 'pwd' || simpleWord === 'pytest')) ||
+                  (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
               } else {
-                innerMatchesCmd = scanShellCommandText(
-                  inner,
-                  isBacktick
-                    ? { skipCodeFences: Boolean(skipCodeFences) }
-                    : {
-                        allowMarkdownBlockquotes: Boolean(allowMarkdownBlockquotes),
-                        skipCodeFences: Boolean(skipCodeFences)
-                      }
-                );
+                innerMatchesCmd =
+                  (checkMode && isBacktick && /^[A-Za-z0-9_./-]+[ \t]+-{1,2}[A-Za-z0-9]/.test(inner)) ||
+                  scanShellCommandText(
+                    inner,
+                    isBacktick
+                      ? { skipCodeFences: Boolean(skipCodeFences) }
+                      : {
+                          allowMarkdownBlockquotes: Boolean(allowMarkdownBlockquotes),
+                          skipCodeFences: Boolean(skipCodeFences)
+                        }
+                  );
               }
             }
             didMatchInner = Boolean(matchesScript || innerMatchesCmd);
@@ -4973,7 +4978,6 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
       if (trimmedBody && !(typeof isSingleExternalEndpointToken === 'function' && isSingleExternalEndpointToken(trimmedBody))) {
         const bodyMatched =
           SHELL_UNQUOTED_SCRIPT_CMD_REGEX.test(trimmedBody) ||
-          (checkMode && UNQUOTED_CHECK_COMMAND_OR_REPO_REGEX.test(trimmedBody)) ||
           scanShellCommandText(trimmedBody, { skipCodeFences: true }) ||
           scanDelimitedShellSpans(trimmedBody, {
             includeBackticks: true,
@@ -5668,9 +5672,6 @@ function hasCheckCommandOrRepoDependency(rawText) {
   if (!rawText || typeof rawText !== 'string') {
     return false;
   }
-  if (/`[^`]+`/.test(rawText)) {
-    return true;
-  }
 
   const { fenceDeps, maskedText } = extractAndMaskMarkdownCodeFences(rawText, {
     checkMode: true,
@@ -5702,9 +5703,10 @@ function hasCheckCommandOrRepoDependency(rawText) {
   }
 
   const { matchedDeps, remainder } = scanDelimitedShellSpans(maskedText, {
-    includeBackticks: false,
+    includeBackticks: true,
     includeBareScript: true,
-    stopOnFirst: true
+    stopOnFirst: true,
+    checkMode: true
   });
   if (matchedDeps.length > 0) {
     return true;

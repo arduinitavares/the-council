@@ -12764,5 +12764,347 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         }
       }
     });
+
+    it('ReReview-102 Round 31 fixes: forwards checkMode into literal-fence delimiter scanning so fenced backticked check commands veto across LF/CRLF/CR and all 20 combinations', async () => {
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+      const r31ReadinessPhaseCases = [
+        ['DELIBERATION', 1, 'proofs'],
+        ['DELIBERATION', 2, 'priorProofs'],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, 'proofs'],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, 'both'],
+        ['VOTING', 1, 'admittedProofs']
+      ];
+
+      function buildR31Proof(statement) {
+        return {
+          id: 'P1',
+          seatId: 's1',
+          round: 1,
+          status: 'admitted',
+          scope: 'Verify auth token expiry',
+          kind: 'check',
+          source: 'src/auth.js',
+          statement
+        };
+      }
+
+      function buildR31ReadinessInputs({ phase, round, errorClass, mode, statement, coveredSources = ['src/auth.js'] }) {
+        const checkProof = buildR31Proof(statement);
+        const extra = {};
+        if (phase === 'DELIBERATION' && round === 1) {
+          extra.proofs = [checkProof];
+        } else if (phase === 'DELIBERATION' && round === 2) {
+          extra.priorProofs = [checkProof];
+          extra.previousCandidate = sampleCandidate;
+          extra.openObjections = sampleObjections;
+        } else if (phase === 'JUDGE_AUDIT_SYNTHESIS' && round === 1) {
+          extra.proofs = [checkProof];
+        } else if (phase === 'JUDGE_AUDIT_SYNTHESIS' && round === 2) {
+          extra.proofs = [checkProof];
+          extra.priorProofs = [checkProof];
+          extra.previousCandidate = sampleCandidate;
+          extra.openObjections = sampleObjections;
+        } else if (phase === 'VOTING') {
+          extra.candidate = sampleCandidate;
+          extra.admittedProofs = [checkProof];
+        } else if (mode === 'proofs') {
+          extra.proofs = [checkProof];
+        }
+        return {
+          phase,
+          round,
+          errorClass,
+          topic: 'Inspect src/auth.js.',
+          clarifications: [],
+          proofs: [],
+          priorProofs: [],
+          openObjections: [],
+          admittedProofs: [],
+          ...extra,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        };
+      }
+
+      function runR31PlanParticipant(params) {
+        const isJudge = params.phase === 'JUDGE_AUDIT_SYNTHESIS';
+        const errorClass = params.errorClass;
+        return planParticipantRecovery({
+          ...buildR31ReadinessInputs(params),
+          participantId: isJudge ? 'judge' : 's1',
+          role: isJudge ? 'judge' : 'seat',
+          error:
+            errorClass === 'TimeoutError'
+              ? { message: `${params.phase} timeout`, code: 'ETIMEDOUT' }
+              : { message: `${params.phase} tool denied`, code: 'HEADLESS_TOOL_DENIED' },
+          isRetryable: true,
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          requestedModel: 'gpt-6-astra',
+          requestedEffort: 'high'
+        });
+      }
+
+      function makeR31Fault(phase, errorClass, participantId) {
+        return errorClass === 'TimeoutError'
+          ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+          : new HeadlessToolDeniedError(`${phase} tool denied`, {
+              harness: 'codex',
+              seatId: participantId,
+              exitCode: 0,
+              isRetryable: true
+            });
+      }
+
+      function makeR31EngineConfig({ maxRounds = 1, coveredSources = ['src/auth.js'] } = {}) {
+        return {
+          topic: 'Inspect src/auth.js.',
+          clarifications: [],
+          maxClarificationBatches: 1,
+          minQuorum: 2,
+          maxRounds,
+          maxRetriesPerSeat: 1,
+          maxRetriesPerJudge: 1,
+          cwd: '/repo',
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            label: `Artifact ${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'R31 fenced check-proof regression matrix',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+          seats: [
+            { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+            { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+            { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+          ]
+        };
+      }
+
+      async function executeR31PhaseEngine({ phase, errorClass, statement }) {
+        if (phase === 'R1_DELIBERATION') {
+          const checkProof = buildR31Proof(statement);
+          const engine = new CouncilEngine(makeR31EngineConfig({ maxRounds: 1 }));
+          engine.initRoster();
+          engine.state = { ...engine.state, phase: 'DELIBERATION', round: 1, proofs: [checkProof] };
+          const enginePlan = engine._planParticipantRecovery({
+            participant: engine.state.seats[0],
+            role: 'seat',
+            phase: 'DELIBERATION',
+            round: 1,
+            error: makeR31Fault('R1_DELIBERATION', errorClass, 's1'),
+            remainingBudget: 50000,
+            totalBudgetMs: 60000
+          });
+          return { targetCalls: [{ tools: enginePlan.canRetry ? enginePlan.nextTools : 'read-only' }], enginePlan };
+        }
+
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        mock.executeSeatProof = async (ctx) => {
+          if (ctx.round === 1 && ctx.seat.id === 's1') {
+            return {
+              scope: 'Verify auth token expiry',
+              kind: 'check',
+              source: 'src/auth.js',
+              statement
+            };
+          }
+          if (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR31Fault(phase, errorClass, 's2');
+          }
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR31Fault(phase, errorClass, 'judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR31Fault(phase, errorClass, 's1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const engine = new CouncilEngine(
+          makeR31EngineConfig({
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1
+          }),
+          { harnessResolver: () => mock }
+        );
+
+        const checkPhase = phase.startsWith('JUDGE_') ? 'JUDGE_AUDIT_SYNTHESIS' : phase === 'VOTING' ? 'VOTING' : 'DELIBERATION';
+        const checkRound = phase.endsWith('_R2') || phase === 'R2_DELIBERATION' ? 2 : 1;
+        const targetId = checkPhase === 'JUDGE_AUDIT_SYNTHESIS' ? 'judge' : phase === 'R2_DELIBERATION' ? 's2' : 's1';
+        let enginePlan = null;
+        const origEnginePlan = engine._planParticipantRecovery.bind(engine);
+        engine._planParticipantRecovery = (arg) => {
+          const res = origEnginePlan(arg);
+          if (arg?.participant?.id === targetId && arg?.phase === checkPhase && Number(arg?.round || 1) === checkRound) {
+            enginePlan = res;
+          }
+          return res;
+        };
+        await engine.run();
+        assert.ok(enginePlan, `Expected live _planParticipantRecovery capture for ${phase} (${errorClass})`);
+        return { targetCalls, enginePlan };
+      }
+
+      const tick = String.fromCharCode(96);
+      const r31Commands = ['pwd', 'pytest', 'ruff --check'];
+      const r31LineEndings = ['\n', '\r\n', '\r'];
+      const r31RefuseCheckStatements = [];
+      for (const cmd of r31Commands) {
+        for (const eol of r31LineEndings) {
+          r31RefuseCheckStatements.push(
+            `Inspect src/auth.js.${eol}~~~txt${eol}${tick}${cmd}${tick}${eol}~~~`,
+            `Inspect src/auth.js.${eol}${tick.repeat(3)}txt${eol}${tick}${cmd}${tick}${eol}${tick.repeat(3)}`,
+            `Inspect src/auth.js.${eol}~~~txt${eol}${tick.repeat(3)}sh${eol}${cmd}${eol}${tick.repeat(3)}${eol}~~~`
+          );
+        }
+      }
+      assert.equal(r31RefuseCheckStatements.length, 27);
+
+      const r31AllowCheckStatements = [
+        'Inspect src/auth.js.\n~~~txt\nKeys " pwd ", " pytest ", and " ruff --check " are strings.\n~~~',
+        `Inspect src/auth.js.\n~~~txt\n${tick}index -1${tick}\n~~~`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}txt\n--heading\n${tick.repeat(3)}\n~~~`,
+        'Inspect src/auth.js.\n~~~txt\njust plain prose\n~~~'
+      ];
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        for (const [phaseName, round, mode] of r31ReadinessPhaseCases) {
+          for (const statement of r31AllowCheckStatements) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR31ReadinessInputs({ phase: phaseName, round, errorClass, mode, statement })
+            );
+            assert.equal(readiness.ready, true, `Expected R31 literal-fence readiness approval in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement)}`);
+
+            const plan = runR31PlanParticipant({ phase: phaseName, round, errorClass, mode, statement });
+            assert.equal(plan.canRetry, true, `Expected R31 literal-fence planner approval in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement)}`);
+            assert.equal(plan.nextTools, 'none');
+            assert.equal(plan.terminationKind, null);
+          }
+          for (const statement of r31RefuseCheckStatements) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR31ReadinessInputs({ phase: phaseName, round, errorClass, mode, statement })
+            );
+            assert.equal(readiness.ready, false, `Expected R31 fenced check-proof readiness refusal in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement)}`);
+            assert.equal(readiness.reasonCode, 'evidence_access_failure');
+
+            const plan = runR31PlanParticipant({ phase: phaseName, round, errorClass, mode, statement });
+            assert.equal(plan.canRetry, false, `Expected R31 fenced check-proof planner refusal in ${phaseName} R${round} (${errorClass}) for ${JSON.stringify(statement)}`);
+            assert.equal(plan.terminationKind, 'evidence_access_failure');
+          }
+        }
+
+        for (const enginePhase of allFivePhases) {
+          for (const statement of r31AllowCheckStatements) {
+            const out = await executeR31PhaseEngine({ phase: enginePhase, errorClass, statement });
+            assert.equal(out.enginePlan.canRetry, true, `Expected R31 live engine approval for ${enginePhase} (${errorClass}) on ${JSON.stringify(statement)}`);
+            assert.equal(out.enginePlan.nextTools, 'none');
+            assert.equal(out.enginePlan.terminationKind, null);
+            if (enginePhase !== 'R1_DELIBERATION') {
+              assert.equal(out.targetCalls.length, 2);
+              assert.equal(out.targetCalls[1].tools, 'none');
+              assert.equal(out.targetCalls[1].cwd, undefined);
+            }
+          }
+          for (const statement of r31RefuseCheckStatements) {
+            const out = await executeR31PhaseEngine({ phase: enginePhase, errorClass, statement });
+            assert.equal(out.enginePlan.canRetry, false, `Expected R31 live engine refusal for ${enginePhase} (${errorClass}) on ${JSON.stringify(statement)}`);
+            assert.equal(out.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(out.targetCalls.length, 1);
+          }
+        }
+      }
+
+      // Multi-sample exact 48,000-byte warmed latency suite for fenced checkMode readiness
+      const r31AllowFenceCr = (
+        `Inspect src/auth.js.\r~~~txt\r${`${tick}index -1${tick}\r`.repeat(4300)}~~~`
+      ).padEnd(48000, ' ');
+      const r31RefuseFenceCrlf = (
+        `Inspect src/auth.js.\r\n${tick.repeat(3)}txt\r\n${`${tick}index -1${tick}\r\n`.repeat(3900)}${tick}ruff --check${tick}\r\n${tick.repeat(3)}`
+      ).padEnd(48000, ' ');
+      const r31LatencyWorkloads = [
+        { name: 'r31-allow-tilde-cr-48k', payload: r31AllowFenceCr, expectReady: true },
+        { name: 'r31-refuse-bt-fence-crlf-48k', payload: r31RefuseFenceCrlf, expectReady: false }
+      ];
+      for (const workload of r31LatencyWorkloads) {
+        assert.equal(Buffer.byteLength(workload.payload, 'utf8'), 48000, `Expected exact 48000B payload for ${workload.name}`);
+        const readinessArgs = buildR31ReadinessInputs({
+          phase: 'JUDGE_AUDIT_SYNTHESIS',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          statement: workload.payload
+        });
+        for (let w = 0; w < 5; w += 1) {
+          evaluateToolFreeEvidenceReadiness(readinessArgs);
+        }
+        for (let s = 0; s < 10; s += 1) {
+          const t0 = performance.now();
+          const readiness = evaluateToolFreeEvidenceReadiness(readinessArgs);
+          const ms = performance.now() - t0;
+          assert.ok(ms < 20, `Expected <20ms warmed R31 readiness sample #${s + 1} for ${workload.name}, got ${ms.toFixed(2)}ms`);
+          assert.equal(readiness.ready, workload.expectReady);
+        }
+      }
+    });
   });
 });

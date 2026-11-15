@@ -4118,7 +4118,12 @@ function scanDelimitedShellSpans(
                   (startsDot && SHELL_EXEC_SCRIPT_TOKEN_REGEX.test(inner));
               } else {
                 innerMatchesCmd =
-                  (checkMode && isBacktick && /^[A-Za-z0-9_./-]+[ \t]+-{1,2}[A-Za-z0-9]/.test(inner)) ||
+                  (checkMode &&
+                    isBacktick &&
+                    (/(?:^|[\r\n])[ \t]*(?:pwd|pytest)[ \t]*(?:$|[\r\n])/.test(inner) ||
+                      /(?:^|[\r\n])[ \t]*[A-Za-z0-9_./][A-Za-z0-9_./-]*[ \t]+(?:--[A-Za-z0-9]|-[A-Za-z])/.test(
+                        inner
+                      ))) ||
                   scanShellCommandText(
                     inner,
                     isBacktick
@@ -4982,6 +4987,7 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
           scanDelimitedShellSpans(trimmedBody, {
             includeBackticks: true,
             includeBareScript: checkMode,
+            checkMode: Boolean(checkMode),
             stopOnFirst: true,
             skipCodeFences: true,
             allowMarkdownBlockquotes: false,

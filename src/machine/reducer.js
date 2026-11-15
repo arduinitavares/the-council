@@ -485,6 +485,7 @@ export function transitionCouncil(state, event) {
       clearAllActiveRetryDiagnostics(next);
       next.phase = 'confirming';
       activeSeats(next).forEach((s) => {
+        s.retries = 0;
         s.status = 'thinking';
         delete s.faultReason;
         delete s.errorClass;
@@ -928,7 +929,9 @@ export function transitionCouncil(state, event) {
       next.round += 1;
       next.phase = 'reviewing';
       clearAllActiveRetryDiagnostics(next);
+      next.judge.retries = 0;
       active.forEach((s) => {
+        s.retries = 0;
         s.status = 'thinking';
       });
       return succeed(

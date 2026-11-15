@@ -797,6 +797,12 @@ export class HarnessAdapter {
     });
   }
 
+  _withRetryFeedback(prompt, feedback) {
+    return typeof feedback === 'string' && feedback
+      ? prompt + '\n\nValidation retry instructions:\n' + feedback.slice(0, 1000)
+      : prompt;
+  }
+
   /**
    * Extracts and parses JSON from raw LLM output, stripping markdown fences.
    *

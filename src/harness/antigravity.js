@@ -188,7 +188,7 @@ export class AntigravityAdapter extends HarnessAdapter {
           });
           const rawOutput = await this._dispatchCli({
             model: seat.model,
-            prompt,
+            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
             signal,
             context,
             tools: effectiveTools,
@@ -293,7 +293,7 @@ export class AntigravityAdapter extends HarnessAdapter {
           });
           const rawOutput = await this._dispatchCli({
             model: judge.model,
-            prompt,
+            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
             signal,
             context,
             tools: effectiveTools,

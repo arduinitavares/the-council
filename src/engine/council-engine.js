@@ -872,6 +872,26 @@ export class CouncilEngine {
     return reason;
   }
 
+  // Only coordinator-owned validation constraints reach the next prompt; never
+  // echo raw output, paths, stderr, or arbitrary error messages as instructions.
+  _validationRetryFeedback(error) {
+    if (this._classifyErrorClass(error) !== 'InvalidResponseError') return undefined;
+    const constraints = new Set();
+    for (const raw of (Array.isArray(error?.validationErrors) ? error.validationErrors : []).slice(0, 8)) {
+      if (typeof raw !== 'string') continue;
+      const field = /^(proof\.(?:scope|source|statement)|summary|reason)\b/.exec(raw)?.[1];
+      if (field && raw.includes('must not cite internal .council or telemetry artifacts')) {
+        constraints.add(field + ': cite an allowed external or repository source, not internal run artifacts.');
+      } else if (field && raw.includes('parent directory traversal')) {
+        constraints.add(field + ': use workspace-relative citations without parent traversal.');
+      } else if (field && /temporary workspace|host workspace/.test(raw)) {
+        constraints.add(field + ': use portable workspace-relative citations.');
+      }
+    }
+    return 'The previous response failed validation. Return the required JSON contract. ' +
+      (constraints.size ? [...constraints].join(' ') : 'Check required fields, allowed values, and cited proof IDs.');
+  }
+
   _resolveConfigParticipant(role, participantId) {
     if (role === 'judge') {
       return this.config?.judge || null;
@@ -895,7 +915,7 @@ export class CouncilEngine {
     for (const item of candidates) {
       if (typeof item === 'string' && item.trim()) {
         const trimmed = item.trim();
-        if (!seen.has(trimmed)) {
+        if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(trimmed) && !seen.has(trimmed)) {
           seen.add(trimmed);
           roots.push(trimmed);
         }
@@ -1130,7 +1150,8 @@ export class CouncilEngine {
     originalAttemptTools,
     previousCandidate = null,
     currentModel,
-    currentReasoningEffort
+    currentReasoningEffort,
+    baseTimeoutMs
   } = {}) {
     const errorClass = this._classifyErrorClass(error);
     const faultStatus = this._classifyFaultStatus(error);
@@ -1183,7 +1204,9 @@ export class CouncilEngine {
     const admittedProofs = (this.state.proofs || []).filter(
       (p) => p.status === 'admitted' || p.status === 'partially_admitted'
     );
-    const openObjections = (this.state.objections || []).filter((o) => o.status === 'open');
+    const openObjections = (this.state.objections || []).filter(
+      (o) => o.status === 'open' || o.status === 'preserved_excused'
+    );
     const toolFreeKey = `${currentRound}:${effectivePhase}:${participant?.id || 'judge'}`;
     const usedToolFree =
       toolFreeRecoveryUsed !== undefined
@@ -1238,6 +1261,20 @@ export class CouncilEngine {
       verifiedCapabilities
     });
 
+    if (plan.canRetry && Number.isFinite(baseTimeoutMs) && baseTimeoutMs > 0) {
+      const recoveryCap = errorClass === 'TimeoutError' || errorClass === 'HeadlessToolDeniedError'
+        ? 90000 : Infinity;
+      plan.turnTimeoutMs = Math.min(baseTimeoutMs, recoveryCap, remainingBudget ?? Infinity);
+      plan.retryDiagnostics = {
+        ...plan.retryDiagnostics,
+        turnTimeoutMs: plan.turnTimeoutMs,
+        timeoutReason: plan.turnTimeoutMs < Math.min(baseTimeoutMs, recoveryCap)
+          ? 'remaining_phase_budget'
+          : recoveryCap < baseTimeoutMs ? 'recovery_cap' : 'turn_timeout'
+      };
+    }
+    plan.retryFeedback = this._validationRetryFeedback(error);
+
     return {
       ...plan,
       errorClass,
@@ -1269,7 +1306,8 @@ export class CouncilEngine {
       originalAttemptTools: options.originalAttemptTools,
       previousCandidate: options.previousCandidate,
       currentModel: options.currentModel,
-      currentReasoningEffort: options.currentReasoningEffort
+      currentReasoningEffort: options.currentReasoningEffort,
+      baseTimeoutMs: options.baseTimeoutMs
     });
     return {
       retries: plan.retries,
@@ -1684,8 +1722,8 @@ export class CouncilEngine {
       const t0 = Date.now();
       let callContext = null;
       try {
-        const callSeat = slot.isRebuttal ? slot.currentSeatConfig : slot.seat;
-        const callTools = slot.isRebuttal ? slot.currentSeatConfig.tools : slot.seat.tools;
+        const callSeat = slot.currentSeatConfig;
+        const callTools = callSeat.tools;
         callContext = slot.isRebuttal
           ? {
               rebuttalMode: true,
@@ -1702,7 +1740,8 @@ export class CouncilEngine {
               tools: callTools,
               ...(callSeat.cwd !== undefined && callTools !== 'none' ? { cwd: callSeat.cwd } : {}),
               signal: delibWaveSignal,
-              retryDiagnostics: null
+              retryDiagnostics: null,
+              ...(callSeat.reasoningEffort ? { reasoningEffort: callSeat.reasoningEffort } : {})
             };
         const { liveMeta: delibLiveMeta, originalMeta: delibOriginalMeta } = this._seedAttemptInvocationMeta({
           role: 'seat',
@@ -1855,6 +1894,7 @@ export class CouncilEngine {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs,
+            baseTimeoutMs: slot.baseTimeoutMs ?? slot.baseVoteTimeoutMs,
             toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
             originalInvocationMeta: slot.originalInvocationMeta,
             originalAttemptTools: slot.originalAttemptTools,
@@ -1884,7 +1924,8 @@ export class CouncilEngine {
             slot.toolFreeRecoveryUsed = true;
           }
           slot.retryDiagnostics = plan?.retryDiagnostics || null;
-          slot.turnTimeoutMs = Math.min(slot.baseTimeoutMs, 90000, Math.max(1, remainingBudget));
+          slot.turnTimeoutMs = plan.turnTimeoutMs;
+          slot.retryFeedback = plan.retryFeedback;
           slot.currentSeatConfig = {
             ...slot.currentSeatConfig,
             retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1
@@ -1932,6 +1973,7 @@ export class CouncilEngine {
                     : {}),
                   signal: delibRetrySignal,
                   retryDiagnostics: slot.retryDiagnostics || null,
+              retryFeedback: slot.retryFeedback,
                   ...(slot.currentSeatConfig.reasoningEffort
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
@@ -1943,6 +1985,7 @@ export class CouncilEngine {
                     : {}),
                   signal: delibRetrySignal,
                   retryDiagnostics: slot.retryDiagnostics || null,
+              retryFeedback: slot.retryFeedback,
                   ...(slot.currentSeatConfig.reasoningEffort
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
@@ -1980,6 +2023,7 @@ export class CouncilEngine {
                 ? { cwd: slot.currentSeatConfig.cwd }
                 : {}),
               retryDiagnostics: slot.retryDiagnostics || null,
+              retryFeedback: slot.retryFeedback,
               _invocationMeta: retryLiveMeta,
               telemetry: this.telemetry,
               ...delibRetryExtras
@@ -2149,6 +2193,7 @@ export class CouncilEngine {
     let judgeOriginalInvocationMeta = null;
     let judgeOriginalAttemptTools = null;
     let judgeRetryDiagnostics = null;
+    let judgeRetryFeedback;
     let currentJudgeConfig = { ...mergedJudge };
     let currentJudgeTimeoutMs = initialJudgeTimeoutMs;
 
@@ -2168,6 +2213,7 @@ export class CouncilEngine {
             : {}),
           signal: judgeSignal,
           retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
+          retryFeedback: judgeRetryFeedback,
           ...(currentJudgeConfig.reasoningEffort ? { reasoningEffort: currentJudgeConfig.reasoningEffort } : {})
         };
         const { liveMeta: judgeLiveMeta, originalMeta: judgeSeededOriginalMeta } = this._seedAttemptInvocationMeta({
@@ -2196,6 +2242,7 @@ export class CouncilEngine {
             ? { cwd: currentJudgeConfig.cwd }
             : {}),
           retryDiagnostics: judgeRoundRetries === 0 ? null : judgeRetryDiagnostics,
+          retryFeedback: judgeRetryFeedback,
           _invocationMeta: judgeLiveMeta,
           telemetry: this.telemetry,
           signal: judgeSignal,
@@ -2286,6 +2333,7 @@ export class CouncilEngine {
           maxRetries: maxJudgeRetries,
           remainingBudget: remainingJudgeBudget,
           totalBudgetMs: judgeBudgetMs,
+          baseTimeoutMs: baseJudgeTimeoutMs,
           toolFreeRecoveryUsed: judgeToolFreeRecoveryUsed,
           originalInvocationMeta: judgeOriginalInvocationMeta,
           originalAttemptTools: judgeOriginalAttemptTools,
@@ -2315,7 +2363,8 @@ export class CouncilEngine {
             retryDiagnosticsHistory: this.state.judge.retryDiagnosticsHistory
           };
           this._applyRetryConfig(currentJudgeConfig, plan);
-          currentJudgeTimeoutMs = Math.min(baseJudgeTimeoutMs, 90000, remainingJudgeBudget);
+          currentJudgeTimeoutMs = plan.turnTimeoutMs;
+          judgeRetryFeedback = plan.retryFeedback;
           this.telemetry.emitSeatTelemetry(judge.id, 'thinking', {
             retryDiagnostics: judgeRetryDiagnostics
           });
@@ -2679,6 +2728,7 @@ export class CouncilEngine {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs,
+            baseTimeoutMs: slot.baseTimeoutMs ?? slot.baseVoteTimeoutMs,
             toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
             originalInvocationMeta: slot.originalInvocationMeta,
             originalAttemptTools: slot.originalAttemptTools,
@@ -2708,7 +2758,8 @@ export class CouncilEngine {
             slot.toolFreeRecoveryUsed = true;
           }
           slot.retryDiagnostics = plan?.retryDiagnostics || null;
-          slot.turnTimeoutMs = Math.min(slot.baseVoteTimeoutMs, 90000, Math.max(1, remainingBudget));
+          slot.turnTimeoutMs = plan.turnTimeoutMs;
+          slot.retryFeedback = plan.retryFeedback;
           slot.currentSeatConfig = {
             ...slot.currentSeatConfig,
             retries: typeof faultRes.retries === 'number' ? faultRes.retries : (liveSeat.retries || 0) + 1,
@@ -2755,6 +2806,7 @@ export class CouncilEngine {
                 : {}),
               signal: voteRetrySignal,
               retryDiagnostics: slot.retryDiagnostics || null,
+              retryFeedback: slot.retryFeedback,
               ...(slot.currentSeatConfig.reasoningEffort
                 ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                 : {})
@@ -2781,6 +2833,7 @@ export class CouncilEngine {
                 ? { cwd: slot.currentSeatConfig.cwd }
                 : {}),
               retryDiagnostics: slot.retryDiagnostics || null,
+              retryFeedback: slot.retryFeedback,
               _invocationMeta: voteRetryLiveMeta,
               telemetry: this.telemetry,
               signal: voteRetrySignal,

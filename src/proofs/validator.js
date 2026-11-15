@@ -17,6 +17,14 @@ const PARENT_TRAVERSAL_REGEX =
 const FORBIDDEN_ARTIFACT_REGEX =
   /(?:^|[\\/\s"'`(=,\[{:])\.council(?:$|[\\/\s"'`),.:;\]}?!])|(?:^|[\\/\s"'`(=,\[{:])latest\.js(?=$|[:\s"'`),.\]}?!])|\*\.meta\.json(?=$|[:\s"'`),.\]}?!])|\*\.events\.jsonl(?=$|[:\s"'`),.\]}?!])|(?:^|[\\/\s"'`(=,\[{:])[a-z0-9._-]+\.(?:meta\.json|events\.jsonl)(?=$|[:\s"'`),.\]}?!])|(?:^|[\\/\s"'`(=,\[{:])telemetry-summary(?:\.\*|(?:\.[a-z0-9]+))?(?=$|[:\s"'`),.\]}?!])/i;
 
+// These negative access disclosures name a category, not a concrete source.
+// Concrete subpaths and other references in the same field remain checked.
+function citationReferences(text) {
+  return text
+    .replace(/\bNo\s+\.council\/?\s+(?:telemetry|files)(?:,\s*(?:or\s+)?(?:run snapshots|skill-source files))*\s+were used\./gi, '')
+    .replace(/\bI did not inspect (?:any engine source or )?\.council\/?\s+files(?:, and I did not run a benchmark)?\./gi, '');
+}
+
 const UNSTRIPPED_TEMP_ROOT_REGEX =
   /(?:(?:\/|\\|[a-z]:\\)[^\s"'`<>]*?council-(?:safe|seat)-cwd-[a-z0-9_-]+|(?:^|[\s"'`(=,\[{:])council-(?:safe|seat)-cwd-[a-z0-9_-]+(?:[\\/]|$))/i;
 
@@ -124,7 +132,7 @@ export function validateCitationFields(fields = [], options = {}) {
     if (PARENT_TRAVERSAL_REGEX.test(text)) {
       errors.push(`${label} must not contain parent directory traversal ("..")`);
     }
-    if (FORBIDDEN_ARTIFACT_REGEX.test(text)) {
+    if (FORBIDDEN_ARTIFACT_REGEX.test(citationReferences(text))) {
       errors.push(`${label} must not cite internal .council or telemetry artifacts`);
     }
     if (UNSTRIPPED_TEMP_ROOT_REGEX.test(text)) {

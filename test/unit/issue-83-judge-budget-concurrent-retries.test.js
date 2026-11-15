@@ -268,7 +268,7 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
       assert.equal(retryTools.get('seat-0'), 'none');
       assert.equal(retryTools.get('seat-2'), 'read-only');
       assert.equal(retryTimeouts.get('seat-0'), 90000);
-      assert.equal(retryTimeouts.get('seat-2'), 90000);
+      assert.equal(retryTimeouts.get('seat-2'), 120000);
 
       // Strict roster-index Proof IDs despite seat-1 succeeding on Attempt 0 and seat-2 finishing retry before seat-0!
       assert.deepEqual(

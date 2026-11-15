@@ -26,8 +26,72 @@ import {
   loadTelemetrySummary,
   formatTelemetryTable
 } from '../telemetry/ledger.js';
+import { validateRetryFallbackCapability } from '../engine/recovery.js';
+import { listAntigravityModels } from '../harness/cli-runner.js';
 import { HarnessRegistry } from '../harness/index.js';
 import { VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
+
+function formatDiagnosticModelEffort(model, effort) {
+  const modelText = typeof model === 'string' ? model.trim() : '';
+  const effortText = typeof effort === 'string' ? effort.trim() : '';
+  if (!modelText) {
+    return effortText ? `(${effortText})` : 'unknown';
+  }
+  if (effortText) {
+    const escapedEffort = effortText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`\\(${escapedEffort}\\)$`, 'i').test(modelText)) {
+      return `${modelText} (${effortText})`;
+    }
+  }
+  return modelText;
+}
+
+function formatRetryDiagnostic(diag) {
+  if (!diag || typeof diag !== 'object') {
+    return '';
+  }
+  const requested = formatDiagnosticModelEffort(diag.requestedModel, diag.requestedEffort);
+  const effective = formatDiagnosticModelEffort(diag.effectiveModel || diag.requestedModel, diag.effectiveEffort);
+  const parts = [`${requested} -> ${effective}`];
+  if (diag.tools) {
+    parts.push(`tools: ${diag.tools}`);
+  }
+  if (diag.fallbackReason) {
+    parts.push(`reason: ${diag.fallbackReason}`);
+  }
+  return parts.join(', ');
+}
+
+function formatRetryDiagnosticsHistory(history) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return '';
+  }
+  return history
+    .map((diag, idx) => {
+      const summary = formatRetryDiagnostic(diag);
+      return summary ? `[${diag.attempt ?? idx + 1}] ${summary}` : '';
+    })
+    .filter(Boolean)
+    .join('; ');
+}
+
+function attachVerboseTelemetryListeners(telemetry, logErr) {
+  if (!telemetry || typeof telemetry.on !== 'function') {
+    return;
+  }
+  telemetry.on('seat_telemetry', (t) => {
+    const detail = t.metadata?.reason || t.metadata?.error;
+    const diag = formatRetryDiagnostic(t.metadata?.retryDiagnostics);
+    const diagSuffix = diag ? ` [${diag}]` : '';
+    logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]${detail ? ` (${detail})` : ''}${diagSuffix}`);
+  });
+  telemetry.on('state_transition', (t) => {
+    const detail = t.event?.reason || t.event?.error;
+    const diag = formatRetryDiagnostic(t.event?.retryDiagnostics);
+    const diagSuffix = diag ? ` [${diag}]` : '';
+    logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})${detail ? `: ${detail}` : ''}${diagSuffix}`);
+  });
+}
 
 export const HELP_TEXT = `
 The Council — Multi-Agent Consensus Deliberation Engine (v0.1.0)
@@ -54,6 +118,8 @@ Options:
       --rebuttal-tools <mode> Tool policy for Round 2+ rebuttal ('none' | 'read-only')
       --rebuttal-reasoning-effort <level> Override reasoning effort for Round 2+ rebuttal
       --rebuttal-model <id>   Override model selector for Round 2+ rebuttal
+      --reasoning-effort <level> Set global default reasoning effort (does not trigger explicit conflict)
+      --retry-effort-fallback Cap bounded retries on eligible failures at medium effort without raising low
       --cwd <dir>             Explicit working directory for seat/judge CLI inspection (alias: --workspace)
       --workspace <dir>       Alias for --cwd <dir>
       --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
@@ -148,6 +214,10 @@ export function parseCliArgs(rawArgs = []) {
       rebuttalReasoningEffort: { type: 'string' },
       'rebuttal-model': { type: 'string' },
       rebuttalModel: { type: 'string' },
+      'reasoning-effort': { type: 'string' },
+      reasoningEffort: { type: 'string' },
+      'retry-effort-fallback': { type: 'boolean', default: false },
+      retryEffortFallback: { type: 'boolean' },
       cwd: { type: 'string' },
       workspace: { type: 'string' },
       days: { type: 'string' },
@@ -161,10 +231,15 @@ export function parseCliArgs(rawArgs = []) {
     },
     allowPositionals: true
   });
+  const retryEffortFallback = Boolean(
+    parsed.values['retry-effort-fallback'] || parsed.values.retryEffortFallback
+  );
+  parsed.values.retryEffortFallback = retryEffortFallback;
   return {
     command,
     values: parsed.values,
-    positionals: parsed.positionals
+    positionals: parsed.positionals,
+    retryEffortFallback
   };
 }
 
@@ -246,6 +321,16 @@ export function buildCliFlagsForConfig(values = {}) {
     values['rebuttal-model'] !== undefined ? values['rebuttal-model'] : values.rebuttalModel;
   if (rawRebuttalModel !== undefined) {
     overrides.rebuttalModel = String(rawRebuttalModel).trim();
+  }
+
+  const rawReasoningEffort =
+    values['reasoning-effort'] !== undefined ? values['reasoning-effort'] : values.reasoningEffort;
+  if (rawReasoningEffort !== undefined) {
+    overrides.reasoningEffort = String(rawReasoningEffort).trim();
+  }
+
+  if (values['retry-effort-fallback'] === true || values.retryEffortFallback === true) {
+    overrides.retryEffortFallback = true;
   }
 
   return overrides;
@@ -391,14 +476,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     const engine = new CouncilEngine(wt.initialConfig);
     if (values.verbose) {
-      engine.getTelemetry().on('seat_telemetry', (t) => {
-        const detail = t.metadata?.reason || t.metadata?.error;
-        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]${detail ? ` (${detail})` : ''}`);
-      });
-      engine.getTelemetry().on('state_transition', (t) => {
-        const detail = t.event?.reason || t.event?.error;
-        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})${detail ? `: ${detail}` : ''}`);
-      });
+      attachVerboseTelemetryListeners(engine.getTelemetry(), logErr);
+    }
+    if (typeof io.onEngine === 'function') {
+      io.onEngine(engine);
     }
 
     // Run walkthrough steps manually
@@ -542,6 +623,31 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
             }
           }
         }
+        if (resolved.retryEffortFallback) {
+          const catalogByHarness = { ...(io.catalogByHarness || {}) };
+          const hasAntigravity = participants.some(
+            ({ participant }) => String(participant?.harness || '').toLowerCase() === 'antigravity'
+          );
+          let antigravityProbeError = null;
+          if (hasAntigravity && !catalogByHarness.antigravity) {
+            const probeFn = io.listAntigravityModels || listAntigravityModels;
+            const catRes = await probeFn();
+            if (catRes?.ok && Array.isArray(catRes.selectors)) {
+              catalogByHarness.antigravity = catRes.selectors;
+            } else {
+              antigravityProbeError = catRes?.error || 'agy models probe failed';
+            }
+          }
+          const capCheck = validateRetryFallbackCapability({
+            config: resolved,
+            catalogByHarness
+          });
+          if (!capCheck.valid) {
+            const extraDetail = antigravityProbeError ? ` (${antigravityProbeError})` : '';
+            throw new Error(`${capCheck.errors.join('; ')}${extraDetail}`);
+          }
+          engineOptions.catalogByHarness = catalogByHarness;
+        }
       } catch (err) {
         logErr(`Configuration error: ${err.message}`);
         return await safeExit(1);
@@ -636,14 +742,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     }
 
     if (values.verbose) {
-      engine.getTelemetry().on('seat_telemetry', (t) => {
-        const detail = t.metadata?.reason || t.metadata?.error;
-        logErr(`[TELEMETRY] Seat "${t.seatId}" -> [${t.status.toUpperCase()}]${detail ? ` (${detail})` : ''}`);
-      });
-      engine.getTelemetry().on('state_transition', (t) => {
-        const detail = t.event?.reason || t.event?.error;
-        logErr(`[TRANSITION] ${t.event.type} -> ${t.state.phase} (Round ${t.state.round})${detail ? `: ${detail}` : ''}`);
-      });
+      attachVerboseTelemetryListeners(engine.getTelemetry(), logErr);
+    }
+    if (typeof io.onEngine === 'function') {
+      io.onEngine(engine);
     }
 
     const drainMs = typeof io.abortDrainMs === 'number' && io.abortDrainMs >= 0 ? io.abortDrainMs : 1500;
@@ -748,11 +850,32 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       }
     }
 
+    const normalizeRetryFields = (participant) =>
+      participant && typeof participant === 'object'
+        ? {
+            ...participant,
+            activeRetryDiagnostics: participant.activeRetryDiagnostics ?? null,
+            retryDiagnosticsHistory: Array.isArray(participant.retryDiagnosticsHistory)
+              ? participant.retryDiagnosticsHistory
+              : []
+          }
+        : participant;
+    const normalizedJudge = normalizeRetryFields(result.state?.judge);
+    const normalizedSeats = Array.isArray(result.state?.seats)
+      ? result.state.seats.map(normalizeRetryFields)
+      : result.state?.seats;
+    const attributedProviderCalls = Array.isArray(result.providerCalls)
+      ? result.providerCalls
+      : engine.getTelemetry?.()?.getProviderCalls?.();
     const outputPayload = {
       mode,
       ...result,
+      retryEffortFallback: Boolean(resolved.retryEffortFallback),
+      ...(Array.isArray(attributedProviderCalls) ? { providerCalls: attributedProviderCalls } : {}),
       state: {
         ...result.state,
+        ...(normalizedJudge ? { judge: normalizedJudge } : {}),
+        ...(normalizedSeats ? { seats: normalizedSeats } : {}),
         ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
         ...(resolved.totalSeatBudgetMs !== undefined ? { totalSeatBudgetMs: resolved.totalSeatBudgetMs } : {})
       }
@@ -775,6 +898,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       log(`Rounds  : ${result.state.round}`);
       if (result.state?.judge) {
         log(`Judge   : ${result.state.judge.id} (${result.state.judge.harness} / ${result.state.judge.model})`);
+        const judgeRetries = formatRetryDiagnosticsHistory(result.state.judge.retryDiagnosticsHistory);
+        if (judgeRetries) {
+          log(`          Retries: ${judgeRetries}`);
+        }
       }
       log(`Seats   : ${result.state.seats.length} total (${result.verdict?.activeSeatCount || 0} active, ${result.verdict?.excusedSeatCount || 0} excused)`);
 
@@ -849,6 +976,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
           if (s.status === 'excused' && s.excusedReason) {
             extraSuffix += ` — Excused: ${s.excusedReason}`;
           }
+          const seatRetries = formatRetryDiagnosticsHistory(s.retryDiagnosticsHistory);
+          if (seatRetries) {
+            extraSuffix += ` — Retries: ${seatRetries}`;
+          }
           log(`  - [${statusUpper}] ${s.id} (${s.harness} / ${s.model}) — Proofs: ${proofsLabel}${extraSuffix}`);
         });
       }
@@ -857,7 +988,9 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       if (excusedList.length > 0) {
         log('\nExcused Seats:');
         excusedList.forEach((s) => {
-          log(`  - [${s.id}] (${s.harness} / ${s.model}): ${s.excusedReason || 'Excused'}`);
+          const excusedRetries = formatRetryDiagnosticsHistory(s.retryDiagnosticsHistory);
+          const retrySuffix = excusedRetries ? ` — Retries: ${excusedRetries}` : '';
+          log(`  - [${s.id}] (${s.harness} / ${s.model}): ${s.excusedReason || 'Excused'}${retrySuffix}`);
         });
       }
 

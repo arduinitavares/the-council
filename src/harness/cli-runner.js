@@ -3354,6 +3354,67 @@ export function parseCursorEventStream(stdout, options = null) {
  * @param {Object} [defaults]
  * @returns {{ traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], durationMs: number, outcome: 'success'|'error' }}
  */
+export const PROVIDER_HTTP_429_REGEX =
+  /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*429\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*429\b|"status"\s*:\s*429\b|"code"\s*:\s*429\b|\b429\s+(?:too\s+many\s+requests|resource[\s_-]*exhausted|rate[\s_-]*limit))/i;
+
+export const PROVIDER_HTTP_AUTH_REGEX =
+  /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*(?:401|403)\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*(?:401|403)\b|"status"\s*:\s*(?:401|403)\b|"code"\s*:\s*(?:401|403)\b|\b(?:401|403)\s+(?:unauthorized|forbidden|unauthenticated|permission[\s_-]*denied))/i;
+
+const BENIGN_AGY_MODE_PLAN_WARNING_LINE =
+  /^[ \t]*warning:\s+--mode\s+plan\s+has\s+no\s+effect\s+while\s+slash\s+command\s+expansion\s+is\s+disabled\.?[ \t]*$/i;
+
+export function stripKnownBenignAntigravityWarning(stderr) {
+  if (typeof stderr !== 'string' || !stderr) return '';
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => !BENIGN_AGY_MODE_PLAN_WARNING_LINE.test(line))
+    .join('\n')
+    .trim();
+}
+
+export function hasQuotaOrAuthProviderSignature(text) {
+  if (typeof text !== 'string' || !text.trim()) return false;
+  return (
+    PROVIDER_HTTP_429_REGEX.test(text) ||
+    PROVIDER_HTTP_AUTH_REGEX.test(text) ||
+    /\b(?:resource_exhausted|rate_limit_error|overloaded_error|quota\s+window\s+exhausted|token_budget_exceeded|quota\s+exceeded)\b/i.test(text) ||
+    /\b(?:unauthenticated|unauthorized|authentication\s+failed|invalid[\s_-]*api[\s_-]*key|permission_denied)\b/i.test(text)
+  );
+}
+
+export function hasExplicitProviderErrorSignature(text) {
+  if (typeof text !== 'string' || !text.trim()) return false;
+  return (
+    hasQuotaOrAuthProviderSignature(text) ||
+    /\b(?:model_not_found|unknown\s+model|unsupported\s+model|invalid_argument)\b/i.test(text)
+  );
+}
+
+export function createHeadlessToolDeniedError(message, options = {}) {
+  const err = new Error(message);
+  err.name = 'HeadlessToolDeniedError';
+  err.code = 'HEADLESS_TOOL_DENIED';
+  err.exitCode = options.exitCode ?? 0;
+  err.deniedActions = Array.isArray(options.deniedActions) ? options.deniedActions : [];
+  err.trace = options.trace || null;
+  err.stderr = options.stderr ?? '';
+  if (typeof options.finishedReason === 'string' && options.finishedReason) {
+    err.finishedReason = options.finishedReason;
+  }
+  if (typeof options.envelopeError === 'string' && options.envelopeError) {
+    err.envelopeError = options.envelopeError;
+  }
+  err.isRetryable = options.isRetryable !== undefined ? Boolean(options.isRetryable) : true;
+  err.isQuotaFault = false;
+  if (options._providerCallRecorded) {
+    err._providerCallRecorded = true;
+  }
+  if (options.cause !== undefined) {
+    err.cause = options.cause;
+  }
+  return err;
+}
+
 export function normalizeProviderTrace(trace, defaults = {}) {
   const validCoverages = new Set(['full', 'partial', 'unavailable']);
   const defaultCoverage = defaults.provider === 'antigravity' ? 'unavailable' : 'partial';
@@ -3394,7 +3455,19 @@ export function normalizeProviderTrace(trace, defaults = {}) {
     forbiddenStateAccess,
     forbiddenAccessDetails: mergedDetails,
     durationMs,
-    outcome
+    outcome,
+    ...(typeof trace?.stderr === 'string' && trace.stderr.length > 0
+      ? { stderr: trace.stderr }
+      : {}),
+    ...(Array.isArray(trace?.deniedActions)
+      ? { deniedActions: trace.deniedActions }
+      : {}),
+    ...(typeof trace?.envelopeError === 'string' && trace.envelopeError.length > 0
+      ? { envelopeError: trace.envelopeError }
+      : {}),
+    ...(typeof trace?.finishedReason === 'string' && trace.finishedReason.length > 0
+      ? { finishedReason: trace.finishedReason }
+      : {})
   };
 }
 
@@ -3823,6 +3896,83 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
   }
   let enrichedRecord;
   try {
+    const retryDiagnostics =
+      record.retryDiagnostics !== undefined ? record.retryDiagnostics : context?.retryDiagnostics;
+    const phase = record.phase ?? context?.phase;
+    const round = record.round ?? context?.round;
+    const pickDefined = (...values) => {
+      for (const value of values) {
+        if (value !== undefined) return value;
+      }
+      return undefined;
+    };
+    const inferEffortForTelemetry = (modelString, defaultEffort) => {
+      if (typeof modelString !== 'string' || !modelString.trim()) {
+        return undefined;
+      }
+      const trimmed = modelString.trim();
+      const fallback =
+        typeof defaultEffort === 'string' && defaultEffort.trim() ? defaultEffort.trim().toLowerCase() : 'high';
+      try {
+        const baseModel = extractCanonicalBaseModel(trimmed, fallback);
+        if (baseModel === 'composer-2.5' || trimmed.toLowerCase() === 'composer-2.5') {
+          return null;
+        }
+        return parseModelAndEffort(trimmed, fallback).effort;
+      } catch {
+        return typeof defaultEffort === 'string' && defaultEffort.trim()
+          ? defaultEffort.trim().toLowerCase()
+          : undefined;
+      }
+    };
+    const hasRetryDiag = Boolean(retryDiagnostics && typeof retryDiagnostics === 'object');
+    const rawEffectiveModel = record.model || context?.model;
+    const attempt =
+      typeof record.attempt === 'number'
+        ? record.attempt
+        : typeof retryDiagnostics?.attempt === 'number'
+          ? retryDiagnostics.attempt
+          : typeof context?.attempt === 'number'
+            ? context.attempt
+            : !hasRetryDiag
+              ? 0
+              : undefined;
+    const requestedModel = pickDefined(
+      record.requestedModel,
+      retryDiagnostics?.requestedModel,
+      context?.requestedModel,
+      context?.seat?.model,
+      rawEffectiveModel
+    );
+    const requestedEffort = pickDefined(
+      record.requestedEffort,
+      retryDiagnostics?.requestedEffort,
+      context?.requestedEffort,
+      inferEffortForTelemetry(requestedModel || rawEffectiveModel, context?.reasoningEffort)
+    );
+    const effectiveEffort = pickDefined(
+      record.effectiveEffort,
+      retryDiagnostics?.effectiveEffort,
+      inferEffortForTelemetry(rawEffectiveModel, record.reasoningEffort ?? context?.reasoningEffort)
+    );
+    const capabilityProvenance = pickDefined(
+      record.capabilityProvenance,
+      retryDiagnostics?.capabilityProvenance,
+      context?.capabilityProvenance,
+      null
+    );
+    const fallbackApplied =
+      typeof record.fallbackApplied === 'boolean'
+        ? record.fallbackApplied
+        : typeof retryDiagnostics?.fallbackApplied === 'boolean'
+          ? retryDiagnostics.fallbackApplied
+          : false;
+    const fallbackReason = pickDefined(
+      record.fallbackReason,
+      retryDiagnostics?.fallbackReason,
+      null
+    );
+
     const normalizedTrace = normalizeProviderTrace(record.trace, {
       durationMs: record.durationMs,
       exitCode: record.exitCode,
@@ -3831,6 +3981,15 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
     enrichedRecord = {
       ...record,
       ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
+      ...(typeof phase === 'string' && phase ? { phase } : {}),
+      ...(typeof round === 'number' ? { round } : {}),
+      ...(typeof attempt === 'number' ? { attempt } : {}),
+      ...(requestedModel !== undefined ? { requestedModel } : {}),
+      ...(requestedEffort !== undefined ? { requestedEffort } : {}),
+      ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
+      ...(capabilityProvenance !== undefined ? { capabilityProvenance } : {}),
+      ...(typeof fallbackApplied === 'boolean' ? { fallbackApplied } : {}),
+      ...(fallbackReason !== undefined ? { fallbackReason } : {}),
       tools:
         record.tools === 'none' || context?.tools === 'none'
           ? 'none'
@@ -3877,11 +4036,156 @@ function createForbiddenStateAccessError(details, trace, exitCode = 0) {
 
 const AGY_FAILURE_FINISH_REASONS = new Set(['print_timeout', 'interrupted', 'error']);
 
+function sanitizeEnvelopeText(text, options = null, maxBytes = 1024) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const carrier = { stderr: trimmed };
+  sanitizeCliError(carrier, options?.executable || 'agy', options?.args || [], options?.prompt || '');
+  return sliceUtf8Bytes(carrier.stderr, maxBytes);
+}
+
+function extractSanitizedEnvelopeError(rawError, options = null) {
+  if (rawError === null || rawError === undefined || rawError === false) {
+    return undefined;
+  }
+  if (typeof rawError === 'string') {
+    const cleaned = sanitizeEnvelopeText(rawError, options, 1024);
+    return cleaned || undefined;
+  }
+  if (typeof rawError === 'object') {
+    const code = rawError.code ?? rawError.statusCode ?? rawError.status;
+    const type =
+      typeof rawError.type === 'string' && rawError.type.trim() ? rawError.type.trim() : '';
+    const msg =
+      typeof rawError.message === 'string' && rawError.message.trim()
+        ? rawError.message.trim()
+        : typeof rawError.error === 'string' && rawError.error.trim()
+          ? rawError.error.trim()
+          : typeof rawError.detail === 'string' && rawError.detail.trim()
+            ? rawError.detail.trim()
+            : '';
+    const parts = [];
+    if (code !== undefined && code !== null && String(code).trim() !== '') {
+      parts.push(`error code=${String(code).trim()}`);
+    }
+    if (type) parts.push(type);
+    if (msg) parts.push(msg);
+    let combined = parts.join(': ');
+    if (!combined) {
+      try {
+        combined = JSON.stringify(rawError);
+      } catch {
+        combined = String(rawError);
+      }
+    }
+    if (!combined || combined === '{}' || combined === '[]') {
+      return undefined;
+    }
+    return sanitizeEnvelopeText(combined, options, 1024) || undefined;
+  }
+  const cleaned = sanitizeEnvelopeText(String(rawError), options, 1024);
+  return cleaned || undefined;
+}
+
+function sanitizeDeniedActionEntry(entry, options = null) {
+  if (typeof entry === 'string') {
+    const cleaned = sanitizeEnvelopeText(entry, options, 512);
+    return cleaned ? { action: cleaned } : null;
+  }
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const out = {};
+  for (const key of [
+    'tool',
+    'name',
+    'action',
+    'type',
+    'status',
+    'reason',
+    'error',
+    'message',
+    'path',
+    'file_path',
+    'filePath',
+    'file',
+    'target_file',
+    'targetFile',
+    'target_path',
+    'targetPath',
+    'absolute_path',
+    'absolutePath',
+    'command',
+    'cmd',
+    'cwd',
+    'directory',
+    'dir',
+    'target',
+    'uri',
+    'url'
+  ]) {
+    const val = entry[key];
+    if (typeof val === 'string' && val.trim()) {
+      out[key] = sanitizeEnvelopeText(val, options, 512);
+    }
+  }
+  if (entry.arguments && typeof entry.arguments === 'object' && !Array.isArray(entry.arguments)) {
+    const argSummary = {};
+    for (const [argKey, argVal] of Object.entries(entry.arguments)) {
+      if (typeof argVal === 'string' && argVal.trim()) {
+        argSummary[argKey] = sanitizeEnvelopeText(argVal, options, 512);
+      }
+      if (Object.keys(argSummary).length >= 20) break;
+    }
+    if (Object.keys(argSummary).length > 0) {
+      out.arguments = argSummary;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : { action: 'denied' };
+}
+
+function collectRawDeniedActions(json, toolCalls) {
+  return [
+    ...(Array.isArray(json?.denied_actions) ? json.denied_actions : []),
+    ...(Array.isArray(json?.deniedActions) ? json.deniedActions : []),
+    ...(Array.isArray(json?.trace?.denied_actions) ? json.trace.denied_actions : []),
+    ...(Array.isArray(json?.trace?.deniedActions) ? json.trace.deniedActions : []),
+    ...(Array.isArray(toolCalls)
+      ? toolCalls.filter((tc) => tc && typeof tc === 'object' && (tc.status === 'denied' || tc.denied === true))
+      : [])
+  ];
+}
+
+function collectDeniedActions(json, toolCalls, options = null) {
+  const rawEntries = collectRawDeniedActions(json, toolCalls);
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of rawEntries) {
+    const sanitized = sanitizeDeniedActionEntry(entry, options);
+    if (!sanitized) continue;
+    const key = JSON.stringify(sanitized);
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(sanitized);
+      if (deduped.length >= 50) break;
+    }
+  }
+  return deduped;
+}
+
 function parseAntigravityOutput(raw, options = null) {
   const str = typeof raw === 'string' ? raw : String(raw || '');
   let unwrappedResponse = null;
   let hasFailureMetadata = false;
   let toolCalls = [];
+  let deniedActions = [];
+  let envelopeError;
+  let finishedReason;
   let traceCoverage = 'unavailable';
   let traceForbidden = false;
   let traceForbiddenDetails = [];
@@ -3896,6 +4200,7 @@ function parseAntigravityOutput(raw, options = null) {
       unwrappedResponse,
       hasFailureMetadata,
       toolCalls,
+      deniedActions,
       skillsRead: [],
       traceCoverage,
       forbiddenStateAccess: false,
@@ -3904,19 +4209,28 @@ function parseAntigravityOutput(raw, options = null) {
     };
   }
 
+  let parsedJson = null;
   try {
     const json = JSON.parse(str);
     if (json && typeof json === 'object') {
+      parsedJson = json;
       if (typeof json.response === 'string') {
         unwrappedResponse = json.response;
       }
-      const finishReason =
+      const rawFinishReason =
         typeof json.finished_reason === 'string'
-          ? json.finished_reason.trim().toLowerCase()
+          ? json.finished_reason.trim()
           : typeof json.finish_reason === 'string'
-            ? json.finish_reason.trim().toLowerCase()
-            : '';
-      if (AGY_FAILURE_FINISH_REASONS.has(finishReason) || Boolean(json.error)) {
+            ? json.finish_reason.trim()
+            : typeof json.trace?.finishedReason === 'string'
+              ? json.trace.finishedReason.trim()
+              : '';
+      if (rawFinishReason) {
+        finishedReason = rawFinishReason;
+      }
+      const normalizedFinishReason = rawFinishReason.toLowerCase();
+      envelopeError = extractSanitizedEnvelopeError(json.error ?? json.trace?.envelopeError, options);
+      if (AGY_FAILURE_FINISH_REASONS.has(normalizedFinishReason) || Boolean(json.error) || Boolean(envelopeError)) {
         hasFailureMetadata = true;
       }
       const hasToolArrayProp =
@@ -3983,9 +4297,16 @@ function parseAntigravityOutput(raw, options = null) {
     }
   }
 
+  const rawDeniedActions = collectRawDeniedActions(parsedJson, toolCalls);
+  deniedActions = collectDeniedActions(parsedJson, toolCalls, options);
+  if (deniedActions.length > 0) {
+    hasFailureMetadata = true;
+  }
+
+  const itemsToScan = [...toolCalls, ...rawDeniedActions];
   const envelopeCheck =
-    toolCalls.length > 0
-      ? detectForbiddenCouncilAccess(toolCalls, null, options)
+    itemsToScan.length > 0
+      ? detectForbiddenCouncilAccess(itemsToScan, null, options)
       : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
   const forbiddenAccessDetails = [
     ...new Set([
@@ -4013,6 +4334,9 @@ function parseAntigravityOutput(raw, options = null) {
     unwrappedResponse,
     hasFailureMetadata,
     toolCalls,
+    deniedActions,
+    ...(envelopeError ? { envelopeError } : {}),
+    ...(finishedReason ? { finishedReason } : {}),
     skillsRead: [...skillsByName.values()],
     traceCoverage,
     forbiddenStateAccess,
@@ -4021,18 +4345,28 @@ function parseAntigravityOutput(raw, options = null) {
   };
 }
 
-function hasDotCouncilEntry(dirPath) {
-  try {
-    fs.lstatSync(path.join(dirPath, '.council'));
+function isExcludedWorkspaceSegment(name, { includeNodeModules = true } = {}) {
+  const lower = String(name || '').toLowerCase();
+  if (lower === '.council' || lower === '.codegraph') {
     return true;
-  } catch (err) {
-    if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')) {
-      throw err;
+  }
+  return includeNodeModules && name === 'node_modules';
+}
+
+function requiresIsolatedSafeWorkspaceCopy(dirPath) {
+  for (const candidate of ['.council', '.codegraph']) {
+    try {
+      fs.lstatSync(path.join(dirPath, candidate));
+      return true;
+    } catch (err) {
+      if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')) {
+        throw err;
+      }
     }
   }
   try {
     const names = fs.readdirSync(dirPath);
-    return names.some((name) => name.toLowerCase() === '.council');
+    return names.some((name) => isExcludedWorkspaceSegment(name, { includeNodeModules: false }));
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
       return false;
@@ -4108,7 +4442,7 @@ function cleanupTempWorkspace(tempDir, { suppressErrors = false } = {}) {
 function copySafeWorkspace(srcDir, destDir, realRoot, realTempSafeCwd) {
   const names = fs.readdirSync(srcDir);
   for (const name of names) {
-    if (name.toLowerCase() === '.council' || name === 'node_modules') {
+    if (isExcludedWorkspaceSegment(name)) {
       continue;
     }
     const srcPath = path.join(srcDir, name);
@@ -4134,8 +4468,8 @@ function copySafeWorkspace(srcDir, destDir, realRoot, realTempSafeCwd) {
         continue;
       }
       const relParts = relToRoot.split(/[\\/]+/).filter(Boolean);
-      if (relParts.some((p) => p.toLowerCase() === '.council' || p === 'node_modules')) {
-        // Omit symlink targeting .council or node_modules
+      if (relParts.some((p) => isExcludedWorkspaceSegment(p))) {
+        // Omit symlink targeting .council, .codegraph, or node_modules
         continue;
       }
       const mappedAbsTarget = relToRoot ? path.join(realTempSafeCwd, relToRoot) : realTempSafeCwd;
@@ -4164,7 +4498,29 @@ function copySafeWorkspace(srcDir, destDir, realRoot, realTempSafeCwd) {
   }
 }
 
-function prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env }) {
+function finalizeIsolatedWorkspaceEnv(targetCwd, sourceEnv) {
+  const effectiveEnv = buildSanitizedCliEnv(targetCwd, sourceEnv);
+  if (effectiveEnv && typeof effectiveEnv === 'object') {
+    delete effectiveEnv.OLDPWD;
+    delete effectiveEnv.INIT_CWD;
+  }
+  return effectiveEnv;
+}
+
+export function prepareIsolatedCliWorkspace(optionsOrCwd = {}, maybeContext) {
+  let effectiveTools;
+  let cwd;
+  let context;
+  let env;
+  if (typeof optionsOrCwd === 'string' || optionsOrCwd === null || optionsOrCwd === undefined) {
+    cwd = optionsOrCwd;
+    context = maybeContext;
+    effectiveTools = context?.tools;
+    env = undefined;
+  } else {
+    ({ effectiveTools, cwd, context, env } = optionsOrCwd);
+  }
+
   const explicitCwd =
     effectiveTools === 'none'
       ? null
@@ -4175,21 +4531,47 @@ function prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env }) {
           : null;
 
   if (!explicitCwd) {
-    const tempCwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+    const rawTempCwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-seat-cwd-'));
+    let canonicalTempCwd = rawTempCwdDir;
+    try {
+      canonicalTempCwd = fs.realpathSync(rawTempCwdDir);
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        throw err;
+      }
+      canonicalTempCwd = path.resolve(rawTempCwdDir);
+    }
+    const effectiveEnv = finalizeIsolatedWorkspaceEnv(canonicalTempCwd, env);
     return {
-      effectiveCwd: tempCwdDir,
-      tempCwdDir,
+      effectiveCwd: canonicalTempCwd,
+      tempCwdDir: canonicalTempCwd,
       forbiddenWorkspaceRoots: [],
-      effectiveEnv: buildSanitizedCliEnv(tempCwdDir, env)
+      effectiveEnv,
+      env: effectiveEnv,
+      isolated: false,
+      cleanup: async () => cleanupTempWorkspace(canonicalTempCwd)
     };
   }
 
-  if (!hasDotCouncilEntry(explicitCwd)) {
+  if (!requiresIsolatedSafeWorkspaceCopy(explicitCwd)) {
+    let canonicalCleanCwd;
+    try {
+      canonicalCleanCwd = fs.realpathSync(explicitCwd);
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        throw err;
+      }
+      canonicalCleanCwd = path.resolve(explicitCwd);
+    }
+    const effectiveEnv = finalizeIsolatedWorkspaceEnv(canonicalCleanCwd, env);
     return {
-      effectiveCwd: explicitCwd,
+      effectiveCwd: canonicalCleanCwd,
       tempCwdDir: null,
       forbiddenWorkspaceRoots: [],
-      effectiveEnv: buildSanitizedCliEnv(explicitCwd, env)
+      effectiveEnv,
+      env: effectiveEnv,
+      isolated: false,
+      cleanup: async () => {}
     };
   }
 
@@ -4197,26 +4579,32 @@ function prepareIsolatedCliWorkspace({ effectiveTools, cwd, context, env }) {
   const realRoot = fs.realpathSync(resolvedRoot);
   const forbiddenWorkspaceRoots = [...new Set([resolvedRoot, realRoot])];
   const tempSafeCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'council-safe-cwd-'));
+  let realTempSafeCwd = tempSafeCwd;
 
   try {
-    const realTempSafeCwd = fs.realpathSync(tempSafeCwd);
+    realTempSafeCwd = fs.realpathSync(tempSafeCwd);
     copySafeWorkspace(realRoot, realTempSafeCwd, realRoot, realTempSafeCwd);
   } catch (err) {
     cleanupTempWorkspace(tempSafeCwd, { suppressErrors: true });
     throw err;
   }
 
-  const effectiveEnv = buildSanitizedCliEnv(tempSafeCwd, env);
-  if (effectiveEnv && typeof effectiveEnv === 'object') {
-    delete effectiveEnv.OLDPWD;
-    delete effectiveEnv.INIT_CWD;
+  if (context && typeof context === 'object') {
+    context._invocationMeta = context._invocationMeta || {};
+    context._invocationMeta.trustedEphemeralRoots = [...new Set([tempSafeCwd, realTempSafeCwd])];
+    context._invocationMeta.forbiddenWorkspaceRoots = [...new Set([resolvedRoot, realRoot])];
   }
 
+  const effectiveEnv = finalizeIsolatedWorkspaceEnv(realTempSafeCwd, env);
+
   return {
-    effectiveCwd: tempSafeCwd,
-    tempCwdDir: tempSafeCwd,
+    effectiveCwd: realTempSafeCwd,
+    tempCwdDir: realTempSafeCwd,
     forbiddenWorkspaceRoots,
-    effectiveEnv
+    effectiveEnv,
+    env: effectiveEnv,
+    isolated: true,
+    cleanup: async () => cleanupTempWorkspace(realTempSafeCwd)
   };
 }
 
@@ -4298,9 +4686,28 @@ export async function runAntigravityCli({
       env: effectiveEnv
     });
     exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
-    const durationMs = Date.now() - startTime;
     const raw = result?.stdout || '';
-    const parsedOut = parseAntigravityOutput(raw, { forbiddenWorkspaceRoots });
+    const rawStderr = typeof result?.stderr === 'string' ? result.stderr : '';
+    if (exitCode !== 0) {
+      const exitErr = new Error(
+        stripKnownBenignAntigravityWarning(rawStderr) || `Command failed with exit code ${exitCode}`
+      );
+      exitErr.exitCode = exitCode;
+      exitErr.stdout = raw;
+      exitErr.stderr = rawStderr;
+      throw exitErr;
+    }
+
+    const durationMs = Date.now() - startTime;
+    const sanitizedStderrCarrier = { stderr: rawStderr };
+    sanitizeCliError(sanitizedStderrCarrier, executable, args, prompt);
+    const diagnosticStderr = stripKnownBenignAntigravityWarning(sanitizedStderrCarrier.stderr || '');
+    const parsedOut = parseAntigravityOutput(raw, {
+      forbiddenWorkspaceRoots,
+      executable,
+      args,
+      prompt
+    });
     const resolvedOutput =
       typeof parsedOut.unwrappedResponse === 'string'
         ? (parsedOut.unwrappedResponse.trim() ? parsedOut.unwrappedResponse : '')
@@ -4317,11 +4724,48 @@ export async function runAntigravityCli({
       forbiddenStateAccess: parsedOut.forbiddenStateAccess,
       forbiddenAccessDetails: parsedOut.forbiddenAccessDetails,
       durationMs,
-      outcome: isErrorOutcome ? 'error' : 'success'
+      outcome: isErrorOutcome ? 'error' : 'success',
+      ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+      ...(parsedOut.deniedActions.length > 0 ? { deniedActions: parsedOut.deniedActions } : {}),
+      ...(parsedOut.envelopeError ? { envelopeError: parsedOut.envelopeError } : {}),
+      ...(parsedOut.finishedReason ? { finishedReason: parsedOut.finishedReason } : {})
     };
 
     if (parsedOut.forbiddenStateAccess) {
       throw createForbiddenStateAccessError(parsedOut.forbiddenAccessDetails, trace, exitCode);
+    }
+
+    if (!resolvedOutput.trim()) {
+      if (parsedOut.deniedActions.length > 0) {
+        throw createHeadlessToolDeniedError(
+          `Antigravity headless mode denied tool execution (${parsedOut.deniedActions.length} action(s))`,
+          {
+            exitCode,
+            deniedActions: parsedOut.deniedActions,
+            stderr: diagnosticStderr,
+            finishedReason: parsedOut.finishedReason,
+            envelopeError: parsedOut.envelopeError,
+            trace
+          }
+        );
+      }
+
+      if (parsedOut.envelopeError || hasExplicitProviderErrorSignature(diagnosticStderr)) {
+        const combinedErrText = [parsedOut.envelopeError, diagnosticStderr]
+          .filter(Boolean)
+          .join(' — ');
+        const envelopeErr = new Error(combinedErrText || 'Antigravity envelope error');
+        envelopeErr.exitCode = exitCode;
+        envelopeErr.stderr = combinedErrText;
+        if (parsedOut.envelopeError) {
+          envelopeErr.envelopeError = parsedOut.envelopeError;
+        }
+        if (parsedOut.finishedReason) {
+          envelopeErr.finishedReason = parsedOut.finishedReason;
+        }
+        envelopeErr.trace = trace;
+        throw envelopeErr;
+      }
     }
 
     cleanedUp = true;
@@ -4351,16 +4795,28 @@ export async function runAntigravityCli({
       : (typeof err.code === 'number' ? err.code : 1);
 
     sanitizeCliError(err, executable, args, prompt);
+    const diagnosticStderr =
+      typeof err.stderr === 'string' ? stripKnownBenignAntigravityWarning(err.stderr) : '';
+    if (typeof err.stderr === 'string') {
+      err.stderr = diagnosticStderr;
+    }
+
     const parsedErr =
       !err?.trace && typeof err?.stdout === 'string' && err.stdout.trim()
-        ? parseAntigravityOutput(err.stdout, { forbiddenWorkspaceRoots })
+        ? parseAntigravityOutput(err.stdout, {
+            forbiddenWorkspaceRoots,
+            executable,
+            args,
+            prompt
+          })
         : null;
 
     const errorTrace = err?.trace
       ? {
           ...err.trace,
           durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
-          outcome: 'error'
+          outcome: 'error',
+          ...(!err.trace.stderr && diagnosticStderr ? { stderr: diagnosticStderr } : {})
         }
       : {
           traceCoverage: parsedErr ? parsedErr.traceCoverage : 'unavailable',
@@ -4369,8 +4825,20 @@ export async function runAntigravityCli({
           forbiddenStateAccess: parsedErr ? parsedErr.forbiddenStateAccess : false,
           forbiddenAccessDetails: parsedErr ? parsedErr.forbiddenAccessDetails : [],
           durationMs,
-          outcome: 'error'
+          outcome: 'error',
+          ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+          ...(parsedErr?.deniedActions?.length ? { deniedActions: parsedErr.deniedActions } : {}),
+          ...(parsedErr?.envelopeError ? { envelopeError: parsedErr.envelopeError } : {}),
+          ...(parsedErr?.finishedReason ? { finishedReason: parsedErr.finishedReason } : {})
         };
+
+    let errToThrow = err;
+    const isPreservedRuntimeAbortOrLimit =
+      err?.name === 'AbortError' ||
+      err?.code === 'ABORT_ERR' ||
+      err?.code === 'ETIMEDOUT' ||
+      err?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+
     if (!err.trace && parsedErr?.forbiddenStateAccess) {
       const detailText =
         parsedErr.forbiddenAccessDetails.length > 0
@@ -4378,9 +4846,32 @@ export async function runAntigravityCli({
           : '.council/';
       err.code = 'FORBIDDEN_STATE_ACCESS';
       err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`;
+    } else if (
+      !err.trace &&
+      !isPreservedRuntimeAbortOrLimit &&
+      parsedErr?.deniedActions?.length > 0 &&
+      !hasQuotaOrAuthProviderSignature(
+        [parsedErr.envelopeError, diagnosticStderr, err?.message].filter(Boolean).join(' ')
+      )
+    ) {
+      errToThrow = createHeadlessToolDeniedError(
+        `Antigravity headless mode denied tool execution (${parsedErr.deniedActions.length} action(s))`,
+        {
+          exitCode,
+          deniedActions: parsedErr.deniedActions,
+          stderr: diagnosticStderr,
+          finishedReason: parsedErr.finishedReason,
+          envelopeError: parsedErr.envelopeError,
+          trace: errorTrace,
+          cause: err
+        }
+      );
+    } else if (!err.trace && parsedErr?.envelopeError) {
+      err.envelopeError = parsedErr.envelopeError;
     }
-    err.trace = errorTrace;
-    err._providerCallRecorded = true;
+
+    errToThrow.trace = errorTrace;
+    errToThrow._providerCallRecorded = true;
 
     recordProviderCall({
       context,
@@ -4397,12 +4888,70 @@ export async function runAntigravityCli({
       }
     });
 
-    throw err;
+    throw errToThrow;
   } finally {
     if (!cleanedUp) {
       cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
     }
   }
+}
+
+/**
+ * Lists available Antigravity model selectors via `agy models`.
+ *
+ * @param {Object} [options]
+ * @param {Function} [options.exec]
+ * @param {Function} [options.runner]
+ * @param {number} [options.timeoutMs=15000]
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<{ ok: boolean, selectors: string[], raw: string, error?: string }>}
+ */
+export async function listAntigravityModels(options = {}) {
+  const exec = options.exec || options.runner || execCli;
+  const runner = typeof options.runner === 'function' ? options.runner : null;
+  const timeoutMs = options.timeoutMs ?? 15000;
+  let res;
+  try {
+    res = runner
+      ? await runner({ command: 'agy', args: ['models'], timeoutMs })
+      : await exec('agy', ['models'], { timeoutMs, signal: options.signal });
+  } catch (err) {
+    return {
+      ok: false,
+      selectors: [],
+      raw: typeof err?.stdout === 'string' ? err.stdout : '',
+      error:
+        (typeof err?.stderr === 'string' && err.stderr.trim()) ||
+        err?.message ||
+        'agy models failed'
+    };
+  }
+  if (!res || res.exitCode !== 0) {
+    return {
+      ok: false,
+      selectors: [],
+      raw: typeof res?.stdout === 'string' ? res.stdout : '',
+      error: (typeof res?.stderr === 'string' && res.stderr.trim()) || 'agy models failed'
+    };
+  }
+  const cleaned = String(res.stdout || '')
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+    .split('\n')
+    .map((line) => (line.includes('\r') ? line.split('\r').pop() : line).trim())
+    .filter(Boolean);
+  const selectors = [];
+  for (const line of cleaned) {
+    if (/^(?:available\s+models:?|model(?:\s+selector)?\s+description|[-─=]+)$/i.test(line)) {
+      continue;
+    }
+    const match =
+      line.match(/^([a-z0-9]+(?:[._-][a-z0-9]+)+)(?:\s|$)/i) ||
+      line.match(/^([a-z0-9][a-z0-9._-]+)(?:\s{2,}.*)?$/i);
+    if (match && !selectors.includes(match[1])) {
+      selectors.push(match[1]);
+    }
+  }
+  return { ok: true, selectors, raw: cleaned.join('\n') };
 }
 
 /**

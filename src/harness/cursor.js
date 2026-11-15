@@ -5,7 +5,15 @@
  * Strictly adheres to model-policy: Premium weekly pool only, zero paid overflow.
  */
 
-import { HarnessAdapter, HarnessError, QuotaExhaustionError, HarnessExecutionError } from './adapter.js';
+import {
+  HarnessAdapter,
+  HarnessError,
+  QuotaExhaustionError,
+  HarnessExecutionError,
+  PROVIDER_HTTP_429_REGEX,
+  resolveAttemptExecutionWorkspace,
+  captureAttemptInvocationMeta
+} from './adapter.js';
 import { runCursorCli, extractCanonicalBaseModel, parseModelAndEffort } from './cli-runner.js';
 import {
   formatClarificationPrompt,
@@ -56,16 +64,19 @@ export class CursorAdapter extends HarnessAdapter {
       error?.code === 'ABORT_ERR' ||
       error?.code === 'FORBIDDEN_STATE_ACCESS' ||
       error?.trace?.forbiddenStateAccess === true ||
-      /\[ForbiddenStateAccessError\]/i.test(error?.message || '')
+      /\[ForbiddenStateAccessError\]/i.test(error?.message || '') ||
+      error?.name === 'HeadlessToolDeniedError' ||
+      error?.code === 'HEADLESS_TOOL_DENIED'
     ) {
       return super.classifyError(error, context);
     }
 
-    const raw = (error?.message || '') + ' ' + (error?.stderr || '');
+    const raw = [error?.message, error?.stderr, error?.envelopeError].filter(Boolean).join(' ');
 
     // Cursor weekly included pool exhaustion signature (reproducing wt-10-seats-quota)
     const isPoolExhausted =
-      /\b429\b|weekly\s+included\s+pool\s+exhausted|weekly_pool_exhausted|subscription_pool_exhausted|rate_limit/i.test(
+      PROVIDER_HTTP_429_REGEX.test(raw) ||
+      /weekly\s+included\s+pool\s+exhausted|weekly_pool_exhausted|subscription_pool_exhausted|rate_limit/i.test(
         raw
       );
 
@@ -122,19 +133,17 @@ export class CursorAdapter extends HarnessAdapter {
       baseModel === 'composer-2.5'
         ? undefined
         : (reasoningEffort ?? callerContext?.reasoningEffort ?? seat?.reasoningEffort);
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ??
-            callerContext?.tools ??
-            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-            'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd, invocationMeta, retryDiagnostics } =
+      captureAttemptInvocationMeta({
+        role: 'seat',
+        phase,
+        participant: seat,
+        state,
+        tools,
+        cwd,
+        callerContext,
+        adapter: this
+      });
     const effectiveSeat = {
       ...seat,
       tools: effectiveTools,
@@ -147,6 +156,10 @@ export class CursorAdapter extends HarnessAdapter {
       seatId: seat.id,
       model: seat.model,
       tools: effectiveTools,
+      ...(phase !== undefined ? { phase } : {}),
+      ...(round !== undefined ? { round } : {}),
+      _invocationMeta: invocationMeta,
+      retryDiagnostics,
       ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
       ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {}),
       ...(telemetry ? { telemetry } : {}),
@@ -174,7 +187,7 @@ export class CursorAdapter extends HarnessAdapter {
           });
           const rawOutput = await this._dispatchCli({
             model: seat.model,
-            prompt,
+            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
             signal,
             context,
             tools: effectiveTools,
@@ -231,16 +244,17 @@ export class CursorAdapter extends HarnessAdapter {
       baseModel === 'composer-2.5'
         ? undefined
         : (reasoningEffort ?? callerContext?.reasoningEffort ?? judge?.reasoningEffort);
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd, invocationMeta, retryDiagnostics } =
+      captureAttemptInvocationMeta({
+        role: 'judge',
+        phase,
+        participant: judge,
+        state,
+        tools,
+        cwd,
+        callerContext,
+        adapter: this
+      });
     const effectiveJudge = {
       ...judge,
       tools: effectiveTools,
@@ -253,6 +267,10 @@ export class CursorAdapter extends HarnessAdapter {
       seatId: judge.id,
       model: judge.model,
       tools: effectiveTools,
+      ...(phase !== undefined ? { phase } : {}),
+      ...(round !== undefined ? { round } : {}),
+      _invocationMeta: invocationMeta,
+      retryDiagnostics,
       ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
       ...(telemetry ? { telemetry } : {}),
       ...(onCallRecord ? { onCallRecord } : {}),
@@ -277,7 +295,7 @@ export class CursorAdapter extends HarnessAdapter {
           });
           const rawOutput = await this._dispatchCli({
             model: judge.model,
-            prompt,
+            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
             signal,
             context,
             tools: effectiveTools,
@@ -324,19 +342,16 @@ export class CursorAdapter extends HarnessAdapter {
           seat?.rebuttalMode ||
           seat?.mode === 'rebuttal'
       );
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ??
-            callerContext?.tools ??
-            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-            'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd } = resolveAttemptExecutionWorkspace({
+      role: 'seat',
+      phase,
+      participant: seat,
+      state,
+      tools,
+      cwd,
+      callerContext,
+      adapter: this
+    });
     const effectiveSeat = seat
       ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : seat;
@@ -386,16 +401,16 @@ export class CursorAdapter extends HarnessAdapter {
   }
 
   formatJudgePrompt({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd } = resolveAttemptExecutionWorkspace({
+      role: 'judge',
+      phase,
+      participant: judge,
+      state,
+      tools,
+      cwd,
+      callerContext,
+      adapter: this
+    });
     const effectiveJudge = judge
       ? { ...judge, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : judge;

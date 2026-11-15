@@ -7,6 +7,79 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
 import { ALLOWED_EFFORTS } from '../harness/cli-runner.js';
+import { VALID_SELF_CONTAINED_PHASES } from './recovery.js';
+
+function validateReasoningEffortField(value, fieldLabel, errors) {
+  if (value === undefined) return;
+  if (typeof value !== 'string' || !ALLOWED_EFFORTS.includes(value.trim().toLowerCase())) {
+    errors.push(`${fieldLabel} must be one of: ${ALLOWED_EFFORTS.join(', ')}.`);
+  }
+}
+
+function validateSelfContainedInput(sci, errors) {
+  if (sci === undefined || sci === null) return;
+  if (typeof sci !== 'object' || Array.isArray(sci)) {
+    errors.push('selfContainedInput must be a plain object or null.');
+    return;
+  }
+  if (sci.phases !== undefined) {
+    if (!Array.isArray(sci.phases) || sci.phases.length === 0) {
+      errors.push('selfContainedInput.phases must be a non-empty array.');
+    } else {
+      for (const phase of sci.phases) {
+        if (typeof phase !== 'string' || !VALID_SELF_CONTAINED_PHASES.includes(phase)) {
+          errors.push(
+            `selfContainedInput.phases entries must be one of: ${VALID_SELF_CONTAINED_PHASES.join(', ')}.`
+          );
+          break;
+        }
+      }
+    }
+  }
+  if (sci.roundScope !== undefined && sci.roundScope !== 'round_1_only' && sci.roundScope !== 'all_rounds') {
+    errors.push('selfContainedInput.roundScope must be "round_1_only" or "all_rounds".');
+  }
+  if (
+    sci.conceptualNoExternalVerification !== undefined &&
+    typeof sci.conceptualNoExternalVerification !== 'boolean'
+  ) {
+    errors.push('selfContainedInput.conceptualNoExternalVerification must be a boolean.');
+  }
+  if (sci.coveredArtifacts !== undefined) {
+    if (!Array.isArray(sci.coveredArtifacts)) {
+      errors.push('selfContainedInput.coveredArtifacts must be an array.');
+    } else {
+      for (let i = 0; i < sci.coveredArtifacts.length; i += 1) {
+        const item = sci.coveredArtifacts[i];
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          errors.push(`selfContainedInput.coveredArtifacts[${i}] must be an object.`);
+          continue;
+        }
+        if (typeof item.source !== 'string' || !item.source.trim()) {
+          errors.push(`selfContainedInput.coveredArtifacts[${i}].source must be a non-empty string.`);
+        }
+        if (typeof item.evidenceId !== 'string' || !item.evidenceId.trim()) {
+          errors.push(`selfContainedInput.coveredArtifacts[${i}].evidenceId must be a non-empty string.`);
+        }
+        const cov = item.coverage;
+        const isComplete = cov === 'complete_artifact';
+        const isRange =
+          Boolean(cov) &&
+          typeof cov === 'object' &&
+          !Array.isArray(cov) &&
+          Number.isInteger(cov.startLine) &&
+          Number.isInteger(cov.endLine) &&
+          cov.startLine >= 1 &&
+          cov.endLine >= cov.startLine;
+        if (!isComplete && !isRange) {
+          errors.push(
+            `selfContainedInput.coveredArtifacts[${i}].coverage must be "complete_artifact" or { startLine >= 1, endLine >= startLine }.`
+          );
+        }
+      }
+    }
+  }
+}
 
 export const MAX_EVIDENCE_ITEMS = 20;
 export const MAX_EVIDENCE_ID_CHARS = 64;
@@ -190,6 +263,18 @@ export function validateConfig(config) {
   if (config.cwd !== undefined && (typeof config.cwd !== 'string' || !config.cwd.trim())) {
     errors.push('cwd must be a non-empty string.');
   }
+
+  if (config.retryEffortFallback !== undefined && typeof config.retryEffortFallback !== 'boolean') {
+    errors.push('retryEffortFallback must be a boolean.');
+  }
+
+  if (config['retry-effort-fallback'] !== undefined && typeof config['retry-effort-fallback'] !== 'boolean') {
+    errors.push('retry-effort-fallback must be a boolean.');
+  }
+
+  validateReasoningEffortField(config.reasoningEffort, 'reasoningEffort', errors);
+  validateReasoningEffortField(config['reasoning-effort'], 'reasoning-effort', errors);
+  validateSelfContainedInput(config.selfContainedInput, errors);
 
   if (config.evidence !== undefined) {
     if (!Array.isArray(config.evidence)) {
@@ -381,6 +466,16 @@ export function validateConfig(config) {
         errors.push('Judge "maxRetries" must be an integer >= 0.');
       }
     }
+    validateReasoningEffortField(
+      config.judge.reasoningEffort,
+      'Judge "reasoningEffort"',
+      errors
+    );
+    validateReasoningEffortField(
+      config.judge['reasoning-effort'],
+      'Judge "reasoning-effort"',
+      errors
+    );
   }
 
   if (config.seats) {
@@ -523,6 +618,16 @@ export function validateConfig(config) {
         if (s.cwd !== undefined && (typeof s.cwd !== 'string' || !s.cwd.trim())) {
           errors.push(`Seat "${s.id || idx}" requires "cwd" to be a non-empty string.`);
         }
+        validateReasoningEffortField(
+          s.reasoningEffort,
+          `Seat "${s.id || idx}" "reasoningEffort"`,
+          errors
+        );
+        validateReasoningEffortField(
+          s['reasoning-effort'],
+          `Seat "${s.id || idx}" "reasoning-effort"`,
+          errors
+        );
       });
     }
   }
@@ -693,18 +798,18 @@ function normalizeClarificationsList(clarifications) {
     if (typeof item === 'string') {
       return {
         batch: idx + 1,
-        answer: item.trim()
+        answer: item.trimEnd()
       };
     }
     const labelStr = typeof item?.label === 'string' ? item.label.trim() : '';
     const sourceStr = typeof item?.source === 'string' ? item.source.trim() : '';
-    const textStr = typeof item?.text === 'string' ? item.text.trim() : '';
+    const textStr = typeof item?.text === 'string' && item.text.trim() ? item.text.trimEnd() : '';
     const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
-    const answer = hasAnswer ? item.answer.trim() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
+    const answer = hasAnswer ? item.answer.trimEnd() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
     return {
       batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
       answer,
-      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trimEnd() } : {}),
       ...(labelStr ? { label: labelStr } : {}),
       ...(sourceStr ? { source: sourceStr } : {}),
       ...(textStr ? { text: textStr } : {})
@@ -940,6 +1045,45 @@ export function resolveConfig(userConfig = {}) {
               ? resolvedSeatBudget
               : resolvedTotalSeatBudgetMs));
 
+  const resolvedRetryEffortFallback =
+    typeof userConfig.retryEffortFallback === 'boolean'
+      ? userConfig.retryEffortFallback
+      : (typeof userConfig['retry-effort-fallback'] === 'boolean'
+          ? userConfig['retry-effort-fallback']
+          : false);
+
+  const resolvedSelfContainedInput =
+    userConfig.selfContainedInput &&
+    typeof userConfig.selfContainedInput === 'object' &&
+    !Array.isArray(userConfig.selfContainedInput)
+      ? structuredClone(userConfig.selfContainedInput)
+      : null;
+
+  const rawGlobalReasoningEffort =
+    userConfig.reasoningEffort !== undefined
+      ? userConfig.reasoningEffort
+      : userConfig['reasoning-effort'];
+  const resolvedReasoningEffort =
+    typeof rawGlobalReasoningEffort === 'string' && rawGlobalReasoningEffort.trim()
+      ? rawGlobalReasoningEffort.trim().toLowerCase()
+      : undefined;
+
+  const hasExplicitJudgeEffort =
+    userConfig.judge && typeof userConfig.judge === 'object'
+      ? (typeof userConfig.judge._explicitReasoningEffort === 'boolean'
+          ? userConfig.judge._explicitReasoningEffort
+          : (userConfig.judge.reasoningEffort !== undefined ||
+              userConfig.judge['reasoning-effort'] !== undefined))
+      : false;
+  const rawJudgeEffort =
+    userConfig.judge?.reasoningEffort !== undefined
+      ? userConfig.judge.reasoningEffort
+      : userConfig.judge?.['reasoning-effort'];
+  const resolvedJudgeEffort =
+    typeof rawJudgeEffort === 'string' && rawJudgeEffort.trim()
+      ? rawJudgeEffort.trim().toLowerCase()
+      : resolvedReasoningEffort;
+
   const merged = {
     ...DEFAULT_CONFIG,
     ...presetScalarDefaults,
@@ -958,12 +1102,16 @@ export function resolveConfig(userConfig = {}) {
     ...(resolvedRebuttalModel !== undefined ? { rebuttalModel: resolvedRebuttalModel } : {}),
     maxRetriesPerJudge: resolvedMaxRetriesPerJudge,
     maxConcurrentSeats: resolvedMaxConcurrentSeats,
+    retryEffortFallback: resolvedRetryEffortFallback,
+    selfContainedInput: resolvedSelfContainedInput,
+    ...(resolvedReasoningEffort !== undefined ? { reasoningEffort: resolvedReasoningEffort } : {}),
     judge: {
       ...defaultJudge,
       ...(userConfig.judge || {}),
       tools: userConfig.judge?.tools !== undefined
         ? userConfig.judge.tools
         : (defaultJudge.tools || defaultTools),
+      ...(resolvedJudgeEffort !== undefined ? { reasoningEffort: resolvedJudgeEffort } : {}),
       ...(hasExplicitJudgeTimeout && explicitJudgeTimeout !== undefined
         ? {
             timeoutMs: explicitJudgeTimeout,
@@ -1053,8 +1201,16 @@ export function resolveConfig(userConfig = {}) {
           ? s.rebuttalModel
           : (s['rebuttal-model'] !== undefined ? s['rebuttal-model'] : resolvedRebuttalModel);
 
+      const rawSeatEffort =
+        s.reasoningEffort !== undefined ? s.reasoningEffort : s['reasoning-effort'];
+      const resolvedSeatEffort =
+        typeof rawSeatEffort === 'string' && rawSeatEffort.trim()
+          ? rawSeatEffort.trim().toLowerCase()
+          : resolvedReasoningEffort;
+
       return {
         ...s,
+        ...(resolvedSeatEffort !== undefined ? { reasoningEffort: resolvedSeatEffort } : {}),
         tools: s.tools !== undefined ? s.tools : defaultTools,
         ...(seatTimeout !== undefined ? { timeoutMs: seatTimeout, timeout: seatTimeout } : {}),
         ...(seatBudget !== undefined ? { totalSeatBudgetMs: seatBudget, seatBudget } : {}),
@@ -1112,6 +1268,12 @@ export function resolveConfig(userConfig = {}) {
         enumerable: false,
         configurable: false,
         writable: false
+      },
+      _explicitReasoningEffort: {
+        value: Boolean(hasExplicitJudgeEffort),
+        enumerable: false,
+        configurable: false,
+        writable: false
       }
     });
   }
@@ -1145,6 +1307,15 @@ export function resolveConfig(userConfig = {}) {
                   rawSeat?.['rebuttal-reasoning-effort'] !== undefined ||
                   hasExplicitGlobalRebuttalEffort
               );
+        const rawEffortSeat = rawSeats[idx];
+        const hasExplicitSeatEffort =
+          rawEffortSeat && typeof rawEffortSeat === 'object'
+            ? (typeof rawEffortSeat._explicitReasoningEffort === 'boolean'
+                ? rawEffortSeat._explicitReasoningEffort
+                : (rawEffortSeat.reasoningEffort !== undefined ||
+                    rawEffortSeat['reasoning-effort'] !== undefined))
+            : false;
+
         const normSeat = {
           ...s,
           ...(typeof s.cwd === 'string' ? { cwd: s.cwd.trim() } : {}),
@@ -1168,6 +1339,12 @@ export function resolveConfig(userConfig = {}) {
           },
           _explicitRebuttalEffort: {
             value: hasExplicitSeatRebuttalEffort,
+            enumerable: false,
+            configurable: false,
+            writable: false
+          },
+          _explicitReasoningEffort: {
+            value: Boolean(hasExplicitSeatEffort),
             enumerable: false,
             configurable: false,
             writable: false

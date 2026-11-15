@@ -7,6 +7,14 @@ import { TimeoutError, QuotaExhaustionError } from '../../src/harness/adapter.js
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const CONCEPTUAL_SELF_CONTAINED = {
+  kind: 'full_context',
+  label: 'Hermetic conceptual unit test context',
+  phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+  roundScope: 'all_rounds',
+  conceptualNoExternalVerification: true
+};
+
 describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent seat retries', () => {
   describe('1. Judge budget precedence (explicitJudgeBudget > explicitJudgeTimeout * 2 > explicitGlobalSeatBudget > 480000)', () => {
     it('honors explicit judge.timeoutMs over global totalSeatBudgetMs via both raw CouncilEngine and resolveConfig()', async () => {
@@ -51,6 +59,7 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
           maxRounds: 1,
           minQuorum: 2,
           totalSeatBudgetMs: 130000, // --seat-budget 130000
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: {
             id: 'judge-explicit-timeout',
             harness: 'mock',
@@ -125,6 +134,7 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
           maxRounds: 1,
           minQuorum: 2,
           totalSeatBudgetMs: 400000,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           judge: {
             id: 'judge-explicit-budget',
             harness: 'mock',
@@ -236,6 +246,7 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
           minQuorum: 2,
           maxRetriesPerSeat: 1,
           maxConcurrentSeats: 3,
+          selfContainedInput: CONCEPTUAL_SELF_CONTAINED,
           seats: [
             { id: 'seat-0', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'S0', tools: 'read-only' },
             { id: 'seat-1', harness: 'mock', model: 'gemini-4-argon-high', soul: 'S1', tools: 'read-only' },
@@ -257,7 +268,7 @@ describe('Issue #83: Symmetric Judge budget precedence & wave-based concurrent s
       assert.equal(retryTools.get('seat-0'), 'none');
       assert.equal(retryTools.get('seat-2'), 'read-only');
       assert.equal(retryTimeouts.get('seat-0'), 90000);
-      assert.equal(retryTimeouts.get('seat-2'), 90000);
+      assert.equal(retryTimeouts.get('seat-2'), 120000);
 
       // Strict roster-index Proof IDs despite seat-1 succeeding on Attempt 0 and seat-2 finishing retry before seat-0!
       assert.deepEqual(

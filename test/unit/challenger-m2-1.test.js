@@ -995,7 +995,8 @@ describe('Challenger M2-1: End-to-End Engine Integration, Faults & Preserved Dis
 
     // Seat-2 was retried once
     const seat2 = engine.getState().seats.find((s) => s.id === 'seat-2');
-    assert.equal(seat2.retries, 1);
+    assert.equal(seat2.retries, 0);
+    assert.equal(seat2.retryDiagnosticsHistory.length, 1);
     assert.equal(seat2.status, 'accepted');
   });
 

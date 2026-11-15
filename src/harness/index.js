@@ -10,7 +10,12 @@ import {
   TimeoutError,
   HarnessExecutionError,
   InvalidResponseError,
-  AuthenticationError
+  AuthenticationError,
+  HeadlessToolDeniedError,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX,
+  resolveAttemptExecutionWorkspace,
+  captureAttemptInvocationMeta
 } from './adapter.js';
 
 import { CodexAdapter } from './codex.js';
@@ -26,6 +31,11 @@ export {
   HarnessExecutionError,
   InvalidResponseError,
   AuthenticationError,
+  HeadlessToolDeniedError,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX,
+  resolveAttemptExecutionWorkspace,
+  captureAttemptInvocationMeta,
   CodexAdapter,
   AntigravityAdapter,
   CursorAdapter,

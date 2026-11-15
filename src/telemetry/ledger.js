@@ -476,14 +476,29 @@ export function buildRunTelemetryRecord({
       observedToolCalls,
       skillsRead: Object.freeze([...skillsByName.values()].map((s) => Object.freeze({ ...s }))),
       forbiddenStateAccess,
-      forbiddenAccessDetails: Object.freeze([...forbiddenDetailsSet])
+      forbiddenAccessDetails: Object.freeze([...forbiddenDetailsSet]),
+      retryDiagnosticsHistory: cloneFrozenRetryDiagnosticsHistory(seat.retryDiagnosticsHistory)
     });
   });
+
+  function cloneFrozenRetryDiagnosticsHistory(history) {
+    if (!Array.isArray(history) || history.length === 0) {
+      return Object.freeze([]);
+    }
+    const copyEntry = (entry) =>
+      typeof structuredClone === 'function' ? structuredClone(entry) : JSON.parse(JSON.stringify(entry));
+    return Object.freeze(
+      history
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => Object.freeze(copyEntry(entry)))
+    );
+  }
 
   const judgeInfo = state.judge
     ? Object.freeze({
         id: state.judge.id,
-        ...canonicalizeModelKey(state.judge.harness, state.judge.model)
+        ...canonicalizeModelKey(state.judge.harness, state.judge.model),
+        retryDiagnosticsHistory: cloneFrozenRetryDiagnosticsHistory(state.judge.retryDiagnosticsHistory)
       })
     : null;
 

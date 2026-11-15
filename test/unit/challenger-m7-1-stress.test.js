@@ -218,6 +218,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 4,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual cumulative budget test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -225,6 +232,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
               harness: 'mock',
               model: 'grok-4.7-xhigh',
               soul: 'Skeptic',
+              tools: 'none',
               timeoutMs: 120000,
               totalSeatBudgetMs: 100000
             },
@@ -290,6 +298,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual budget math test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             // Branch A: baseTimeoutMs is smallest (25000 < 90000 < remaining 90000)
@@ -385,6 +400,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual tool-loop test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -464,6 +486,13 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual voting override test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -674,7 +703,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
       }
     });
 
-    it('4.2 caps local reads to 3–5 targeted spot-checks when hasWorkspaceCwd && resolvedEvidence.length > 0', () => {
+    it('4.2 caps local reads to 3–5 targeted spot-checks when hasWorkspaceCwd && resolvedEvidence.length > 0 (with path-citing Judge proofs, and 0 reads without)', () => {
       const delibPrompt = formatDeliberationPrompt({
         soul: 'Impartial Auditor',
         seat: { id: 's1', tools: 'read-only' },
@@ -687,7 +716,7 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
         judge: { id: 'j1', soul: 'Impartial Judge' },
         topic: 'Targeted read bounds',
         round: 1,
-        proofs: [],
+        proofs: [{ id: 'P1', kind: 'citation', source: 'kernel/arch.md:1', statement: 'Preemption timer interval is 10ms.' }],
         evidence: testEvidence,
         cwd: '/Users/aaat/projects/target-repo'
       });
@@ -695,6 +724,17 @@ describe('Adversarial Challenger M7-1: Issues #70 & #72 Stress Suite', () => {
       for (const prompt of [delibPrompt, judgePrompt]) {
         assert.match(prompt, /at most 3–5 targeted reads/);
       }
+
+      const judgeZeroReadsPrompt = formatJudgePrompt({
+        judge: { id: 'j1', soul: 'Impartial Judge' },
+        topic: 'Targeted read bounds',
+        round: 1,
+        proofs: [],
+        evidence: testEvidence,
+        cwd: '/Users/aaat/projects/target-repo'
+      });
+      assert.match(judgeZeroReadsPrompt, /use 0 local workspace reads/);
+      assert.doesNotMatch(judgeZeroReadsPrompt, /at most 3–5 targeted reads/);
     });
 
     it('4.3 frames evidence as attributed & challengeable baseline context across all prompts', () => {

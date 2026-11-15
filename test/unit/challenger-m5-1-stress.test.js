@@ -378,6 +378,13 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
         maxRounds: 1,
         minQuorum: 2,
         maxRetriesPerSeat: 1,
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Hermetic conceptual stress test context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
         judge: { id: 'j', harness: 'mock', model: 'm', soul: 'J' },
         seats: [
           {
@@ -426,6 +433,13 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
         maxRounds: 1,
         minQuorum: 2,
         maxRetriesPerSeat: 5, // allows up to 5 retries, but budget only permits 1 retry
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Hermetic conceptual multi-retry budget test context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
         judge: { id: 'j', harness: 'mock', model: 'm', soul: 'J' },
         seats: [
           {
@@ -433,6 +447,7 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
             harness: 'mock',
             model: 'grok-4.7-high',
             soul: 'S1',
+            tools: 'none',
             timeoutMs: 90000,
             totalSeatBudgetMs: 150000 // initial 90s + remaining 60s = 150s (exhausted on attempt 2)
           },
@@ -548,6 +563,13 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
         maxRounds: 1,
         minQuorum: 2,
         maxRetriesPerSeat: 1,
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Hermetic conceptual tool-loop guard test context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
         seats: [
           {
             id: 's-guard-timeout',
@@ -637,6 +659,13 @@ describe('Adversarial Challenger M5-1: Engine Timeouts, Retry Bounding & Config 
         maxRounds: 1,
         minQuorum: 2,
         maxRetriesPerSeat: 1,
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Hermetic conceptual tool-loop guard generic timeout test context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
         seats: [
           {
             id: 's-guard-generic',

@@ -5,7 +5,7 @@
  * and Soul adherence prompt verification.
  */
 
-import { HarnessAdapter, QuotaExhaustionError } from './adapter.js';
+import { HarnessAdapter, QuotaExhaustionError, captureAttemptInvocationMeta } from './adapter.js';
 import { formatDeliberationPrompt, formatVotingPrompt, formatJudgePrompt } from '../seats/soul.js';
 
 export class MockAdapter extends HarnessAdapter {
@@ -164,19 +164,17 @@ export class MockAdapter extends HarnessAdapter {
           seat?.rebuttalMode ||
           seat?.mode === 'rebuttal'
       );
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ??
-            callerContext?.tools ??
-            (isVoting ? seat?.votingTools ?? seat?.tools : seat?.tools) ??
-            'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, seat?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd, invocationMeta, retryDiagnostics } =
+      captureAttemptInvocationMeta({
+        role: 'seat',
+        phase,
+        participant: seat,
+        state,
+        tools,
+        cwd,
+        callerContext,
+        adapter: this
+      });
     const effectiveSeat = seat
       ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : seat;
@@ -249,7 +247,11 @@ export class MockAdapter extends HarnessAdapter {
             cwd: effectiveCwd,
             rebuttalMode: isRebuttal,
             mode: isRebuttal ? 'rebuttal' : mode,
-            context: callerContext
+            context: {
+              ...(callerContext && typeof callerContext === 'object' ? callerContext : {}),
+              _invocationMeta: invocationMeta,
+              retryDiagnostics
+            }
           })
         : scripted;
     }
@@ -275,16 +277,17 @@ export class MockAdapter extends HarnessAdapter {
   async executeJudge({ judge, round, phase, proofs, state, tools, cwd, context: callerContext }) {
     this.callCount.judge += 1;
 
-    const effectiveTools =
-      tools === 'none' || callerContext?.tools === 'none'
-        ? 'none'
-        : (tools ?? callerContext?.tools ?? judge?.tools ?? 'read-only');
-    const effectiveCwd =
-      effectiveTools === 'none'
-        ? undefined
-        : [cwd, callerContext?.cwd, judge?.cwd, state?.cwd, this.cwd, this.config?.cwd]
-            .find((c) => typeof c === 'string' && c.trim())
-            ?.trim();
+    const { effectiveTools, effectiveCwd, invocationMeta, retryDiagnostics } =
+      captureAttemptInvocationMeta({
+        role: 'judge',
+        phase,
+        participant: judge,
+        state,
+        tools,
+        cwd,
+        callerContext,
+        adapter: this
+      });
     const effectiveJudge = judge
       ? { ...judge, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : judge;
@@ -321,7 +324,22 @@ export class MockAdapter extends HarnessAdapter {
     const scripted = this.scriptedJudgeResponses.get(exactKey) || this.scriptedJudgeResponses.get(wildcardKey);
 
     if (scripted) {
-      return typeof scripted === 'function' ? scripted({ judge, round, phase, proofs, state }) : scripted;
+      return typeof scripted === 'function'
+        ? scripted({
+            judge,
+            round,
+            phase,
+            proofs,
+            state,
+            tools: effectiveTools,
+            cwd: effectiveCwd,
+            context: {
+              ...(callerContext && typeof callerContext === 'object' ? callerContext : {}),
+              _invocationMeta: invocationMeta,
+              retryDiagnostics
+            }
+          })
+        : scripted;
     }
 
     // Default deterministic candidate synthesis admitting all pending proofs

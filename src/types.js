@@ -142,12 +142,32 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxRetriesPerSeat: 1
 });
 
+/**
+ * Known harness error classifications.
+ * @readonly
+ * @type {readonly string[]}
+ */
+export const ERROR_CLASSES = Object.freeze([
+  'HarnessError',
+  'QuotaExhaustionError',
+  'TimeoutError',
+  'HarnessExecutionError',
+  'InvalidResponseError',
+  'AuthenticationError',
+  'AbortError',
+  'HeadlessToolDeniedError'
+]);
+
 // ============================================================================
 // JSDOC DOMAIN CONTRACTS
 // ============================================================================
 
 /**
  * @typedef {'codex' | 'antigravity' | 'cursor' | 'mock' | string} HarnessType
+ */
+
+/**
+ * @typedef {'HarnessError' | 'QuotaExhaustionError' | 'TimeoutError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'AbortError' | 'HeadlessToolDeniedError' | string} ErrorClass
  */
 
 /**
@@ -282,6 +302,31 @@ export const DEFAULT_CONFIG = Object.freeze({
  */
 
 /**
+ * @typedef {'DELIBERATION' | 'JUDGE_AUDIT_SYNTHESIS' | 'VOTING'} SelfContainedInputPhase
+ */
+
+/**
+ * @typedef {Object} SelfContainedLineRangeCoverage
+ * @property {number} startLine - 1-based inclusive start line (>= 1).
+ * @property {number} endLine - 1-based inclusive end line (>= startLine).
+ */
+
+/**
+ * @typedef {Object} SelfContainedCoveredArtifact
+ * @property {string} source - Verifiable workspace file path or external source covered by the evidence item.
+ * @property {string} evidenceId - Non-empty EvidenceItem ID backing this artifact.
+ * @property {'complete_artifact' | SelfContainedLineRangeCoverage} coverage - Full-artifact or line-range coverage descriptor.
+ */
+
+/**
+ * @typedef {Object} SelfContainedInputContract
+ * @property {SelfContainedInputPhase[]} [phases] - Non-empty list of phases authorized for tool-free recovery.
+ * @property {'round_1_only' | 'all_rounds'} [roundScope] - Round scope for tool-free recovery.
+ * @property {boolean} [conceptualNoExternalVerification] - True when purely conceptual without attached cwd or dependencies.
+ * @property {SelfContainedCoveredArtifact[]} [coveredArtifacts] - Explicit [E#]-backed artifact coverage records.
+ */
+
+/**
  * @typedef {Object} CouncilConfig
  * @property {string} [topic] - Topic handoff problem statement.
  * @property {number} [maxRounds] - Max deliberation rounds (default: 3).
@@ -291,6 +336,8 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @property {number} [timeoutMs] - Optional global execution timeout in ms.
  * @property {number} [maxConcurrentSeats] - Max concurrent seats during deliberation/voting.
  * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
+ * @property {boolean} [retryEffortFallback] - Enable opt-in retry effort fallback (caps effort at 'medium' within same model family; never raises 'low').
+ * @property {SelfContainedInputContract | null} [selfContainedInput] - Structured self-contained evidence contract for tool-removing recovery.
  * @property {EvidenceItem[]} [evidence] - Pre-collected grounded evidence items passed to seats and judge.
  * @property {Clarification[]} [clarifications] - Pre-supplied clarification answers broadcast to seats and judge.
  * @property {Partial<Judge>} [judge] - Optional judge configuration.

@@ -678,6 +678,13 @@ describe('Empirical Challenge: Milestone 3 Concurrency & Deterministic Reducer O
           maxConcurrentSeats: 3,
           minQuorum: 2,
           maxRetriesPerSeat: 1, // Allow 1 retry
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual concurrency test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'mock-judge', soul: 'Judge' },
           seats: [
             { id: 's1', harness: 'mock', model: 'mock-model', soul: 'Soul 1' },

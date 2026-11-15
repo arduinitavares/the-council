@@ -328,15 +328,26 @@ describe('Challenger M6-1 Stress Suite: Empirical Prompt & Evidence Guard Valida
       assert.ok(!promptToolsNone.includes('at most 3–5 targeted reads'));
     });
 
-    it('STRESS-3.3: formatJudgePrompt emits bounds when evidence and workspace cwd are present', () => {
+    it('STRESS-3.3: formatJudgePrompt emits bounds when evidence, workspace cwd, and path-citing submitted proofs are present (and 0 reads when proofs cite none)', () => {
       const prompt = formatJudgePrompt({
+        judge: { id: 'judge-1', model: 'gpt-6-astra', cwd: '/Users/aaat/projects/the-council' },
+        topic: 'Judge audit',
+        round: 1,
+        proofs: [{ id: 'P1', kind: 'citation', source: 'README.md:1', statement: 'Welcome' }],
+        evidence: [{ id: 'E1', label: 'Doc', source: 'README.md', text: 'Welcome' }]
+      });
+      assert.ok(prompt.includes('avoid re-reading excerpted files, and cap local file spot-checks to at most 3–5 targeted reads so you finish well within your turn timeout'));
+
+      const zeroReadsPrompt = formatJudgePrompt({
         judge: { id: 'judge-1', model: 'gpt-6-astra', cwd: '/Users/aaat/projects/the-council' },
         topic: 'Judge audit',
         round: 1,
         proofs: [],
         evidence: [{ id: 'E1', label: 'Doc', source: 'README.md', text: 'Welcome' }]
       });
-      assert.ok(prompt.includes('avoid re-reading excerpted files, and cap local file spot-checks to at most 3–5 targeted reads so you finish well within your turn timeout'));
+      assert.ok(zeroReadsPrompt.includes('use 0 local workspace reads'));
+      assert.ok(zeroReadsPrompt.includes('audit and cite baseline evidence first'));
+      assert.ok(!zeroReadsPrompt.includes('at most 3–5 targeted reads'));
     });
   });
 

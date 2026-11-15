@@ -2157,7 +2157,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
             return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
           }
         });
-        assert.equal(seenDirectCwd, explicitDir);
+        assert.equal(seenDirectCwd, fs.realpathSync(explicitDir));
         assert.equal(fs.existsSync(explicitDir), true, 'Explicit cwd must not be removed');
 
         let seenContextCwd = null;
@@ -2170,7 +2170,7 @@ describe('Unit: Direct CLI Outbound Runner (src/harness/cli-runner.js)', () => {
             return { stdout: '{"vote":"accept"}', stderr: '', exitCode: 0 };
           }
         });
-        assert.equal(seenContextCwd, explicitDir);
+        assert.equal(seenContextCwd, fs.realpathSync(explicitDir));
         assert.equal(fs.existsSync(explicitDir), true, 'Context cwd must not be removed');
       } finally {
         fs.rmSync(explicitDir, { recursive: true, force: true });

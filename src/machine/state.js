@@ -36,7 +36,10 @@ export function createInitialCouncilState(config = {}) {
     soul: rawJudge.soul || defaultJudge.soul,
     status: 'idle',
     retries: 0,
+    activeRetryDiagnostics: null,
+    retryDiagnosticsHistory: [],
     tools: judgeTools,
+    ...(rawJudge.reasoningEffort || cfg.reasoningEffort ? { reasoningEffort: rawJudge.reasoningEffort || cfg.reasoningEffort } : {}),
     ...(typeof judgeTimeoutMs === 'number' ? { timeoutMs: judgeTimeoutMs } : {}),
     ...(typeof judgeDisableHooks === 'boolean' ? { disableHooks: judgeDisableHooks } : {}),
     ...(typeof judgeIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: judgeIgnoreUserConfig } : {}),
@@ -59,7 +62,10 @@ export function createInitialCouncilState(config = {}) {
       status: 'idle',
       retries: 0,
       excusedReason: null,
+      activeRetryDiagnostics: null,
+      retryDiagnosticsHistory: [],
       tools: seatTools,
+      ...(s.reasoningEffort || cfg.reasoningEffort ? { reasoningEffort: s.reasoningEffort || cfg.reasoningEffort } : {}),
       ...(seatTimeoutMs !== undefined ? { timeoutMs: seatTimeoutMs } : {}),
       ...(typeof seatDisableHooks === 'boolean' ? { disableHooks: seatDisableHooks } : {}),
       ...(typeof seatIgnoreUserConfig === 'boolean' ? { ignoreUserConfig: seatIgnoreUserConfig } : {}),
@@ -82,17 +88,17 @@ export function createInitialCouncilState(config = {}) {
 
   const clarifications = (Array.isArray(cfg.clarifications) ? cfg.clarifications : []).map((item, idx) => {
     if (typeof item === 'string') {
-      return { batch: idx + 1, answer: item.trim() };
+      return { batch: idx + 1, answer: item.trimEnd() };
     }
     const labelStr = typeof item?.label === 'string' ? item.label.trim() : '';
     const sourceStr = typeof item?.source === 'string' ? item.source.trim() : '';
-    const textStr = typeof item?.text === 'string' ? item.text.trim() : '';
+    const textStr = typeof item?.text === 'string' && item.text.trim() ? item.text.trimEnd() : '';
     const hasAnswer = typeof item?.answer === 'string' && item.answer.trim().length > 0;
-    const answer = hasAnswer ? item.answer.trim() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
+    const answer = hasAnswer ? item.answer.trimEnd() : `[${labelStr}] (Source: ${sourceStr}): ${textStr}`;
     return {
       batch: Number.isInteger(item?.batch) && item.batch >= 1 ? item.batch : idx + 1,
       answer,
-      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trim() } : {}),
+      ...(typeof item?.question === 'string' && item.question.trim() ? { question: item.question.trimEnd() } : {}),
       ...(labelStr ? { label: labelStr } : {}),
       ...(sourceStr ? { source: sourceStr } : {}),
       ...(textStr ? { text: textStr } : {})

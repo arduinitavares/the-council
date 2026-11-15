@@ -586,6 +586,13 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 1,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual voting timeout test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -685,6 +692,13 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 2,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual mixed voting retry test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -731,7 +745,7 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
       assert.ok(!calls[2].prompt.includes('TOOL USAGE & VERIFICATION DIRECTIVE:'));
     });
 
-    it('2e: Sticky tool-loop guard: Attempt 1 TimeoutError strips tools to "none"; subsequent non-timeout retry stays "none"', async () => {
+    it('2e: Single tool-free recovery limit: Attempt 1 TimeoutError strips tools to "none"; subsequent Retry 1 failure excuses immediately', async () => {
       const capturedVoteCalls = [];
       const mockHarness = new MockAdapter();
 
@@ -768,10 +782,17 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
 
       const engine = new CouncilEngine(
         {
-          topic: 'Adversarial 2e: Sticky timeout tool guard test',
+          topic: 'Adversarial 2e: Single tool-free recovery attempt guard test',
           maxRounds: 1,
           minQuorum: 2,
           maxRetriesPerSeat: 2,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual voting single tool-free guard context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
           seats: [
             {
@@ -796,21 +817,104 @@ describe('Adversarial Stress Test: Voting Retry Tool Enforcement Across Fault Cl
 
       engine.initRoster();
       const result = await engine.run();
-      assert.equal(result.ok, true);
+      assert.equal(result.ok, false);
+      assert.equal(result.state.canonicalPhase, 'DISSENT_REPORT');
 
       const calls = capturedVoteCalls.filter((c) => c.seatId === 'voter-sticky-timeout');
-      assert.equal(calls.length, 3);
+      assert.equal(calls.length, 2, 'Must terminate after the single tool-free attempt fails');
 
       // Attempt 1: starts with read-only
       assert.equal(calls[0].tools, 'read-only');
 
       // Attempt 2: retry after TimeoutError -> tools forced to 'none'
       assert.equal(calls[1].tools, 'none');
+      assert.equal(calls[1].seatTools, 'none');
+      assert.equal(calls[1].seatVotingTools, 'none');
 
-      // Attempt 3: retry after InvalidResponseError -> tools remains sticky at 'none'
-      assert.equal(calls[2].tools, 'none', 'Sticky tool-loop guard keeps tools stripped to "none" on subsequent non-timeout retry');
-      assert.equal(calls[2].seatTools, 'none');
-      assert.equal(calls[2].seatVotingTools, 'none');
+      const excusedSeat = result.state.seats.find((s) => s.id === 'voter-sticky-timeout');
+      assert.equal(excusedSeat.status, 'excused');
+      assert.match(excusedSeat.excusedReason, /Tool-free recovery already used/i);
+    });
+
+    it('2e-companion: Initially tool-free seat keeps tools: "none" sticky across multiple retries', async () => {
+      const capturedVoteCalls = [];
+      const mockHarness = new MockAdapter();
+
+      mockHarness.executeSeatVote = async (ctx) => {
+        const attempt = capturedVoteCalls.filter((c) => c.seatId === ctx.seat.id).length + 1;
+        capturedVoteCalls.push({
+          seatId: ctx.seat.id,
+          attempt,
+          tools: ctx.tools,
+          seatTools: ctx.seat.tools,
+          seatVotingTools: ctx.seat.votingTools
+        });
+
+        if (ctx.seat.id === 'voter-initially-none') {
+          if (attempt === 1) {
+            throw new TimeoutError('Turn timed out', {
+              seatId: ctx.seat.id,
+              harness: 'mock',
+              timeoutMs: 90000
+            });
+          }
+          if (attempt === 2) {
+            throw new InvalidResponseError('Syntax error in vote JSON', {
+              seatId: ctx.seat.id,
+              harness: 'mock'
+            });
+          }
+        }
+
+        return { vote: 'accept' };
+      };
+
+      const engine = new CouncilEngine(
+        {
+          topic: 'Adversarial 2e-companion: Initially tool-free sticky guard test',
+          maxRounds: 1,
+          minQuorum: 2,
+          maxRetriesPerSeat: 2,
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual initially tool-free voting context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
+          judge: { id: 'judge', harness: 'mock', model: 'gpt-6-astra (max)', soul: 'Judge' },
+          seats: [
+            {
+              id: 'voter-initially-none',
+              harness: 'mock',
+              model: 'grok-4.7-xhigh',
+              soul: 'Purist',
+              tools: 'none',
+              votingTools: 'none'
+            },
+            {
+              id: 'voter-pal',
+              harness: 'mock',
+              model: 'gpt-6-astra (max)',
+              soul: 'Partner',
+              tools: 'none'
+            }
+          ]
+        },
+        { harnessResolver: () => mockHarness }
+      );
+
+      engine.initRoster();
+      const result = await engine.run();
+      assert.equal(result.ok, true);
+
+      const calls = capturedVoteCalls.filter((c) => c.seatId === 'voter-initially-none');
+      assert.equal(calls.length, 3);
+      for (const call of calls) {
+        assert.equal(call.tools, 'none');
+        assert.equal(call.seatTools, 'none');
+        assert.equal(call.seatVotingTools, 'none');
+      }
     });
 
     it('2f: Seat-level votingTools: "none" overrides engine-level votingTools: "read-only" on retry', async () => {

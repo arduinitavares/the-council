@@ -5,3 +5,4 @@
 
 export * from './config.js';
 export * from './council-engine.js';
+export * from './recovery.js';

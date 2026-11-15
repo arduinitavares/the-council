@@ -72,6 +72,10 @@ Consensus requires unanimous acceptance from active seats, meeting minimum quoru
 7. **Read-Only Tool Policy & Verification Injections (R3: #25)**: Deliberation seats and the Judge enforce a strict tool access policy (`tools: 'none' | 'read-only'`, defaulting to `'read-only'`). Write tools are strictly forbidden and rejected at configuration validation. For `read-only` participants, verification directives are injected into prompt contracts instructing seats to inspect codebases, specifications, or benchmarks before submitting proofs or voting, and instructing the Judge to spot-check citations before admitting proofs. For `cursor-agent`, CLI invocation enforces `--mode plan` and `--sandbox enabled`.
 8. **Configurable Time Budgets & Dynamic Effort-Scaled Timeouts (R3: #25)**: Per-turn timeouts (`timeoutMs`) can be configured globally or per-seat/judge. Unset timeouts dynamically scale by reasoning effort tier (`max`/`xhigh`: 240s, `high`: 120s, `medium`/`low`: 60s, default: 60s). Structured output extraction evaluates multi-block markdown code blocks in reverse order and extracts balanced-brace candidates, ensuring model outputs parse resiliently even when preceded by extensive read-only tool chatter.
 
+Ordinary validation and quota retries preserve the phase's turn timeout within the remaining phase budget. Validation retries receive bounded corrective guidance. Timeout and headless-tool-denial recovery keeps a separate 90-second ceiling and the evidence-readiness gate before tools can be removed. Retry diagnostics record `turnTimeoutMs` and `timeoutReason`; voting and rebuttal phase caps still apply.
+
+`--retry-effort-fallback` is opt-in. It caps eligible timeout/denial recovery at medium effort without raising low effort or changing model families. Unsupported fallback fails explicitly. Antigravity capability preflight uses `agy models` when enabled. Requested and effective settings remain visible in retry diagnostics.
+
 ## Quickstart
 
 ### Prerequisites

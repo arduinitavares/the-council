@@ -391,6 +391,13 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
         maxRounds: 2,
         minQuorum: 2,
         maxRetriesPerSeat: 1,
+        selfContainedInput: {
+          kind: 'full_context',
+          label: 'Hermetic conceptual watcher test context',
+          phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+          roundScope: 'all_rounds',
+          conceptualNoExternalVerification: true
+        },
         judge: {
           id: 'judge-astra',
           harness: 'codex',
@@ -772,9 +779,9 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
           };
         },
         executeSeatVote: async ({ seat }) => {
-          if (seat.id === 'seat-alpha' && s1VoteAttempts === 0) {
+          if (seat.id === 'seat-alpha' && s1VoteAttempts < 2) {
             s1VoteAttempts += 1;
-            // First vote objects citing non-existent P999 -> rejected CAST_VOTE transition + SEAT_FAULT (exhausts retries -> EXCUSE_SEAT)
+            // Both voting attempts cite P999; the phase-local retry is exhausted before excusal.
             return { vote: 'object', reason: 'Bad proof reference', proofId: 'P999' };
           }
           return { vote: 'accept' };
@@ -788,6 +795,13 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
           minQuorum: 2,
           maxRetriesPerSeat: 1,
           clarifications: [{ answer: 'Target Node >= 22' }],
+          selfContainedInput: {
+            kind: 'full_context',
+            label: 'Hermetic conceptual event contract test context',
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            conceptualNoExternalVerification: true
+          },
           judge: { id: 'judge-opus', harness: 'antigravity', model: 'claude-opus-5-5-high', soul: 'Judge' },
           seats: [
             { id: 'seat-alpha', harness: 'codex', model: 'gpt-6-astra (max)', soul: 'Alpha' },
@@ -834,7 +848,7 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.equal(beginRound.summary, 'Began Round 1/1 proof collection');
 
       const seatFaults = byType('SEAT_FAULT');
-      assert.equal(seatFaults.length, 2);
+      assert.equal(seatFaults.length, 3);
       assert.equal(seatFaults[0].actor, 'seat-alpha');
       assert.doesNotMatch(
         seatFaults[0].summary,
@@ -844,9 +858,9 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
       assert.match(seatFaults[0].summary, /^Seat "seat-alpha" faulted \(\[TimeoutError\]/);
 
       const retrySeats = byType('RETRY_SEAT');
-      assert.equal(retrySeats.length, 1);
+      assert.equal(retrySeats.length, 2);
       assert.equal(retrySeats[0].actor, 'seat-alpha');
-      assert.equal(retrySeats[0].summary, 'Retrying faulted Seat "seat-alpha"');
+      assert.match(retrySeats[0].summary, /^Retrying faulted Seat "seat-alpha" \(.*, tools=none\)$/);
 
       const submitProofs = byType('SUBMIT_PROOF');
       assert.equal(submitProofs.length, 3);
@@ -880,20 +894,22 @@ describe('Unit: VisualizerLiveWatcher (Pure Observer for Live Visualizer)', () =
 
       const retryJudge = byType('RETRY_JUDGE')[0];
       assert.equal(retryJudge.actor, 'judge-opus');
-      assert.equal(retryJudge.summary, 'Retrying faulted Judge');
+      assert.match(retryJudge.summary, /^Retrying faulted Judge \(.*, tools=read-only\)$/);
 
       const castVotes = byType('CAST_VOTE');
-      assert.equal(castVotes.length, 3);
+      assert.equal(castVotes.length, 4);
       assert.equal(castVotes[0].actor, 'seat-alpha');
       assert.match(
         castVotes[0].summary,
         /^Rejected CAST_VOTE: .*Objection Guard:/,
         'Rejected CAST_VOTE must render Rejected summary instead of false-positive success'
       );
-      assert.equal(castVotes[1].actor, 'seat-beta');
-      assert.equal(castVotes[1].summary, 'Seat "seat-beta" voted ACCEPT (Round 1)');
-      assert.equal(castVotes[2].actor, 'seat-gamma');
-      assert.equal(castVotes[2].summary, 'Seat "seat-gamma" voted ACCEPT (Round 1)');
+      assert.equal(castVotes[1].actor, 'seat-alpha');
+      assert.match(castVotes[1].summary, /^Rejected CAST_VOTE:/);
+      assert.equal(castVotes[2].actor, 'seat-beta');
+      assert.equal(castVotes[2].summary, 'Seat "seat-beta" voted ACCEPT (Round 1)');
+      assert.equal(castVotes[3].actor, 'seat-gamma');
+      assert.equal(castVotes[3].summary, 'Seat "seat-gamma" voted ACCEPT (Round 1)');
 
       const excuseSeats = byType('EXCUSE_SEAT');
       assert.equal(excuseSeats.length, 1);

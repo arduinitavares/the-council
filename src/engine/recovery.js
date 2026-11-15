@@ -1988,14 +1988,18 @@ function parseShellClausesLinear(text, options = {}) {
         } else if (wcc === 9) {
           lineCol += 4 - (lineCol & 3);
           i += 1;
-        } else if (wcc === 13 || wcc === 11 || wcc === 12) {
+        } else if ((wcc === 13 && i + 1 < n && text.charCodeAt(i + 1) === 10) || wcc === 11 || wcc === 12) {
           i += 1;
         } else {
           break;
         }
       }
     } else {
-      while (i < n && isHorizontalWsCode(text.charCodeAt(i))) {
+      while (i < n) {
+        const hcc = text.charCodeAt(i);
+        if (!isHorizontalWsCode(hcc) || (hcc === 13 && (i + 1 >= n || text.charCodeAt(i + 1) !== 10))) {
+          break;
+        }
         i += 1;
       }
     }
@@ -2059,7 +2063,7 @@ function parseShellClausesLinear(text, options = {}) {
           }
         } else if (fc === fenceCharCode && runLen >= fenceMinLen) {
           let q = runEnd;
-          while (q < n && isHorizontalWsCode(text.charCodeAt(q))) {
+          while (q < n && isSpaceOrTabCode(text.charCodeAt(q))) {
             q += 1;
           }
           if (q >= n || text.charCodeAt(q) === 10 || text.charCodeAt(q) === 13) {
@@ -2072,16 +2076,16 @@ function parseShellClausesLinear(text, options = {}) {
       }
     }
 
-    // Clause separators: &&, ||, ;, |, \n
-    if (ch === '\n' || ch === ';') {
+    // Clause separators: &&, ||, ;, |, \n, \r
+    if (ch === '\n' || ch === '\r' || ch === ';') {
       pushClause();
-      if (ch === '\n' && allowMarkdownBlockquotes) {
+      if ((ch === '\n' || ch === '\r') && allowMarkdownBlockquotes) {
         atMarkdownLineStart = true;
         lineCol = 0;
         lineBaseCol = 0;
         lineBqDepth = 0;
       }
-      i += 1;
+      i += ch === '\r' && i + 1 < n && text.charCodeAt(i + 1) === 10 ? 2 : 1;
       continue;
     }
     if (ch === '|') {
@@ -3642,13 +3646,28 @@ function stripBlockquoteFenceContainer(slice, fenceBqDepth) {
   }
   const slen = slice.length;
   const parts = [];
+  let nextLf = slice.indexOf('\n');
+  let nextCr = slice.indexOf('\r');
   let pos = 0;
   while (pos < slen) {
-    const lineEnd = slice.indexOf('\n', pos);
-    const end = lineEnd === -1 ? slen : lineEnd + 1;
-    const stripped = consumeBlockquotePrefixesAtLineStart(slice, pos, end, fenceBqDepth);
-    parts.push(slice.slice(stripped.pos, end));
-    pos = end;
+    if (nextLf !== -1 && nextLf < pos) {
+      nextLf = slice.indexOf('\n', pos);
+    }
+    if (nextCr !== -1 && nextCr < pos) {
+      nextCr = slice.indexOf('\r', pos);
+    }
+    let lineContentEnd = slen;
+    let nextPos = slen;
+    if (nextCr !== -1 && (nextLf === -1 || nextCr < nextLf)) {
+      lineContentEnd = nextCr;
+      nextPos = nextCr + 1 < slen && slice.charCodeAt(nextCr + 1) === 10 ? nextCr + 2 : nextCr + 1;
+    } else if (nextLf !== -1) {
+      lineContentEnd = nextLf;
+      nextPos = nextLf + 1;
+    }
+    const stripped = consumeBlockquotePrefixesAtLineStart(slice, pos, lineContentEnd, fenceBqDepth);
+    parts.push(slice.slice(stripped.pos, nextPos));
+    pos = nextPos;
   }
   return parts.join('');
 }
@@ -4026,7 +4045,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     if (isFence && isExplicitShellFenceInfo(fenceInfo)) {
       let picked = fenceInfo;
       if (inner) {
-        const lines = inner.split(/\r?\n/);
+        const lines = inner.split(/\r\n|\r|\n/);
         let firstNonComment = '';
         let firstNonEmpty = '';
         for (let li = 0; li < lines.length; li += 1) {
@@ -4088,8 +4107,12 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
 
     if (!maskedParts) maskedParts = [];
     if (spanStart > cursor) maskedParts.push(rawText.slice(cursor, spanStart));
-    const spanLen = closeIdx - spanStart + 1;
-    maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
+    if (isFence || rawInnerSlice.indexOf('\n') !== -1 || rawInnerSlice.indexOf('\r') !== -1) {
+      appendMaskedPreserveNewlines(maskedParts, rawText, spanStart, closeIdx + 1);
+    } else {
+      const spanLen = closeIdx - spanStart + 1;
+      maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
+    }
     cursor = closeIdx + 1;
     return false;
   };
@@ -4303,24 +4326,233 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
 }
 
 function appendMaskedPreserveNewlines(outParts, text, start, end) {
+  if (start >= end) {
+    return;
+  }
   let segStart = start;
+  const firstCr = text.indexOf('\r', start);
+  if (firstCr === -1 || firstCr >= end) {
+    while (segStart < end) {
+      const nl = text.indexOf('\n', segStart);
+      if (nl === -1 || nl >= end) {
+        const len = end - segStart;
+        if (len > 0) {
+          outParts.push(' '.repeat(len));
+        }
+        break;
+      }
+      const wsLen = nl - segStart;
+      if (wsLen > 0) {
+        outParts.push(' '.repeat(wsLen));
+      }
+      outParts.push('\n');
+      segStart = nl + 1;
+    }
+    return;
+  }
+  let nextLf = text.indexOf('\n', start);
+  let nextCr = firstCr;
   while (segStart < end) {
-    const nl = text.indexOf('\n', segStart);
-    if (nl === -1 || nl >= end) {
+    if (nextLf !== -1 && nextLf < segStart) {
+      nextLf = text.indexOf('\n', segStart);
+    }
+    if (nextCr !== -1 && nextCr < segStart) {
+      nextCr = text.indexOf('\r', segStart);
+    }
+    const hasCrHere = nextCr !== -1 && nextCr < end;
+    const hasLfHere = nextLf !== -1 && nextLf < end;
+    if (!hasCrHere && !hasLfHere) {
       const len = end - segStart;
       if (len > 0) {
         outParts.push(' '.repeat(len));
       }
       break;
     }
-    const cr = nl > segStart && text.charCodeAt(nl - 1) === 13 ? 1 : 0;
-    const wsLen = nl - cr - segStart;
-    if (wsLen > 0) {
-      outParts.push(' '.repeat(wsLen));
+    if (hasCrHere && (!hasLfHere || nextCr < nextLf)) {
+      const wsLen = nextCr - segStart;
+      if (wsLen > 0) {
+        outParts.push(' '.repeat(wsLen));
+      }
+      if (nextCr + 1 < end && text.charCodeAt(nextCr + 1) === 10) {
+        outParts.push('\r\n');
+        segStart = nextCr + 2;
+      } else {
+        outParts.push('\r');
+        segStart = nextCr + 1;
+      }
+    } else {
+      const wsLen = nextLf - segStart;
+      if (wsLen > 0) {
+        outParts.push(' '.repeat(wsLen));
+      }
+      outParts.push('\n');
+      segStart = nextLf + 1;
     }
-    outParts.push(cr ? '\r\n' : '\n');
-    segStart = nl + 1;
   }
+}
+
+function advanceSpacesAndTabsBelow(text, pos, col, colLimit, lineEnd) {
+  let p = pos;
+  let c = col;
+  while (p < lineEnd && c < colLimit) {
+    const cc = text.charCodeAt(p);
+    if (cc === 32) {
+      c += 1;
+      p += 1;
+    } else if (cc === 9) {
+      c += 4 - (c & 3);
+      p += 1;
+    } else {
+      break;
+    }
+  }
+  return { pos: p, col: c };
+}
+
+function advanceSpacesAndTabsWithin3(text, pos, col, baseCol, lineEnd) {
+  let p = pos;
+  let c = col;
+  while (p < lineEnd && (c - baseCol) <= 3) {
+    const cc = text.charCodeAt(p);
+    if (cc === 32) {
+      c += 1;
+      p += 1;
+    } else if (cc === 9) {
+      c += 4 - (c & 3);
+      p += 1;
+    } else {
+      break;
+    }
+  }
+  return { pos: p, col: c };
+}
+
+function consumeSingleBlockquoteAtLine(text, pos, col, baseCol, lineEnd) {
+  const sp = advanceSpacesAndTabsWithin3(text, pos, col, baseCol, lineEnd);
+  if ((sp.col - baseCol) > 3 || sp.pos >= lineEnd || text.charCodeAt(sp.pos) !== 62) {
+    return null;
+  }
+  let q = sp.pos + 1;
+  let nextCol = sp.col + 1;
+  let nextBase = nextCol;
+  if (q < lineEnd) {
+    const post = text.charCodeAt(q);
+    if (post === 32) {
+      nextCol += 1;
+      nextBase = nextCol;
+      q += 1;
+    } else if (post === 9) {
+      nextBase = nextCol + 1;
+      nextCol += 4 - (nextCol & 3);
+      q += 1;
+    }
+  }
+  return { pos: q, col: nextCol, baseCol: nextBase };
+}
+
+function isBlankSliceTo(text, pos, lineEnd) {
+  let p = pos;
+  while (p < lineEnd && isSpaceOrTabCode(text.charCodeAt(p))) {
+    p += 1;
+  }
+  return p === lineEnd;
+}
+
+function isCommonMarkThematicBreakAt(text, pos, lineEnd) {
+  if (pos >= lineEnd) {
+    return false;
+  }
+  const marker = text.charCodeAt(pos);
+  if (marker !== 45 && marker !== 42 && marker !== 95) {
+    return false;
+  }
+  let count = 0;
+  for (let p = pos; p < lineEnd; p += 1) {
+    const cc = text.charCodeAt(p);
+    if (cc === marker) {
+      count += 1;
+    } else if (!isSpaceOrTabCode(cc)) {
+      return false;
+    }
+  }
+  return count >= 3;
+}
+
+function matchCommonMarkListMarkerAt(text, pos, lineEnd) {
+  if (pos >= lineEnd) {
+    return -1;
+  }
+  const cc = text.charCodeAt(pos);
+  if (cc === 45 || cc === 43 || cc === 42) {
+    if ((cc === 45 || cc === 42) && isCommonMarkThematicBreakAt(text, pos, lineEnd)) {
+      return -1;
+    }
+    const mEnd = pos + 1;
+    return mEnd === lineEnd || isSpaceOrTabCode(text.charCodeAt(mEnd)) ? mEnd : -1;
+  }
+  if (cc >= 48 && cc <= 57) {
+    let dEnd = pos + 1;
+    while (dEnd < lineEnd && dEnd - pos < 9) {
+      const dc = text.charCodeAt(dEnd);
+      if (dc >= 48 && dc <= 57) {
+        dEnd += 1;
+      } else {
+        break;
+      }
+    }
+    if (dEnd < lineEnd && (text.charCodeAt(dEnd) === 46 || text.charCodeAt(dEnd) === 41)) {
+      const mEnd = dEnd + 1;
+      return mEnd === lineEnd || isSpaceOrTabCode(text.charCodeAt(mEnd)) ? mEnd : -1;
+    }
+  }
+  return -1;
+}
+
+function isAtxHeadingAt(text, pos, lineEnd) {
+  if (pos >= lineEnd || text.charCodeAt(pos) !== 35) {
+    return false;
+  }
+  let hEnd = pos + 1;
+  while (hEnd < lineEnd && hEnd - pos < 6 && text.charCodeAt(hEnd) === 35) {
+    hEnd += 1;
+  }
+  return hEnd === lineEnd || isSpaceOrTabCode(text.charCodeAt(hEnd));
+}
+
+function startsParagraphInterruptBlockAt(text, pos, col, baseCol, lineEnd) {
+  const sp = advanceSpacesAndTabsWithin3(text, pos, col, baseCol, lineEnd);
+  if ((sp.col - baseCol) > 3 || sp.pos >= lineEnd) {
+    return false;
+  }
+  const p = sp.pos;
+  const cc = text.charCodeAt(p);
+  if (cc === 62 || isCommonMarkThematicBreakAt(text, p, lineEnd) || isAtxHeadingAt(text, p, lineEnd)) {
+    return true;
+  }
+  if (cc === 96 || cc === 126) {
+    let fEnd = p + 1;
+    while (fEnd < lineEnd && text.charCodeAt(fEnd) === cc) {
+      fEnd += 1;
+    }
+    if (fEnd - p >= 3) {
+      if (cc === 96) {
+        for (let q = fEnd; q < lineEnd; q += 1) {
+          if (text.charCodeAt(q) === 96) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+  }
+  const mEnd = matchCommonMarkListMarkerAt(text, p, lineEnd);
+  if (mEnd !== -1 && !isBlankSliceTo(text, mEnd, lineEnd)) {
+    if (cc >= 48 && cc <= 57) {
+      return mEnd - p === 2 && cc === 49;
+    }
+    return true;
+  }
+  return false;
 }
 
 function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFirst = false } = {}) {
@@ -4341,60 +4573,154 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
       fenceDeps.push(clean);
     }
   };
+
+  const hasCr = rawText.indexOf('\r') !== -1;
+  let cachedLf = rawText.indexOf('\n');
+  let cachedCr = hasCr ? rawText.indexOf('\r') : -1;
+  const nextCommonMarkLine = (start) => {
+    if (!hasCr) {
+      const nl = rawText.indexOf('\n', start);
+      return {
+        lineEnd: nl === -1 ? n : nl,
+        nextLineStart: nl === -1 ? n : nl + 1
+      };
+    }
+    if (cachedLf !== -1 && cachedLf < start) {
+      cachedLf = rawText.indexOf('\n', start);
+    }
+    if (cachedCr !== -1 && cachedCr < start) {
+      cachedCr = rawText.indexOf('\r', start);
+    }
+    if (cachedCr !== -1 && (cachedLf === -1 || cachedCr < cachedLf)) {
+      const nextAfterCr = cachedCr + 1 < n && rawText.charCodeAt(cachedCr + 1) === 10 ? cachedCr + 2 : cachedCr + 1;
+      return {
+        lineEnd: cachedCr,
+        nextLineStart: nextAfterCr
+      };
+    }
+    if (cachedLf !== -1) {
+      return {
+        lineEnd: cachedLf,
+        nextLineStart: cachedLf + 1
+      };
+    }
+    return { lineEnd: n, nextLineStart: n };
+  };
+
   let maskedParts = null;
   let maskCursor = 0;
   let lineStart = 0;
+  let openContainers = [];
+  let paragraphOpen = false;
 
   while (lineStart < n) {
-    const rawNl = rawText.indexOf('\n', lineStart);
-    const rawLineEnd = rawNl === -1 ? n : rawNl;
-    const lineEnd = rawLineEnd > lineStart && rawText.charCodeAt(rawLineEnd - 1) === 13 ? rawLineEnd - 1 : rawLineEnd;
-    const nextLineStart = rawLineEnd < n ? rawLineEnd + 1 : n;
+    const { lineEnd, nextLineStart } = nextCommonMarkLine(lineStart);
 
-    const bqOpen = consumeBlockquotePrefixesAtLineStart(rawText, lineStart, lineEnd, n);
-    let p = bqOpen.pos;
-    let col = bqOpen.col;
-    let baseCol = bqOpen.baseCol;
-    while (p < lineEnd && (col - baseCol) <= 3) {
-      const cc = rawText.charCodeAt(p);
-      if (cc === 32) {
-        col += 1;
-        p += 1;
-      } else if (cc === 9) {
-        col += 4 - (col & 3);
-        p += 1;
+    // Step A: match currently open CommonMark §5.1 blockquote & §5.2 list containers
+    let p = lineStart;
+    let col = 0;
+    let baseCol = 0;
+    let matchedLen = 0;
+    let allMatched = true;
+    let handledBlankLine = false;
+
+    for (let idx = 0; idx < openContainers.length; idx += 1) {
+      const container = openContainers[idx];
+      if (container.type === 'bq') {
+        const bqStep = consumeSingleBlockquoteAtLine(rawText, p, col, baseCol, lineEnd);
+        if (!bqStep) {
+          allMatched = false;
+          break;
+        }
+        p = bqStep.pos;
+        col = bqStep.col;
+        baseCol = bqStep.baseCol;
+        matchedLen = idx + 1;
       } else {
-        break;
+        if (isBlankSliceTo(rawText, p, lineEnd)) {
+          let keepLen = openContainers.length;
+          for (let k = idx; k < openContainers.length; k += 1) {
+            if (openContainers[k].type === 'bq' || openContainers[k].justOpenedEmpty) {
+              keepLen = k;
+              break;
+            }
+          }
+          openContainers.length = keepLen;
+          paragraphOpen = false;
+          lineStart = nextLineStart;
+          handledBlankLine = true;
+          break;
+        }
+        const ind = advanceSpacesAndTabsBelow(rawText, p, col, baseCol + container.indentCols, lineEnd);
+        if ((ind.col - baseCol) < container.indentCols) {
+          allMatched = false;
+          break;
+        }
+        p = ind.pos;
+        col = ind.col;
+        baseCol += container.indentCols;
+        container.justOpenedEmpty = false;
+        matchedLen = idx + 1;
       }
     }
-    if ((col - baseCol) > 3 || p >= lineEnd) {
-      lineStart = nextLineStart;
+    if (handledBlankLine) {
       continue;
     }
-    let fenceListIndent = 0;
-    let fc = rawText.charCodeAt(p);
-    if (fc !== 96 && fc !== 126) {
-      let mEnd = -1;
-      if (fc === 45 || fc === 43 || fc === 42) {
-        mEnd = p + 1;
-      } else if (fc >= 48 && fc <= 57) {
-        let dEnd = p + 1;
-        while (dEnd < lineEnd && dEnd - p < 9) {
-          const dc = rawText.charCodeAt(dEnd);
-          if (dc >= 48 && dc <= 57) {
-            dEnd += 1;
-          } else {
+
+    // Step B: blank line remainder or container drop-out (with lazy paragraph continuation check)
+    if (isBlankSliceTo(rawText, p, lineEnd)) {
+      if (!allMatched) {
+        openContainers.length = matchedLen;
+      } else {
+        for (let idx = 0; idx < openContainers.length; idx += 1) {
+          if (openContainers[idx].type === 'list' && openContainers[idx].justOpenedEmpty) {
+            openContainers.length = idx;
             break;
           }
         }
-        if (dEnd < lineEnd && (rawText.charCodeAt(dEnd) === 46 || rawText.charCodeAt(dEnd) === 41)) {
-          mEnd = dEnd + 1;
-        }
       }
-      if (mEnd !== -1 && mEnd < lineEnd && isSpaceOrTabCode(rawText.charCodeAt(mEnd))) {
-        const mWidth = mEnd - p;
+      paragraphOpen = false;
+      lineStart = nextLineStart;
+      continue;
+    }
+
+    if (!allMatched) {
+      if (paragraphOpen && !startsParagraphInterruptBlockAt(rawText, p, col, baseCol, lineEnd)) {
+        for (let idx = 0; idx < openContainers.length; idx += 1) {
+          if (openContainers[idx].type === 'list') {
+            openContainers[idx].justOpenedEmpty = false;
+          }
+        }
+        paragraphOpen = true;
+        lineStart = nextLineStart;
+        continue;
+      }
+      openContainers.length = matchedLen;
+      paragraphOpen = false;
+    }
+
+    // Step C: consume zero or more newly opened nested blockquote / list containers on this line
+    let openedEmptyOnThisLine = false;
+    while (p < lineEnd) {
+      const sp = advanceSpacesAndTabsWithin3(rawText, p, col, baseCol, lineEnd);
+      if ((sp.col - baseCol) > 3 || sp.pos >= lineEnd) {
+        break;
+      }
+      const mc = rawText.charCodeAt(sp.pos);
+      if (mc === 62) {
+        const bqStep = consumeSingleBlockquoteAtLine(rawText, sp.pos, sp.col, baseCol, lineEnd);
+        p = bqStep.pos;
+        col = bqStep.col;
+        baseCol = bqStep.baseCol;
+        openContainers.push({ type: 'bq' });
+        paragraphOpen = false;
+        continue;
+      }
+      const mEnd = matchCommonMarkListMarkerAt(rawText, sp.pos, lineEnd);
+      if (mEnd !== -1) {
+        const mWidth = mEnd - sp.pos;
         let lp = mEnd;
-        let lCol = col + mWidth;
+        let lCol = sp.col + mWidth;
         while (lp < lineEnd) {
           const lcc = rawText.charCodeAt(lp);
           if (lcc === 32) {
@@ -4407,17 +4733,65 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
             break;
           }
         }
-        const spacesAfterMarker = lCol - (col + mWidth);
-        if (lp < lineEnd && spacesAfterMarker >= 1 && spacesAfterMarker <= 4) {
-          fenceListIndent = lCol - baseCol;
+        paragraphOpen = false;
+        if (lp === lineEnd) {
+          const indentCols = (sp.col - baseCol) + mWidth + 1;
+          openContainers.push({ type: 'list', indentCols, justOpenedEmpty: true });
+          openedEmptyOnThisLine = true;
+          baseCol += indentCols;
+          p = lp;
+          col = Math.max(lCol, baseCol);
+          break;
+        }
+        const spacesAfterMarker = lCol - (sp.col + mWidth);
+        if (spacesAfterMarker >= 1 && spacesAfterMarker <= 4) {
+          const indentCols = lCol - baseCol;
+          openContainers.push({ type: 'list', indentCols, justOpenedEmpty: false });
           baseCol = lCol;
           p = lp;
           col = lCol;
-          fc = rawText.charCodeAt(p);
+          continue;
+        }
+        const indentCols = (sp.col - baseCol) + mWidth + 1;
+        openContainers.push({ type: 'list', indentCols, justOpenedEmpty: false });
+        baseCol += indentCols;
+        p = lp;
+        col = lCol;
+        break;
+      }
+      break;
+    }
+
+    // Step D: check for opening fenced code block inside active containers
+    const fSp = advanceSpacesAndTabsWithin3(rawText, p, col, baseCol, lineEnd);
+    p = fSp.pos;
+    col = fSp.col;
+    if (p >= lineEnd) {
+      if (!openedEmptyOnThisLine) {
+        for (let idx = 0; idx < openContainers.length; idx += 1) {
+          if (openContainers[idx].type === 'list' && openContainers[idx].justOpenedEmpty) {
+            openContainers.length = idx;
+            break;
+          }
         }
       }
+      paragraphOpen = false;
+      lineStart = nextLineStart;
+      continue;
     }
+    if ((col - baseCol) > 3) {
+      lineStart = nextLineStart;
+      continue;
+    }
+    if (isCommonMarkThematicBreakAt(rawText, p, lineEnd) || isAtxHeadingAt(rawText, p, lineEnd)) {
+      paragraphOpen = false;
+      lineStart = nextLineStart;
+      continue;
+    }
+
+    const fc = rawText.charCodeAt(p);
     if (fc !== 96 && fc !== 126) {
+      paragraphOpen = true;
       lineStart = nextLineStart;
       continue;
     }
@@ -4427,6 +4801,7 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
     }
     const fenceLen = fEnd - p;
     if (fenceLen < 3) {
+      paragraphOpen = true;
       lineStart = nextLineStart;
       continue;
     }
@@ -4439,113 +4814,104 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
         }
       }
       if (hasBtOnInfo) {
+        paragraphOpen = true;
         lineStart = nextLineStart;
         continue;
       }
     }
 
+    // Step E: scan inside opened fenced code block until closing fence or container drop-out
+    paragraphOpen = false;
+    const fenceContainers = openContainers.map((c) =>
+      c.type === 'bq' ? { type: 'bq' } : { type: 'list', indentCols: c.indentCols, justOpenedEmpty: false }
+    );
     const fenceInfo = rawText.slice(fEnd, lineEnd).trim();
     const isShellFence = isExplicitShellFenceInfo(fenceInfo);
     const fenceOpenSummary = rawText.slice(p, lineEnd).trim() || (fc === 96 ? '```' : '~~~');
-    const fenceBqDepth = bqOpen.count;
     const bodyLines = [];
-    let fenceCloseMaskEnd = rawLineEnd;
+    let fenceCloseMaskEnd = lineEnd;
     let afterFenceLineStart = nextLineStart;
     let scanStart = nextLineStart;
 
     while (scanStart < n) {
-      const sNl = rawText.indexOf('\n', scanStart);
-      const sRawEnd = sNl === -1 ? n : sNl;
-      const sLineEnd = sRawEnd > scanStart && rawText.charCodeAt(sRawEnd - 1) === 13 ? sRawEnd - 1 : sRawEnd;
-      const sNext = sRawEnd < n ? sRawEnd + 1 : n;
+      const { lineEnd: sLineEnd, nextLineStart: sNext } = nextCommonMarkLine(scanStart);
 
       let contentPos = scanStart;
       let lineCol = 0;
       let lineBaseCol = 0;
-      if (fenceBqDepth > 0) {
-        const bqRes = consumeBlockquotePrefixesAtLineStart(rawText, scanStart, sLineEnd, fenceBqDepth);
-        if (bqRes.count < fenceBqDepth) {
-          afterFenceLineStart = scanStart;
-          break;
-        }
-        contentPos = bqRes.pos;
-        lineCol = bqRes.col;
-        lineBaseCol = bqRes.baseCol;
-      }
+      let droppedOut = false;
+      let isBlankInListFence = false;
 
-      if (fenceListIndent > 0) {
-        let blankPos = contentPos;
-        while (blankPos < sLineEnd && isSpaceOrTabCode(rawText.charCodeAt(blankPos))) {
-          blankPos += 1;
-        }
-        if (blankPos === sLineEnd) {
-          bodyLines.push('');
-          fenceCloseMaskEnd = sRawEnd;
-          afterFenceLineStart = sNext;
-          scanStart = sNext;
-          continue;
-        }
-        let lPos = contentPos;
-        let lCol2 = lineCol;
-        while (lPos < sLineEnd && (lCol2 - lineBaseCol) < fenceListIndent) {
-          const lcc = rawText.charCodeAt(lPos);
-          if (lcc === 32) {
-            lCol2 += 1;
-            lPos += 1;
-          } else if (lcc === 9) {
-            lCol2 += 4 - (lCol2 & 3);
-            lPos += 1;
-          } else {
+      for (let k = 0; k < fenceContainers.length; k += 1) {
+        const fCont = fenceContainers[k];
+        if (fCont.type === 'bq') {
+          const bqStep = consumeSingleBlockquoteAtLine(rawText, contentPos, lineCol, lineBaseCol, sLineEnd);
+          if (!bqStep) {
+            droppedOut = true;
             break;
           }
+          contentPos = bqStep.pos;
+          lineCol = bqStep.col;
+          lineBaseCol = bqStep.baseCol;
+        } else {
+          if (isBlankSliceTo(rawText, contentPos, sLineEnd)) {
+            let hasNestedBq = false;
+            for (let m = k + 1; m < fenceContainers.length; m += 1) {
+              if (fenceContainers[m].type === 'bq') {
+                hasNestedBq = true;
+                break;
+              }
+            }
+            if (hasNestedBq) {
+              droppedOut = true;
+            } else {
+              isBlankInListFence = true;
+            }
+            break;
+          }
+          const ind = advanceSpacesAndTabsBelow(rawText, contentPos, lineCol, lineBaseCol + fCont.indentCols, sLineEnd);
+          if ((ind.col - lineBaseCol) < fCont.indentCols) {
+            droppedOut = true;
+            break;
+          }
+          contentPos = ind.pos;
+          lineCol = ind.col;
+          lineBaseCol += fCont.indentCols;
         }
-        if ((lCol2 - lineBaseCol) < fenceListIndent) {
-          afterFenceLineStart = scanStart;
-          break;
-        }
-        contentPos = lPos;
-        lineBaseCol += fenceListIndent;
-        lineCol = lCol2;
       }
 
-      let cp = contentPos;
-      let cCol = lineCol;
-      while (cp < sLineEnd && (cCol - lineBaseCol) <= 3) {
-        const cc = rawText.charCodeAt(cp);
-        if (cc === 32) {
-          cCol += 1;
-          cp += 1;
-        } else if (cc === 9) {
-          cCol += 4 - (cCol & 3);
-          cp += 1;
-        } else {
-          break;
-        }
+      if (droppedOut) {
+        afterFenceLineStart = scanStart;
+        break;
       }
+      if (isBlankInListFence) {
+        bodyLines.push('');
+        fenceCloseMaskEnd = sLineEnd;
+        afterFenceLineStart = sNext;
+        scanStart = sNext;
+        continue;
+      }
+
+      const cSp = advanceSpacesAndTabsWithin3(rawText, contentPos, lineCol, lineBaseCol, sLineEnd);
       let isCloseFence = false;
-      if ((cCol - lineBaseCol) <= 3 && cp < sLineEnd && rawText.charCodeAt(cp) === fc) {
-        let ce = cp + 1;
+      if ((cSp.col - lineBaseCol) <= 3 && cSp.pos < sLineEnd && rawText.charCodeAt(cSp.pos) === fc) {
+        let ce = cSp.pos + 1;
         while (ce < sLineEnd && rawText.charCodeAt(ce) === fc) {
           ce += 1;
         }
-        if (ce - cp >= fenceLen) {
-          let tail = ce;
-          while (tail < sLineEnd && isSpaceOrTabCode(rawText.charCodeAt(tail))) {
-            tail += 1;
-          }
-          if (tail === sLineEnd) {
-            isCloseFence = true;
-          }
+        if (ce - cSp.pos >= fenceLen && isBlankSliceTo(rawText, ce, sLineEnd)) {
+          isCloseFence = true;
         }
       }
       if (isCloseFence) {
-        fenceCloseMaskEnd = sRawEnd;
+        fenceCloseMaskEnd = sLineEnd;
         afterFenceLineStart = sNext;
+        openContainers = fenceContainers;
         break;
       }
 
       bodyLines.push(rawText.slice(contentPos, sLineEnd));
-      fenceCloseMaskEnd = sRawEnd;
+      fenceCloseMaskEnd = sLineEnd;
       afterFenceLineStart = sNext;
       scanStart = sNext;
     }

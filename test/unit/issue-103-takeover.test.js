@@ -105,6 +105,34 @@ describe('PR #103 takeover regressions', () => {
     assert.equal(d.turnTimeoutMs, 500000); assert.equal(d.timeoutReason, 'turn_timeout');
   });
 
+  for (const phase of ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING']) {
+    it('corrects an engine-generated citation failure in ' + phase, async () => {
+      const h = harness(); const calls = [];
+      const originalJudge = h.executeJudgeAuditAndSynthesis;
+      if (phase === 'DELIBERATION') h.executeSeatProof = async ctx => {
+        if (ctx.seat.id !== 'a') return { ...proof };
+        calls.push(ctx);
+        return { ...proof, source: calls.length === 1 ? '.council/runs/latest.js:12' : 'Arithmetic' };
+      };
+      if (phase === 'JUDGE_AUDIT_SYNTHESIS') h.executeJudgeAuditAndSynthesis = async ctx => {
+        calls.push(ctx);
+        const result = await originalJudge(ctx);
+        return { ...result, summary: calls.length === 1 ? '.council/runs/latest.js:12' : 'Verified' };
+      };
+      if (phase === 'VOTING') h.executeSeatVote = async ctx => {
+        if (ctx.seat.id !== 'a') return { vote: 'accept' };
+        calls.push(ctx);
+        return { vote: 'accept', reason: calls.length === 1 ? '.council/runs/latest.js:12' : 'Verified' };
+      };
+      const r = await new CouncilEngine(config({ votingTimeoutMs: 120000 }), { harnessResolver: () => h }).run();
+      assert.equal(r.ok, true); assert.equal(calls.length, 2);
+      const field = phase === 'DELIBERATION' ? 'proof.source' : phase === 'VOTING' ? 'vote.reason' : 'judge.summary';
+      assert.ok(calls[1].context.retryFeedback.includes(field));
+      assert.match(calls[1].context.retryFeedback, /not internal run artifacts/);
+      assert.equal(calls[1].timeoutMs, phase === 'VOTING' ? 120000 : 500000);
+    });
+  }
+
   it('keeps the timeout recovery ceiling and remaining phase budget', async () => {
     const h = harness(); const calls = [];
     h.executeSeatProof = async ctx => {

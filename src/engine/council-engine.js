@@ -877,9 +877,10 @@ export class CouncilEngine {
   _validationRetryFeedback(error) {
     if (this._classifyErrorClass(error) !== 'InvalidResponseError') return undefined;
     const constraints = new Set();
-    for (const raw of (Array.isArray(error?.validationErrors) ? error.validationErrors : []).slice(0, 8)) {
-      if (typeof raw !== 'string') continue;
-      const field = /^(proof\.(?:scope|source|statement)|summary|reason)\b/.exec(raw)?.[1];
+    for (const value of (Array.isArray(error?.validationErrors) ? error.validationErrors : []).slice(0, 8)) {
+      if (typeof value !== 'string') continue;
+      const raw = value.slice(0, 2048);
+      const field = /^(proof\.(?:scope|source|statement)|vote\.(?:reason|objectionReason|note)|judge\.(?:summary|clauses\[\d{1,6}\]\.(?:id|context|conclusion)|proofDecisions\[P\d{1,6}\]\.(?:note|statement|admittedStatement|reason|caveat)))\s/.exec(raw)?.[1];
       if (field && raw.includes('must not cite internal .council or telemetry artifacts')) {
         constraints.add(field + ': cite an allowed external or repository source, not internal run artifacts.');
       } else if (field && raw.includes('parent directory traversal')) {
@@ -1205,7 +1206,7 @@ export class CouncilEngine {
       (p) => p.status === 'admitted' || p.status === 'partially_admitted'
     );
     const openObjections = (this.state.objections || []).filter(
-      (o) => o.status === 'open' || o.status === 'preserved_excused'
+      (o) => o.status === 'open' || (role === 'judge' && o.status === 'preserved_excused')
     );
     const toolFreeKey = `${currentRound}:${effectivePhase}:${participant?.id || 'judge'}`;
     const usedToolFree =
@@ -1894,7 +1895,7 @@ export class CouncilEngine {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs,
-            baseTimeoutMs: slot.baseTimeoutMs ?? slot.baseVoteTimeoutMs,
+            baseTimeoutMs: slot.baseTimeoutMs,
             toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
             originalInvocationMeta: slot.originalInvocationMeta,
             originalAttemptTools: slot.originalAttemptTools,
@@ -1973,7 +1974,7 @@ export class CouncilEngine {
                     : {}),
                   signal: delibRetrySignal,
                   retryDiagnostics: slot.retryDiagnostics || null,
-              retryFeedback: slot.retryFeedback,
+                  retryFeedback: slot.retryFeedback,
                   ...(slot.currentSeatConfig.reasoningEffort
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
@@ -1985,7 +1986,7 @@ export class CouncilEngine {
                     : {}),
                   signal: delibRetrySignal,
                   retryDiagnostics: slot.retryDiagnostics || null,
-              retryFeedback: slot.retryFeedback,
+                  retryFeedback: slot.retryFeedback,
                   ...(slot.currentSeatConfig.reasoningEffort
                     ? { reasoningEffort: slot.currentSeatConfig.reasoningEffort }
                     : {})
@@ -2728,7 +2729,7 @@ export class CouncilEngine {
             remainingBudget,
             seatElapsedMs: slot.seatElapsedMs,
             totalSeatBudgetMs: slot.totalSeatBudgetMs,
-            baseTimeoutMs: slot.baseTimeoutMs ?? slot.baseVoteTimeoutMs,
+            baseTimeoutMs: slot.baseVoteTimeoutMs,
             toolFreeRecoveryUsed: slot.toolFreeRecoveryUsed,
             originalInvocationMeta: slot.originalInvocationMeta,
             originalAttemptTools: slot.originalAttemptTools,

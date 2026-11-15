@@ -11977,5 +11977,405 @@ describe('Issue #102 Task 3 Core: Recovery Policy, Config Metadata, & Reducer Re
         assert.equal(readiness.ready, false);
       }
     });
+
+    it('ReReview-102 Round 29 fixes: processes non-shell fence bodies literally without recursive Markdown fence scanning or stack overflow while retaining bounded shell detection across all 20 combinations', async () => {
+      const sampleAuthProof = {
+        id: 'P1',
+        seatId: 's1',
+        round: 1,
+        scope: 'Verify auth token expiry',
+        kind: 'check',
+        source: 'src/auth.js',
+        statement: 'Token expiry verified in src/auth.js.'
+      };
+      const sampleCandidate = {
+        id: 'C1',
+        round: 1,
+        summary: 'Token expiry handling in src/auth.js.',
+        admittedProofIds: ['P1']
+      };
+      const sampleObjections = [{ seatId: 's2', proofId: 'P1', reason: 'Verify token expiry details.' }];
+      const allFivePhases = [
+        'R1_DELIBERATION',
+        'R2_DELIBERATION',
+        'JUDGE_AUDIT_SYNTHESIS_R1',
+        'JUDGE_AUDIT_SYNTHESIS_R2',
+        'VOTING'
+      ];
+      const r29ReadinessPhaseCases = [
+        ['DELIBERATION', 1, {}],
+        ['DELIBERATION', 2, { priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['JUDGE_AUDIT_SYNTHESIS', 1, { proofs: [sampleAuthProof] }],
+        ['JUDGE_AUDIT_SYNTHESIS', 2, { proofs: [sampleAuthProof], priorProofs: [sampleAuthProof], previousCandidate: sampleCandidate, openObjections: sampleObjections }],
+        ['VOTING', 1, { candidate: sampleCandidate, admittedProofs: [sampleAuthProof] }]
+      ];
+
+      function buildR29ReadinessInputs({
+        phase = 'DELIBERATION',
+        round = 1,
+        errorClass,
+        topic = 'Inspect src/auth.js.',
+        clarifications = [],
+        proofs = [],
+        priorProofs = [],
+        previousCandidate = undefined,
+        openObjections = [],
+        candidate = undefined,
+        admittedProofs = [],
+        coveredSources = ['src/auth.js']
+      }) {
+        return {
+          phase,
+          round,
+          errorClass,
+          topic,
+          clarifications,
+          proofs,
+          priorProofs,
+          previousCandidate,
+          openObjections,
+          candidate,
+          admittedProofs,
+          evidence: coveredSources.map((source, i) => ({
+            id: `E${i + 1}`,
+            source,
+            text: `complete snapshot for ${source}`
+          })),
+          selfContainedInput: {
+            phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+            roundScope: 'all_rounds',
+            coveredArtifacts: coveredSources.map((source, i) => ({
+              source,
+              evidenceId: `E${i + 1}`,
+              coverage: 'complete_artifact'
+            }))
+          },
+          originalInvocationMeta: { effectiveTools: 'read-only', effectiveCwd: '/repo', configuredWorkspaceCwd: '/repo' }
+        };
+      }
+
+      function runR29PlanParticipant(params) {
+        const isJudge = params.phase === 'JUDGE_AUDIT_SYNTHESIS';
+        const errorClass = params.errorClass;
+        return planParticipantRecovery({
+          ...buildR29ReadinessInputs(params),
+          participantId: isJudge ? 'judge' : 's1',
+          role: isJudge ? 'judge' : 'seat',
+          error:
+            errorClass === 'TimeoutError'
+              ? { message: `${params.phase} timeout`, code: 'ETIMEDOUT' }
+              : { message: `${params.phase} tool denied`, code: 'HEADLESS_TOOL_DENIED' },
+          isRetryable: true,
+          retries: 0,
+          maxRetries: 1,
+          remainingBudget: 50000,
+          minViable: 5000,
+          toolFreeRecoveryUsed: false,
+          originalAttemptTools: 'read-only',
+          requestedModel: 'gpt-6-astra',
+          requestedEffort: 'high'
+        });
+      }
+
+      function makeR29Fault(phase, errorClass, participantId) {
+        return errorClass === 'TimeoutError'
+          ? new TimeoutError(`${phase} timeout`, { timeoutMs: 1000, harness: 'codex', seatId: participantId })
+          : new HeadlessToolDeniedError(`${phase} tool denied`, {
+              harness: 'codex',
+              seatId: participantId,
+              exitCode: 0,
+              isRetryable: true
+            });
+      }
+
+      async function executeR29PhaseEngine({ phase, errorClass, topic = 'Inspect src/auth.js.' }) {
+        const mock = new MockAdapter();
+        const targetCalls = [];
+        const origProof = mock.executeSeatProof.bind(mock);
+        const origJudge = mock.executeJudgeAuditAndSynthesis.bind(mock);
+        const origVote = mock.executeSeatVote.bind(mock);
+
+        mock.executeSeatProof = async (ctx) => {
+          if (
+            (phase === 'R1_DELIBERATION' && ctx.round === 1 && ctx.seat.id === 's1') ||
+            (phase === 'R2_DELIBERATION' && ctx.round === 2 && ctx.seat.id === 's2')
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR29Fault(phase, errorClass, ctx.seat.id);
+          }
+          return origProof(ctx);
+        };
+        mock.executeJudgeAuditAndSynthesis = async (ctx) => {
+          if (
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R1' && ctx.round === 1) ||
+            (phase === 'JUDGE_AUDIT_SYNTHESIS_R2' && ctx.round === 2)
+          ) {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR29Fault(phase, errorClass, 'judge');
+          }
+          return origJudge(ctx);
+        };
+        mock.executeSeatVote = async (ctx) => {
+          if (phase === 'VOTING' && ctx.round === 1 && ctx.seat.id === 's1') {
+            targetCalls.push({ tools: ctx.tools, cwd: ctx.cwd });
+            if (targetCalls.length === 1) throw makeR29Fault(phase, errorClass, 's1');
+          }
+          if ((phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2') && ctx.round === 1 && ctx.seat.id === 's2') {
+            return { vote: 'object', proofId: 'P1', reason: 'Dispute R1 proof in R2' };
+          }
+          return origVote(ctx);
+        };
+
+        const coveredSources = ['src/auth.js'];
+        const engine = new CouncilEngine(
+          {
+            topic,
+            clarifications: [],
+            maxClarificationBatches: 1,
+            minQuorum: 2,
+            maxRounds: phase === 'R2_DELIBERATION' || phase === 'JUDGE_AUDIT_SYNTHESIS_R2' ? 2 : 1,
+            maxRetriesPerSeat: 1,
+            maxRetriesPerJudge: 1,
+            cwd: '/repo',
+            evidence: coveredSources.map((source, i) => ({
+              id: `E${i + 1}`,
+              label: `Artifact ${i + 1}`,
+              source,
+              text: `complete snapshot for ${source}`
+            })),
+            selfContainedInput: {
+              kind: 'full_context',
+              label: 'R29 regression matrix',
+              phases: ['DELIBERATION', 'JUDGE_AUDIT_SYNTHESIS', 'VOTING'],
+              roundScope: 'all_rounds',
+              coveredArtifacts: coveredSources.map((source, i) => ({
+                source,
+                evidenceId: `E${i + 1}`,
+                coverage: 'complete_artifact'
+              }))
+            },
+            judge: { id: 'judge', harness: 'codex', model: 'gpt-6-astra (high)', tools: 'read-only', cwd: '/repo' },
+            seats: [
+              { id: 's1', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S1', tools: 'read-only', votingTools: 'read-only', cwd: '/repo' },
+              { id: 's2', harness: 'codex', model: 'gpt-6-astra (high)', soul: 'S2', tools: 'read-only', cwd: '/repo' },
+              { id: 's3', harness: 'cursor', model: 'grok-4', soul: 'S3', tools: 'none' }
+            ]
+          },
+          { harnessResolver: () => mock }
+        );
+
+        const checkPhase = phase.startsWith('JUDGE_') ? 'JUDGE_AUDIT_SYNTHESIS' : phase === 'VOTING' ? 'VOTING' : 'DELIBERATION';
+        const checkRound = phase.endsWith('_R2') || phase === 'R2_DELIBERATION' ? 2 : 1;
+        const targetId = checkPhase === 'JUDGE_AUDIT_SYNTHESIS' ? 'judge' : phase === 'R2_DELIBERATION' ? 's2' : 's1';
+        let enginePlan = null;
+        const origEnginePlan = engine._planParticipantRecovery.bind(engine);
+        engine._planParticipantRecovery = (arg) => {
+          const res = origEnginePlan(arg);
+          if (arg?.participant?.id === targetId && arg?.phase === checkPhase && Number(arg?.round || 1) === checkRound) {
+            enginePlan = res;
+          }
+          return res;
+        };
+        await engine.run();
+        assert.ok(enginePlan, `Expected live _planParticipantRecovery capture for ${phase} (${errorClass})`);
+        return { targetCalls, enginePlan };
+      }
+
+      const tick = String.fromCharCode(96);
+      const slow = Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n')
+        .join('')
+        .padEnd(48000, ' ');
+      const crash = ('Inspect src/auth.js.\r' + (tick.repeat(3) + 'txt\r').repeat(6800)).padEnd(48000, ' ');
+      const crashLf = ('Inspect src/auth.js.\n' + (tick.repeat(3) + 'txt\n').repeat(6800)).padEnd(48000, ' ');
+      const crashCrlf = ('Inspect src/auth.js.\r\n' + (tick.repeat(3) + 'txt\r\n').repeat(5995)).padEnd(48000, ' ');
+      const crashTildeCr = ('Inspect src/auth.js.\r' + ('~~~txt\r').repeat(6800)).padEnd(48000, ' ');
+      const slowAuthLf = (
+        'Inspect src/auth.js.\n' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n').join('')
+      ).padEnd(48000, ' ');
+      const slowAuthCr = (
+        'Inspect src/auth.js.\r' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\r').join('')
+      ).padEnd(48000, ' ');
+      const crashWithRedir = (
+        'Inspect src/auth.js.\r' +
+        (tick.repeat(3) + 'txt\r').repeat(6798) +
+        '2>&1\r'
+      ).padEnd(48000, ' ');
+      const slowWithCmd = (
+        'Inspect src/auth.js.\n' +
+        Array.from({ length: 250 }, (_, i) => tick.repeat(i + 1) + ' x\n').join('') +
+        'npm test\n'
+      ).padEnd(48000, ' ');
+
+      const r29AllowTopics = [
+        crash,
+        crashLf,
+        crashCrlf,
+        crashTildeCr,
+        slowAuthLf,
+        slowAuthCr,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\njust plain prose\n~~~\n`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\necho ok\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\r${tick.repeat(4)}txt\r${tick.repeat(3)}sh\rjust plain prose\r${tick.repeat(3)}\r${tick.repeat(4)}`
+      ];
+      const r29RefuseTopics = [
+        crashWithRedir,
+        slowWithCmd,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\nnpm test\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\n~~~txt\n${tick.repeat(3)}sh\necho -n ok\n${tick.repeat(3)}\n~~~`,
+        `Inspect src/auth.js.\r${tick.repeat(4)}txt\r${tick.repeat(3)}txt\r2>&-\r${tick.repeat(4)}`,
+        'Inspect src/auth.js.\n~~~txt\n"npm test"\n~~~',
+        `Inspect src/auth.js.\n~~~txt\n${tick}npm test${tick}\n~~~`
+      ];
+
+      // Direct check on exact R28 `slow` reproduction (no file citation -> open-ended R1 DELIBERATION refusal, allowed in JUDGE/VOTING with covered proof)
+      const slowDeps = extractVerificationDependencies([slow]);
+      assert.deepEqual(slowDeps.workspaceBroadDeps, []);
+      assert.deepEqual(slowDeps.workspaceFileDeps, []);
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        const r1Readiness = evaluateToolFreeEvidenceReadiness(
+          buildR29ReadinessInputs({ phase: 'DELIBERATION', round: 1, errorClass, topic: slow })
+        );
+        assert.equal(r1Readiness.ready, false);
+        assert.equal(r1Readiness.reasonCode, 'evidence_access_failure');
+
+        const r1Plan = runR29PlanParticipant({ phase: 'DELIBERATION', round: 1, errorClass, topic: slow });
+        assert.equal(r1Plan.canRetry, false);
+        assert.equal(r1Plan.terminationKind, 'evidence_access_failure');
+
+        const judgeReadiness = evaluateToolFreeEvidenceReadiness(
+          buildR29ReadinessInputs({ phase: 'JUDGE_AUDIT_SYNTHESIS', round: 1, errorClass, topic: slow, proofs: [sampleAuthProof] })
+        );
+        assert.equal(judgeReadiness.ready, true);
+        const judgePlan = runR29PlanParticipant({ phase: 'JUDGE_AUDIT_SYNTHESIS', round: 1, errorClass, topic: slow, proofs: [sampleAuthProof] });
+        assert.equal(judgePlan.canRetry, true);
+        assert.equal(judgePlan.nextTools, 'none');
+
+        const voteReadiness = evaluateToolFreeEvidenceReadiness(
+          buildR29ReadinessInputs({ phase: 'VOTING', round: 1, errorClass, topic: slow, candidate: sampleCandidate, admittedProofs: [sampleAuthProof] })
+        );
+        assert.equal(voteReadiness.ready, true);
+        const votePlan = runR29PlanParticipant({ phase: 'VOTING', round: 1, errorClass, topic: slow, candidate: sampleCandidate, admittedProofs: [sampleAuthProof] });
+        assert.equal(votePlan.canRetry, true);
+        assert.equal(votePlan.nextTools, 'none');
+      }
+
+      for (const topic of r29RefuseTopics) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.ok(deps.workspaceBroadDeps.length > 0, `Expected R29 broad dep refusal for ${JSON.stringify(topic.slice(0, 80))}`);
+      }
+      for (const topic of r29AllowTopics) {
+        const deps = extractVerificationDependencies([topic]);
+        assert.deepEqual(deps.workspaceBroadDeps, [], `Expected 0 broad deps for R29 allow control ${JSON.stringify(topic.slice(0, 80))}`);
+      }
+
+      for (const errorClass of ['TimeoutError', 'HeadlessToolDeniedError']) {
+        for (const [phaseName, round, extra] of r29ReadinessPhaseCases) {
+          for (const topic of r29RefuseTopics) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR29ReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, false, `Expected R29 readiness refusal in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(readiness.reasonCode, 'evidence_access_failure');
+
+            const plan = runR29PlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, false, `Expected R29 planner refusal in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(plan.terminationKind, 'evidence_access_failure');
+          }
+          for (const topic of r29AllowTopics) {
+            const readiness = evaluateToolFreeEvidenceReadiness(
+              buildR29ReadinessInputs({ phase: phaseName, round, errorClass, topic, ...extra })
+            );
+            assert.equal(readiness.ready, true, `Expected R29 readiness approval in ${phaseName} R${round} (${errorClass})`);
+
+            const plan = runR29PlanParticipant({ phase: phaseName, round, errorClass, topic, ...extra });
+            assert.equal(plan.canRetry, true, `Expected R29 planner approval in ${phaseName} R${round} (${errorClass})`);
+            assert.equal(plan.nextTools, 'none');
+            assert.equal(plan.terminationKind, null);
+          }
+        }
+
+        for (const statement of r29RefuseTopics) {
+          const checkProof = {
+            id: 'P_CHK_R29',
+            seatId: 's1',
+            round: 1,
+            scope: 'Verify auth token expiry',
+            kind: 'check',
+            source: 'src/auth.js',
+            statement
+          };
+          const checkReadiness = evaluateToolFreeEvidenceReadiness(
+            buildR29ReadinessInputs({
+              phase: 'JUDGE_AUDIT_SYNTHESIS',
+              round: 1,
+              errorClass,
+              proofs: [checkProof]
+            })
+          );
+          assert.equal(checkReadiness.ready, false, `Expected kind:'check' proof refusal in R29 (${errorClass})`);
+          assert.equal(checkReadiness.reasonCode, 'evidence_access_failure');
+        }
+
+        for (const enginePhase of allFivePhases) {
+          for (const topic of r29RefuseTopics) {
+            const out = await executeR29PhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, false);
+            assert.equal(out.enginePlan.terminationKind, 'evidence_access_failure');
+            assert.equal(out.targetCalls.length, 1);
+          }
+          for (const topic of r29AllowTopics) {
+            const out = await executeR29PhaseEngine({ phase: enginePhase, errorClass, topic });
+            assert.equal(out.enginePlan.canRetry, true);
+            assert.equal(out.enginePlan.nextTools, 'none');
+            assert.equal(out.enginePlan.terminationKind, null);
+            assert.equal(out.targetCalls.length, 2);
+            assert.equal(out.targetCalls[1].tools, 'none');
+            assert.equal(out.targetCalls[1].cwd, undefined);
+          }
+        }
+      }
+
+      // Multi-sample exact 48,000-byte warmed latency suite (5 warmups + 10 sequential timed samples per function/payload)
+      const r29LatencyWorkloads = [
+        { name: 'r29-slow-backticks-48k', payload: slow, expectBroad: false, expectReady: false },
+        { name: 'r29-crash-cr-48k', payload: crash, expectBroad: false, expectReady: true },
+        { name: 'r29-crash-lf-48k', payload: crashLf, expectBroad: false, expectReady: true },
+        { name: 'r29-crash-tilde-cr-48k', payload: crashTildeCr, expectBroad: false, expectReady: true },
+        { name: 'r29-slow-auth-cr-48k', payload: slowAuthCr, expectBroad: false, expectReady: true },
+        { name: 'r29-crash-with-redir-48k', payload: crashWithRedir, expectBroad: true, expectReady: false }
+      ];
+      for (const workload of r29LatencyWorkloads) {
+        assert.equal(Buffer.byteLength(workload.payload, 'utf8'), 48000, `Expected exact 48000B payload for ${workload.name}`);
+        for (let w = 0; w < 5; w += 1) {
+          extractVerificationDependencies([workload.payload]);
+        }
+        for (let s = 0; s < 10; s += 1) {
+          const t0 = performance.now();
+          const deps = extractVerificationDependencies([workload.payload]);
+          const ms = performance.now() - t0;
+          assert.ok(ms < 20, `Expected <20ms warmed extract sample #${s + 1} for ${workload.name}, got ${ms.toFixed(2)}ms`);
+          assert.equal(deps.workspaceBroadDeps.length > 0, workload.expectBroad);
+        }
+
+        const readinessArgs = buildR29ReadinessInputs({
+          phase: 'DELIBERATION',
+          round: 1,
+          errorClass: 'HeadlessToolDeniedError',
+          topic: workload.payload
+        });
+        for (let w = 0; w < 5; w += 1) {
+          evaluateToolFreeEvidenceReadiness(readinessArgs);
+        }
+        for (let s = 0; s < 10; s += 1) {
+          const t0 = performance.now();
+          const readiness = evaluateToolFreeEvidenceReadiness(readinessArgs);
+          const ms = performance.now() - t0;
+          assert.ok(ms < 20, `Expected <20ms warmed readiness sample #${s + 1} for ${workload.name}, got ${ms.toFixed(2)}ms`);
+          assert.equal(readiness.ready, workload.expectReady);
+        }
+      }
+    });
   });
 });

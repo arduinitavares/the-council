@@ -3573,15 +3573,20 @@ function scanShellCommandText(text, options) {
     return false;
   }
   const allowMarkdownBlockquotes = Boolean(options && options.allowMarkdownBlockquotes);
-  const canMemo =
-    activeReadinessCache !== null &&
-    (options === undefined || (allowMarkdownBlockquotes && Object.keys(options).length === 1));
+  const skipCodeFences = Boolean(options && options.skipCodeFences);
+  const checkMode = Boolean(options && options.checkMode);
+  let hasUnknownOpt = false;
+  if (options) {
+    for (const k of Object.keys(options)) {
+      if (k !== 'allowMarkdownBlockquotes' && k !== 'skipCodeFences' && k !== 'checkMode') {
+        hasUnknownOpt = true;
+        break;
+      }
+    }
+  }
+  const canMemo = activeReadinessCache !== null && !hasUnknownOpt;
   const memoKey = canMemo
-    ? allowMarkdownBlockquotes
-      ? `bq:${text}`
-      : text.startsWith('bq:') || text.startsWith('raw:')
-        ? `raw:${text}`
-        : text
+    ? `${allowMarkdownBlockquotes ? '1' : '0'}${skipCodeFences ? '1' : '0'}${checkMode ? '1' : '0'}:${text}`
     : '';
   if (canMemo && activeReadinessCache.shellCmd.has(memoKey)) {
     return activeReadinessCache.shellCmd.get(memoKey);
@@ -3698,7 +3703,7 @@ function findMatchingBacktickSpan(text, openPos, n, btState) {
   }
   const btLen = runEnd - openPos;
 
-  if (btLen >= 3) {
+  if (!btState.skipCodeFences && btLen >= 3) {
     let p = openPos;
     while (p > 0) {
       const prevCode = text.charCodeAt(p - 1);
@@ -3906,7 +3911,8 @@ function scanShellCommandTextInner(text, options = {}) {
     const btNorm = normalizeInlineEscapedQuotes(text).replace(/\\`/g, '`');
     const bn = btNorm.length;
     let noMoreSq = false;
-    const btState = { noSingleBt: false, multiRuns: null };
+    const btState = { noSingleBt: false, multiRuns: null, skipCodeFences: true };
+    let btInnerCache = null;
     let outerHasVerbChecked = false;
     let outerSubCmdCtx = false;
     for (let i = 0; i < bn; i += 1) {
@@ -3959,7 +3965,19 @@ function scanShellCommandTextInner(text, options = {}) {
               }
             }
           }
-          if (scanFlatShellClauses(btInner, { isSubshellOrSubCmd: outerSubCmdCtx, strictProseMode: false, skipQuoteNorm: true })) {
+          let btMatched = btInnerCache ? btInnerCache.get(btInner) : undefined;
+          if (btMatched === undefined) {
+            btMatched = scanFlatShellClauses(btInner, {
+              isSubshellOrSubCmd: outerSubCmdCtx,
+              strictProseMode: false,
+              skipQuoteNorm: true
+            });
+            if (!btInnerCache) {
+              btInnerCache = new Map();
+            }
+            btInnerCache.set(btInner, btMatched);
+          }
+          if (btMatched) {
             return true;
           }
         }
@@ -3990,7 +4008,17 @@ function scanShellCommandTextInner(text, options = {}) {
   return scanFlatShellClauses(text, options);
 }
 
-function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBareScript = false, stopOnFirst = true } = {}) {
+function scanDelimitedShellSpans(
+  rawText,
+  {
+    includeBackticks = false,
+    includeBareScript = false,
+    stopOnFirst = true,
+    skipCodeFences = true,
+    allowMarkdownBlockquotes = true,
+    needRemainder = true
+  } = {}
+) {
   const n = rawText.length;
   if (
     rawText.indexOf('"') === -1 &&
@@ -4000,12 +4028,13 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
     return { matchedDeps: [], remainder: rawText };
   }
   const delimCacheKey =
+    needRemainder &&
     activeReadinessCache &&
     rawText &&
     rawText.indexOf('`') === -1 &&
     rawText.indexOf('./') === -1 &&
     rawText.indexOf('../') === -1
-      ? rawText
+      ? `${allowMarkdownBlockquotes ? '1' : '0'}${skipCodeFences ? '1' : '0'}:${rawText}`
       : null;
   if (delimCacheKey !== null && activeReadinessCache.delimSpans.has(delimCacheKey)) {
     return activeReadinessCache.delimSpans.get(delimCacheKey);
@@ -4015,7 +4044,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   let cursor = 0;
   let noMoreDouble = false;
   let noMoreSingle = false;
-  const btState = { noSingleBt: false, multiRuns: null };
+  const btState = { noSingleBt: false, multiRuns: null, skipCodeFences: Boolean(skipCodeFences) };
   let nextBsPos = -2;
   let nextBtPos = includeBackticks ? -2 : -1;
   const pad64 = '                                                                ';
@@ -4087,7 +4116,12 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
               } else {
                 innerMatchesCmd = scanShellCommandText(
                   inner,
-                  isBacktick ? undefined : { allowMarkdownBlockquotes: true }
+                  isBacktick
+                    ? { skipCodeFences: Boolean(skipCodeFences) }
+                    : {
+                        allowMarkdownBlockquotes: Boolean(allowMarkdownBlockquotes),
+                        skipCodeFences: Boolean(skipCodeFences)
+                      }
                 );
               }
             }
@@ -4105,15 +4139,17 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
       }
     }
 
-    if (!maskedParts) maskedParts = [];
-    if (spanStart > cursor) maskedParts.push(rawText.slice(cursor, spanStart));
-    if (isFence || rawInnerSlice.indexOf('\n') !== -1 || rawInnerSlice.indexOf('\r') !== -1) {
-      appendMaskedPreserveNewlines(maskedParts, rawText, spanStart, closeIdx + 1);
-    } else {
-      const spanLen = closeIdx - spanStart + 1;
-      maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
+    if (needRemainder) {
+      if (!maskedParts) maskedParts = [];
+      if (spanStart > cursor) maskedParts.push(rawText.slice(cursor, spanStart));
+      if (isFence || rawInnerSlice.indexOf('\n') !== -1 || rawInnerSlice.indexOf('\r') !== -1) {
+        appendMaskedPreserveNewlines(maskedParts, rawText, spanStart, closeIdx + 1);
+      } else {
+        const spanLen = closeIdx - spanStart + 1;
+        maskedParts.push(spanLen <= 64 ? pad64.slice(0, spanLen) : ' '.repeat(spanLen));
+      }
+      cursor = closeIdx + 1;
     }
-    cursor = closeIdx + 1;
     return false;
   };
   const scanEmbeddedBackticksBefore = (fromPos, endQuote) => {
@@ -4311,7 +4347,7 @@ function scanDelimitedShellSpans(rawText, { includeBackticks = false, includeBar
   }
 
   let finalResult;
-  if (cursor === 0) {
+  if (!needRemainder || cursor === 0) {
     finalResult = { matchedDeps, remainder: rawText };
   } else {
     if (cursor < n) {
@@ -4942,7 +4978,10 @@ function extractAndMaskMarkdownCodeFences(rawText, { checkMode = false, stopOnFi
           scanDelimitedShellSpans(trimmedBody, {
             includeBackticks: true,
             includeBareScript: checkMode,
-            stopOnFirst: true
+            stopOnFirst: true,
+            skipCodeFences: true,
+            allowMarkdownBlockquotes: false,
+            needRemainder: false
           }).matchedDeps.length > 0;
         if (bodyMatched) {
           pushFenceDep(trimmedBody);
@@ -5099,7 +5138,7 @@ function maskBackticksLinear(text) {
   const n = text.length;
   let out = '';
   let cursor = 0;
-  const btState = { noSingleBt: false, multiRuns: null };
+  const btState = { noSingleBt: false, multiRuns: null, skipCodeFences: true };
 
   for (let i = 0; i < n; i += 1) {
     const c = text[i];

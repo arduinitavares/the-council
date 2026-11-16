@@ -211,6 +211,54 @@ const ISOLATED_WORKSPACE_PATH_DIRECTIVE =
 const CLARIFICATION_WORKSPACE_DIRECTIVE =
   'TOOL USAGE & WORKSPACE DIRECTIVE: If a workspace is attached, inspect workspace files via relative paths rooted at "." (your current working directory is already an isolated .council-free workspace copy (and .codegraph-free) when ".council" or ".codegraph" exists on the host); prefer native read/search tools (Read/read_file, Glob, Grep, LS) over headless Bash or codegraph CLI invocations whenever native tools suffice, passing only "."-relative paths (or an absolute path strictly inside your current isolated workspace directory if a native tool schema requires one). If no workspace is attached, do not run local filesystem tools (do not infer that no workspace is attached merely because seat.cwd is absent). NEVER read, "cd" into, traverse via "..", or pass "git -C" or absolute host filesystem/repository paths mentioned in the Topic Handoff to shell, file, or search tools—probing host workspace roots triggers FORBIDDEN_STATE_ACCESS. Keep any referenced paths portable and repository-relative only (never echo temporary copy directory names, raw temp paths, or host repository paths).';
 
+const DEFAULT_ADMITTED_JUDGE_NOTE = 'Admitted by Judge.';
+
+/**
+ * Extracts a substantive Judge note from a proof decision/record.
+ * Always preserves non-empty trimmed notes on `partially_admitted` proofs,
+ * and excludes the reducer's `default_admitted` boilerplate on `admitted` proofs.
+ *
+ * @param {Object|null|undefined} proof
+ * @returns {string}
+ */
+export function getSubstantiveJudgeNote(proof) {
+  if (!proof || typeof proof !== 'object') return '';
+  const noteText = typeof proof.judgeNote === 'string' ? proof.judgeNote.trim() : '';
+  if (!noteText) return '';
+  if (proof.status === 'partially_admitted') {
+    return noteText;
+  }
+  if (noteText === DEFAULT_ADMITTED_JUDGE_NOTE) {
+    return '';
+  }
+  return noteText;
+}
+
+/**
+ * Resolves prior-round admitted and partially_admitted proofs strictly earlier than `resolvedRound`.
+ *
+ * @param {Array<Object>} priorAdmittedProofs
+ * @param {Object|null} state
+ * @param {number} resolvedRound
+ * @param {Set<string>|null} [excludeIds=null]
+ * @returns {Array<Object>}
+ */
+export function resolvePriorAdmittedProofs(priorAdmittedProofs, state, resolvedRound, excludeIds = null) {
+  if (Array.isArray(priorAdmittedProofs) && priorAdmittedProofs.length > 0) {
+    return priorAdmittedProofs;
+  }
+  return (state?.proofs || []).filter(
+    (p) =>
+      p &&
+      (!excludeIds || !excludeIds.has(p.id)) &&
+      (typeof p.round === 'number' ? p.round < resolvedRound : true) &&
+      (p.status === 'admitted' || p.status === 'partially_admitted')
+  );
+}
+
+const VOTING_CONSISTENCY_DIRECTIVE =
+  'Audit both Candidate Summary and Candidate Clauses for mutual consistency with Topic, cited proofs and their caveats (Judge Note and Admitted Core), and Your Open Objections from Prior Rounds; object if Candidate Summary contradicts Candidate Clauses or Topic, drops decisive conditions/scope bounds/quantities/caveats, or presents unavailable upstream verification as verified fact instead of explicitly labeling it as a limitation or abstention.';
+
 function judgeItemsCiteWorkspacePath(proofs, openObjections) {
   const texts = [];
   const structuredSources = [];
@@ -347,6 +395,7 @@ export function formatGroundingSection(evidence = [], clarifications = []) {
  * @param {Array<Object>} [params.clarifications=[]]
  * @param {Object|null} [params.previousCandidate=null]
  * @param {Array<Object>} [params.openObjections=[]]
+ * @param {Array<Object>} [params.priorAdmittedProofs=[]]
  * @param {Object|null} [params.state=null]
  * @param {'none' | 'read-only'} [params.tools]
  * @param {string} [params.cwd]
@@ -364,6 +413,7 @@ export function formatDeliberationPrompt({
   clarifications = [],
   previousCandidate = null,
   openObjections = [],
+  priorAdmittedProofs = [],
   state = null,
   tools,
   cwd,
@@ -396,7 +446,10 @@ export function formatDeliberationPrompt({
   const resolvedPrevCandidate = previousCandidate || state?.candidate || null;
   const resolvedObjections = (openObjections && openObjections.length > 0)
     ? openObjections
-    : (state?.objections || []).filter((o) => o.status === 'open');
+    : (state?.objections || []).filter((o) => o && o.status === 'open');
+  const resolvedPriorAdmittedProofs = resolvedRound > 1
+    ? resolvePriorAdmittedProofs(priorAdmittedProofs, state, resolvedRound)
+    : [];
 
   let contextBlock = `Topic: "${resolvedTopic}"\n`;
   contextBlock += formatGroundingSection(resolvedEvidence, resolvedClarifications);
@@ -410,6 +463,32 @@ export function formatDeliberationPrompt({
   if (resolvedObjections.length > 0) {
     contextBlock += `\nUnresolved Objections to Address:\n` +
       resolvedObjections.map((o) => `- Objection ${o.id} (by ${o.seatId}, backed by ${o.proofId}): ${o.reason}`).join('\n') + '\n';
+  }
+
+  if (resolvedRound > 1 && resolvedPriorAdmittedProofs.length > 0) {
+    const priorProofLines = resolvedPriorAdmittedProofs
+      .map((p, idx) => {
+        const pid = p.id || `P${idx + 1}`;
+        const kind = p.kind || 'check';
+        const scope = p.scope || 'general';
+        const stmt = p.statement || p.judgeAdmittedStatement || '';
+        const src = p.source || 'unspecified';
+        const noteText = getSubstantiveJudgeNote(p);
+
+        if (p.status === 'partially_admitted') {
+          const statusTag = noteText ? ` [PARTIALLY ADMITTED: ${noteText}]` : ' [PARTIALLY ADMITTED]';
+          const admittedCore = typeof p.judgeAdmittedStatement === 'string' ? p.judgeAdmittedStatement.trim() : '';
+          const coreSuffix = admittedCore && admittedCore !== stmt.trim()
+            ? ` (Admitted Core: ${admittedCore})`
+            : '';
+          return `- [${pid}]${statusTag} (Round ${p.round || 1}, ${kind}) [${scope}]: ${stmt}${coreSuffix} (source: ${src})`;
+        }
+
+        const noteSuffix = noteText ? ` [Judge Note: ${noteText}]` : '';
+        return `- [${pid}] [ADMITTED] (Round ${p.round || 1}, ${kind}) [${scope}]: ${stmt}${noteSuffix} (source: ${src})`;
+      })
+      .join('\n');
+    contextBlock += `\nPrior-Round Admitted Proofs:\n${priorProofLines}\n`;
   }
 
   const evidenceGuidance = resolvedEvidence.length > 0
@@ -467,6 +546,7 @@ OUTPUT CONTRACT (strict JSON):
  * @param {Object} params
  * @param {Soul | string} params.soul
  * @param {Object} params.seat
+ * @param {string} [params.topic='']
  * @param {Object} [params.candidate]
  * @param {Array<Object>} [params.admittedProofs]
  * @param {Array<Object>} [params.evidence=[]]
@@ -480,6 +560,7 @@ OUTPUT CONTRACT (strict JSON):
 export function formatVotingPrompt({
   soul,
   seat,
+  topic = '',
   candidate,
   admittedProofs,
   evidence = [],
@@ -499,9 +580,12 @@ export function formatVotingPrompt({
     (typeof seat?.cwd === 'string' && seat.cwd.trim()) ||
     (typeof state?.cwd === 'string' && state.cwd.trim())
   );
+  const rawTopic = topic || state?.topic || '';
+  const resolvedTopic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic : '';
+  const topicLine = resolvedTopic ? `Topic: "${resolvedTopic}"\n` : '';
   const cand = candidate || state?.candidate;
   const proofs = admittedProofs || (state?.proofs || []).filter(
-    (p) => p.status === 'admitted' || p.status === 'partially_admitted'
+    (p) => p && (p.status === 'admitted' || p.status === 'partially_admitted')
   );
   const resolvedEvidence = (evidence && evidence.length > 0)
     ? evidence
@@ -509,6 +593,11 @@ export function formatVotingPrompt({
   const resolvedClarifications = (clarifications && clarifications.length > 0)
     ? clarifications
     : (state?.clarifications || []);
+  const resolvedMyOpenObjections = (Array.isArray(myOpenObjections) && myOpenObjections.length > 0)
+    ? myOpenObjections
+    : (seat?.id
+        ? (state?.objections || []).filter((o) => o && o.seatId === seat.id && o.status === 'open')
+        : []);
 
   const proofList = (proofs && proofs.length > 0)
     ? proofs.map((p, idx) => {
@@ -519,17 +608,32 @@ export function formatVotingPrompt({
         const src = p.source || 'unspecified';
         let line = `- [${pid}] (${kind}) [${scope}]: ${stmt}`;
         if (p.status === 'partially_admitted') {
-          const noteStr = p.judgeNote ? `: ${p.judgeNote}` : '';
+          const noteText = getSubstantiveJudgeNote(p);
+          const noteStr = noteText ? `: ${noteText}` : '';
           line += ` [PARTIALLY ADMITTED${noteStr}]`;
           const admittedCore = typeof p.judgeAdmittedStatement === 'string' ? p.judgeAdmittedStatement.trim() : '';
           if (admittedCore && admittedCore !== stmt.trim()) {
             line += ` (Admitted Core: ${admittedCore})`;
+          }
+        } else {
+          const substantiveNote = getSubstantiveJudgeNote(p);
+          if (substantiveNote) {
+            line += ` [Judge Note: ${substantiveNote}]`;
           }
         }
         line += ` (source: ${src})`;
         return line;
       }).join('\n')
     : 'No admitted proofs for this round.';
+
+  const myOpenObjectionsSection = resolvedMyOpenObjections.length > 0
+    ? `\nYour Open Objections from Prior Rounds:\n` +
+      `Note: Voting "accept" withdraws your open objections listed below.\n` +
+      resolvedMyOpenObjections
+        .map((o) => `- [${o.id}] (Round ${o.round || 1}, backed by Proof ${o.proofId}): ${o.reason}`)
+        .join('\n') +
+      '\n'
+    : '';
 
   const clauseList = (cand?.clauses && cand.clauses.length > 0)
     ? cand.clauses.map((c, idx) =>
@@ -546,13 +650,13 @@ export function formatVotingPrompt({
     : '';
 
   const votingToolDirective = hasWorkspaceCwd
-    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. Cap local file reads to at most 3–5 targeted spot-check reads within ".". If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
+    ? `You have read-only inspection tools enabled. ${ISOLATED_WORKSPACE_PATH_DIRECTIVE} Verify disputed candidate clauses or cited proof sources using your read-only tools before casting your vote. Cap local file reads to at most 3–5 targeted spot-check reads within ".". ${VOTING_CONSISTENCY_DIRECTIVE} If objecting, cite the specific discrepancies observed during your inspection.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`
-    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Verify disputed candidate clauses or cited proof sources against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations before casting your vote. If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
+    : `You have read-only inspection tools enabled. No local code workspace is attached (running in an isolated sandbox directory); do NOT run local filesystem search/grep/find commands (rg, grep, find, ls) to search a codebase. Furthermore, do NOT run local filesystem tools (cat, readToolCall, view_file) and do NOT read or probe absolute host file paths mentioned in the topic or evidence packet. Verify disputed candidate clauses or cited proof sources against the Pre-Gathered Baseline Evidence packet, authoritative specifications, web search (if needed for external facts), or analytical/mathematical derivations before casting your vote. ${VOTING_CONSISTENCY_DIRECTIVE} If objecting, cite the specific discrepancies observed.${votingEvidenceGuidance}
 Local filesystem tools are only for topics that explicitly concern files in the target workspace—never for searching The Council's own engine source code on general/external topics.`;
 
   const toolFreeVotingDirective =
-    'Do not invoke any tools during confirmation voting. Evaluate the Candidate Clauses strictly against the audited Proofs provided above and return your JSON vote immediately. No local file reads are permitted.';
+    `Do not invoke any tools during confirmation voting. Evaluate the Candidate Clauses strictly against the audited Proofs provided above and return your JSON vote immediately. No local file reads are permitted. ${VOTING_CONSISTENCY_DIRECTIVE}`;
 
   const votingVerificationBlock = resolvedTools === 'read-only'
     ? `\nTOOL USAGE & VERIFICATION DIRECTIVE:
@@ -562,17 +666,18 @@ ${ANTI_CHEATING_RULE}\n`
 ${ANTI_CHEATING_RULE}\n`;
 
   return `### Voting on Round ${cand?.round || 1} Candidate
-Candidate Summary: "${cand?.summary || ''}"
+${topicLine}Candidate Summary: "${cand?.summary || ''}"
 ${groundingSection}
 Candidate Clauses:
 ${clauseList}
 
 Admitted Proofs this Round:
 ${proofList}
-
+${myOpenObjectionsSection}
 As Seat "${seat?.id || 'seat'}" embodying "${s.name}" (${s.lens}), evaluate if this Candidate satisfies your criteria.
 - If you accept: voting "accept" will automatically withdraw any open objections you previously raised.
 - If you object: you MUST provide a concrete "reason" and cite an admitted "proofId" substantiating your dissent. Proofs with status "partially_admitted" are valid citations for their narrowed Admitted Core and may be cited in "proofId" if that narrowed core refutes a Candidate Clause.
+- Consistency & verification audit: Verify both Candidate Summary and Candidate Clauses against Topic, cited proofs and caveats (Judge Note and Admitted Core), and Your Open Objections from Prior Rounds; explicitly require unavailable upstream verification to be labeled as a limitation or abstention rather than presented as verified fact.
 ${votingVerificationBlock}
 OUTPUT CONTRACT (strict JSON):
 If accepting:
@@ -641,15 +746,12 @@ export function formatJudgePrompt({
     : (state?.objections || []).filter(
         (o) => o && (o.status === 'open' || o.status === 'preserved_excused')
       );
-  const resolvedPriorAdmittedProofs = (Array.isArray(priorAdmittedProofs) && priorAdmittedProofs.length > 0)
-    ? priorAdmittedProofs
-    : (state?.proofs || []).filter(
-        (p) =>
-          p &&
-          !currentProofIds.has(p.id) &&
-          (typeof p.round === 'number' ? p.round < resolvedRound : true) &&
-          (p.status === 'admitted' || p.status === 'partially_admitted')
-      );
+  const resolvedPriorAdmittedProofs = resolvePriorAdmittedProofs(
+    priorAdmittedProofs,
+    state,
+    resolvedRound,
+    currentProofIds
+  );
 
   let priorContextSection = '';
   if (resolvedPrevCandidate) {
@@ -682,15 +784,21 @@ export function formatJudgePrompt({
         const pid = p.id || `P${idx + 1}`;
         const kind = p.kind || 'check';
         const scope = p.scope || 'general';
-        const stmt =
-          p.status === 'partially_admitted' &&
-          typeof p.judgeAdmittedStatement === 'string' &&
-          p.judgeAdmittedStatement.trim()
-            ? p.judgeAdmittedStatement.trim()
-            : (p.statement || '');
         const src = p.source || 'unspecified';
-        const statusTag = p.status === 'partially_admitted' ? ' [PARTIALLY ADMITTED]' : ' [ADMITTED]';
-        return `- [${pid}]${statusTag} (Round ${p.round || 1}, Seat "${p.seatId || 'seat'}", ${kind}) [${scope}]: ${stmt} (source: ${src})`;
+        const noteText = getSubstantiveJudgeNote(p);
+
+        if (p.status === 'partially_admitted') {
+          const admittedCore = typeof p.judgeAdmittedStatement === 'string' ? p.judgeAdmittedStatement.trim() : '';
+          const statusTag = noteText ? ` [PARTIALLY ADMITTED: ${noteText}]` : ' [PARTIALLY ADMITTED]';
+          const stmt = admittedCore
+            ? admittedCore
+            : `${p.statement || ''} (Caveat — narrowed by Judge Note: ${noteText || 'partially admitted'})`;
+          return `- [${pid}]${statusTag} (Round ${p.round || 1}, Seat "${p.seatId || 'seat'}", ${kind}) [${scope}]: ${stmt} (source: ${src})`;
+        }
+
+        const stmt = p.statement || '';
+        const noteSuffix = noteText ? ` [Judge Note: ${noteText}]` : '';
+        return `- [${pid}] [ADMITTED] (Round ${p.round || 1}, Seat "${p.seatId || 'seat'}", ${kind}) [${scope}]: ${stmt}${noteSuffix} (source: ${src})`;
       })
       .join('\n');
     priorContextSection +=
@@ -751,6 +859,8 @@ export function formatJudgePrompt({
 
   const answerFirstDirective = `${judgeDirectives.length + 1}. Standalone Answer-First Summary: candidate.summary ("summary") MUST be a standalone, direct, user-facing executive synthesis that directly answers the user's topic in clear prose. It MUST NOT contain internal proof IDs (e.g. P1, P2, [P1]) or audit process commentary (e.g. "P1 was admitted...", "P2-P4 require corrections..."). All proof audit commentary belongs strictly in proofDecisions, and proof citations belong strictly in "clauses[].citedProofIds".`;
   judgeDirectives.push(answerFirstDirective);
+  const synthesisConsistencyDirective = `${judgeDirectives.length + 1}. Summary, Clause & Caveat Consistency: Keep "summary" (Candidate Summary) and "clauses" (Candidate Clauses) mutually consistent with Topic and preserve all decisive conditions, scope bounds, quantities, and caveats from cited "admitted" and "partially_admitted" proofs (including "admittedStatement" and "judgeNote"). Where upstream verification is unavailable, explicitly label unavailable verification as a limitation or abstention rather than presenting it as a verified fact.`;
+  judgeDirectives.push(synthesisConsistencyDirective);
   judgeDirectives.push(`${judgeDirectives.length + 1}. ${ANTI_CHEATING_RULE}`);
 
   return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}

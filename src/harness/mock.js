@@ -6,7 +6,7 @@
  */
 
 import { HarnessAdapter, QuotaExhaustionError, captureAttemptInvocationMeta } from './adapter.js';
-import { formatDeliberationPrompt, formatVotingPrompt, formatJudgePrompt } from '../seats/soul.js';
+import { formatDeliberationPrompt, formatVotingPrompt, formatJudgePrompt, resolvePriorAdmittedProofs } from '../seats/soul.js';
 
 export class MockAdapter extends HarnessAdapter {
   constructor(config = {}) {
@@ -179,19 +179,47 @@ export class MockAdapter extends HarnessAdapter {
       ? { ...seat, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : seat;
     const resolvedSoul = soul || seat?.soul || 'General Seat: Evaluates claims empirically';
-    const renderedPrompt = isVoting
-      ? formatVotingPrompt({ soul: resolvedSoul, seat: effectiveSeat, candidate: state?.candidate, state, tools: effectiveTools, cwd: effectiveCwd })
-      : formatDeliberationPrompt({
-          soul: resolvedSoul,
-          seat: effectiveSeat,
-          topic: state?.topic,
-          round,
-          maxRounds: state?.maxRounds,
-          state,
-          tools: effectiveTools,
-          cwd: effectiveCwd,
-          ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {})
-        });
+    let renderedPrompt;
+    if (isVoting) {
+      const admittedProofs = (state?.proofs || []).filter(
+        (p) => p && (p.status === 'admitted' || p.status === 'partially_admitted')
+      );
+      const myOpenObjections = seat?.id
+        ? (state?.objections || []).filter((o) => o && o.seatId === seat.id && o.status === 'open')
+        : [];
+      renderedPrompt = formatVotingPrompt({
+        soul: resolvedSoul,
+        seat: effectiveSeat,
+        topic: state?.topic || '',
+        candidate: state?.candidate,
+        admittedProofs,
+        myOpenObjections,
+        state,
+        tools: effectiveTools,
+        cwd: effectiveCwd
+      });
+    } else {
+      const openObjections = (state?.objections || []).filter((o) => o && o.status === 'open');
+      const resolvedRound = round || state?.round || 1;
+      const priorAdmittedProofs = resolvedRound > 1
+        ? resolvePriorAdmittedProofs([], state, resolvedRound)
+        : [];
+      renderedPrompt = formatDeliberationPrompt({
+        soul: resolvedSoul,
+        seat: effectiveSeat,
+        topic: state?.topic,
+        round,
+        maxRounds: state?.maxRounds,
+        clarifications: state?.clarifications,
+        previousCandidate: state?.candidate,
+        openObjections,
+        priorAdmittedProofs,
+        state,
+        tools: effectiveTools,
+        cwd: effectiveCwd,
+        ...(isRebuttal ? { rebuttalMode: true, mode: 'rebuttal' } : {})
+      });
+    }
 
     // Record prompt for soul adherence and evidence/clarifications verification
     const formattedPrompt = `[SEAT: ${seat.id}] [SOUL: ${typeof soul === 'object' ? JSON.stringify(soul) : soul}] [ROUND: ${round}] [PHASE: ${phase}]\n${renderedPrompt}`;

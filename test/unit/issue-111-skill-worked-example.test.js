@@ -10,11 +10,20 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
 const SOURCE_SKILL_PATH = path.join(REPO_ROOT, 'skills', 'ask-council', 'SKILL.md');
 const MIRROR_SKILL_PATH = path.join(REPO_ROOT, '.agents', 'skills', 'ask-council', 'SKILL.md');
 
+const STEP_1_GROUNDING_SENTENCE =
+  'Ground your answer in the supplied evidence: recommend the smallest justified action (or explicitly recommend no change), compare it against leaving the current state unchanged, preserve any decision-critical conditions or missing-evidence limits, and state a concrete check or condition that would verify or reverse the call.';
+
 const EXPECTED_STEP_1_SECTION = [
   '### Step 1: Formulate Command',
+  'When formulating the Council question (`-t` or config `topic`), preserve the original question and append this sentence once—allowing natural prose without imposing fixed headings or adding further instructions:',
+  '',
+  `> ${STEP_1_GROUNDING_SENTENCE}`,
+  '',
   'Using a built-in preset (works from any working directory):',
   '```bash',
-  '/Users/aaat/projects/the-council/bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?" -v',
+  '/Users/aaat/projects/the-council/bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?',
+  '',
+  `${STEP_1_GROUNDING_SENTENCE}" -v`,
   '```',
   '',
   'Using a custom configuration file:',
@@ -149,7 +158,7 @@ describe('Issue #111: Worked gRPC load-balancing condition & skill mirror parity
     }
   });
 
-  it('leaves ### Step 1: Formulate Command unchanged and free of any five-part decision-contract rubric', () => {
+  it('updates ### Step 1: Formulate Command with the single #109 grounding sentence while keeping it free of any five-part decision-contract rubric', () => {
     for (const filePath of [SOURCE_SKILL_PATH, MIRROR_SKILL_PATH]) {
       const content = fs.readFileSync(filePath, 'utf8');
       const step1Section = extractSection(
@@ -161,12 +170,27 @@ describe('Issue #111: Worked gRPC load-balancing condition & skill mirror parity
       assert.equal(
         step1Section,
         EXPECTED_STEP_1_SECTION,
-        `${filePath} ### Step 1: Formulate Command must remain unchanged`
+        `${filePath} ### Step 1: Formulate Command must match the #109 grounding update`
+      );
+
+      const occurrencesInStep1 = step1Section.split(STEP_1_GROUNDING_SENTENCE).length - 1;
+      assert.equal(
+        occurrencesInStep1,
+        2,
+        `${filePath} ### Step 1 must state STEP_1_GROUNDING_SENTENCE once in the rule blockquote and once appended in the -t example`
+      );
+
+      const outsideStep1 = content.replace(step1Section, '');
+      const occurrencesOutsideStep1 = outsideStep1.split(STEP_1_GROUNDING_SENTENCE).length - 1;
+      assert.equal(
+        occurrencesOutsideStep1,
+        0,
+        `${filePath} must not duplicate STEP_1_GROUNDING_SENTENCE outside ### Step 1: Formulate Command`
       );
 
       assert.doesNotMatch(
         step1Section,
-        /decision[- ]contract|rubric|blast radius|reversibility|verification plan|1\.\s+.*\n\s*2\.\s+/i,
+        /decision[- ]contract|rubric|blast radius|reversibility|verification plan|five headings|1\.\s+.*\n\s*2\.\s+/i,
         '### Step 1: Formulate Command must remain free of any five-part decision-contract rubric'
       );
     }

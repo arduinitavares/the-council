@@ -19,7 +19,8 @@ import {
   formatClarificationPrompt,
   formatDeliberationPrompt,
   formatVotingPrompt,
-  formatJudgePrompt as formatJudgeSoulPrompt
+  formatJudgePrompt as formatJudgeSoulPrompt,
+  resolvePriorAdmittedProofs
 } from '../seats/soul.js';
 
 export class CursorAdapter extends HarnessAdapter {
@@ -366,14 +367,15 @@ export class CursorAdapter extends HarnessAdapter {
     }
     if (isVoting) {
       const admittedProofs = (state?.proofs || []).filter(
-        (p) => p.status === 'admitted' || p.status === 'partially_admitted'
+        (p) => p && (p.status === 'admitted' || p.status === 'partially_admitted')
       );
-      const myOpenObjections = (state?.objections || []).filter(
-        (o) => o.seatId === seat.id && o.status === 'open'
-      );
+      const myOpenObjections = seat?.id
+        ? (state?.objections || []).filter((o) => o && o.seatId === seat.id && o.status === 'open')
+        : [];
       return formatVotingPrompt({
         soul,
         seat: effectiveSeat,
+        topic: state?.topic || '',
         candidate: state?.candidate,
         admittedProofs,
         myOpenObjections,
@@ -383,7 +385,11 @@ export class CursorAdapter extends HarnessAdapter {
       });
     }
 
-    const openObjections = (state?.objections || []).filter((o) => o.status === 'open');
+    const openObjections = (state?.objections || []).filter((o) => o && o.status === 'open');
+    const resolvedRound = round || state?.round || 1;
+    const priorAdmittedProofs = resolvedRound > 1
+      ? resolvePriorAdmittedProofs([], state, resolvedRound)
+      : [];
     return formatDeliberationPrompt({
       soul,
       seat: effectiveSeat,
@@ -393,6 +399,7 @@ export class CursorAdapter extends HarnessAdapter {
       clarifications: state?.clarifications,
       previousCandidate: state?.candidate,
       openObjections,
+      priorAdmittedProofs,
       state,
       tools: effectiveTools,
       cwd: effectiveCwd,

@@ -193,10 +193,10 @@ Judge   : judge-opus (antigravity / claude-opus-5-5-high)
 Seats   : 4 total (4 active, 0 excused)
 
 Final Answer:
-  Adopt gRPC with Protobuf for internal service-to-service RPC behind the API Gateway while retaining REST / OpenAPI 3.1 at the public edge.
+  Adopt gRPC with Protobuf for internal service-to-service RPC behind the API Gateway using L7 (request-level) or client-side load balancing to prevent HTTP/2 backend hotspotting, while retaining REST / OpenAPI 3.1 at the public edge.
 
 Candidate Clauses:
-  - [C1] Internal Services: Adopt gRPC with Protobuf for internal, high-throughput microservices behind the API Gateway. (Cited: P1, P3, P4)
+  - [C1] Internal Services: Adopt gRPC with Protobuf for internal, high-throughput microservices behind the API Gateway, pairing HTTP/2 connection reuse with L7 (request-level) or client-side load balancing to prevent backend hotspotting. (Cited: P1, P3, P4)
   - [C2] Public Ingress: Retain REST / OpenAPI 3.1 at the public edge gateway for external partners and web clients. (Cited: P2)
 
 Proof Audit: 3 Admitted | 1 Partially Admitted | 0 Rejected
@@ -215,7 +215,7 @@ Submitted Proofs:
     Admitted Core: REST ecosystems maintain broader public client generator support.
   - [P3] (admitted) [check] Boundary Isolation — "Architecture seam audit": Internal service boundaries benefit from strict .proto contract compilation.
     Seat : argon-staff | Judge Note: Admitted — verified schema contract checks.
-  - [P4] (admitted) [citation] Blast Radius — "Envoy gRPC load balancing RFC": HTTP/2 connection reuse requires L7 client-side load balancing to prevent backend hotspotting.
+  - [P4] (admitted) [citation] Blast Radius — "Envoy gRPC load balancing RFC": HTTP/2 connection reuse requires L7 (request-level) or client-side load balancing to prevent backend hotspotting.
     Seat : opus-domain | Judge Note: Admitted — incorporated into internal service clause.
 
 Note: All 4 active Seats accepted the Proof-bound Candidate in Round 1 with zero unresolved Objections.

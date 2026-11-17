@@ -150,9 +150,15 @@ For a self-review such as “What single change would most improve this Council 
    ```
 
 ### Step 1: Formulate Command
+When formulating the Council question (`-t` or config `topic`), preserve the original question and append this sentence once—allowing natural prose without imposing fixed headings or adding further instructions:
+
+> Ground your answer in the supplied evidence: recommend the smallest justified action (or explicitly recommend no change), compare it against leaving the current state unchanged, preserve any decision-critical conditions or missing-evidence limits, and state a concrete check or condition that would verify or reverse the call.
+
 Using a built-in preset (works from any working directory):
 ```bash
-/Users/aaat/projects/the-council/bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?" -v
+/Users/aaat/projects/the-council/bin/council run --live -p architecture -t "Should we migrate from REST to gRPC for service-to-service communication?
+
+Ground your answer in the supplied evidence: recommend the smallest justified action (or explicitly recommend no change), compare it against leaving the current state unchanged, preserve any decision-critical conditions or missing-evidence limits, and state a concrete check or condition that would verify or reverse the call." -v
 ```
 
 Using a custom configuration file:

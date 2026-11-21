@@ -4,6 +4,7 @@
  * Node >= 22 ESM.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -12,6 +13,49 @@ import os from 'node:os';
 import path from 'node:path';
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
+
+const _validDrainStatusesSet = new Set(['fulfilled', 'settled', 'drain_expired']);
+const _throwDrainStatusesReadOnly = () => {
+  throw new TypeError('VALID_DRAIN_STATUSES is read-only');
+};
+export const VALID_DRAIN_STATUSES = Object.freeze({
+  get size() {
+    return _validDrainStatusesSet.size;
+  },
+  has(value) {
+    return _validDrainStatusesSet.has(value);
+  },
+  values() {
+    return _validDrainStatusesSet.values();
+  },
+  [Symbol.iterator]() {
+    return _validDrainStatusesSet[Symbol.iterator]();
+  },
+  add: _throwDrainStatusesReadOnly,
+  delete: _throwDrainStatusesReadOnly,
+  clear: _throwDrainStatusesReadOnly
+});
+
+export const LIFECYCLE_ISO_KEYS = Object.freeze([
+  'spawnedAt',
+  'firstStdoutAt',
+  'lastStdoutAt',
+  'firstStderrAt',
+  'lastStderrAt',
+  'sigtermSentAt',
+  'sigkillSentAt',
+  'settledAt'
+]);
+
+export const LIFECYCLE_INT_KEYS = Object.freeze([
+  'stdoutBytes',
+  'stdoutChunks',
+  'stderrBytes',
+  'stderrChunks'
+]);
+
+export const MAX_CLI_ERROR_MESSAGE_BYTES = 2048;
+export const MAX_CLI_STDERR_BYTES = 4096;
 
 export const CODEX_EFFORT_MAP = Object.freeze({
   max: 'max',
@@ -250,8 +294,206 @@ export function inferPromptFromArgs(executable, args = [], explicitPrompt = '') 
   return '';
 }
 
+const REDACTED_PROMPT_MARKER_REGEX = /^\[REDACTED prompt: length=\d+, sha256=[0-9a-f]{12}\]$/;
+
+function isAsciiAlnumCode(code) {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function matchesTokenBoundary(text, idx, needle) {
+  if (!needle) return false;
+  if (isAsciiAlnumCode(needle.charCodeAt(0)) && idx > 0 && isAsciiAlnumCode(text.charCodeAt(idx - 1))) {
+    return false;
+  }
+  const end = idx + needle.length;
+  if (
+    isAsciiAlnumCode(needle.charCodeAt(needle.length - 1)) &&
+    end < text.length &&
+    isAsciiAlnumCode(text.charCodeAt(end))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function findNextPairMatch(text, pair, fromPos) {
+  let pos = fromPos;
+  while (pos < text.length) {
+    const idx = text.indexOf(pair.needle, pos);
+    if (idx === -1) return -1;
+    if (!pair.boundaryOnly || matchesTokenBoundary(text, idx, pair.needle)) {
+      return idx;
+    }
+    pos = idx + 1;
+  }
+  return -1;
+}
+
+function resolveCliErrorArgsAndPrompt(error, executable, args = [], explicitPrompt = '') {
+  const providedArgs = Array.isArray(args) ? args : [];
+  const rawSpawnArgs = Array.isArray(error?.spawnargs) ? error.spawnargs : [];
+  const spawnArgs =
+    executable && rawSpawnArgs.length > 0 && rawSpawnArgs[0] === executable
+      ? rawSpawnArgs.slice(1)
+      : rawSpawnArgs;
+  const fromProvided = inferPromptFromArgs(executable, providedArgs, explicitPrompt);
+  if (fromProvided) {
+    return {
+      effectiveArgs: providedArgs.length > 0 ? providedArgs : spawnArgs,
+      detectedPrompt: fromProvided
+    };
+  }
+  const fromSpawn = inferPromptFromArgs(executable, spawnArgs, '');
+  const detectedPrompt =
+    fromSpawn && !REDACTED_PROMPT_MARKER_REGEX.test(fromSpawn) ? fromSpawn : '';
+  return {
+    effectiveArgs: spawnArgs.length > 0 ? spawnArgs : providedArgs,
+    detectedPrompt
+  };
+}
+
+function buildPromptRedactionPairs(text, prompt, options = {}) {
+  const args = Array.isArray(options?.args) ? options.args : [];
+  const executable = typeof options?.executable === 'string' ? options.executable : '';
+  const explicitPrompt = typeof prompt === 'string' ? prompt : '';
+  const detectedPrompt = explicitPrompt || inferPromptFromArgs(executable, args, '');
+  if (!detectedPrompt) {
+    return [];
+  }
+  const minPromptLength =
+    typeof options?.minPromptLength === 'number' && Number.isFinite(options.minPromptLength)
+      ? options.minPromptLength
+      : 1;
+  const redactBareUnbounded = detectedPrompt.length >= minPromptLength || text === detectedPrompt;
+  const redactBareBounded = !redactBareUnbounded && Boolean(explicitPrompt);
+  const redactedSummary = redactArgv([detectedPrompt], detectedPrompt)[0] || '[PROMPT REDACTED]';
+  const pairs = [];
+  const addPair = (needle, replacement, boundaryOnly = false) => {
+    if (needle && replacement !== undefined && needle !== replacement) {
+      pairs.push({ needle, replacement, boundaryOnly });
+    }
+  };
+  if (!redactBareUnbounded && args.length > 0) {
+    const redactedArgs = redactArgv(args, detectedPrompt);
+    const rawCmd = [executable, ...args].filter(Boolean).join(' ');
+    const redactedCmd = [executable, ...redactedArgs].filter(Boolean).join(' ');
+    if (rawCmd) {
+      addPair(rawCmd, redactedCmd, false);
+    }
+    if (args.length >= 2) {
+      addPair(args.join(' '), redactedArgs.join(' '), false);
+    }
+  }
+  addPair(`--print=${detectedPrompt}`, `--print=${redactedSummary}`, false);
+  if (redactBareUnbounded) {
+    addPair(detectedPrompt, redactedSummary, false);
+  } else if (redactBareBounded) {
+    addPair(detectedPrompt, redactedSummary, true);
+  }
+  pairs.sort((a, b) => b.needle.length - a.needle.length);
+  return pairs;
+}
+
+function sanitizeSpawnargsInPlace(error, detectedPrompt, explicitPrompt, opts) {
+  if (!error || typeof error !== 'object' || !Array.isArray(error.spawnargs) || !detectedPrompt) {
+    return;
+  }
+  const redacted = redactArgv(error.spawnargs, detectedPrompt);
+  for (let i = 0; i < error.spawnargs.length; i += 1) {
+    const val = redacted[i];
+    error.spawnargs[i] = typeof val === 'string' ? redactPromptInText(val, explicitPrompt, opts) : val;
+  }
+}
+
+function appendBoundedTrailingSlice(rebuilt, rebuiltBytes, text, pos, maxBytesCap) {
+  const remainingBytes = Math.max(0, maxBytesCap - rebuiltBytes);
+  if (remainingBytes <= 0) {
+    return rebuilt;
+  }
+  const tail = pos === 0 ? text.slice(0, remainingBytes + 4) : text.slice(pos, pos + remainingBytes + 4);
+  return rebuilt + tail;
+}
+
 /**
- * Sanitizes an execFile Error object so its message, cmd, and stderr never leak the raw prompt.
+ * Redacts literal prompt and prompt-arg occurrences in text in a single pass,
+ * optionally capping the resulting UTF-8 byte length via sliceUtf8Bytes.
+ *
+ * @param {string} text
+ * @param {string} [prompt='']
+ * @param {Object} [options]
+ * @returns {string}
+ */
+export function redactPromptInText(text, prompt = '', options = {}) {
+  if (typeof text !== 'string' || !text) {
+    return '';
+  }
+  const hasMaxBytes =
+    typeof options?.maxBytes === 'number' && Number.isFinite(options.maxBytes) && options.maxBytes >= 0;
+  if (typeof options?.maxBytes === 'number' && (!Number.isFinite(options.maxBytes) || options.maxBytes <= 0)) {
+    return '';
+  }
+  const maxBytesCap = hasMaxBytes ? Math.floor(options.maxBytes) : Infinity;
+  const pairs = buildPromptRedactionPairs(text, prompt, options);
+  if (pairs.length === 0) {
+    return hasMaxBytes ? sliceUtf8Bytes(text, options.maxBytes) : text;
+  }
+  const nextIndices = pairs.map((pair) => findNextPairMatch(text, pair, 0));
+  let pos = 0;
+  let rebuilt = '';
+  let rebuiltBytes = 0;
+  while (pos < text.length) {
+    let bestIdx = -1;
+    let bestPair = null;
+    for (let i = 0; i < pairs.length; i += 1) {
+      let idx = nextIndices[i];
+      if (idx === -1) continue;
+      if (idx < pos) {
+        idx = findNextPairMatch(text, pairs[i], pos);
+        nextIndices[i] = idx;
+        if (idx === -1) continue;
+      }
+      if (
+        bestIdx === -1 ||
+        idx < bestIdx ||
+        (idx === bestIdx && pairs[i].needle.length > bestPair.needle.length)
+      ) {
+        bestIdx = idx;
+        bestPair = pairs[i];
+      }
+    }
+    if (bestIdx === -1) {
+      rebuilt = hasMaxBytes
+        ? appendBoundedTrailingSlice(rebuilt, rebuiltBytes, text, pos, maxBytesCap)
+        : (pos === 0 ? text : rebuilt + text.slice(pos));
+      break;
+    }
+    const prefix = text.slice(pos, bestIdx);
+    if (hasMaxBytes) {
+      const remainingBytes = Math.max(0, maxBytesCap - rebuiltBytes);
+      if (prefix.length > remainingBytes + 4) {
+        rebuilt += prefix.slice(0, remainingBytes + 4);
+        break;
+      }
+    }
+    const piece = prefix + bestPair.replacement;
+    rebuilt += piece;
+    pos = bestIdx + bestPair.needle.length;
+    if (hasMaxBytes) {
+      rebuiltBytes += Buffer.byteLength(piece, 'utf8');
+      if (rebuiltBytes >= maxBytesCap) {
+        break;
+      }
+    }
+  }
+  return hasMaxBytes ? sliceUtf8Bytes(rebuilt, options.maxBytes) : rebuilt;
+}
+
+/**
+ * Sanitizes an execFile Error object so its message, cmd, stderr, and spawnargs never leak the raw prompt.
  *
  * @param {Error|any} error
  * @param {string} executable
@@ -263,48 +505,27 @@ export function sanitizeCliError(error, executable, args = [], explicitPrompt = 
   if (!error || typeof error !== 'object') {
     return error;
   }
-  const detectedPrompt = inferPromptFromArgs(executable, args, explicitPrompt);
+  const explicitStr = typeof explicitPrompt === 'string' ? explicitPrompt : '';
+  const { effectiveArgs, detectedPrompt } = resolveCliErrorArgsAndPrompt(
+    error,
+    executable,
+    args,
+    explicitStr
+  );
   if (!detectedPrompt) {
     return error;
   }
-
-  const redactedArgs = redactArgv(args, detectedPrompt);
-  const redactedSummary = redactArgv([detectedPrompt], detectedPrompt)[0] || '[PROMPT REDACTED]';
-  const rawArgsJoined = Array.isArray(args) ? args.join(' ') : '';
-  const redactedArgsJoined = redactedArgs.join(' ');
-  const rawCmd = [executable, ...(Array.isArray(args) ? args : [])].filter(Boolean).join(' ');
-  const redactedCmd = [executable, ...redactedArgs].filter(Boolean).join(' ');
-  const printArg = `--print=${detectedPrompt}`;
-  const redactedPrintArg = `--print=${redactedSummary}`;
-
-  const sanitizeText = (text) => {
-    let next = text;
-    if (rawCmd && next.includes(rawCmd)) {
-      next = next.split(rawCmd).join(redactedCmd);
-    } else if (rawArgsJoined && Array.isArray(args) && args.length >= 2 && next.includes(rawArgsJoined)) {
-      next = next.split(rawArgsJoined).join(redactedArgsJoined);
-    }
-    if (next.includes(printArg)) {
-      next = next.split(printArg).join(redactedPrintArg);
-    }
-    if ((detectedPrompt.length >= 8 || next === detectedPrompt) && next.includes(detectedPrompt)) {
-      next = next.split(detectedPrompt).join(redactedSummary);
-    }
-    return next;
-  };
-
+  const opts = { executable, args: effectiveArgs, minPromptLength: 8 };
   if (typeof error.cmd === 'string') {
-    error.cmd = sanitizeText(error.cmd);
+    error.cmd = redactPromptInText(error.cmd, explicitStr, opts);
   }
-
   if (typeof error.message === 'string') {
-    error.message = sanitizeText(error.message);
+    error.message = redactPromptInText(error.message, explicitStr, opts);
   }
-
   if (typeof error.stderr === 'string') {
-    error.stderr = sanitizeText(error.stderr);
+    error.stderr = redactPromptInText(error.stderr, explicitStr, opts);
   }
-
+  sanitizeSpawnargsInPlace(error, detectedPrompt, explicitStr, opts);
   return error;
 }
 
@@ -1487,16 +1708,27 @@ function stripBenignCouncilExclusions(str) {
 
 const MAX_TRACE_SCAN_BYTES = 262_144;
 
-function sliceUtf8Bytes(str, maxBytes = MAX_TRACE_SCAN_BYTES) {
+export function sliceUtf8Bytes(str, maxBytes = MAX_TRACE_SCAN_BYTES) {
   if (typeof str !== 'string' || !str) return '';
-  const pre = str.length > maxBytes ? str.slice(0, maxBytes) : str;
-  if (Buffer.byteLength(pre, 'utf8') <= maxBytes) {
+  if (typeof maxBytes !== 'number' || !Number.isFinite(maxBytes) || maxBytes <= 0) return '';
+  const cap = Math.floor(maxBytes);
+  if (cap <= 0) return '';
+  let pre = str.length > cap ? str.slice(0, cap) : str;
+  if (str.length > cap && pre.length > 0) {
+    const lastCode = pre.charCodeAt(pre.length - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      pre = pre.slice(0, -1);
+    }
+  }
+  const buf = Buffer.from(pre, 'utf8');
+  if (buf.length <= cap) {
     return pre;
   }
-  return Buffer.from(pre, 'utf8')
-    .subarray(0, maxBytes)
-    .toString('utf8')
-    .replace(/\uFFFD+$/, '');
+  let end = cap;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return buf.subarray(0, end).toString('utf8');
 }
 
 function stripOuterMatchingQuotes(s) {
@@ -3390,14 +3622,144 @@ export function hasExplicitProviderErrorSignature(text) {
   );
 }
 
+const ISO_8601_TIMESTAMP_REGEX =
+  /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+/**
+ * Normalizes a CLI exit code to a finite number or null (never string error codes like 'ENOENT').
+ *
+ * @param {*} value
+ * @returns {number|null}
+ */
+export function normalizeExitCode(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? (value === 0 ? 0 : value) : null;
+}
+
+/**
+ * Normalizes a POSIX signal name to trimmed uppercase /^SIG[A-Z0-9]+$/ or null.
+ *
+ * @param {*} value
+ * @returns {string|null}
+ */
+export function normalizeSignalName(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  return /^SIG[A-Z0-9]+$/.test(normalized) ? normalized : null;
+}
+
+/**
+ * Validates and clones CLI lifecycle metadata into a frozen object, or returns null when empty/invalid.
+ *
+ * @param {*} raw
+ * @returns {Readonly<Object>|null}
+ */
+export function sanitizeLifecycleMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const out = {};
+  for (const key of LIFECYCLE_ISO_KEYS) {
+    const val = raw[key];
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (ISO_8601_TIMESTAMP_REGEX.test(trimmed) && Number.isFinite(Date.parse(trimmed))) {
+        out[key] = trimmed;
+      }
+    }
+  }
+  for (const key of LIFECYCLE_INT_KEYS) {
+    const val = raw[key];
+    if (typeof val === 'number' && Number.isInteger(val) && val >= 0) {
+      out[key] = val === 0 ? 0 : val;
+    }
+  }
+  if (typeof raw.groupDrainExhausted === 'boolean') {
+    out.groupDrainExhausted = raw.groupDrainExhausted;
+  }
+  if (Array.isArray(raw.attemptedSignals)) {
+    const seen = new Set();
+    const signals = [];
+    for (const item of raw.attemptedSignals) {
+      const sig = normalizeSignalName(item);
+      if (sig && !seen.has(sig)) {
+        seen.add(sig);
+        signals.push(sig);
+        if (signals.length >= 8) break;
+      }
+    }
+    if (signals.length > 0) {
+      out.attemptedSignals = Object.freeze(signals);
+    }
+  }
+  return Object.keys(out).length > 0 ? Object.freeze(out) : null;
+}
+
+const attemptTelemetryGateStorage = new AsyncLocalStorage();
+
+export function createAttemptTelemetryGate(meta = {}) {
+  const safeMeta = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  return {
+    ...safeMeta,
+    recorded: Boolean(safeMeta.recorded),
+    finalized: Boolean(safeMeta.finalized),
+    cancelled: Boolean(safeMeta.cancelled),
+    managedByExecuteWithTimeout: Boolean(safeMeta.managedByExecuteWithTimeout)
+  };
+}
+
+export function runWithAttemptTelemetryGate(gate, fn) {
+  if (typeof fn !== 'function') {
+    throw new TypeError('runWithAttemptTelemetryGate requires a function');
+  }
+  return attemptTelemetryGateStorage.run(gate && typeof gate === 'object' ? gate : null, fn);
+}
+
+export function getActiveAttemptTelemetryGate() {
+  return attemptTelemetryGateStorage.getStore() || null;
+}
+
+export function markAttemptGateFinalized(gate) {
+  if (gate && typeof gate === 'object') {
+    gate.finalized = true;
+    return gate;
+  }
+  return null;
+}
+
+export function markAttemptGateCancelled(gate) {
+  if (gate && typeof gate === 'object') {
+    gate.cancelled = true;
+    return gate;
+  }
+  return null;
+}
+
 export function createHeadlessToolDeniedError(message, options = {}) {
   const err = new Error(message);
   err.name = 'HeadlessToolDeniedError';
   err.code = 'HEADLESS_TOOL_DENIED';
-  err.exitCode = options.exitCode ?? 0;
+  err.exitCode = options.exitCode === undefined ? 0 : normalizeExitCode(options.exitCode);
+  const sig = normalizeSignalName(options.signal ?? options.cause?.signal);
+  if (sig) {
+    err.signal = sig;
+  }
   err.deniedActions = Array.isArray(options.deniedActions) ? options.deniedActions : [];
   err.trace = options.trace || null;
-  err.stderr = options.stderr ?? '';
+  err.stderr = redactPromptInText(options.stderr ?? '', '', { maxBytes: MAX_CLI_STDERR_BYTES });
+  const lifecycle = sanitizeLifecycleMetadata(options.lifecycle ?? options.trace?.lifecycle);
+  if (lifecycle) {
+    err.lifecycle = lifecycle;
+  }
+  if (VALID_DRAIN_STATUSES.has(options.drainStatus)) {
+    err.drainStatus = options.drainStatus;
+  }
+  if (
+    typeof options.drainDurationMs === 'number' &&
+    Number.isFinite(options.drainDurationMs) &&
+    options.drainDurationMs >= 0
+  ) {
+    err.drainDurationMs = options.drainDurationMs;
+  }
   if (typeof options.finishedReason === 'string' && options.finishedReason) {
     err.finishedReason = options.finishedReason;
   }
@@ -3448,6 +3810,22 @@ export function normalizeProviderTrace(trace, defaults = {}) {
         ? trace.outcome
         : (defaults.exitCode === 0 || defaults.exitCode === undefined ? 'success' : 'error');
 
+  const promptHint = typeof defaults.prompt === 'string' ? defaults.prompt : '';
+  const redactOpts = {
+    executable: defaults.executable,
+    args: defaults.args,
+    minPromptLength: 8
+  };
+  const boundedStderr =
+    typeof trace?.stderr === 'string' && trace.stderr.length > 0
+      ? redactPromptInText(trace.stderr, promptHint, { ...redactOpts, maxBytes: MAX_CLI_STDERR_BYTES })
+      : '';
+  const boundedEnvelopeError =
+    typeof trace?.envelopeError === 'string' && trace.envelopeError.length > 0
+      ? redactPromptInText(trace.envelopeError, promptHint, { ...redactOpts, maxBytes: 1024 })
+      : '';
+  const lifecycle = sanitizeLifecycleMetadata(trace?.lifecycle ?? defaults.lifecycle);
+
   return {
     traceCoverage,
     toolCalls,
@@ -3456,18 +3834,15 @@ export function normalizeProviderTrace(trace, defaults = {}) {
     forbiddenAccessDetails: mergedDetails,
     durationMs,
     outcome,
-    ...(typeof trace?.stderr === 'string' && trace.stderr.length > 0
-      ? { stderr: trace.stderr }
-      : {}),
+    ...(boundedStderr ? { stderr: boundedStderr } : {}),
     ...(Array.isArray(trace?.deniedActions)
       ? { deniedActions: trace.deniedActions }
       : {}),
-    ...(typeof trace?.envelopeError === 'string' && trace.envelopeError.length > 0
-      ? { envelopeError: trace.envelopeError }
-      : {}),
+    ...(boundedEnvelopeError ? { envelopeError: boundedEnvelopeError } : {}),
     ...(typeof trace?.finishedReason === 'string' && trace.finishedReason.length > 0
       ? { finishedReason: trace.finishedReason }
-      : {})
+      : {}),
+    ...(lifecycle ? { lifecycle } : {})
   };
 }
 
@@ -3496,11 +3871,517 @@ export function buildSanitizedCliEnv(cwd, env) {
   return nextEnv;
 }
 
+const DEFAULT_KILL_GRACE_MS = 250;
+
+function createExecLifecycleTracker({ spawned = false } = {}) {
+  const state = {
+    ...(spawned ? { spawnedAt: new Date().toISOString() } : {}),
+    stdoutBytes: 0,
+    stdoutChunks: 0,
+    stderrBytes: 0,
+    stderrChunks: 0,
+    groupDrainExhausted: false,
+    attemptedSignals: []
+  };
+  const seenSignals = new Set();
+
+  return {
+    markSpawned() {
+      if (!state.spawnedAt) {
+        state.spawnedAt = new Date().toISOString();
+      }
+    },
+    recordChunk(streamName, byteLength) {
+      if (!byteLength || byteLength <= 0) return;
+      const nowIso = new Date().toISOString();
+      if (streamName === 'stdout') {
+        if (!state.firstStdoutAt) state.firstStdoutAt = nowIso;
+        state.lastStdoutAt = nowIso;
+        state.stdoutBytes += byteLength;
+        state.stdoutChunks += 1;
+      } else {
+        if (!state.firstStderrAt) state.firstStderrAt = nowIso;
+        state.lastStderrAt = nowIso;
+        state.stderrBytes += byteLength;
+        state.stderrChunks += 1;
+      }
+    },
+    recordSignal(sig) {
+      const normalized = normalizeSignalName(sig);
+      if (!normalized) return;
+      const nowIso = new Date().toISOString();
+      if (normalized === 'SIGTERM' && !state.sigtermSentAt) {
+        state.sigtermSentAt = nowIso;
+      } else if (normalized === 'SIGKILL' && !state.sigkillSentAt) {
+        state.sigkillSentAt = nowIso;
+      }
+      if (!seenSignals.has(normalized)) {
+        seenSignals.add(normalized);
+        state.attemptedSignals.push(normalized);
+      }
+    },
+    markGroupDrainExhausted() {
+      state.groupDrainExhausted = true;
+    },
+    snapshot() {
+      if (!state.settledAt) {
+        state.settledAt = new Date().toISOString();
+      }
+      return sanitizeLifecycleMetadata(state);
+    }
+  };
+}
+
+function buildExecCliError(kind, details) {
+  const {
+    executable,
+    args,
+    prompt,
+    code = null,
+    signalCode = null,
+    timeoutMs,
+    maxBufferError,
+    cause,
+    existingError,
+    out = '',
+    errOut = '',
+    lifecycle = null
+  } = details;
+  let err = existingError;
+  if (!err) {
+    if (kind === 'pre_abort' || kind === 'abort') {
+      err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      err.code = 'ABORT_ERR';
+      if (cause !== undefined) {
+        err.cause = cause;
+        Object.defineProperty(err, 'inheritCauseDiagnostics', {
+          value: false,
+          enumerable: false,
+          configurable: true
+        });
+      }
+    } else if (kind === 'timeout') {
+      err = new Error(`Command timed out after ${timeoutMs}ms`);
+      err.killed = true;
+      err.code = 'ETIMEDOUT';
+    } else if (kind === 'maxBuffer') {
+      err = maxBufferError || new RangeError('stdout maxBuffer length exceeded');
+      err.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+      err.killed = true;
+    } else {
+      const cmd = [executable, ...(Array.isArray(args) ? args : [])].filter(Boolean).join(' ');
+      const failMsg = errOut ? `Command failed: ${cmd}\n${errOut}` : `Command failed: ${cmd}`;
+      err = new Error(failMsg);
+      err.cmd = cmd;
+      err.killed = Boolean(signalCode);
+      if (typeof code === 'number') {
+        err.code = code;
+      }
+    }
+  }
+  const explicitPrompt = typeof prompt === 'string' ? prompt : '';
+  const { effectiveArgs, detectedPrompt } = resolveCliErrorArgsAndPrompt(
+    err,
+    executable,
+    args,
+    explicitPrompt
+  );
+  const redactOpts = { executable, args: effectiveArgs, minPromptLength: 8 };
+  err.exitCode = normalizeExitCode(code ?? err.exitCode);
+  err.signal = normalizeSignalName(signalCode ?? err.signal);
+  err.stdout = out;
+  err.stderr = redactPromptInText(errOut, explicitPrompt, {
+    ...redactOpts,
+    maxBytes: MAX_CLI_STDERR_BYTES
+  });
+  if (typeof err.cmd === 'string') {
+    err.cmd = redactPromptInText(err.cmd, explicitPrompt, redactOpts);
+  }
+  if (typeof err.message === 'string') {
+    err.message = redactPromptInText(err.message, explicitPrompt, {
+      ...redactOpts,
+      maxBytes: MAX_CLI_ERROR_MESSAGE_BYTES
+    });
+  }
+  sanitizeSpawnargsInPlace(err, detectedPrompt, explicitPrompt, redactOpts);
+  err.lifecycle = lifecycle;
+  return err;
+}
+
+function destroyChildStdioStreams(child) {
+  try { child?.stdin?.destroy(); } catch {}
+  try { child?.stdout?.destroy(); } catch {}
+  try { child?.stderr?.destroy(); } catch {}
+}
+
+function isPosixProcessGroupDead(child, isPosix) {
+  if (!isPosix || !child?.pid) return true;
+  try {
+    process.kill(-child.pid, 0);
+    return false;
+  } catch (err) {
+    return Boolean(err && err.code === 'ESRCH');
+  }
+}
+
+function signalChildProcessTree(child, isPosix, sig, lifecycle) {
+  if (!child || !child.pid) return false;
+  lifecycle.recordSignal(sig);
+  if (isPosix) {
+    try {
+      process.kill(-child.pid, sig);
+      return true;
+    } catch (err) {
+      if (!err || err.code !== 'ESRCH') {
+        // Fall through to direct child.kill attempt
+      }
+    }
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    try {
+      return child.kill(sig);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function scheduleProcessGroupDrain({ child, isPosix, lifecycle, state, isSettled, onCloseReady }, attempt = 0) {
+  if (isSettled()) return;
+  if (state.drainTimer) {
+    if (state.pendingClose || state.leaderExit) state.drainTimer.ref?.();
+    return;
+  }
+  state.drainTimer = setTimeout(() => {
+    state.drainTimer = null;
+    if (isSettled()) return;
+    if (!state.sigkillSent) {
+      if (isPosixProcessGroupDead(child, isPosix)) {
+        if (state.pendingClose) {
+          onCloseReady(state.pendingClose.code, state.pendingClose.signalCode);
+        }
+        return;
+      }
+      scheduleProcessGroupDrain({ child, isPosix, lifecycle, state, isSettled, onCloseReady }, 0);
+      return;
+    }
+    const groupDead = isPosixProcessGroupDead(child, isPosix);
+    if (groupDead || attempt >= 5) {
+      if (!groupDead && attempt >= 5) {
+        state.groupDrainExhausted = true;
+        lifecycle.markGroupDrainExhausted();
+      }
+      if (state.pendingClose) {
+        destroyChildStdioStreams(child);
+        onCloseReady(state.pendingClose.code, state.pendingClose.signalCode);
+        return;
+      }
+      if (!groupDead || attempt >= 2) {
+        destroyChildStdioStreams(child);
+      }
+      if (attempt >= 5 && state.leaderExit) {
+        onCloseReady(state.leaderExit.code, state.leaderExit.signalCode);
+        return;
+      }
+      scheduleProcessGroupDrain({ child, isPosix, lifecycle, state, isSettled, onCloseReady }, attempt + 1);
+      return;
+    }
+    signalChildProcessTree(child, isPosix, 'SIGKILL', lifecycle);
+    scheduleProcessGroupDrain({ child, isPosix, lifecycle, state, isSettled, onCloseReady }, attempt + 1);
+  }, 15);
+  if (!state.pendingClose && !state.leaderExit) state.drainTimer.unref?.();
+}
+
+function createProcessGroupController({ child, isPosix, killGraceMs, lifecycle, isSettled, onCloseReady }) {
+  const state = {
+    terminationCause: null,
+    terminating: false,
+    sigkillSent: false,
+    groupDrainExhausted: false,
+    leaderExit: null,
+    pendingClose: null,
+    timeoutTimer: null,
+    killTimer: null,
+    drainTimer: null
+  };
+  const drainCtx = { child, isPosix, lifecycle, state, isSettled, onCloseReady };
+
+  const clearTimeoutTimer = () => {
+    if (state.timeoutTimer) { clearTimeout(state.timeoutTimer); state.timeoutTimer = null; }
+  };
+  const clearTimers = () => {
+    clearTimeoutTimer();
+    if (state.killTimer) { clearTimeout(state.killTimer); state.killTimer = null; }
+    if (state.drainTimer) { clearTimeout(state.drainTimer); state.drainTimer = null; }
+  };
+  const escalateSigkill = () => {
+    state.sigkillSent = true;
+    signalChildProcessTree(child, isPosix, 'SIGKILL', lifecycle);
+    if (state.pendingClose && isPosixProcessGroupDead(child, isPosix)) {
+      onCloseReady(state.pendingClose.code, state.pendingClose.signalCode);
+      return;
+    }
+    scheduleProcessGroupDrain(drainCtx, 0);
+  };
+  const startKillEscalation = () => {
+    signalChildProcessTree(child, isPosix, 'SIGTERM', lifecycle);
+    if (killGraceMs === 0) {
+      escalateSigkill();
+      return;
+    }
+    if (!state.killTimer) {
+      state.killTimer = setTimeout(() => {
+        state.killTimer = null;
+        if (isSettled()) return;
+        if (state.drainTimer) { clearTimeout(state.drainTimer); state.drainTimer = null; }
+        escalateSigkill();
+      }, killGraceMs);
+      if (!state.pendingClose && !state.leaderExit) state.killTimer.unref?.();
+    }
+  };
+  const terminateChild = (cause) => {
+    if (isSettled()) return;
+    if (state.terminationCause === null) state.terminationCause = cause;
+    if (state.terminating || !child || !child.pid) return;
+    clearTimeoutTimer();
+    state.terminating = true;
+    startKillEscalation();
+  };
+
+  return {
+    getTerminationCause: () => state.terminationCause,
+    isSigkillSent: () => state.sigkillSent,
+    clearTimers,
+    terminateChild,
+    clearTimeoutTimer,
+    startTimeout(timeoutMs) {
+      if (state.terminationCause === null && typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        state.timeoutTimer = setTimeout(() => {
+          state.timeoutTimer = null;
+          terminateChild('timeout');
+        }, timeoutMs);
+        state.timeoutTimer.unref?.();
+      }
+    },
+    onChildExit(code, signalCode) {
+      if (isSettled()) return;
+      state.leaderExit = { code, signalCode };
+      if (state.terminating) {
+        state.killTimer?.ref?.();
+        state.drainTimer?.ref?.();
+        return;
+      }
+      if (state.groupDrainExhausted || !isPosix || !child?.pid || !signalCode || isPosixProcessGroupDead(child, isPosix)) {
+        return;
+      }
+      clearTimeoutTimer();
+      state.terminating = true;
+      startKillEscalation();
+      if (!isSettled()) {
+        state.killTimer?.ref?.();
+        state.drainTimer?.ref?.();
+      }
+    },
+    deferCloseIfDraining(code, signalCode) {
+      if (isSettled() || state.groupDrainExhausted || !isPosix || !child?.pid || isPosixProcessGroupDead(child, isPosix)) {
+        return false;
+      }
+      if (state.terminating) {
+        clearTimeoutTimer();
+        state.pendingClose = { code, signalCode };
+        state.killTimer?.ref?.();
+        state.drainTimer?.ref?.();
+        scheduleProcessGroupDrain(drainCtx, 0);
+        return true;
+      }
+      if (signalCode) {
+        clearTimeoutTimer();
+        state.terminating = true;
+        state.pendingClose = { code, signalCode };
+        startKillEscalation();
+        if (!isSettled()) scheduleProcessGroupDrain(drainCtx, 0);
+        return true;
+      }
+      return false;
+    }
+  };
+}
+
+function resolveExecCliClose({
+  executable,
+  args,
+  options,
+  child,
+  controller,
+  lifecycle,
+  stdoutChunks,
+  stderrChunks,
+  maxBufferError,
+  code,
+  signalCode
+}) {
+  const out = Buffer.concat(stdoutChunks).toString('utf8');
+  const errOut = Buffer.concat(stderrChunks).toString('utf8');
+  const snap = lifecycle.snapshot();
+  const cause = controller?.getTerminationCause();
+
+  if (cause === 'abort' || cause === 'timeout' || cause === 'maxBuffer') {
+    return {
+      ok: false,
+      error: buildExecCliError(cause, {
+        executable,
+        args,
+        prompt: options.prompt,
+        code: typeof code === 'number' ? code : null,
+        signalCode: signalCode || child?.signalCode || null,
+        timeoutMs: options.timeoutMs,
+        maxBufferError,
+        cause: options.signal?.reason,
+        out,
+        errOut,
+        lifecycle: snap
+      })
+    };
+  }
+  if (code === 0 && !signalCode) {
+    return { ok: true, value: { stdout: out, stderr: errOut, exitCode: 0, lifecycle: snap } };
+  }
+  return {
+    ok: false,
+    error: buildExecCliError('exit', {
+      executable,
+      args,
+      prompt: options.prompt,
+      code: typeof code === 'number' ? code : null,
+      signalCode: signalCode || child?.signalCode || null,
+      out,
+      errOut,
+      lifecycle: snap
+    })
+  };
+}
+
+function runExecCliSession({
+  executable,
+  args,
+  options,
+  spawnOptions,
+  isPosix,
+  maxBuffer,
+  killGraceMs,
+  resolve,
+  reject
+}) {
+  const lifecycle = createExecLifecycleTracker();
+  const stdoutChunks = [];
+  const stderrChunks = [];
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let maxBufferError = null;
+  let settled = false;
+  let child = null;
+  let controller = null;
+
+  const onAbort = () => {
+    controller?.clearTimeoutTimer();
+    controller?.terminateChild('abort');
+  };
+  const cleanup = () => {
+    controller?.clearTimers();
+    if (options.signal) options.signal.removeEventListener('abort', onAbort);
+  };
+  const finalizeClose = (code, signalCode) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    const outcome = resolveExecCliClose({
+      executable, args, options, child, controller, lifecycle, stdoutChunks, stderrChunks, maxBufferError, code, signalCode
+    });
+    if (outcome.ok) resolve(outcome.value);
+    else reject(outcome.error);
+  };
+
+  try {
+    child = spawn(executable, args, spawnOptions);
+  } catch (spawnErr) {
+    settled = true;
+    cleanup();
+    return reject(buildExecCliError('spawn_error', {
+      executable, args, prompt: options.prompt, existingError: spawnErr, lifecycle: lifecycle.snapshot()
+    }));
+  }
+
+  controller = createProcessGroupController({
+    child, isPosix, killGraceMs, lifecycle, isSettled: () => settled, onCloseReady: finalizeClose
+  });
+
+  const appendChunk = (chunks, currentBytes, buf, streamName) => {
+    if (currentBytes + buf.length > maxBuffer) {
+      const remaining = Math.max(0, maxBuffer - currentBytes);
+      if (remaining > 0) chunks.push(buf.subarray(0, remaining));
+      if (!maxBufferError) {
+        maxBufferError = new RangeError(`${streamName} maxBuffer length exceeded`);
+        maxBufferError.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+      }
+      controller.terminateChild('maxBuffer');
+      return maxBuffer;
+    }
+    chunks.push(buf);
+    return currentBytes + buf.length;
+  };
+
+  child.on('spawn', () => lifecycle.markSpawned());
+  child.stdout?.on('data', (chunk) => {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    lifecycle.recordChunk('stdout', buf.length);
+    if (!maxBufferError) stdoutBytes = appendChunk(stdoutChunks, stdoutBytes, buf, 'stdout');
+  });
+  child.stderr?.on('data', (chunk) => {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    lifecycle.recordChunk('stderr', buf.length);
+    if (!maxBufferError) stderrBytes = appendChunk(stderrChunks, stderrBytes, buf, 'stderr');
+  });
+  child.on('error', (err) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    destroyChildStdioStreams(child);
+    reject(buildExecCliError('spawn_error', {
+      executable,
+      args,
+      prompt: options.prompt,
+      existingError: err,
+      code: err.exitCode,
+      signalCode: err.signal,
+      out: Buffer.concat(stdoutChunks).toString('utf8'),
+      errOut: Buffer.concat(stderrChunks).toString('utf8'),
+      lifecycle: lifecycle.snapshot()
+    }));
+  });
+  child.on('exit', (code, signalCode) => controller.onChildExit(code, signalCode));
+  child.on('close', (code, signalCode) => {
+    if (settled || controller.deferCloseIfDraining(code, signalCode)) return;
+    finalizeClose(code, signalCode);
+  });
+
+  if (options.signal) {
+    if (options.signal.aborted) onAbort();
+    else options.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  controller.startTimeout(options.timeoutMs);
+  child.stdin?.on?.('error', () => {});
+  if (options.input !== undefined && options.input !== null) child.stdin?.end(options.input);
+  else child.stdin?.end();
+}
+
 /**
  * Executes a CLI process directly via child_process.spawn with POSIX process-group isolation,
- * bounded stdout/stderr collection, and timeout/abort escalation.
- * On non-zero exit or ENOENT, attaches exitCode, stdout, and stderr to Error
- * and sanitizes error.message / error.cmd so raw prompts are never leaked.
+ * bounded stdout/stderr collection, timeout/abort escalation, and CLI lifecycle diagnostics.
+ * Note: lifecycle timestamps `firstStdoutAt`/`firstStderrAt` (and byte/chunk counters) measure
+ * CLI-observed stdio stream bytes emitted by the subprocess, which is distinct from unavailable
+ * upstream provider progress before the CLI flushes to stdout or stderr.
  *
  * @param {string} executable
  * @param {string[]} [args=[]]
@@ -3512,10 +4393,8 @@ export function buildSanitizedCliEnv(cwd, env) {
  * @param {string|Buffer} [options.input]
  * @param {string} [options.prompt]
  * @param {number} [options.maxBuffer=10485760]
- * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
+ * @returns {Promise<{ stdout: string, stderr: string, exitCode: number, lifecycle: Readonly<Object>|null }>}
  */
-const DEFAULT_KILL_GRACE_MS = 250;
-
 export async function execCli(executable, args = [], options = {}) {
   const maxBuffer = options.maxBuffer || DEFAULT_MAX_BUFFER;
   const killGraceMs =
@@ -3526,17 +4405,13 @@ export async function execCli(executable, args = [], options = {}) {
       : DEFAULT_KILL_GRACE_MS;
 
   if (options.signal?.aborted) {
-    const abortErr = new Error('The operation was aborted');
-    abortErr.name = 'AbortError';
-    abortErr.code = 'ABORT_ERR';
-    abortErr.exitCode = null;
-    abortErr.stdout = '';
-    abortErr.stderr = '';
-    if (options.signal.reason !== undefined) {
-      abortErr.cause = options.signal.reason;
-    }
-    sanitizeCliError(abortErr, executable, args, options.prompt);
-    throw abortErr;
+    throw buildExecCliError('pre_abort', {
+      executable,
+      args,
+      prompt: options.prompt,
+      cause: options.signal.reason,
+      lifecycle: createExecLifecycleTracker().snapshot()
+    });
   }
 
   const isPosix = process.platform !== 'win32';
@@ -3552,452 +4427,169 @@ export async function execCli(executable, args = [], options = {}) {
     ...(effectiveEnv ? { env: effectiveEnv } : {})
   };
 
-  return new Promise((resolve, reject) => {
-    let terminationCause = null;
-    let maxBufferError = null;
-    let terminating = false;
-    let sigkillSent = false;
-    let groupDrainExhausted = false;
-    let pendingClose = null;
-    let settled = false;
-    let timeoutTimer = null;
-    let killTimer = null;
-    let drainTimer = null;
-    let child = null;
-    const stdoutChunks = [];
-    const stderrChunks = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+  return new Promise((resolve, reject) =>
+    runExecCliSession({ executable, args, options, spawnOptions, isPosix, maxBuffer, killGraceMs, resolve, reject })
+  );
+}
 
-    const clearTimersAndListeners = () => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = null;
-      }
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-      if (drainTimer) {
-        clearTimeout(drainTimer);
-        drainTimer = null;
-      }
-      if (options.signal) {
-        options.signal.removeEventListener('abort', onAbort);
-      }
-    };
-
-    const destroyStdioStreams = () => {
-      try { child?.stdin?.destroy(); } catch {}
-      try { child?.stdout?.destroy(); } catch {}
-      try { child?.stderr?.destroy(); } catch {}
-    };
-
-    const isProcessGroupDead = () => {
-      if (!isPosix || !child?.pid) {
-        return true;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return false;
-      } catch (err) {
-        return Boolean(err && err.code === 'ESRCH');
-      }
-    };
-
-    const signalProcessTree = (sig) => {
-      if (!child || !child.pid) {
-        return false;
-      }
-      if (isPosix) {
-        try {
-          process.kill(-child.pid, sig);
-          return true;
-        } catch (err) {
-          if (!err || err.code !== 'ESRCH') {
-            // Fall through to direct child.kill attempt
-          }
-        }
-      }
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          return child.kill(sig);
-        } catch {
-          return false;
-        }
-      }
-      return false;
-    };
-
-    const scheduleStdioDrain = (attempt = 0) => {
-      if (settled) {
-        return;
-      }
-      if (drainTimer) {
-        if (pendingClose) {
-          drainTimer.ref?.();
-        }
-        return;
-      }
-      drainTimer = setTimeout(() => {
-        drainTimer = null;
-        if (settled) {
-          return;
-        }
-        if (!sigkillSent) {
-          if (isProcessGroupDead() && pendingClose) {
-            finalizeClose(pendingClose.code, pendingClose.signalCode);
-            return;
-          }
-          scheduleStdioDrain(0);
-          return;
-        }
-        if (isProcessGroupDead() || attempt >= 5) {
-          if (attempt >= 5) {
-            groupDrainExhausted = true;
-          }
-          destroyStdioStreams();
-          if (pendingClose) {
-            finalizeClose(pendingClose.code, pendingClose.signalCode);
-          }
-          return;
-        }
-        signalProcessTree('SIGKILL');
-        scheduleStdioDrain(attempt + 1);
-      }, 15);
-      if (!pendingClose) {
-        drainTimer.unref?.();
-      }
-    };
-
-    const terminateChild = (cause) => {
-      if (settled) {
-        return;
-      }
-      if (terminationCause === null) {
-        terminationCause = cause;
-      }
-      if (terminating || !child || !child.pid) {
-        return;
-      }
-      terminating = true;
-      signalProcessTree('SIGTERM');
-      if (killGraceMs === 0) {
-        sigkillSent = true;
-        signalProcessTree('SIGKILL');
-        if (pendingClose && isProcessGroupDead()) {
-          finalizeClose(pendingClose.code, pendingClose.signalCode);
-          return;
-        }
-        scheduleStdioDrain();
-        return;
-      }
-      if (!killTimer) {
-        killTimer = setTimeout(() => {
-          killTimer = null;
-          if (settled) {
-            return;
-          }
-          if (drainTimer) {
-            clearTimeout(drainTimer);
-            drainTimer = null;
-          }
-          sigkillSent = true;
-          signalProcessTree('SIGKILL');
-          if (pendingClose && isProcessGroupDead()) {
-            finalizeClose(pendingClose.code, pendingClose.signalCode);
-            return;
-          }
-          scheduleStdioDrain();
-        }, killGraceMs);
-        if (!pendingClose) {
-          killTimer.unref?.();
-        }
-      }
-    };
-
-    const onAbort = () => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = null;
-      }
-      terminateChild('abort');
-    };
-
-    try {
-      child = spawn(executable, args, spawnOptions);
-    } catch (spawnErr) {
-      settled = true;
-      clearTimersAndListeners();
-      spawnErr.exitCode = null;
-      spawnErr.stdout = '';
-      spawnErr.stderr = '';
-      sanitizeCliError(spawnErr, executable, args, options.prompt);
-      return reject(spawnErr);
+function inferEffortForTelemetry(modelString, defaultEffort) {
+  if (typeof modelString !== 'string' || !modelString.trim()) {
+    return undefined;
+  }
+  const trimmed = modelString.trim();
+  const fallback =
+    typeof defaultEffort === 'string' && defaultEffort.trim() ? defaultEffort.trim().toLowerCase() : 'high';
+  try {
+    const baseModel = extractCanonicalBaseModel(trimmed, fallback);
+    if (baseModel === 'composer-2.5' || trimmed.toLowerCase() === 'composer-2.5') {
+      return null;
     }
+    return parseModelAndEffort(trimmed, fallback).effort;
+  } catch {
+    return typeof defaultEffort === 'string' && defaultEffort.trim()
+      ? defaultEffort.trim().toLowerCase()
+      : undefined;
+  }
+}
 
-    const appendChunk = (chunks, currentBytes, chunk, streamName) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (currentBytes + buf.length > maxBuffer) {
-        const remaining = Math.max(0, maxBuffer - currentBytes);
-        if (remaining > 0) {
-          chunks.push(buf.subarray(0, remaining));
-        }
-        if (!maxBufferError) {
-          maxBufferError = new RangeError(`${streamName} maxBuffer length exceeded`);
-          maxBufferError.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-        }
-        terminateChild('maxBuffer');
-        return maxBuffer;
-      }
-      chunks.push(buf);
-      return currentBytes + buf.length;
-    };
-
-    child.stdout?.on('data', (chunk) => {
-      if (maxBufferError) return;
-      stdoutBytes = appendChunk(stdoutChunks, stdoutBytes, chunk, 'stdout');
-    });
-
-    child.stderr?.on('data', (chunk) => {
-      if (maxBufferError) return;
-      stderrBytes = appendChunk(stderrChunks, stderrBytes, chunk, 'stderr');
-    });
-
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimersAndListeners();
-      destroyStdioStreams();
-      const out = Buffer.concat(stdoutChunks).toString('utf8');
-      const errOut = Buffer.concat(stderrChunks).toString('utf8');
-      err.exitCode = typeof err.exitCode === 'number' ? err.exitCode : null;
-      err.stdout = out;
-      err.stderr = errOut;
-      sanitizeCliError(err, executable, args, options.prompt);
-      reject(err);
-    });
-
-    const finalizeClose = (code, signalCode) => {
-      if (settled) return;
-      settled = true;
-      clearTimersAndListeners();
-      const out = Buffer.concat(stdoutChunks).toString('utf8');
-      const errOut = Buffer.concat(stderrChunks).toString('utf8');
-
-      if (terminationCause === 'abort') {
-        const abortErr = new Error('The operation was aborted');
-        abortErr.name = 'AbortError';
-        abortErr.code = 'ABORT_ERR';
-        if (options.signal?.reason !== undefined) {
-          abortErr.cause = options.signal.reason;
-        }
-        abortErr.exitCode = typeof code === 'number' ? code : null;
-        abortErr.stdout = out;
-        abortErr.stderr = errOut;
-        sanitizeCliError(abortErr, executable, args, options.prompt);
-        return reject(abortErr);
-      }
-
-      if (terminationCause === 'timeout') {
-        const timeoutErr = new Error(`Command timed out after ${options.timeoutMs}ms`);
-        timeoutErr.killed = true;
-        timeoutErr.code = 'ETIMEDOUT';
-        timeoutErr.signal = signalCode || child?.signalCode || 'SIGTERM';
-        timeoutErr.exitCode = typeof code === 'number' ? code : null;
-        timeoutErr.stdout = out;
-        timeoutErr.stderr = errOut;
-        sanitizeCliError(timeoutErr, executable, args, options.prompt);
-        return reject(timeoutErr);
-      }
-
-      if (terminationCause === 'maxBuffer') {
-        const bufErr = maxBufferError || new RangeError('stdout maxBuffer length exceeded');
-        bufErr.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-        bufErr.killed = true;
-        bufErr.signal = signalCode || child?.signalCode || 'SIGTERM';
-        bufErr.exitCode = typeof code === 'number' ? code : null;
-        bufErr.stdout = out;
-        bufErr.stderr = errOut;
-        sanitizeCliError(bufErr, executable, args, options.prompt);
-        return reject(bufErr);
-      }
-
-      if (code === 0 && !signalCode) {
-        return resolve({ stdout: out, stderr: errOut, exitCode: 0 });
-      }
-
-      const cmd = [executable, ...(Array.isArray(args) ? args : [])].filter(Boolean).join(' ');
-      const failMsg = errOut ? `Command failed: ${cmd}\n${errOut}` : `Command failed: ${cmd}`;
-      const error = new Error(failMsg);
-      error.cmd = cmd;
-      error.killed = Boolean(signalCode);
-      error.signal = signalCode || null;
-      if (typeof code === 'number') {
-        error.code = code;
-      }
-      error.exitCode = typeof code === 'number' ? code : null;
-      error.stdout = out;
-      error.stderr = errOut;
-      sanitizeCliError(error, executable, args, options.prompt);
-      return reject(error);
-    };
-
-    child.on('close', (code, signalCode) => {
-      if (settled) return;
-      if (terminating && !groupDrainExhausted && !isProcessGroupDead()) {
-        pendingClose = { code, signalCode };
-        killTimer?.ref?.();
-        drainTimer?.ref?.();
-        scheduleStdioDrain(0);
-        return;
-      }
-      finalizeClose(code, signalCode);
-    });
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        onAbort();
-      } else {
-        options.signal.addEventListener('abort', onAbort, { once: true });
-      }
+function buildProviderCallRecord({ context, record }) {
+  const pickDefined = (...values) => {
+    for (const value of values) {
+      if (value !== undefined) return value;
     }
-
-    if (
-      terminationCause === null &&
-      typeof options.timeoutMs === 'number' &&
-      Number.isFinite(options.timeoutMs) &&
-      options.timeoutMs > 0
-    ) {
-      timeoutTimer = setTimeout(() => {
-        timeoutTimer = null;
-        terminateChild('timeout');
-      }, options.timeoutMs);
-      timeoutTimer.unref?.();
-    }
-
-    child.stdin?.on?.('error', () => {});
-    if (options.input !== undefined && options.input !== null) {
-      child.stdin?.end(options.input);
-    } else {
-      child.stdin?.end();
-    }
+    return undefined;
+  };
+  const retryDiagnostics =
+    record.retryDiagnostics !== undefined ? record.retryDiagnostics : context?.retryDiagnostics;
+  const phase = record.phase ?? context?.phase;
+  const round = record.round ?? context?.round;
+  const hasRetryDiag = Boolean(retryDiagnostics && typeof retryDiagnostics === 'object');
+  const rawEffectiveModel = record.model || context?.model;
+  const attempt =
+    typeof record.attempt === 'number'
+      ? record.attempt
+      : typeof retryDiagnostics?.attempt === 'number'
+        ? retryDiagnostics.attempt
+        : typeof context?.attempt === 'number'
+          ? context.attempt
+          : !hasRetryDiag
+            ? 0
+            : undefined;
+  const requestedModel = pickDefined(
+    record.requestedModel,
+    retryDiagnostics?.requestedModel,
+    context?.requestedModel,
+    context?.seat?.model,
+    rawEffectiveModel
+  );
+  const requestedEffort = pickDefined(
+    record.requestedEffort,
+    retryDiagnostics?.requestedEffort,
+    context?.requestedEffort,
+    inferEffortForTelemetry(requestedModel || rawEffectiveModel, context?.reasoningEffort)
+  );
+  const effectiveEffort = pickDefined(
+    record.effectiveEffort,
+    retryDiagnostics?.effectiveEffort,
+    inferEffortForTelemetry(rawEffectiveModel, record.reasoningEffort ?? context?.reasoningEffort)
+  );
+  const capabilityProvenance = pickDefined(
+    record.capabilityProvenance,
+    retryDiagnostics?.capabilityProvenance,
+    context?.capabilityProvenance,
+    null
+  );
+  const fallbackApplied =
+    typeof record.fallbackApplied === 'boolean'
+      ? record.fallbackApplied
+      : typeof retryDiagnostics?.fallbackApplied === 'boolean'
+        ? retryDiagnostics.fallbackApplied
+        : false;
+  const fallbackReason = pickDefined(record.fallbackReason, retryDiagnostics?.fallbackReason, null);
+  const drainStatus = VALID_DRAIN_STATUSES.has(record.drainStatus) ? record.drainStatus : undefined;
+  const drainDurationMs =
+    typeof record.drainDurationMs === 'number' &&
+    Number.isFinite(record.drainDurationMs) &&
+    record.drainDurationMs >= 0
+      ? record.drainDurationMs
+      : undefined;
+  const exitCode = drainStatus === 'drain_expired' ? null : normalizeExitCode(record.exitCode);
+  const signal = drainStatus === 'drain_expired' ? null : normalizeSignalName(record.signal);
+  const promptHint =
+    typeof record.prompt === 'string' && record.prompt
+      ? record.prompt
+      : (typeof context?.prompt === 'string' ? context.prompt : '');
+  const normalizedTrace = normalizeProviderTrace(record.trace, {
+    durationMs: record.durationMs,
+    exitCode,
+    provider: record.provider,
+    prompt: promptHint,
+    lifecycle: record.trace?.lifecycle ?? record.lifecycle
   });
+
+  const {
+    drainStatus: _ds,
+    drainDurationMs: _dd,
+    exitCode: _ec,
+    signal: _sig,
+    lifecycle: _lc,
+    prompt: _pr,
+    ...restRecord
+  } = record;
+
+  return {
+    ...restRecord,
+    ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
+    ...(typeof phase === 'string' && phase ? { phase } : {}),
+    ...(typeof round === 'number' ? { round } : {}),
+    ...(typeof attempt === 'number' ? { attempt } : {}),
+    ...(requestedModel !== undefined ? { requestedModel } : {}),
+    ...(requestedEffort !== undefined ? { requestedEffort } : {}),
+    ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
+    ...(capabilityProvenance !== undefined ? { capabilityProvenance } : {}),
+    ...(typeof fallbackApplied === 'boolean' ? { fallbackApplied } : {}),
+    ...(fallbackReason !== undefined ? { fallbackReason } : {}),
+    exitCode,
+    signal,
+    ...(drainStatus ? { drainStatus } : {}),
+    ...(drainDurationMs !== undefined ? { drainDurationMs } : {}),
+    tools:
+      record.tools === 'none' || context?.tools === 'none'
+        ? 'none'
+        : (record.tools || context?.tools || 'read-only'),
+    trace: normalizedTrace
+  };
 }
 
 /**
- * Helper to safely record provider call telemetry.
+ * Helper to safely record provider call telemetry once per active attempt gate.
  * Observer errors in onCallRecord, context.onCallRecord, or telemetry.emitProviderCall
  * are isolated so they never alter provider execution outcomes or trigger duplicate recording.
+ *
+ * @returns {boolean} true if emitted, false if skipped/invalid/gated
  */
-export function recordProviderCall({ context, onCallRecord, record } = {}) {
+export function recordProviderCall({
+  context,
+  onCallRecord,
+  record,
+  attemptGate,
+  allowCancelledFallback = false
+} = {}) {
+  const gate = attemptGate || getActiveAttemptTelemetryGate();
+  if (gate && (gate.recorded || gate.finalized || (gate.cancelled && !allowCancelledFallback))) {
+    return false;
+  }
   if (!record || typeof record !== 'object') {
-    return;
+    return false;
   }
   let enrichedRecord;
   try {
-    const retryDiagnostics =
-      record.retryDiagnostics !== undefined ? record.retryDiagnostics : context?.retryDiagnostics;
-    const phase = record.phase ?? context?.phase;
-    const round = record.round ?? context?.round;
-    const pickDefined = (...values) => {
-      for (const value of values) {
-        if (value !== undefined) return value;
-      }
-      return undefined;
-    };
-    const inferEffortForTelemetry = (modelString, defaultEffort) => {
-      if (typeof modelString !== 'string' || !modelString.trim()) {
-        return undefined;
-      }
-      const trimmed = modelString.trim();
-      const fallback =
-        typeof defaultEffort === 'string' && defaultEffort.trim() ? defaultEffort.trim().toLowerCase() : 'high';
-      try {
-        const baseModel = extractCanonicalBaseModel(trimmed, fallback);
-        if (baseModel === 'composer-2.5' || trimmed.toLowerCase() === 'composer-2.5') {
-          return null;
-        }
-        return parseModelAndEffort(trimmed, fallback).effort;
-      } catch {
-        return typeof defaultEffort === 'string' && defaultEffort.trim()
-          ? defaultEffort.trim().toLowerCase()
-          : undefined;
-      }
-    };
-    const hasRetryDiag = Boolean(retryDiagnostics && typeof retryDiagnostics === 'object');
-    const rawEffectiveModel = record.model || context?.model;
-    const attempt =
-      typeof record.attempt === 'number'
-        ? record.attempt
-        : typeof retryDiagnostics?.attempt === 'number'
-          ? retryDiagnostics.attempt
-          : typeof context?.attempt === 'number'
-            ? context.attempt
-            : !hasRetryDiag
-              ? 0
-              : undefined;
-    const requestedModel = pickDefined(
-      record.requestedModel,
-      retryDiagnostics?.requestedModel,
-      context?.requestedModel,
-      context?.seat?.model,
-      rawEffectiveModel
-    );
-    const requestedEffort = pickDefined(
-      record.requestedEffort,
-      retryDiagnostics?.requestedEffort,
-      context?.requestedEffort,
-      inferEffortForTelemetry(requestedModel || rawEffectiveModel, context?.reasoningEffort)
-    );
-    const effectiveEffort = pickDefined(
-      record.effectiveEffort,
-      retryDiagnostics?.effectiveEffort,
-      inferEffortForTelemetry(rawEffectiveModel, record.reasoningEffort ?? context?.reasoningEffort)
-    );
-    const capabilityProvenance = pickDefined(
-      record.capabilityProvenance,
-      retryDiagnostics?.capabilityProvenance,
-      context?.capabilityProvenance,
-      null
-    );
-    const fallbackApplied =
-      typeof record.fallbackApplied === 'boolean'
-        ? record.fallbackApplied
-        : typeof retryDiagnostics?.fallbackApplied === 'boolean'
-          ? retryDiagnostics.fallbackApplied
-          : false;
-    const fallbackReason = pickDefined(
-      record.fallbackReason,
-      retryDiagnostics?.fallbackReason,
-      null
-    );
-
-    const normalizedTrace = normalizeProviderTrace(record.trace, {
-      durationMs: record.durationMs,
-      exitCode: record.exitCode,
-      provider: record.provider
-    });
-    enrichedRecord = {
-      ...record,
-      ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
-      ...(typeof phase === 'string' && phase ? { phase } : {}),
-      ...(typeof round === 'number' ? { round } : {}),
-      ...(typeof attempt === 'number' ? { attempt } : {}),
-      ...(requestedModel !== undefined ? { requestedModel } : {}),
-      ...(requestedEffort !== undefined ? { requestedEffort } : {}),
-      ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
-      ...(capabilityProvenance !== undefined ? { capabilityProvenance } : {}),
-      ...(typeof fallbackApplied === 'boolean' ? { fallbackApplied } : {}),
-      ...(fallbackReason !== undefined ? { fallbackReason } : {}),
-      tools:
-        record.tools === 'none' || context?.tools === 'none'
-          ? 'none'
-          : (record.tools || context?.tools || 'read-only'),
-      trace: normalizedTrace
-    };
+    enrichedRecord = buildProviderCallRecord({ context, record });
   } catch {
-    return;
+    return false;
+  }
+  if (gate) {
+    gate.recorded = true;
   }
   try {
     if (typeof onCallRecord === 'function') {
@@ -4007,7 +4599,7 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
     // Isolate direct observer callback failure
   }
   try {
-    if (typeof context?.onCallRecord === 'function') {
+    if (typeof context?.onCallRecord === 'function' && context.onCallRecord !== onCallRecord) {
       context.onCallRecord(enrichedRecord);
     }
   } catch {
@@ -4020,6 +4612,7 @@ export function recordProviderCall({ context, onCallRecord, record } = {}) {
   } catch {
     // Isolate telemetry emitter failure
   }
+  return true;
 }
 
 function createForbiddenStateAccessError(details, trace, exitCode = 0) {
@@ -4029,7 +4622,10 @@ function createForbiddenStateAccessError(details, trace, exitCode = 0) {
     `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`
   );
   err.code = 'FORBIDDEN_STATE_ACCESS';
-  err.exitCode = exitCode;
+  err.exitCode = normalizeExitCode(exitCode);
+  if (trace?.lifecycle) {
+    err.lifecycle = trace.lifecycle;
+  }
   err.trace = trace;
   return err;
 }
@@ -4044,9 +4640,12 @@ function sanitizeEnvelopeText(text, options = null, maxBytes = 1024) {
   if (!trimmed) {
     return '';
   }
-  const carrier = { stderr: trimmed };
-  sanitizeCliError(carrier, options?.executable || 'agy', options?.args || [], options?.prompt || '');
-  return sliceUtf8Bytes(carrier.stderr, maxBytes);
+  return redactPromptInText(trimmed, options?.prompt || '', {
+    executable: options?.executable || 'agy',
+    args: options?.args || [],
+    minPromptLength: 8,
+    maxBytes
+  });
 }
 
 function extractSanitizedEnvelopeError(rawError, options = null) {
@@ -4608,6 +5207,332 @@ export function prepareIsolatedCliWorkspace(optionsOrCwd = {}, maybeContext) {
   };
 }
 
+function extractExecDiagnostics(source, defaultExitCode = null) {
+  const drainStatus = VALID_DRAIN_STATUSES.has(source?.drainStatus) ? source.drainStatus : undefined;
+  const drainDurationMs =
+    typeof source?.drainDurationMs === 'number' &&
+    Number.isFinite(source.drainDurationMs) &&
+    source.drainDurationMs >= 0
+      ? source.drainDurationMs
+      : undefined;
+  const rawExit = source?.exitCode ?? source?.code;
+  const exitCode =
+    drainStatus === 'drain_expired'
+      ? null
+      : (normalizeExitCode(rawExit) ?? defaultExitCode);
+  const signal = drainStatus === 'drain_expired' ? null : normalizeSignalName(source?.signal);
+  const lifecycle = sanitizeLifecycleMetadata(source?.lifecycle ?? source?.trace?.lifecycle);
+  return { exitCode, signal, lifecycle, drainStatus, drainDurationMs };
+}
+
+function attachDiagnosticsToError(err, diagnostics) {
+  if (!err || typeof err !== 'object' || !diagnostics) return err;
+  err.exitCode = diagnostics.drainStatus === 'drain_expired' ? null : diagnostics.exitCode;
+  err.signal = diagnostics.drainStatus === 'drain_expired' ? null : diagnostics.signal;
+  if (diagnostics.lifecycle) err.lifecycle = diagnostics.lifecycle;
+  if (diagnostics.drainStatus) err.drainStatus = diagnostics.drainStatus;
+  if (diagnostics.drainDurationMs !== undefined) err.drainDurationMs = diagnostics.drainDurationMs;
+  return err;
+}
+
+function recordRunnerTelemetry({
+  provider,
+  model,
+  prompt,
+  args,
+  effectiveTools,
+  context,
+  onCallRecord,
+  signal,
+  diagnostics,
+  durationMs,
+  trace,
+  isFailure
+}) {
+  const activeGate = getActiveAttemptTelemetryGate();
+  if (
+    (isFailure && activeGate?.managedByExecuteWithTimeout && signal?.aborted) ||
+    activeGate?.cancelled ||
+    activeGate?.finalized ||
+    activeGate?.recorded
+  ) {
+    return false;
+  }
+  return recordProviderCall({
+    context,
+    onCallRecord,
+    attemptGate: activeGate,
+    record: {
+      participantId: context?.seatId || context?.participantId || 'unknown',
+      provider,
+      model,
+      prompt,
+      tools: effectiveTools,
+      argv: redactArgv(args, prompt),
+      exitCode: diagnostics.exitCode,
+      signal: diagnostics.signal,
+      ...(diagnostics.drainStatus ? { drainStatus: diagnostics.drainStatus } : {}),
+      ...(diagnostics.drainDurationMs !== undefined ? { drainDurationMs: diagnostics.drainDurationMs } : {}),
+      durationMs,
+      trace
+    }
+  });
+}
+
+function sanitizeRunnerStderr(rawStderr, executable, args, prompt, stripBenignAgy = false) {
+  if (typeof rawStderr !== 'string' || !rawStderr) return '';
+  const redacted = redactPromptInText(rawStderr, prompt, {
+    executable,
+    args,
+    minPromptLength: 8
+  });
+  const stripped = stripBenignAgy ? stripKnownBenignAntigravityWarning(redacted) : redacted;
+  return sliceUtf8Bytes(stripped, MAX_CLI_STDERR_BYTES);
+}
+
+function evaluateAntigravitySuccess({
+  result,
+  executable,
+  args,
+  prompt,
+  forbiddenWorkspaceRoots,
+  durationMs
+}) {
+  const diagnostics = extractExecDiagnostics(result, 0);
+  const raw = result?.stdout || '';
+  const rawStderr = typeof result?.stderr === 'string' ? result.stderr : '';
+  if (diagnostics.exitCode !== 0) {
+    const exitErr = new Error(
+      sanitizeRunnerStderr(rawStderr, executable, args, prompt, true) ||
+        `Command failed with exit code ${diagnostics.exitCode}`
+    );
+    exitErr.stdout = raw;
+    exitErr.stderr = rawStderr;
+    throw attachDiagnosticsToError(exitErr, diagnostics);
+  }
+  const diagnosticStderr = sanitizeRunnerStderr(rawStderr, executable, args, prompt, true);
+  const parsedOut = parseAntigravityOutput(raw, { forbiddenWorkspaceRoots, executable, args, prompt });
+  const resolvedOutput =
+    typeof parsedOut.unwrappedResponse === 'string'
+      ? (parsedOut.unwrappedResponse.trim() ? parsedOut.unwrappedResponse : '')
+      : raw.trim();
+  const isErrorOutcome =
+    parsedOut.forbiddenStateAccess || parsedOut.hasFailureMetadata || !resolvedOutput.trim();
+  const trace = {
+    traceCoverage: parsedOut.traceCoverage,
+    toolCalls: parsedOut.toolCalls,
+    skillsRead: parsedOut.skillsRead,
+    forbiddenStateAccess: parsedOut.forbiddenStateAccess,
+    forbiddenAccessDetails: parsedOut.forbiddenAccessDetails,
+    durationMs,
+    outcome: isErrorOutcome ? 'error' : 'success',
+    ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+    ...(parsedOut.deniedActions.length > 0 ? { deniedActions: parsedOut.deniedActions } : {}),
+    ...(parsedOut.envelopeError ? { envelopeError: parsedOut.envelopeError } : {}),
+    ...(parsedOut.finishedReason ? { finishedReason: parsedOut.finishedReason } : {}),
+    ...(diagnostics.lifecycle ? { lifecycle: diagnostics.lifecycle } : {})
+  };
+  if (parsedOut.forbiddenStateAccess) {
+    throw attachDiagnosticsToError(
+      createForbiddenStateAccessError(parsedOut.forbiddenAccessDetails, trace, diagnostics.exitCode),
+      diagnostics
+    );
+  }
+  if (!resolvedOutput.trim()) {
+    if (parsedOut.deniedActions.length > 0) {
+      throw createHeadlessToolDeniedError(
+        `Antigravity headless mode denied tool execution (${parsedOut.deniedActions.length} action(s))`,
+        {
+          exitCode: diagnostics.exitCode,
+          signal: diagnostics.signal,
+          lifecycle: diagnostics.lifecycle,
+          drainStatus: diagnostics.drainStatus,
+          drainDurationMs: diagnostics.drainDurationMs,
+          deniedActions: parsedOut.deniedActions,
+          stderr: diagnosticStderr,
+          finishedReason: parsedOut.finishedReason,
+          envelopeError: parsedOut.envelopeError,
+          trace
+        }
+      );
+    }
+    if (parsedOut.envelopeError || hasExplicitProviderErrorSignature(diagnosticStderr)) {
+      const combinedErrText = [parsedOut.envelopeError, diagnosticStderr].filter(Boolean).join(' — ');
+      const envelopeErr = new Error(combinedErrText || 'Antigravity envelope error');
+      envelopeErr.stderr = combinedErrText;
+      if (parsedOut.envelopeError) envelopeErr.envelopeError = parsedOut.envelopeError;
+      if (parsedOut.finishedReason) envelopeErr.finishedReason = parsedOut.finishedReason;
+      envelopeErr.trace = trace;
+      throw attachDiagnosticsToError(envelopeErr, diagnostics);
+    }
+  }
+  return { resolvedOutput, trace, diagnostics };
+}
+
+function buildRunnerErrorTrace({
+  err,
+  parsedErr,
+  durationMs,
+  diagnosticStderr,
+  lifecycle,
+  isAntigravity
+}) {
+  if (err?.trace) {
+    return {
+      ...err.trace,
+      durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
+      outcome: 'error',
+      ...(!err.trace.stderr && diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+      ...(!err.trace.lifecycle && lifecycle ? { lifecycle } : {})
+    };
+  }
+  return {
+    traceCoverage: parsedErr?.eventsParsed
+      ? parsedErr.traceCoverage
+      : (isAntigravity && parsedErr ? parsedErr.traceCoverage : 'unavailable'),
+    toolCalls: parsedErr ? parsedErr.toolCalls : [],
+    skillsRead: parsedErr ? parsedErr.skillsRead : [],
+    forbiddenStateAccess: parsedErr ? parsedErr.forbiddenStateAccess : false,
+    forbiddenAccessDetails: parsedErr ? parsedErr.forbiddenAccessDetails : [],
+    durationMs,
+    outcome: 'error',
+    ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+    ...(parsedErr?.deniedActions?.length ? { deniedActions: parsedErr.deniedActions } : {}),
+    ...(parsedErr?.envelopeError ? { envelopeError: parsedErr.envelopeError } : {}),
+    ...(parsedErr?.finishedReason ? { finishedReason: parsedErr.finishedReason } : {}),
+    ...(lifecycle ? { lifecycle } : {})
+  };
+}
+
+function sanitizeFailureErrorFields(err, executable, args, prompt, isAntigravity) {
+  const explicitPrompt = typeof prompt === 'string' ? prompt : '';
+  const { effectiveArgs, detectedPrompt } = resolveCliErrorArgsAndPrompt(
+    err,
+    executable,
+    args,
+    explicitPrompt
+  );
+  const redactOpts = { executable, args: effectiveArgs, minPromptLength: 8 };
+  sanitizeSpawnargsInPlace(err, detectedPrompt, explicitPrompt, redactOpts);
+  if (typeof err.cmd === 'string') {
+    err.cmd = redactPromptInText(err.cmd, explicitPrompt, redactOpts);
+  }
+  if (typeof err.message === 'string') {
+    err.message = redactPromptInText(err.message, explicitPrompt, {
+      ...redactOpts,
+      maxBytes: MAX_CLI_ERROR_MESSAGE_BYTES
+    });
+  }
+  const diagnosticStderr =
+    typeof err.stderr === 'string'
+      ? sanitizeRunnerStderr(err.stderr, executable, effectiveArgs, explicitPrompt, isAntigravity)
+      : '';
+  if (typeof err.stderr === 'string') {
+    err.stderr = diagnosticStderr;
+  }
+  return diagnosticStderr;
+}
+
+function finalizeRunnerFailure({
+  err,
+  provider,
+  executable,
+  model,
+  prompt,
+  args,
+  effectiveTools,
+  context,
+  onCallRecord,
+  signal,
+  startTime,
+  forbiddenWorkspaceRoots,
+  parser,
+  isAntigravity = false
+}) {
+  const durationMs = Date.now() - startTime;
+  const diagnostics = extractExecDiagnostics(err, null);
+  const diagnosticStderr = sanitizeFailureErrorFields(err, executable, args, prompt, isAntigravity);
+
+  const parsedErr =
+    !err?.trace && typeof err?.stdout === 'string' && (!isAntigravity || err.stdout.trim())
+      ? parser(err.stdout, { forbiddenWorkspaceRoots, executable, args, prompt })
+      : null;
+  const errorTrace = buildRunnerErrorTrace({
+    err,
+    parsedErr,
+    durationMs,
+    diagnosticStderr,
+    lifecycle: diagnostics.lifecycle,
+    isAntigravity
+  });
+
+  let errToThrow = err;
+  const isPreservedRuntimeAbortOrLimit =
+    err?.name === 'AbortError' ||
+    err?.code === 'ABORT_ERR' ||
+    err?.code === 'ETIMEDOUT' ||
+    err?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+
+  if (!err.trace && parsedErr?.forbiddenStateAccess) {
+    const detailText =
+      parsedErr.forbiddenAccessDetails.length > 0
+        ? parsedErr.forbiddenAccessDetails.join(', ')
+        : '.council/';
+    err.code = 'FORBIDDEN_STATE_ACCESS';
+    err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`;
+  } else if (
+    isAntigravity &&
+    !err.trace &&
+    !isPreservedRuntimeAbortOrLimit &&
+    parsedErr?.deniedActions?.length > 0 &&
+    !hasQuotaOrAuthProviderSignature(
+      [parsedErr.envelopeError, diagnosticStderr, err?.message].filter(Boolean).join(' ')
+    )
+  ) {
+    errToThrow = createHeadlessToolDeniedError(
+      `Antigravity headless mode denied tool execution (${parsedErr.deniedActions.length} action(s))`,
+      {
+        exitCode: diagnostics.exitCode,
+        signal: diagnostics.signal,
+        lifecycle: diagnostics.lifecycle,
+        drainStatus: diagnostics.drainStatus,
+        drainDurationMs: diagnostics.drainDurationMs,
+        deniedActions: parsedErr.deniedActions,
+        stderr: diagnosticStderr,
+        finishedReason: parsedErr.finishedReason,
+        envelopeError: parsedErr.envelopeError,
+        trace: errorTrace,
+        cause: err
+      }
+    );
+  } else if (isAntigravity && !err.trace && parsedErr?.envelopeError) {
+    err.envelopeError = parsedErr.envelopeError;
+  }
+
+  attachDiagnosticsToError(errToThrow, diagnostics);
+  errToThrow.trace = errorTrace;
+
+  const activeGate = getActiveAttemptTelemetryGate();
+  const recorded = recordRunnerTelemetry({
+    provider,
+    model,
+    prompt,
+    args,
+    effectiveTools,
+    context,
+    onCallRecord,
+    signal,
+    diagnostics,
+    durationMs: errorTrace.durationMs,
+    trace: errorTrace,
+    isFailure: true
+  });
+  if (recorded || activeGate?.recorded) {
+    errToThrow._providerCallRecorded = true;
+  }
+  return errToThrow;
+}
+
 /**
  * Provider Dispatcher: Antigravity (agy --print)
  * Args: ['--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--model', model, '--effort', effort, '--print=' + prompt]
@@ -4645,8 +5570,7 @@ export async function runAntigravityCli({
   const defaultEffort = context?.reasoningEffort || 'high';
   const parsed = parseModelAndEffort(model, defaultEffort);
   const baseModel = extractCanonicalBaseModel(model, defaultEffort);
-  const trimmedModel = String(model || '').trim();
-  const isDateStamped = /-\d{8}(?:\s*\([^)]*\))?$/i.test(trimmedModel);
+  const isDateStamped = /-\d{8}(?:\s*\([^)]*\))?$/i.test(String(model || '').trim());
   const isCanonicalAgyFamily =
     baseModel === 'gemini-4-argon' ||
     baseModel === 'gemini-4-carbon' ||
@@ -4673,7 +5597,6 @@ export async function runAntigravityCli({
   ];
 
   const startTime = Date.now();
-  let exitCode = 0;
   let cleanedUp = false;
   let primaryError = null;
 
@@ -4682,213 +5605,54 @@ export async function runAntigravityCli({
       signal,
       timeoutMs,
       ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
+      ...(typeof prompt === 'string' && prompt ? { prompt } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
-    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
-    const raw = result?.stdout || '';
-    const rawStderr = typeof result?.stderr === 'string' ? result.stderr : '';
-    if (exitCode !== 0) {
-      const exitErr = new Error(
-        stripKnownBenignAntigravityWarning(rawStderr) || `Command failed with exit code ${exitCode}`
-      );
-      exitErr.exitCode = exitCode;
-      exitErr.stdout = raw;
-      exitErr.stderr = rawStderr;
-      throw exitErr;
-    }
-
     const durationMs = Date.now() - startTime;
-    const sanitizedStderrCarrier = { stderr: rawStderr };
-    sanitizeCliError(sanitizedStderrCarrier, executable, args, prompt);
-    const diagnosticStderr = stripKnownBenignAntigravityWarning(sanitizedStderrCarrier.stderr || '');
-    const parsedOut = parseAntigravityOutput(raw, {
-      forbiddenWorkspaceRoots,
+    const { resolvedOutput, trace, diagnostics } = evaluateAntigravitySuccess({
+      result,
       executable,
       args,
-      prompt
+      prompt,
+      forbiddenWorkspaceRoots,
+      durationMs
     });
-    const resolvedOutput =
-      typeof parsedOut.unwrappedResponse === 'string'
-        ? (parsedOut.unwrappedResponse.trim() ? parsedOut.unwrappedResponse : '')
-        : raw.trim();
-    const isErrorOutcome =
-      parsedOut.forbiddenStateAccess ||
-      parsedOut.hasFailureMetadata ||
-      !resolvedOutput.trim();
-
-    const trace = {
-      traceCoverage: parsedOut.traceCoverage,
-      toolCalls: parsedOut.toolCalls,
-      skillsRead: parsedOut.skillsRead,
-      forbiddenStateAccess: parsedOut.forbiddenStateAccess,
-      forbiddenAccessDetails: parsedOut.forbiddenAccessDetails,
-      durationMs,
-      outcome: isErrorOutcome ? 'error' : 'success',
-      ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
-      ...(parsedOut.deniedActions.length > 0 ? { deniedActions: parsedOut.deniedActions } : {}),
-      ...(parsedOut.envelopeError ? { envelopeError: parsedOut.envelopeError } : {}),
-      ...(parsedOut.finishedReason ? { finishedReason: parsedOut.finishedReason } : {})
-    };
-
-    if (parsedOut.forbiddenStateAccess) {
-      throw createForbiddenStateAccessError(parsedOut.forbiddenAccessDetails, trace, exitCode);
-    }
-
-    if (!resolvedOutput.trim()) {
-      if (parsedOut.deniedActions.length > 0) {
-        throw createHeadlessToolDeniedError(
-          `Antigravity headless mode denied tool execution (${parsedOut.deniedActions.length} action(s))`,
-          {
-            exitCode,
-            deniedActions: parsedOut.deniedActions,
-            stderr: diagnosticStderr,
-            finishedReason: parsedOut.finishedReason,
-            envelopeError: parsedOut.envelopeError,
-            trace
-          }
-        );
-      }
-
-      if (parsedOut.envelopeError || hasExplicitProviderErrorSignature(diagnosticStderr)) {
-        const combinedErrText = [parsedOut.envelopeError, diagnosticStderr]
-          .filter(Boolean)
-          .join(' — ');
-        const envelopeErr = new Error(combinedErrText || 'Antigravity envelope error');
-        envelopeErr.exitCode = exitCode;
-        envelopeErr.stderr = combinedErrText;
-        if (parsedOut.envelopeError) {
-          envelopeErr.envelopeError = parsedOut.envelopeError;
-        }
-        if (parsedOut.finishedReason) {
-          envelopeErr.finishedReason = parsedOut.finishedReason;
-        }
-        envelopeErr.trace = trace;
-        throw envelopeErr;
-      }
-    }
-
     cleanedUp = true;
     cleanupTempWorkspace(tempCwdDir);
-
-    recordProviderCall({
+    recordRunnerTelemetry({
+      provider: 'antigravity',
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'antigravity',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs,
-        trace
-      }
+      signal,
+      diagnostics,
+      durationMs,
+      trace,
+      isFailure: false
     });
-
     return resolvedOutput;
   } catch (err) {
     primaryError = err;
-    const durationMs = Date.now() - startTime;
-    exitCode = typeof err.exitCode === 'number'
-      ? err.exitCode
-      : (typeof err.code === 'number' ? err.code : 1);
-
-    sanitizeCliError(err, executable, args, prompt);
-    const diagnosticStderr =
-      typeof err.stderr === 'string' ? stripKnownBenignAntigravityWarning(err.stderr) : '';
-    if (typeof err.stderr === 'string') {
-      err.stderr = diagnosticStderr;
-    }
-
-    const parsedErr =
-      !err?.trace && typeof err?.stdout === 'string' && err.stdout.trim()
-        ? parseAntigravityOutput(err.stdout, {
-            forbiddenWorkspaceRoots,
-            executable,
-            args,
-            prompt
-          })
-        : null;
-
-    const errorTrace = err?.trace
-      ? {
-          ...err.trace,
-          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
-          outcome: 'error',
-          ...(!err.trace.stderr && diagnosticStderr ? { stderr: diagnosticStderr } : {})
-        }
-      : {
-          traceCoverage: parsedErr ? parsedErr.traceCoverage : 'unavailable',
-          toolCalls: parsedErr ? parsedErr.toolCalls : [],
-          skillsRead: parsedErr ? parsedErr.skillsRead : [],
-          forbiddenStateAccess: parsedErr ? parsedErr.forbiddenStateAccess : false,
-          forbiddenAccessDetails: parsedErr ? parsedErr.forbiddenAccessDetails : [],
-          durationMs,
-          outcome: 'error',
-          ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
-          ...(parsedErr?.deniedActions?.length ? { deniedActions: parsedErr.deniedActions } : {}),
-          ...(parsedErr?.envelopeError ? { envelopeError: parsedErr.envelopeError } : {}),
-          ...(parsedErr?.finishedReason ? { finishedReason: parsedErr.finishedReason } : {})
-        };
-
-    let errToThrow = err;
-    const isPreservedRuntimeAbortOrLimit =
-      err?.name === 'AbortError' ||
-      err?.code === 'ABORT_ERR' ||
-      err?.code === 'ETIMEDOUT' ||
-      err?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-
-    if (!err.trace && parsedErr?.forbiddenStateAccess) {
-      const detailText =
-        parsedErr.forbiddenAccessDetails.length > 0
-          ? parsedErr.forbiddenAccessDetails.join(', ')
-          : '.council/';
-      err.code = 'FORBIDDEN_STATE_ACCESS';
-      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${detailText}`;
-    } else if (
-      !err.trace &&
-      !isPreservedRuntimeAbortOrLimit &&
-      parsedErr?.deniedActions?.length > 0 &&
-      !hasQuotaOrAuthProviderSignature(
-        [parsedErr.envelopeError, diagnosticStderr, err?.message].filter(Boolean).join(' ')
-      )
-    ) {
-      errToThrow = createHeadlessToolDeniedError(
-        `Antigravity headless mode denied tool execution (${parsedErr.deniedActions.length} action(s))`,
-        {
-          exitCode,
-          deniedActions: parsedErr.deniedActions,
-          stderr: diagnosticStderr,
-          finishedReason: parsedErr.finishedReason,
-          envelopeError: parsedErr.envelopeError,
-          trace: errorTrace,
-          cause: err
-        }
-      );
-    } else if (!err.trace && parsedErr?.envelopeError) {
-      err.envelopeError = parsedErr.envelopeError;
-    }
-
-    errToThrow.trace = errorTrace;
-    errToThrow._providerCallRecorded = true;
-
-    recordProviderCall({
+    throw finalizeRunnerFailure({
+      err,
+      provider: 'antigravity',
+      executable,
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'antigravity',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs: errorTrace.durationMs,
-        trace: errorTrace
-      }
+      signal,
+      startTime,
+      forbiddenWorkspaceRoots,
+      parser: parseAntigravityOutput,
+      isAntigravity: true
     });
-
-    throw errToThrow;
   } finally {
     if (!cleanedUp) {
       cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
@@ -4954,6 +5718,41 @@ export async function listAntigravityModels(options = {}) {
   return { ok: true, selectors, raw: cleaned.join('\n') };
 }
 
+function evaluateStreamRunnerResult({
+  result,
+  executable,
+  args,
+  prompt,
+  parser,
+  forbiddenWorkspaceRoots,
+  durationMs
+}) {
+  const diagnostics = extractExecDiagnostics(result, 0);
+  const parsedStream = parser(result?.stdout || '', { forbiddenWorkspaceRoots });
+  const diagnosticStderr =
+    typeof result?.stderr === 'string'
+      ? sanitizeRunnerStderr(result.stderr, executable, args, prompt, false)
+      : '';
+  const trace = {
+    traceCoverage: parsedStream.traceCoverage,
+    toolCalls: parsedStream.toolCalls,
+    skillsRead: parsedStream.skillsRead,
+    forbiddenStateAccess: parsedStream.forbiddenStateAccess,
+    forbiddenAccessDetails: parsedStream.forbiddenAccessDetails,
+    durationMs,
+    outcome: parsedStream.forbiddenStateAccess ? 'error' : 'success',
+    ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
+    ...(diagnostics.lifecycle ? { lifecycle: diagnostics.lifecycle } : {})
+  };
+  if (parsedStream.forbiddenStateAccess) {
+    throw attachDiagnosticsToError(
+      createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, diagnostics.exitCode),
+      diagnostics
+    );
+  }
+  return { text: parsedStream.text, trace, diagnostics };
+}
+
 /**
  * Provider Dispatcher: Codex (codex exec)
  * Args: ['exec', '--ephemeral', '--json', '--disable', 'hooks', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', 'model_reasoning_effort="' + codexEffort + '"', prompt]
@@ -5016,13 +5815,11 @@ export async function runCodexCli({
     '-c', `model_reasoning_effort="${parsed.codexEffort}"`,
     prompt
   ];
-
   if (shouldIgnoreUserConfig) {
     args.splice(args.indexOf('--ephemeral') + 1, 0, '--ignore-user-config');
   }
 
   const startTime = Date.now();
-  let exitCode = 0;
   let cleanedUp = false;
   let primaryError = null;
 
@@ -5031,95 +5828,54 @@ export async function runCodexCli({
       signal,
       timeoutMs,
       ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
+      ...(typeof prompt === 'string' && prompt ? { prompt } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
-    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
-    const parsedStream = parseCodexEventStream(result?.stdout || '', { forbiddenWorkspaceRoots });
-
-    const trace = {
-      traceCoverage: parsedStream.traceCoverage,
-      toolCalls: parsedStream.toolCalls,
-      skillsRead: parsedStream.skillsRead,
-      forbiddenStateAccess: parsedStream.forbiddenStateAccess,
-      forbiddenAccessDetails: parsedStream.forbiddenAccessDetails,
-      durationMs,
-      outcome: parsedStream.forbiddenStateAccess ? 'error' : 'success'
-    };
-
-    if (parsedStream.forbiddenStateAccess) {
-      throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
-    }
-
+    const { text, trace, diagnostics } = evaluateStreamRunnerResult({
+      result,
+      executable,
+      args,
+      prompt,
+      parser: parseCodexEventStream,
+      forbiddenWorkspaceRoots,
+      durationMs
+    });
     cleanedUp = true;
     cleanupTempWorkspace(tempCwdDir);
-
-    recordProviderCall({
+    recordRunnerTelemetry({
+      provider: 'codex',
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'codex',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs,
-        trace
-      }
+      signal,
+      diagnostics,
+      durationMs,
+      trace,
+      isFailure: false
     });
-
-    return parsedStream.text;
+    return text;
   } catch (err) {
     primaryError = err;
-    const durationMs = Date.now() - startTime;
-    exitCode = typeof err.exitCode === 'number'
-      ? err.exitCode
-      : (typeof err.code === 'number' ? err.code : 1);
-
-    sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = err?.trace
-      ? null
-      : parseCodexEventStream(err?.stdout || '', { forbiddenWorkspaceRoots });
-    const errorTrace = err?.trace
-      ? {
-          ...err.trace,
-          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
-          outcome: 'error'
-        }
-      : {
-          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
-          toolCalls: parsedErrStream.toolCalls,
-          skillsRead: parsedErrStream.skillsRead,
-          forbiddenStateAccess: parsedErrStream.forbiddenStateAccess,
-          forbiddenAccessDetails: parsedErrStream.forbiddenAccessDetails,
-          durationMs,
-          outcome: 'error'
-        };
-    if (!err.trace && parsedErrStream?.forbiddenStateAccess) {
-      err.code = 'FORBIDDEN_STATE_ACCESS';
-      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErrStream.forbiddenAccessDetails.join(', ')}`;
-    }
-    err.trace = errorTrace;
-    err._providerCallRecorded = true;
-
-    recordProviderCall({
+    throw finalizeRunnerFailure({
+      err,
+      provider: 'codex',
+      executable,
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'codex',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs: errorTrace.durationMs,
-        trace: errorTrace
-      }
+      signal,
+      startTime,
+      forbiddenWorkspaceRoots,
+      parser: parseCodexEventStream
     });
-
-    throw err;
   } finally {
     if (!cleanedUp) {
       cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });
@@ -5187,213 +5943,76 @@ export async function runCursorCli({
   ];
 
   const startTime = Date.now();
-  let exitCode = 0;
   let cleanedUp = false;
   let primaryError = null;
 
-  try {
-    const result = await exec(executable, args, {
+  const runBinary = async (bin) => {
+    const result = await exec(bin, args, {
       signal,
       timeoutMs,
       ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
+      ...(typeof prompt === 'string' && prompt ? { prompt } : {}),
       cwd: effectiveCwd,
       env: effectiveEnv
     });
-    exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const durationMs = Date.now() - startTime;
-    const parsedStream = parseCursorEventStream(result?.stdout || '', { forbiddenWorkspaceRoots });
-
-    const trace = {
-      traceCoverage: parsedStream.traceCoverage,
-      toolCalls: parsedStream.toolCalls,
-      skillsRead: parsedStream.skillsRead,
-      forbiddenStateAccess: parsedStream.forbiddenStateAccess,
-      forbiddenAccessDetails: parsedStream.forbiddenAccessDetails,
-      durationMs,
-      outcome: parsedStream.forbiddenStateAccess ? 'error' : 'success'
-    };
-
-    if (parsedStream.forbiddenStateAccess) {
-      throw createForbiddenStateAccessError(parsedStream.forbiddenAccessDetails, trace, exitCode);
-    }
-
+    const { text, trace, diagnostics } = evaluateStreamRunnerResult({
+      result,
+      executable: bin,
+      args,
+      prompt,
+      parser: parseCursorEventStream,
+      forbiddenWorkspaceRoots,
+      durationMs
+    });
     cleanedUp = true;
     cleanupTempWorkspace(tempCwdDir);
-
-    recordProviderCall({
+    recordRunnerTelemetry({
+      provider: 'cursor',
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'cursor',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs,
-        trace
-      }
+      signal,
+      diagnostics,
+      durationMs,
+      trace,
+      isFailure: false
     });
+    return text;
+  };
 
-    return parsedStream.text;
+  try {
+    return await runBinary(executable);
   } catch (err) {
-    if (err && err.code === 'ENOENT' && executable === 'cursor-agent') {
+    let activeBin = executable;
+    let activeErr = err;
+    if (err && err.code === 'ENOENT' && executable === 'cursor-agent' && !signal?.aborted) {
+      activeBin = 'agent';
       try {
-        const fallbackResult = await exec('agent', args, {
-          signal,
-          timeoutMs,
-          ...(effectiveKillGraceMs !== undefined ? { killGraceMs: effectiveKillGraceMs } : {}),
-          cwd: effectiveCwd,
-          env: effectiveEnv
-        });
-        exitCode = typeof fallbackResult?.exitCode === 'number' ? fallbackResult.exitCode : 0;
-        const durationMs = Date.now() - startTime;
-        const parsedFallback = parseCursorEventStream(fallbackResult?.stdout || '', {
-          forbiddenWorkspaceRoots
-        });
-
-        const fallbackTrace = {
-          traceCoverage: parsedFallback.traceCoverage,
-          toolCalls: parsedFallback.toolCalls,
-          skillsRead: parsedFallback.skillsRead,
-          forbiddenStateAccess: parsedFallback.forbiddenStateAccess,
-          forbiddenAccessDetails: parsedFallback.forbiddenAccessDetails,
-          durationMs,
-          outcome: parsedFallback.forbiddenStateAccess ? 'error' : 'success'
-        };
-
-        if (parsedFallback.forbiddenStateAccess) {
-          throw createForbiddenStateAccessError(
-            parsedFallback.forbiddenAccessDetails,
-            fallbackTrace,
-            exitCode
-          );
-        }
-
-        cleanedUp = true;
-        cleanupTempWorkspace(tempCwdDir);
-
-        recordProviderCall({
-          context,
-          onCallRecord,
-          record: {
-            participantId: context?.seatId || context?.participantId || 'unknown',
-            provider: 'cursor',
-            model,
-            tools: effectiveTools,
-            argv: redactArgv(args, prompt),
-            exitCode,
-            durationMs,
-            trace: fallbackTrace
-          }
-        });
-
-        return parsedFallback.text;
+        return await runBinary('agent');
       } catch (fallbackErr) {
-        primaryError = fallbackErr;
-        const durationMs = Date.now() - startTime;
-        exitCode = typeof fallbackErr.exitCode === 'number'
-          ? fallbackErr.exitCode
-          : (typeof fallbackErr.code === 'number' ? fallbackErr.code : 1);
-
-        sanitizeCliError(fallbackErr, 'agent', args, prompt);
-        const parsedFallbackErr = fallbackErr?.trace
-          ? null
-          : parseCursorEventStream(fallbackErr?.stdout || '', { forbiddenWorkspaceRoots });
-        const fallbackErrorTrace = fallbackErr?.trace
-          ? {
-              ...fallbackErr.trace,
-              durationMs:
-                typeof fallbackErr.trace.durationMs === 'number'
-                  ? fallbackErr.trace.durationMs
-                  : durationMs,
-              outcome: 'error'
-            }
-          : {
-              traceCoverage: parsedFallbackErr.eventsParsed
-                ? parsedFallbackErr.traceCoverage
-                : 'unavailable',
-              toolCalls: parsedFallbackErr.toolCalls,
-              skillsRead: parsedFallbackErr.skillsRead,
-              forbiddenStateAccess: parsedFallbackErr.forbiddenStateAccess,
-              forbiddenAccessDetails: parsedFallbackErr.forbiddenAccessDetails,
-              durationMs,
-              outcome: 'error'
-            };
-        if (!fallbackErr.trace && parsedFallbackErr?.forbiddenStateAccess) {
-          fallbackErr.code = 'FORBIDDEN_STATE_ACCESS';
-          fallbackErr.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedFallbackErr.forbiddenAccessDetails.join(', ')}`;
-        }
-        fallbackErr.trace = fallbackErrorTrace;
-        fallbackErr._providerCallRecorded = true;
-
-        recordProviderCall({
-          context,
-          onCallRecord,
-          record: {
-            participantId: context?.seatId || context?.participantId || 'unknown',
-            provider: 'cursor',
-            model,
-            tools: effectiveTools,
-            argv: redactArgv(args, prompt),
-            exitCode,
-            durationMs: fallbackErrorTrace.durationMs,
-            trace: fallbackErrorTrace
-          }
-        });
-
-        throw fallbackErr;
+        activeErr = fallbackErr;
       }
     }
-
-    primaryError = err;
-    const durationMs = Date.now() - startTime;
-    exitCode = typeof err.exitCode === 'number'
-      ? err.exitCode
-      : (typeof err.code === 'number' ? err.code : 1);
-
-    sanitizeCliError(err, executable, args, prompt);
-    const parsedErrStream = err?.trace
-      ? null
-      : parseCursorEventStream(err?.stdout || '', { forbiddenWorkspaceRoots });
-    const errorTrace = err?.trace
-      ? {
-          ...err.trace,
-          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : durationMs,
-          outcome: 'error'
-        }
-      : {
-          traceCoverage: parsedErrStream.eventsParsed ? parsedErrStream.traceCoverage : 'unavailable',
-          toolCalls: parsedErrStream.toolCalls,
-          skillsRead: parsedErrStream.skillsRead,
-          forbiddenStateAccess: parsedErrStream.forbiddenStateAccess,
-          forbiddenAccessDetails: parsedErrStream.forbiddenAccessDetails,
-          durationMs,
-          outcome: 'error'
-        };
-    if (!err.trace && parsedErrStream?.forbiddenStateAccess) {
-      err.code = 'FORBIDDEN_STATE_ACCESS';
-      err.message = `[ForbiddenStateAccessError] Seat attempted to access forbidden .council/ state artifact: ${parsedErrStream.forbiddenAccessDetails.join(', ')}`;
-    }
-    err.trace = errorTrace;
-    err._providerCallRecorded = true;
-
-    recordProviderCall({
+    primaryError = activeErr;
+    throw finalizeRunnerFailure({
+      err: activeErr,
+      provider: 'cursor',
+      executable: activeBin,
+      model,
+      prompt,
+      args,
+      effectiveTools,
       context,
       onCallRecord,
-      record: {
-        participantId: context?.seatId || context?.participantId || 'unknown',
-        provider: 'cursor',
-        model,
-        tools: effectiveTools,
-        argv: redactArgv(args, prompt),
-        exitCode,
-        durationMs: errorTrace.durationMs,
-        trace: errorTrace
-      }
+      signal,
+      startTime,
+      forbiddenWorkspaceRoots,
+      parser: parseCursorEventStream
     });
-
-    throw err;
   } finally {
     if (!cleanedUp) {
       cleanupTempWorkspace(tempCwdDir, { suppressErrors: primaryError !== null });

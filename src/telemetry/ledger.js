@@ -498,6 +498,9 @@ export function buildRunTelemetryRecord({
     ? Object.freeze({
         id: state.judge.id,
         ...canonicalizeModelKey(state.judge.harness, state.judge.model),
+        status: state.judge.status || 'idle',
+        errorClass: state.judge.errorClass || null,
+        faultReason: state.judge.faultReason || null,
         retryDiagnosticsHistory: cloneFrozenRetryDiagnosticsHistory(state.judge.retryDiagnosticsHistory)
       })
     : null;

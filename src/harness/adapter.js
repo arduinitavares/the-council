@@ -4,9 +4,22 @@
  */
 
 import {
+  VALID_DRAIN_STATUSES,
+  MAX_CLI_ERROR_MESSAGE_BYTES,
+  MAX_CLI_STDERR_BYTES,
   parseModelAndEffort,
   recordProviderCall,
   normalizeProviderTrace,
+  normalizeExitCode,
+  normalizeSignalName,
+  sliceUtf8Bytes,
+  redactPromptInText,
+  sanitizeLifecycleMetadata,
+  createAttemptTelemetryGate,
+  runWithAttemptTelemetryGate,
+  getActiveAttemptTelemetryGate,
+  markAttemptGateCancelled,
+  markAttemptGateFinalized,
   PROVIDER_HTTP_429_REGEX,
   PROVIDER_HTTP_AUTH_REGEX
 } from './cli-runner.js';
@@ -15,6 +28,45 @@ export {
   PROVIDER_HTTP_429_REGEX,
   PROVIDER_HTTP_AUTH_REGEX
 };
+
+const MAX_ENVELOPE_ERROR_BYTES = 1024;
+const attemptPromptRegistry = new WeakMap();
+
+/**
+ * Associates an attempt prompt with a context object without mutating enumerable
+ * context properties, allowing timeout/abort diagnostics to redact prompt leaks.
+ *
+ * @param {Object} context
+ * @param {string} prompt
+ */
+export function registerAttemptPrompt(context, prompt) {
+  if (context && typeof context === 'object' && typeof prompt === 'string' && prompt) {
+    attemptPromptRegistry.set(context, prompt);
+  }
+}
+
+/**
+ * Returns true when an error must be handled by base HarnessAdapter.classifyError
+ * before provider-specific quota patterns are inspected.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isReservedClassificationError(error) {
+  return Boolean(
+    error instanceof HarnessError ||
+      error?.name === 'AbortError' ||
+      error?.code === 'ABORT_ERR' ||
+      error?._latchedTimeout === true ||
+      error?.name === 'TimeoutError' ||
+      error?.code === 'ETIMEDOUT' ||
+      error?.code === 'FORBIDDEN_STATE_ACCESS' ||
+      error?.trace?.forbiddenStateAccess === true ||
+      /\[ForbiddenStateAccessError\]/i.test(error?.message || '') ||
+      error?.name === 'HeadlessToolDeniedError' ||
+      error?.code === 'HEADLESS_TOOL_DENIED'
+  );
+}
 
 export const EFFORT_TIMEOUT_MAP = Object.freeze({
   max: 240000,
@@ -45,7 +97,8 @@ export class HarnessError extends Error {
    * @param {Error} [options.cause]
    */
   constructor(message, options = {}) {
-    super(message);
+    const rawMessage = message === undefined ? '' : String(message);
+    super(sliceUtf8Bytes(rawMessage, MAX_CLI_ERROR_MESSAGE_BYTES));
     this.name = this.constructor.name;
     this.harness = options.harness || 'unknown';
     this.seatId = options.seatId || null;
@@ -56,8 +109,67 @@ export class HarnessError extends Error {
     if (options.cause) {
       this.cause = options.cause;
     }
-    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
-    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
+    if (options.inheritCauseDiagnostics === false) {
+      Object.defineProperty(this, 'inheritCauseDiagnostics', {
+        value: false,
+        enumerable: false,
+        configurable: true
+      });
+    }
+    const diagCause = options.inheritCauseDiagnostics !== false ? options.cause : undefined;
+    const rawCode =
+      typeof options.code === 'string' && options.code.trim()
+        ? options.code.trim()
+        : typeof diagCause?.code === 'string' && diagCause.code.trim()
+          ? diagCause.code.trim()
+          : '';
+    if (rawCode) {
+      this.code = rawCode;
+    }
+    const drainStatus = options.drainStatus ?? diagCause?.drainStatus;
+    if (typeof drainStatus === 'string' && VALID_DRAIN_STATUSES.has(drainStatus)) {
+      this.drainStatus = drainStatus;
+    }
+    const isExpired = this.drainStatus === 'drain_expired';
+    const trace = isExpired ? undefined : (options.trace ?? diagCause?.trace);
+    if (trace !== undefined && trace !== null) {
+      this.trace = trace;
+    }
+    const lifecycle = isExpired
+      ? null
+      : sanitizeLifecycleMetadata(options.lifecycle ?? diagCause?.lifecycle ?? trace?.lifecycle);
+    if (lifecycle) {
+      this.lifecycle = lifecycle;
+    }
+    const drainDurationMs = options.drainDurationMs ?? diagCause?.drainDurationMs;
+    if (typeof drainDurationMs === 'number' && Number.isFinite(drainDurationMs) && drainDurationMs >= 0) {
+      this.drainDurationMs = drainDurationMs;
+    }
+    if (options._latchedTimeout === true || diagCause?._latchedTimeout === true) {
+      this._latchedTimeout = true;
+    }
+    const hasOwnExitCode =
+      Object.prototype.hasOwnProperty.call(options, 'exitCode') && options.exitCode !== undefined;
+    const hasOwnSignal =
+      Object.prototype.hasOwnProperty.call(options, 'signal') && options.signal !== undefined;
+    if (isExpired) {
+      this.exitCode = null;
+      this.signal = null;
+      this.stderr = '';
+    } else {
+      this.exitCode = hasOwnExitCode
+        ? normalizeExitCode(options.exitCode)
+        : normalizeExitCode(diagCause?.exitCode);
+      this.signal = hasOwnSignal
+        ? normalizeSignalName(options.signal)
+        : normalizeSignalName(diagCause?.signal);
+      const rawStderr = options.stderr ?? diagCause?.stderr ?? '';
+      this.stderr = typeof rawStderr === 'string' ? sliceUtf8Bytes(rawStderr, MAX_CLI_STDERR_BYTES) : '';
+      const rawEnvelope = options.envelopeError ?? diagCause?.envelopeError;
+      if (typeof rawEnvelope === 'string' && rawEnvelope.trim()) {
+        this.envelopeError = sliceUtf8Bytes(rawEnvelope, MAX_ENVELOPE_ERROR_BYTES);
+      }
+    }
   }
 }
 
@@ -114,14 +226,6 @@ export class HarnessExecutionError extends HarnessError {
       isQuotaFault: false,
       isRetryable: Boolean(options.isRetryable)
     });
-    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
-    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
-    if (options.code) {
-      this.code = options.code;
-    }
-    if (options.trace || options.cause?.trace) {
-      this.trace = options.trace || options.cause.trace;
-    }
   }
 }
 
@@ -160,15 +264,6 @@ export class AuthenticationError extends HarnessError {
       isQuotaFault: false,
       isRetryable: false
     });
-    if (options.exitCode !== undefined) {
-      this.exitCode = options.exitCode;
-    }
-    if (options.stderr !== undefined) {
-      this.stderr = options.stderr;
-    }
-    if (options.trace) {
-      this.trace = options.trace;
-    }
   }
 }
 
@@ -186,18 +281,20 @@ export class HeadlessToolDeniedError extends HarnessError {
       isQuotaFault: false,
       isRetryable: options.isRetryable !== undefined ? Boolean(options.isRetryable) : true
     });
-    this.code = options.code || 'HEADLESS_TOOL_DENIED';
+    this.code =
+      typeof options.code === 'string' && options.code.trim()
+        ? options.code.trim()
+        : 'HEADLESS_TOOL_DENIED';
+    const diagCause = options.inheritCauseDiagnostics !== false ? options.cause : undefined;
     this.deniedActions = Array.isArray(options.deniedActions) ? options.deniedActions : [];
-    this.exitCode = options.exitCode ?? options.cause?.exitCode ?? null;
-    this.stderr = options.stderr ?? options.cause?.stderr ?? '';
-    this.trace = options.trace ?? options.cause?.trace ?? null;
-    const finishedReason = options.finishedReason ?? options.cause?.finishedReason;
+    this.trace = options.trace ?? diagCause?.trace ?? null;
+    const finishedReason = options.finishedReason ?? diagCause?.finishedReason;
     if (typeof finishedReason === 'string' && finishedReason) {
       this.finishedReason = finishedReason;
     }
-    const envelopeError = options.envelopeError ?? options.cause?.envelopeError;
-    if (typeof envelopeError === 'string' && envelopeError) {
-      this.envelopeError = envelopeError;
+    const envelopeError = options.envelopeError ?? diagCause?.envelopeError;
+    if (typeof envelopeError === 'string' && envelopeError.trim()) {
+      this.envelopeError = sliceUtf8Bytes(envelopeError, MAX_ENVELOPE_ERROR_BYTES);
     }
   }
 }
@@ -217,10 +314,8 @@ export class AbortError extends HarnessError {
       isRetryable: false
     });
     this.name = 'AbortError';
-    this.code = options.code || 'ABORT_ERR';
-    if (options.trace) {
-      this.trace = options.trace;
-    }
+    this.code =
+      typeof options.code === 'string' && options.code.trim() ? options.code.trim() : 'ABORT_ERR';
   }
 }
 
@@ -463,6 +558,288 @@ export class HarnessAdapter {
     return this.executeJudge({ ...params, phase: params.phase || 'JUDGE_AUDIT_SYNTHESIS' });
   }
 
+  _buildAttemptAbortError(context = {}, causeOverride, externalSignal) {
+    const hasOwnCause = causeOverride instanceof Error;
+    const hasSignalReason = !hasOwnCause && externalSignal?.reason instanceof Error;
+    return createAbortError(
+      `Harness "${this.name}" execution aborted for seat "${context.seatId || 'unknown'}"`,
+      {
+        harness: this.name,
+        seatId: context.seatId,
+        model: context.model,
+        ...(hasOwnCause
+          ? { cause: causeOverride }
+          : hasSignalReason
+            ? { cause: externalSignal.reason, inheritCauseDiagnostics: false }
+            : {})
+      }
+    );
+  }
+
+  _emitFallbackAttemptRecord({ gate, context, err, drainResult, startedAt }) {
+    if (!gate || gate.recorded || gate.finalized) {
+      return;
+    }
+    const isExpired = drainResult?.drainStatus === 'drain_expired';
+    const rawTrace = !isExpired && err?.trace && typeof err.trace === 'object' ? err.trace : null;
+    const durationMs =
+      typeof rawTrace?.durationMs === 'number' && Number.isFinite(rawTrace.durationMs)
+        ? rawTrace.durationMs
+        : Math.max(0, Date.now() - startedAt);
+    const stderr =
+      !isExpired && typeof err?.stderr === 'string' && err.stderr.length > 0
+        ? err.stderr
+        : undefined;
+    const lifecycle = isExpired ? undefined : (err?.lifecycle ?? undefined);
+    const trace = {
+      ...(rawTrace || {
+        traceCoverage: 'unavailable',
+        toolCalls: [],
+        skillsRead: [],
+        forbiddenStateAccess: false,
+        forbiddenAccessDetails: []
+      }),
+      durationMs,
+      outcome: 'error',
+      ...(stderr ? { stderr } : {}),
+      ...(lifecycle ? { lifecycle } : {})
+    };
+
+    const prompt = resolveAttemptPrompt(context);
+    this.recordProviderCall({
+      context,
+      attemptGate: gate,
+      allowCancelledFallback: true,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: this.name,
+        model: context?.model,
+        ...(prompt ? { prompt } : {}),
+        tools: context?.tools === 'none' ? 'none' : context?.tools || 'read-only',
+        exitCode: isExpired ? null : normalizeExitCode(err?.exitCode),
+        signal: isExpired ? null : normalizeSignalName(err?.signal),
+        ...(drainResult?.drainStatus ? { drainStatus: drainResult.drainStatus } : {}),
+        ...(typeof drainResult?.drainDurationMs === 'number'
+          ? { drainDurationMs: drainResult.drainDurationMs }
+          : {}),
+        ...(lifecycle ? { lifecycle } : {}),
+        durationMs,
+        trace
+      }
+    });
+  }
+
+  _recordDirectFnErrorIfUngated(err, { gate, context, startedAt }) {
+    if (!err?.trace || err._providerCallRecorded || gate.recorded || gate.finalized || gate.cancelled) {
+      return;
+    }
+    const prompt = resolveAttemptPrompt(context);
+    const durationMs =
+      typeof err.trace.durationMs === 'number' && Number.isFinite(err.trace.durationMs)
+        ? err.trace.durationMs
+        : Math.max(0, Date.now() - startedAt);
+    this.recordProviderCall({
+      context,
+      attemptGate: gate,
+      record: {
+        participantId: context?.seatId || context?.participantId || 'unknown',
+        provider: this.name,
+        model: context?.model,
+        ...(prompt ? { prompt } : {}),
+        tools: context?.tools === 'none' ? 'none' : context?.tools || 'read-only',
+        exitCode: normalizeExitCode(err.exitCode),
+        signal: normalizeSignalName(err.signal),
+        durationMs,
+        trace: { ...err.trace, outcome: 'error' }
+      }
+    });
+    err._providerCallRecorded = true;
+  }
+
+  _throwDiagnosticOutcome({ targetErr, drainResult, context, gate, startedAt, externalSignal = null }) {
+    attachDrainDiagnostics(targetErr, drainResult, context, externalSignal);
+    this._emitFallbackAttemptRecord({ gate, context, err: targetErr, drainResult, startedAt });
+    markAttemptGateFinalized(gate);
+    throw targetErr;
+  }
+
+  async _finalizeTimeoutOrAbort({
+    firstCause,
+    latchedTimeoutErr,
+    fnPromise,
+    context,
+    gate,
+    startedAt,
+    externalSignal
+  }) {
+    const drainResult = await drainSettledAttempt(fnPromise, context?.abortDrainMs);
+    if (firstCause === 'timeout' && latchedTimeoutErr) {
+      latchedTimeoutErr._latchedTimeout = true;
+      this._throwDiagnosticOutcome({
+        targetErr: latchedTimeoutErr,
+        drainResult,
+        context,
+        gate,
+        startedAt,
+        externalSignal
+      });
+    }
+
+    const externalReason = externalSignal?.reason;
+    const isExternalReason =
+      externalReason !== undefined &&
+      externalReason !== null &&
+      drainResult.settledError === externalReason;
+    const abortErr =
+      !isExternalReason && drainResult.settledError instanceof AbortError
+        ? drainResult.settledError
+        : this._buildAttemptAbortError(
+            context,
+            isExternalReason ? undefined : drainResult.settledError,
+            externalSignal
+          );
+    this._throwDiagnosticOutcome({
+      targetErr: abortErr,
+      drainResult,
+      context,
+      gate,
+      startedAt,
+      externalSignal
+    });
+  }
+
+  _handleSettledFnError(err, { controls, context, gate, startedAt, externalSignal }) {
+    if (settledIsAbort(err, externalSignal, controls.firstCause)) {
+      const externalReason = externalSignal?.reason;
+      const isExternalReason =
+        externalReason !== undefined && externalReason !== null && err === externalReason;
+      const abortErr =
+        !isExternalReason && err instanceof AbortError
+          ? err
+          : this._buildAttemptAbortError(context, isExternalReason ? undefined : err, externalSignal);
+      this._throwDiagnosticOutcome({
+        targetErr: abortErr,
+        drainResult: { drainStatus: 'settled', drainDurationMs: 0, settledError: err },
+        context,
+        gate,
+        startedAt,
+        externalSignal
+      });
+    }
+    const prompt = resolveAttemptPrompt(context);
+    if (err && typeof err === 'object' && err !== externalSignal?.reason) {
+      sanitizeErrorDiagnostics(err, prompt, externalSignal?.reason);
+    }
+    this._recordDirectFnErrorIfUngated(err, { gate, context, startedAt });
+    throw err;
+  }
+
+  _handleAttemptError(err, { provider, context, onCallRecord, tools }) {
+    const activeGate = getActiveAttemptTelemetryGate();
+    const gateBlocked = Boolean(
+      activeGate && (activeGate.recorded || activeGate.finalized || activeGate.cancelled)
+    );
+    if (err?.trace && !err._providerCallRecorded && !gateBlocked) {
+      const prompt = resolveAttemptPrompt(context);
+      this.recordProviderCall({
+        context,
+        ...(activeGate ? { attemptGate: activeGate } : {}),
+        ...(typeof onCallRecord === 'function' && onCallRecord !== context?.onCallRecord
+          ? { onCallRecord }
+          : {}),
+        record: {
+          participantId: context.seatId,
+          provider,
+          model: context.model,
+          ...(prompt ? { prompt } : {}),
+          tools,
+          exitCode: normalizeExitCode(err.exitCode),
+          signal: normalizeSignalName(err.signal),
+          durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
+          trace: { ...err.trace, outcome: 'error' }
+        }
+      });
+      err._providerCallRecorded = true;
+    }
+    throw this.classifyError(err, context);
+  }
+
+  _createExecutionRaceControls(externalSignal, effectiveTimeoutMs, context, gate) {
+    const timeoutController = new AbortController();
+    const composedSignal = externalSignal
+      ? AbortSignal.any([externalSignal, timeoutController.signal])
+      : timeoutController.signal;
+    const state = {
+      firstCause: null,
+      latchedTimeoutErr: null,
+      timer: null,
+      onExternalAbort: null,
+      composedSignal
+    };
+    let triggerExternalAbort = null;
+    const externalAbortPromise = externalSignal
+      ? new Promise((resolve) => {
+          triggerExternalAbort = resolve;
+        })
+      : null;
+
+    if (externalSignal) {
+      state.onExternalAbort = () => {
+        if (state.firstCause === null) {
+          state.firstCause = 'external';
+          markAttemptGateCancelled(gate);
+          if (state.timer) {
+            clearTimeout(state.timer);
+            state.timer = null;
+          }
+        }
+        triggerExternalAbort?.({ type: 'external' });
+      };
+      externalSignal.addEventListener('abort', state.onExternalAbort, { once: true });
+      if (externalSignal.aborted) {
+        externalSignal.removeEventListener('abort', state.onExternalAbort);
+        state.preAborted = true;
+        return state;
+      }
+    }
+
+    state.externalAbortPromise = externalAbortPromise;
+    state.timeoutPromise = new Promise((resolve) => {
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        if (state.firstCause !== null) {
+          return;
+        }
+        state.firstCause = 'timeout';
+        markAttemptGateCancelled(gate);
+        state.latchedTimeoutErr = new TimeoutError(
+          `Harness "${this.name}" execution timed out after ${effectiveTimeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
+          {
+            harness: this.name,
+            seatId: context.seatId,
+            model: context.model,
+            timeoutMs: effectiveTimeoutMs,
+            _latchedTimeout: true
+          }
+        );
+        timeoutController.abort();
+        resolve({ type: 'timeout' });
+      }, effectiveTimeoutMs);
+    });
+    return state;
+  }
+
+  _cleanupRaceControls(state, externalSignal) {
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (externalSignal && state.onExternalAbort) {
+      externalSignal.removeEventListener('abort', state.onExternalAbort);
+      state.onExternalAbort = null;
+    }
+  }
+
   /**
    * Execute an async operation with strict timeout boundary and first-cause cancellation latch.
    *
@@ -476,185 +853,75 @@ export class HarnessAdapter {
     const effectiveTimeoutMs = this.resolveTimeoutMs(context.model, timeoutMs);
     const externalSignal = context?.signal || null;
 
-    const buildAbortErr = (causeOverride) =>
-      createAbortError(
-        `Harness "${this.name}" execution aborted for seat "${context.seatId || 'unknown'}"`,
-        {
-          harness: this.name,
-          seatId: context.seatId,
-          model: context.model,
-          cause:
-            causeOverride instanceof Error
-              ? causeOverride
-              : externalSignal?.reason instanceof Error
-                ? externalSignal.reason
-                : undefined
-        }
-      );
-
     if (externalSignal?.aborted) {
-      throw buildAbortErr();
+      throw this._buildAttemptAbortError(context, undefined, externalSignal);
     }
 
-    const timeoutController = new AbortController();
-    const composedSignal = externalSignal
-      ? AbortSignal.any([externalSignal, timeoutController.signal])
-      : timeoutController.signal;
-
-    let firstCause = null;
-    let latchedTimeoutErr = null;
-    let timer = null;
-    let onExternalAbort = null;
-
-    let triggerExternalAbort;
-    const externalAbortPromise = externalSignal
-      ? new Promise((resolve) => {
-          triggerExternalAbort = resolve;
-        })
-      : null;
-
-    if (externalSignal) {
-      onExternalAbort = () => {
-        if (firstCause === null) {
-          firstCause = 'external';
-          if (timer) {
-            clearTimeout(timer);
-            timer = null;
-          }
-        }
-        triggerExternalAbort?.({ type: 'external' });
-      };
-      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-      if (externalSignal.aborted) {
-        externalSignal.removeEventListener('abort', onExternalAbort);
-        throw buildAbortErr();
-      }
+    const startedAt = Date.now();
+    const gate = createAttemptTelemetryGate({ managedByExecuteWithTimeout: true });
+    const controls = this._createExecutionRaceControls(externalSignal, effectiveTimeoutMs, context, gate);
+    if (controls.preAborted) {
+      markAttemptGateFinalized(gate);
+      throw this._buildAttemptAbortError(context, undefined, externalSignal);
     }
 
-    const timeoutPromise = new Promise((resolve) => {
-      timer = setTimeout(() => {
-        timer = null;
-        if (firstCause !== null) {
-          return;
-        }
-        firstCause = 'timeout';
-        latchedTimeoutErr = new TimeoutError(
-          `Harness "${this.name}" execution timed out after ${effectiveTimeoutMs}ms for seat "${context.seatId || 'unknown'}"`,
-          {
-            harness: this.name,
-            seatId: context.seatId,
-            model: context.model,
-            timeoutMs: effectiveTimeoutMs
-          }
+    try {
+      let fnPromise;
+      try {
+        fnPromise = runWithAttemptTelemetryGate(gate, () =>
+          Promise.resolve(fn(controls.composedSignal))
         );
-        timeoutController.abort();
-        resolve({ type: 'timeout' });
-      }, effectiveTimeoutMs);
-    });
-
-    let fnPromise;
-    try {
-      fnPromise = Promise.resolve(fn(composedSignal));
-    } catch (syncErr) {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (externalSignal && onExternalAbort) {
-        externalSignal.removeEventListener('abort', onExternalAbort);
-      }
-      throw syncErr;
-    }
-
-    // Prevent unhandled rejection when timeout or abortDrainMs wins before fnPromise settles
-    fnPromise.catch(() => {});
-
-    const drainFnSettlement = async () => {
-      const hasExplicitAbortDrain =
-        typeof context.abortDrainMs === 'number' &&
-        Number.isFinite(context.abortDrainMs) &&
-        context.abortDrainMs >= 0;
-
-      let settledError = null;
-      const waitForSettlement = fnPromise.then(
-        () => {},
-        (err) => {
-          settledError = err;
-        }
-      );
-
-      if (hasExplicitAbortDrain) {
-        let drainTimer = null;
-        await Promise.race([
-          waitForSettlement,
-          new Promise((resolve) => {
-            drainTimer = setTimeout(resolve, context.abortDrainMs);
-          })
-        ]);
-        if (drainTimer) {
-          clearTimeout(drainTimer);
-        }
-      } else {
-        await waitForSettlement;
+      } catch (syncErr) {
+        this._handleSettledFnError(syncErr, { controls, context, gate, startedAt, externalSignal });
       }
 
-      return settledError;
-    };
+      // Prevent unhandled rejection when timeout or abortDrainMs wins before fnPromise settles
+      fnPromise.catch(() => {});
 
-    try {
       const raceInputs = [
-        timeoutPromise,
+        controls.timeoutPromise,
         fnPromise.then(
           (value) => ({ type: 'fn_ok', value }),
           (error) => ({ type: 'fn_err', error })
         )
       ];
-      if (externalAbortPromise) {
-        raceInputs.push(externalAbortPromise);
+      if (controls.externalAbortPromise) {
+        raceInputs.push(controls.externalAbortPromise);
       }
 
       const outcome = await Promise.race(raceInputs);
+      const common = { fnPromise, context, gate, startedAt, externalSignal };
 
-      if (outcome.type === 'timeout' || (firstCause === 'timeout' && latchedTimeoutErr)) {
-        await drainFnSettlement();
-        throw latchedTimeoutErr;
+      if (outcome.type === 'timeout' || (controls.firstCause === 'timeout' && controls.latchedTimeoutErr)) {
+        await this._finalizeTimeoutOrAbort({
+          ...common,
+          firstCause: 'timeout',
+          latchedTimeoutErr: controls.latchedTimeoutErr
+        });
       }
-
-      if (outcome.type === 'external' || (firstCause === 'external' && externalSignal?.aborted)) {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        const settledError = await drainFnSettlement();
-        if (settledError instanceof AbortError) {
-          throw settledError;
-        }
-        throw buildAbortErr(settledError);
+      if (outcome.type === 'external' || (controls.firstCause === 'external' && externalSignal?.aborted)) {
+        this._cleanupRaceControls(controls, externalSignal);
+        await this._finalizeTimeoutOrAbort({ ...common, firstCause: 'external', latchedTimeoutErr: null });
       }
-
       if (outcome.type === 'fn_err') {
-        if (settledIsAbort(outcome.error, externalSignal, firstCause)) {
-          if (outcome.error instanceof AbortError) {
-            throw outcome.error;
-          }
-          throw buildAbortErr(outcome.error);
-        }
-        throw outcome.error;
+        this._handleSettledFnError(outcome.error, { controls, context, gate, startedAt, externalSignal });
       }
-
-      if (externalSignal?.aborted && firstCause !== 'timeout') {
-        throw buildAbortErr();
+      if (externalSignal?.aborted && controls.firstCause !== 'timeout') {
+        this._throwDiagnosticOutcome({
+          targetErr: this._buildAttemptAbortError(context, undefined, externalSignal),
+          drainResult: { drainStatus: 'fulfilled', drainDurationMs: 0, settledError: null },
+          context,
+          gate,
+          startedAt,
+          externalSignal
+        });
       }
 
       return outcome.value;
     } finally {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (externalSignal && onExternalAbort) {
-        externalSignal.removeEventListener('abort', onExternalAbort);
-      }
+      this._cleanupRaceControls(controls, externalSignal);
+      markAttemptGateFinalized(gate);
+      attemptPromptRegistry.delete(context);
     }
   }
 
@@ -664,7 +931,11 @@ export class HarnessAdapter {
    * @param {Object} params
    */
   recordProviderCall(params) {
-    recordProviderCall(params);
+    return recordProviderCall(params);
+  }
+
+  _buildClassifiedErrorOptions(error, context = {}) {
+    return buildClassifiedErrorOptions(this.name, error, context);
   }
 
   /**
@@ -675,24 +946,44 @@ export class HarnessAdapter {
    * @returns {HarnessError}
    */
   classifyError(error, context = {}) {
-    if (error instanceof HarnessError) {
+    const prompt = resolveAttemptPrompt(context);
+    const externalReason = context?.signal?.reason;
+    const isSameExternalReason =
+      externalReason !== undefined && externalReason !== null && error === externalReason;
+    if (error && typeof error === 'object' && !isSameExternalReason) {
+      sanitizeErrorDiagnostics(error, prompt, externalReason);
+    }
+    if (error instanceof AbortError) {
       return error;
     }
 
-    const msg = error?.message || String(error);
-    const raw = [msg, error?.stderr, error?.envelopeError].filter(Boolean).join(' ');
+    const rawMsg = typeof error?.message === 'string' ? error.message : String(error);
+    const msg = redactPromptInText(rawMsg, prompt, {
+      minPromptLength: 8,
+      maxBytes: MAX_CLI_ERROR_MESSAGE_BYTES
+    });
+    const baseOptions = this._buildClassifiedErrorOptions(error, context);
+    const raw = [msg, baseOptions.stderr, baseOptions.envelopeError].filter(Boolean).join(' ');
 
     // Cancellation / AbortSignal guard (non-retryable)
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
-      return new AbortError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
-        stderr: error?.stderr || '',
-        trace: error?.trace || null,
-        cause: error
+      return new AbortError(msg, baseOptions);
+    }
+
+    // Preserve already-latched TimeoutError with attached diagnostics intact; never reclassify from stderr
+    if (error instanceof TimeoutError) {
+      return error;
+    }
+    if (error?._latchedTimeout === true) {
+      return new TimeoutError(msg, {
+        ...baseOptions,
+        timeoutMs: error?.timeoutMs || null,
+        _latchedTimeout: true
       });
+    }
+
+    if (error instanceof HarnessError) {
+      return error;
     }
 
     // Forbidden .council/ state access guard
@@ -702,32 +993,20 @@ export class HarnessAdapter {
       /\[ForbiddenStateAccessError\]/i.test(msg)
     ) {
       return new HarnessExecutionError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
-        stderr: error?.stderr || '',
+        ...baseOptions,
         code: 'FORBIDDEN_STATE_ACCESS',
-        trace: error?.trace || null,
-        isRetryable: true,
-        cause: error
+        isRetryable: true
       });
     }
 
     // Headless tool denial guard
     if (error?.name === 'HeadlessToolDeniedError' || error?.code === 'HEADLESS_TOOL_DENIED') {
       return new HeadlessToolDeniedError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        exitCode: typeof error?.exitCode === 'number' ? error.exitCode : null,
-        stderr: error?.stderr || '',
+        ...baseOptions,
         deniedActions: error?.deniedActions ?? error?.trace?.deniedActions,
-        trace: error?.trace || null,
-        finishedReason: error?.finishedReason ?? error?.trace?.finishedReason,
-        envelopeError: error?.envelopeError ?? error?.trace?.envelopeError,
-        isRetryable: error?.isRetryable !== undefined ? Boolean(error.isRetryable) : true,
-        cause: error
+        finishedReason: error?.finishedReason ?? baseOptions.trace?.finishedReason,
+        envelopeError: baseOptions.envelopeError ?? baseOptions.trace?.envelopeError,
+        isRetryable: error?.isRetryable !== undefined ? Boolean(error.isRetryable) : true
       });
     }
 
@@ -739,11 +1018,8 @@ export class HarnessAdapter {
       /\btimed?\s*out\b/i.test(raw)
     ) {
       return new TimeoutError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        timeoutMs: error?.timeoutMs || null,
-        cause: error
+        ...baseOptions,
+        timeoutMs: error?.timeoutMs || null
       });
     }
 
@@ -754,47 +1030,15 @@ export class HarnessAdapter {
         raw
       )
     ) {
-      return new AuthenticationError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        exitCode: error?.exitCode ?? error?.code ?? error?.status ?? null,
-        stderr: error?.stderr || '',
-        trace: error?.trace || null,
-        cause: error
-      });
+      return new AuthenticationError(msg, baseOptions);
     }
 
     // Common PID-safe HTTP 429 / Quota pattern
     if (PROVIDER_HTTP_429_REGEX.test(raw) || /\bquota\b|rate[\s_-]*limit|resource_exhausted/i.test(raw)) {
-      return new QuotaExhaustionError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        cause: error
-      });
+      return new QuotaExhaustionError(msg, baseOptions);
     }
 
-    // Process execution error (preserving numeric exitCode 0)
-    if (error?.code || error?.status || typeof error?.exitCode === 'number') {
-      return new HarnessExecutionError(msg, {
-        harness: this.name,
-        seatId: context.seatId,
-        model: context.model,
-        exitCode: error.exitCode ?? error.code ?? error.status ?? null,
-        stderr: error.stderr || '',
-        trace: error?.trace || null,
-        cause: error
-      });
-    }
-
-    return new HarnessExecutionError(msg, {
-      harness: this.name,
-      seatId: context.seatId,
-      model: context.model,
-      trace: error?.trace || null,
-      cause: error
-    });
+    return new HarnessExecutionError(msg, baseOptions);
   }
 
   _withRetryFeedback(prompt, feedback) {
@@ -1070,6 +1314,392 @@ export class HarnessAdapter {
 
     return errors;
   }
+}
+
+function resolveAttemptPrompt(context) {
+  if (typeof context?.prompt === 'string' && context.prompt) {
+    return context.prompt;
+  }
+  if (context && typeof context === 'object') {
+    return attemptPromptRegistry.get(context) || '';
+  }
+  return '';
+}
+
+async function drainSettledAttempt(fnPromise, abortDrainMs) {
+  const drainStartedAt = Date.now();
+  const hasExplicitAbortDrain =
+    typeof abortDrainMs === 'number' &&
+    Number.isFinite(abortDrainMs) &&
+    abortDrainMs >= 0;
+
+  let settled = false;
+  let settledError = null;
+  let settledFulfilled = false;
+  const waitForSettlement = fnPromise.then(
+    () => {
+      settled = true;
+      settledFulfilled = true;
+    },
+    (err) => {
+      settled = true;
+      settledError = err;
+    }
+  );
+
+  if (hasExplicitAbortDrain) {
+    let drainTimer = null;
+    try {
+      await Promise.race([
+        waitForSettlement,
+        new Promise((resolve) => {
+          drainTimer = setTimeout(resolve, abortDrainMs);
+        })
+      ]);
+    } finally {
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+      }
+    }
+  } else {
+    await waitForSettlement;
+  }
+
+  return {
+    drainStatus: !settled ? 'drain_expired' : settledFulfilled ? 'fulfilled' : 'settled',
+    drainDurationMs: Math.max(0, Date.now() - drainStartedAt),
+    settledError
+  };
+}
+
+function pickOwnOrCause(obj, key, allowCause = true) {
+  if (!obj || typeof obj !== 'object') {
+    return undefined;
+  }
+  if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
+    return obj[key];
+  }
+  if (
+    allowCause &&
+    obj.cause &&
+    typeof obj.cause === 'object' &&
+    Object.prototype.hasOwnProperty.call(obj.cause, key) &&
+    obj.cause[key] !== undefined
+  ) {
+    return obj.cause[key];
+  }
+  return undefined;
+}
+
+function tryAssignDiagnosticProp(obj, key, value) {
+  try {
+    obj[key] = value;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeTraceDiagnostics(trace, prompt = '') {
+  if (!trace || typeof trace !== 'object') {
+    return trace;
+  }
+  const opts = { minPromptLength: 8 };
+  const nextStderr =
+    typeof trace.stderr === 'string' && trace.stderr.length > 0
+      ? sliceUtf8Bytes(
+          redactPromptInText(trace.stderr, prompt, { ...opts, maxBytes: MAX_CLI_STDERR_BYTES }),
+          MAX_CLI_STDERR_BYTES
+        )
+      : undefined;
+  const nextEnvelope =
+    typeof trace.envelopeError === 'string' && trace.envelopeError.length > 0
+      ? sliceUtf8Bytes(
+          redactPromptInText(trace.envelopeError, prompt, { ...opts, maxBytes: MAX_ENVELOPE_ERROR_BYTES }),
+          MAX_ENVELOPE_ERROR_BYTES
+        )
+      : undefined;
+  const hasLifecycle = trace.lifecycle !== undefined && trace.lifecycle !== null;
+  const nextLifecycle = hasLifecycle ? sanitizeLifecycleMetadata(trace.lifecycle) : null;
+  const stderrChanged = nextStderr !== undefined && nextStderr !== trace.stderr;
+  const envelopeChanged = nextEnvelope !== undefined && nextEnvelope !== trace.envelopeError;
+  if (!stderrChanged && !envelopeChanged && !hasLifecycle) {
+    return trace;
+  }
+  const cloned = {
+    ...trace,
+    ...(nextStderr !== undefined ? { stderr: nextStderr } : {}),
+    ...(nextEnvelope !== undefined ? { envelopeError: nextEnvelope } : {})
+  };
+  if (nextLifecycle) {
+    cloned.lifecycle = nextLifecycle;
+  } else if (hasLifecycle) {
+    delete cloned.lifecycle;
+  }
+  return cloned;
+}
+
+function buildSanitizedCauseFallback(error, prompt = '') {
+  if (!error || typeof error !== 'object') {
+    return error;
+  }
+  const opts = { minPromptLength: 8 };
+  const rawMsg = typeof error.message === 'string' ? error.message : String(error.message ?? error);
+  const cleanMsg = redactPromptInText(rawMsg, prompt, { ...opts, maxBytes: MAX_CLI_ERROR_MESSAGE_BYTES });
+  const clone = new Error(cleanMsg);
+  if (typeof error.name === 'string' && error.name) clone.name = error.name;
+  if (typeof error.code === 'string' && error.code.trim()) clone.code = error.code.trim();
+  clone.exitCode = normalizeExitCode(error.exitCode);
+  clone.signal = normalizeSignalName(error.signal);
+  clone.stderr =
+    typeof error.stderr === 'string' && error.stderr.length > 0
+      ? sliceUtf8Bytes(
+          redactPromptInText(error.stderr, prompt, { ...opts, maxBytes: MAX_CLI_STDERR_BYTES }),
+          MAX_CLI_STDERR_BYTES
+        )
+      : '';
+  if (typeof error.envelopeError === 'string' && error.envelopeError.trim()) {
+    clone.envelopeError = sliceUtf8Bytes(
+      redactPromptInText(error.envelopeError, prompt, { ...opts, maxBytes: MAX_ENVELOPE_ERROR_BYTES }),
+      MAX_ENVELOPE_ERROR_BYTES
+    );
+  }
+  if (error.trace && typeof error.trace === 'object') {
+    clone.trace = sanitizeTraceDiagnostics(error.trace, prompt);
+  }
+  const lifecycle = sanitizeLifecycleMetadata(error.lifecycle ?? error.trace?.lifecycle);
+  if (lifecycle) {
+    clone.lifecycle = lifecycle;
+  }
+  return clone;
+}
+
+function sanitizeErrorDiagnostics(error, prompt = '', externalReason = undefined, depth = 0, seen = new Set()) {
+  if (!error || typeof error !== 'object' || seen.has(error)) {
+    return { mutatedClean: true };
+  }
+  if (externalReason !== undefined && externalReason !== null && error === externalReason) {
+    return { mutatedClean: true };
+  }
+  seen.add(error);
+  const opts = { minPromptLength: 8 };
+  let mutatedClean = true;
+
+  if (typeof error.message === 'string' && error.message.length > 0) {
+    const cleanMsg = redactPromptInText(error.message, prompt, {
+      ...opts,
+      maxBytes: MAX_CLI_ERROR_MESSAGE_BYTES
+    });
+    if (cleanMsg !== error.message && !tryAssignDiagnosticProp(error, 'message', cleanMsg)) {
+      mutatedClean = false;
+    }
+  }
+  if (typeof error.stderr === 'string' && error.stderr.length > 0) {
+    const cleanStderr = sliceUtf8Bytes(
+      redactPromptInText(error.stderr, prompt, { ...opts, maxBytes: MAX_CLI_STDERR_BYTES }),
+      MAX_CLI_STDERR_BYTES
+    );
+    if (cleanStderr !== error.stderr && !tryAssignDiagnosticProp(error, 'stderr', cleanStderr)) {
+      mutatedClean = false;
+    }
+  }
+  if (typeof error.envelopeError === 'string' && error.envelopeError.length > 0) {
+    const cleanEnv = sliceUtf8Bytes(
+      redactPromptInText(error.envelopeError, prompt, { ...opts, maxBytes: MAX_ENVELOPE_ERROR_BYTES }),
+      MAX_ENVELOPE_ERROR_BYTES
+    );
+    if (cleanEnv !== error.envelopeError && !tryAssignDiagnosticProp(error, 'envelopeError', cleanEnv)) {
+      mutatedClean = false;
+    }
+  }
+  if (error.trace && typeof error.trace === 'object') {
+    const cleanTrace = sanitizeTraceDiagnostics(error.trace, prompt);
+    if (cleanTrace !== error.trace && !tryAssignDiagnosticProp(error, 'trace', cleanTrace)) {
+      mutatedClean = false;
+    }
+  }
+  if (
+    depth < 2 &&
+    error.inheritCauseDiagnostics !== false &&
+    error.cause &&
+    typeof error.cause === 'object' &&
+    !(externalReason !== undefined && externalReason !== null && error.cause === externalReason)
+  ) {
+    const nested = sanitizeErrorDiagnostics(error.cause, prompt, externalReason, depth + 1, seen);
+    if (!nested.mutatedClean) {
+      const fallbackCause = buildSanitizedCauseFallback(error.cause, prompt);
+      if (!tryAssignDiagnosticProp(error, 'cause', fallbackCause)) {
+        mutatedClean = false;
+      }
+    }
+  }
+  return { mutatedClean };
+}
+
+function attachDrainDiagnostics(targetErr, drainResult, context = {}, externalSignal = null) {
+  if (!targetErr || typeof targetErr !== 'object') {
+    return targetErr;
+  }
+  const { drainStatus, drainDurationMs, settledError } = drainResult;
+  if (typeof drainStatus === 'string' && VALID_DRAIN_STATUSES.has(drainStatus)) {
+    targetErr.drainStatus = drainStatus;
+  }
+  if (typeof drainDurationMs === 'number' && Number.isFinite(drainDurationMs) && drainDurationMs >= 0) {
+    targetErr.drainDurationMs = drainDurationMs;
+  }
+  const externalReason = externalSignal?.reason;
+  const isExternalReasonItself =
+    externalReason !== undefined && externalReason !== null && settledError === externalReason;
+  const prompt = resolveAttemptPrompt(context);
+  const { mutatedClean } =
+    settledError && typeof settledError === 'object' && !isExternalReasonItself
+      ? sanitizeErrorDiagnostics(settledError, prompt, externalReason)
+      : { mutatedClean: true };
+  if (settledError !== undefined && settledError !== null && settledError !== targetErr) {
+    targetErr.cause =
+      mutatedClean || isExternalReasonItself ? settledError : buildSanitizedCauseFallback(settledError, prompt);
+  }
+  if (drainStatus === 'drain_expired' || isExternalReasonItself) {
+    if (isExternalReasonItself) {
+      Object.defineProperty(targetErr, 'inheritCauseDiagnostics', {
+        value: false,
+        enumerable: false,
+        configurable: true
+      });
+    }
+    targetErr.exitCode = null;
+    targetErr.signal = null;
+    targetErr.stderr = '';
+    delete targetErr.lifecycle;
+    delete targetErr.trace;
+    delete targetErr.envelopeError;
+    return targetErr;
+  }
+
+  const allowSettledCause =
+    settledError?.inheritCauseDiagnostics !== false &&
+    !(externalReason !== undefined && externalReason !== null && settledError?.cause === externalReason);
+  if (!allowSettledCause) {
+    Object.defineProperty(targetErr, 'inheritCauseDiagnostics', {
+      value: false,
+      enumerable: false,
+      configurable: true
+    });
+  }
+  targetErr.exitCode = normalizeExitCode(pickOwnOrCause(settledError, 'exitCode', allowSettledCause));
+  targetErr.signal = normalizeSignalName(pickOwnOrCause(settledError, 'signal', allowSettledCause));
+
+  const rawStderr =
+    (typeof settledError?.stderr === 'string' && settledError.stderr) ||
+    (typeof settledError?.trace?.stderr === 'string' && settledError.trace.stderr) ||
+    (allowSettledCause && typeof settledError?.cause?.stderr === 'string' ? settledError.cause.stderr : '');
+  targetErr.stderr = rawStderr
+    ? sliceUtf8Bytes(
+        redactPromptInText(rawStderr, prompt, { minPromptLength: 8, maxBytes: MAX_CLI_STDERR_BYTES }),
+        MAX_CLI_STDERR_BYTES
+      )
+    : '';
+
+  const settledTrace = settledError?.trace ?? (allowSettledCause ? settledError?.cause?.trace : undefined);
+  const sanitizedLifecycle = sanitizeLifecycleMetadata(
+    settledError?.lifecycle ??
+      settledTrace?.lifecycle ??
+      (allowSettledCause ? settledError?.cause?.lifecycle ?? settledError?.cause?.trace?.lifecycle : undefined)
+  );
+  if (sanitizedLifecycle) {
+    targetErr.lifecycle = sanitizedLifecycle;
+  }
+
+  const rawEnvelope =
+    [
+      settledError?.envelopeError,
+      settledTrace?.envelopeError,
+      ...(allowSettledCause ? [settledError?.cause?.envelopeError] : [])
+    ].find((v) => typeof v === 'string' && v.trim()) || '';
+  const sanitizedEnvelope = rawEnvelope
+    ? sliceUtf8Bytes(
+        redactPromptInText(rawEnvelope, prompt, { minPromptLength: 8, maxBytes: MAX_ENVELOPE_ERROR_BYTES }),
+        MAX_ENVELOPE_ERROR_BYTES
+      )
+    : '';
+  if (sanitizedEnvelope) {
+    targetErr.envelopeError = sanitizedEnvelope;
+  }
+
+  if (settledTrace && typeof settledTrace === 'object') {
+    const cleanTrace = sanitizeTraceDiagnostics(settledTrace, prompt);
+    targetErr.trace =
+      sanitizedLifecycle && !cleanTrace.lifecycle
+        ? { ...cleanTrace, lifecycle: sanitizedLifecycle }
+        : cleanTrace;
+  }
+  return targetErr;
+}
+
+function buildClassifiedErrorOptions(harness, error, context = {}) {
+  const prompt = resolveAttemptPrompt(context);
+  const externalReason = context?.signal?.reason;
+  const isErrObj = Boolean(error && typeof error === 'object');
+  const isSameExternalReason =
+    externalReason !== undefined && externalReason !== null && error === externalReason;
+  const { mutatedClean } =
+    isErrObj && !isSameExternalReason
+      ? sanitizeErrorDiagnostics(error, prompt, externalReason)
+      : { mutatedClean: true };
+  const allowCause =
+    error?.inheritCauseDiagnostics !== false &&
+    !(externalReason !== undefined && externalReason !== null && error?.cause === externalReason);
+
+  const rawStderrValue =
+    typeof error?.stderr === 'string'
+      ? error.stderr
+      : allowCause && typeof error?.cause?.stderr === 'string'
+        ? error.cause.stderr
+        : '';
+  const stderr = rawStderrValue
+    ? sliceUtf8Bytes(
+        redactPromptInText(rawStderrValue, prompt, { minPromptLength: 8, maxBytes: MAX_CLI_STDERR_BYTES }),
+        MAX_CLI_STDERR_BYTES
+      )
+    : '';
+
+  const rawEnvelopeValue =
+    (typeof error?.envelopeError === 'string' && error.envelopeError.trim() ? error.envelopeError : '') ||
+    (allowCause && typeof error?.cause?.envelopeError === 'string' && error.cause.envelopeError.trim()
+      ? error.cause.envelopeError
+      : '');
+  const envelopeError = rawEnvelopeValue
+    ? sliceUtf8Bytes(
+        redactPromptInText(rawEnvelopeValue, prompt, { minPromptLength: 8, maxBytes: MAX_ENVELOPE_ERROR_BYTES }),
+        MAX_ENVELOPE_ERROR_BYTES
+      )
+    : '';
+
+  const rawTrace = error?.trace ?? (allowCause ? error?.cause?.trace : null) ?? null;
+  const trace = rawTrace && typeof rawTrace === 'object' ? sanitizeTraceDiagnostics(rawTrace, prompt) : null;
+  const lifecycle =
+    error?.lifecycle ??
+    trace?.lifecycle ??
+    (allowCause ? error?.cause?.lifecycle ?? error?.cause?.trace?.lifecycle : null) ??
+    null;
+
+  return {
+    harness,
+    seatId: context.seatId,
+    model: context.model,
+    exitCode: normalizeExitCode(pickOwnOrCause(error, 'exitCode', allowCause)),
+    signal: normalizeSignalName(pickOwnOrCause(error, 'signal', allowCause)),
+    stderr,
+    ...(envelopeError ? { envelopeError } : {}),
+    trace,
+    lifecycle,
+    drainStatus: error?.drainStatus ?? (allowCause ? error?.cause?.drainStatus : undefined),
+    drainDurationMs: error?.drainDurationMs ?? (allowCause ? error?.cause?.drainDurationMs : undefined),
+    ...(allowCause ? {} : { inheritCauseDiagnostics: false }),
+    ...(typeof error?.code === 'string' && error.code.trim() ? { code: error.code.trim() } : {}),
+    ...(error?._latchedTimeout === true ? { _latchedTimeout: true } : {}),
+    cause: !isErrObj || mutatedClean || isSameExternalReason ? error : buildSanitizedCauseFallback(error, prompt)
+  };
 }
 
 function settledIsAbort(error, externalSignal, firstCause) {

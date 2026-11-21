@@ -41,7 +41,24 @@ import {
   extractCanonicalBaseModel,
   parseModelAndEffort
 } from '../harness/cli-runner.js';
-import { planParticipantRecovery } from './recovery.js';
+import {
+  planParticipantRecovery,
+  boundSingleLineFaultMessage,
+  formatErrorDiagnosticSuffix
+} from './recovery.js';
+
+function isAbortLikeError(error) {
+  return Boolean(error && typeof error === 'object' && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
+}
+
+function isLatchedTimeoutError(error) {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      !isAbortLikeError(error) &&
+      (error._latchedTimeout === true || error.name === 'TimeoutError')
+  );
+}
 
 const DEFAULT_TIMEOUT_RESOLVER = new HarnessAdapter();
 
@@ -723,6 +740,9 @@ export class CouncilEngine {
    * @returns {boolean}
    */
   _isRetryableError(error) {
+    if (isAbortLikeError(error)) {
+      return false;
+    }
     return !(error && typeof error === 'object' && error.isRetryable === false);
   }
 
@@ -747,13 +767,10 @@ export class CouncilEngine {
    * @returns {boolean}
    */
   _isAbortError(error, waveSignal = null) {
-    if (this.aborted || this.signal?.aborted || waveSignal?.aborted) {
+    if (isAbortLikeError(error)) {
       return true;
     }
-    if (!error || typeof error !== 'object') {
-      return false;
-    }
-    return error.name === 'AbortError' || error.code === 'ABORT_ERR';
+    return Boolean(this.aborted || this.signal?.aborted || waveSignal?.aborted);
   }
 
   /**
@@ -762,11 +779,14 @@ export class CouncilEngine {
    * @returns {'fault_quota' | 'fault_timeout' | 'fault'}
    */
   _classifyFaultStatus(error) {
+    if (isLatchedTimeoutError(error)) {
+      return 'fault_timeout';
+    }
     if (error && typeof error === 'object') {
       if (error.isQuotaFault === true || error.name === 'QuotaExhaustionError') {
         return 'fault_quota';
       }
-      if (error.name === 'TimeoutError' || typeof error.timeoutMs === 'number' || error.code === 'ETIMEDOUT') {
+      if (typeof error.timeoutMs === 'number' || error.code === 'ETIMEDOUT') {
         return 'fault_timeout';
       }
       if (error.isQuotaFault === false) {
@@ -791,6 +811,9 @@ export class CouncilEngine {
    * @returns {'TimeoutError' | 'QuotaExhaustionError' | 'HeadlessToolDeniedError' | 'HarnessExecutionError' | 'InvalidResponseError' | 'AuthenticationError' | 'HarnessError'}
    */
   _classifyErrorClass(error) {
+    if (isLatchedTimeoutError(error)) {
+      return 'TimeoutError';
+    }
     const knownClasses = new Set([
       'TimeoutError',
       'QuotaExhaustionError',
@@ -835,41 +858,63 @@ export class CouncilEngine {
   }
 
   /**
-   * Formats a single-line fault error message including the error class, message,
-   * non-zero CLI exit code, and a bounded stderr excerpt when present.
+   * Formats a single-line fault error message including the error class, bounded message,
+   * normalized exit code/signal/drain status, and bounded stderr excerpt when present.
    * @param {unknown} error
    * @returns {string}
    */
   _formatFaultReason(error) {
     const errorClass = this._classifyErrorClass(error);
-    const rawMsg = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
-    let reason =
-      rawMsg.startsWith(`[${errorClass}]`) || rawMsg.startsWith(`${errorClass}:`)
-        ? rawMsg
-        : `[${errorClass}] ${rawMsg}`;
+    const rawValue = error instanceof Error ? error.message : String(error ?? '');
+    const boundedMsg = boundSingleLineFaultMessage(rawValue) || errorClass;
+    const baseReason =
+      boundedMsg.startsWith(`[${errorClass}]`) || boundedMsg.startsWith(`${errorClass}:`)
+        ? boundedMsg
+        : `[${errorClass}] ${boundedMsg}`;
+    return `${baseReason}${formatErrorDiagnosticSuffix(error, baseReason)}`;
+  }
 
-    if (error && typeof error === 'object') {
-      const exitCode = error.exitCode ?? error.cause?.exitCode ?? null;
-      const stderrRaw =
-        typeof error.stderr === 'string' && error.stderr.trim()
-          ? error.stderr.trim()
-          : typeof error.cause?.stderr === 'string' && error.cause.stderr.trim()
-          ? error.cause.stderr.trim()
-          : '';
+  _emitLatchedTimeoutTelemetry(participantId, error) {
+    if (!participantId || !isLatchedTimeoutError(error)) {
+      return false;
+    }
+    this.telemetry.emitSeatTelemetry(participantId, 'fault_timeout', {
+      reason: this._formatFaultReason(error),
+      errorClass: 'TimeoutError'
+    });
+    return true;
+  }
 
-      if (exitCode !== null && exitCode !== undefined && !reason.includes(`exit code ${exitCode}`)) {
-        reason += ` (exit code ${exitCode})`;
-      }
-      if (stderrRaw) {
-        const stderrSingleLine = stderrRaw.replace(/\s+/g, ' ').trim();
-        const stderrExcerpt =
-          stderrSingleLine.length > 240 ? `${stderrSingleLine.slice(0, 237)}...` : stderrSingleLine;
-        if (stderrExcerpt && !reason.includes(stderrExcerpt)) {
-          reason += ` — stderr: ${stderrExcerpt}`;
-        }
+  _handleCanceledSeatCatch(slot, err, waveSignal, waveController, quorumAborted, resultKey = 'proofInput') {
+    if (this.signal?.aborted) {
+      this.aborted = true;
+    }
+    if (!this._isAbortError(err, waveSignal)) {
+      return false;
+    }
+    this._emitLatchedTimeoutTelemetry(slot?.seat?.id, err);
+    if (this.signal?.aborted || !quorumAborted) {
+      this.aborted = true;
+      if (waveController && !waveController.signal.aborted) {
+        waveController.abort(err);
       }
     }
-    return reason;
+    slot.aborted = true;
+    slot.skipped = true;
+    slot[resultKey] = null;
+    slot.error = null;
+    slot.needsValidation = false;
+    return true;
+  }
+
+  _flushCanceledTimeoutTelemetry(slots) {
+    if (!Array.isArray(slots)) return;
+    for (const slot of slots) {
+      if (slot && !slot.excused && !slot.skipped && isLatchedTimeoutError(slot.error)) {
+        this._emitLatchedTimeoutTelemetry(slot.seat?.id, slot.error);
+        slot.error = null;
+      }
+    }
   }
 
   // Only coordinator-owned validation constraints reach the next prompt; never
@@ -1809,21 +1854,7 @@ export class CouncilEngine {
         slot.error = null;
         slot.needsValidation = true;
       } catch (err) {
-        if (this.signal?.aborted) {
-          this.aborted = true;
-        }
-        if (this._isAbortError(err, delibWaveSignal)) {
-          if (this.signal?.aborted || !delibQuorumAborted) {
-            this.aborted = true;
-            if (!delibWaveController.signal.aborted) {
-              delibWaveController.abort(err);
-            }
-          }
-          slot.aborted = true;
-          slot.skipped = true;
-          slot.proofInput = null;
-          slot.error = null;
-          slot.needsValidation = false;
+        if (this._handleCanceledSeatCatch(slot, err, delibWaveSignal, delibWaveController, delibQuorumAborted, 'proofInput')) {
           return;
         }
         const elapsedMs =
@@ -2055,21 +2086,7 @@ export class CouncilEngine {
             slot.error = null;
             slot.needsValidation = true;
           } catch (retryErr) {
-            if (this.signal?.aborted) {
-              this.aborted = true;
-            }
-            if (this._isAbortError(retryErr, delibRetrySignal)) {
-              if (this.signal?.aborted || !delibRetryQuorumAborted) {
-                this.aborted = true;
-                if (!delibRetryController.signal.aborted) {
-                  delibRetryController.abort(retryErr);
-                }
-              }
-              slot.aborted = true;
-              slot.skipped = true;
-              slot.proofInput = null;
-              slot.error = null;
-              slot.needsValidation = false;
+            if (this._handleCanceledSeatCatch(slot, retryErr, delibRetrySignal, delibRetryController, delibRetryQuorumAborted, 'proofInput')) {
               return;
             }
             const retryDuration =
@@ -2132,6 +2149,7 @@ export class CouncilEngine {
     }
 
     if (this.isCompleted() || this.aborted) {
+      this._flushCanceledTimeoutTelemetry(delibSlots);
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 
@@ -2310,10 +2328,12 @@ export class CouncilEngine {
           this.aborted = true;
         }
         if (this._isAbortError(err, judgeSignal)) {
+          this._emitLatchedTimeoutTelemetry(judge.id, err);
           this.aborted = true;
           break;
         }
         if (this.isCompleted()) {
+          this._emitLatchedTimeoutTelemetry(judge.id, err);
           break;
         }
         const attemptDuration =
@@ -2641,21 +2661,7 @@ export class CouncilEngine {
         slot.error = null;
         slot.needsValidation = true;
       } catch (err) {
-        if (this.signal?.aborted) {
-          this.aborted = true;
-        }
-        if (this._isAbortError(err, voteWaveSignal)) {
-          if (this.signal?.aborted || !voteQuorumAborted) {
-            this.aborted = true;
-            if (!voteWaveController.signal.aborted) {
-              voteWaveController.abort(err);
-            }
-          }
-          slot.aborted = true;
-          slot.skipped = true;
-          slot.voteResult = null;
-          slot.error = null;
-          slot.needsValidation = false;
+        if (this._handleCanceledSeatCatch(slot, err, voteWaveSignal, voteWaveController, voteQuorumAborted, 'voteResult')) {
           return;
         }
         const elapsedMs =
@@ -2870,21 +2876,7 @@ export class CouncilEngine {
             slot.error = null;
             slot.needsValidation = true;
           } catch (retryErr) {
-            if (this.signal?.aborted) {
-              this.aborted = true;
-            }
-            if (this._isAbortError(retryErr, voteRetrySignal)) {
-              if (this.signal?.aborted || !voteRetryQuorumAborted) {
-                this.aborted = true;
-                if (!voteRetryController.signal.aborted) {
-                  voteRetryController.abort(retryErr);
-                }
-              }
-              slot.aborted = true;
-              slot.skipped = true;
-              slot.voteResult = null;
-              slot.error = null;
-              slot.needsValidation = false;
+            if (this._handleCanceledSeatCatch(slot, retryErr, voteRetrySignal, voteRetryController, voteRetryQuorumAborted, 'voteResult')) {
               return;
             }
             const retryDuration =
@@ -2947,6 +2939,7 @@ export class CouncilEngine {
     }
 
     if (this.isCompleted() || this.aborted) {
+      this._flushCanceledTimeoutTelemetry(voteSlots);
       return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
     }
 

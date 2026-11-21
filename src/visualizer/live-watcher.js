@@ -175,6 +175,14 @@ export function getTransitionSummary(event, state) {
 export const DEFAULT_OUTPUT_DIR = path.resolve(import.meta.dirname, '../../.council/runs');
 export const DEFAULT_STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
 
+function isFaultStatus(status) {
+  return status === 'fault_quota' || status === 'fault_timeout' || status === 'fault';
+}
+
+const CLEARING_TELEMETRY_STATUSES = new Set([
+  'thinking', 'auditing', 'idle', 'proof_submitted', 'accepted', 'objected', 'excused'
+]);
+
 export class VisualizerLiveWatcher {
   /**
    * @param {Object} [options]
@@ -217,6 +225,8 @@ export class VisualizerLiveWatcher {
     this._prevSeatMap = new Map();
     this._prevProofMap = new Map();
     this._prevObjMap = new Map();
+    this._observerParticipantFaults = new Map();
+    this._prevFaultSeatId = null;
 
     const nowIso = new Date().toISOString();
     this.liveRun = {
@@ -735,6 +745,69 @@ export class VisualizerLiveWatcher {
   }
 
   /**
+   * Upserts an observer fault entry, preserving prior reason/errorClass if omitted.
+   * @private
+   */
+  _recordObserverFault(id, status, faultReason, errorClass) {
+    const prev = this._observerParticipantFaults.get(id);
+    const reason = faultReason || prev?.faultReason;
+    const cls = errorClass || prev?.errorClass;
+    this._observerParticipantFaults.set(id, {
+      status,
+      ...(reason ? { faultReason: reason } : {}),
+      ...(cls ? { errorClass: cls } : {})
+    });
+    return { reason, cls };
+  }
+
+  /**
+   * Clears overlay entries on retry/next round/submission/vote/excusal/reset and
+   * overlays surviving observer faults onto clonedState so subsequent transitions keep them visible.
+   * @private
+   */
+  _syncObserverFaultsForTransition(event, clonedState) {
+    if (!clonedState || typeof clonedState !== 'object') return;
+    if (clonedState.lastTransition?.ok !== false && event?.type) {
+      const seatId = event.seatId || event.proof?.seatId || event.vote?.seatId || null;
+      if (event.type === 'RESET' || event.type === 'BEGIN_ROUND' || (event.type === 'EVALUATE_ROUND' && clonedState.phase === 'reviewing')) {
+        this._observerParticipantFaults.clear();
+      } else if (event.type === 'JUDGE_AUDIT_AND_SYNTHESIZE' || event.type === 'RETRY_JUDGE') {
+        if (clonedState.judge?.id) this._observerParticipantFaults.delete(clonedState.judge.id);
+        this._observerParticipantFaults.delete('judge');
+      } else if (event.type === 'RETRY_SEAT') {
+        const retryId = seatId || this._prevFaultSeatId;
+        if (retryId) this._observerParticipantFaults.delete(retryId);
+      } else if ((event.type === 'SUBMIT_PROOF' || event.type === 'CAST_VOTE' || event.type === 'EXCUSE_SEAT') && seatId) {
+        this._observerParticipantFaults.delete(seatId);
+      }
+    }
+    this._prevFaultSeatId = clonedState.faultSeatId || null;
+
+    const syncParticipant = (p) => {
+      if (!p || !p.id) return;
+      if (p.status === 'excused' || p.status === 'proof_submitted' || p.status === 'accepted' || p.status === 'objected') {
+        this._observerParticipantFaults.delete(p.id);
+        return;
+      }
+      if (isFaultStatus(p.status)) {
+        const merged = this._recordObserverFault(p.id, p.status, p.faultReason, p.errorClass);
+        if (!p.faultReason && merged.reason) p.faultReason = merged.reason;
+        if (!p.errorClass && merged.cls) p.errorClass = merged.cls;
+        return;
+      }
+      const overlay = this._observerParticipantFaults.get(p.id);
+      if (overlay) {
+        p.status = overlay.status;
+        if (overlay.faultReason) p.faultReason = overlay.faultReason;
+        if (overlay.errorClass) p.errorClass = overlay.errorClass;
+      }
+    };
+
+    for (const s of Array.isArray(clonedState.seats) ? clonedState.seats : []) syncParticipant(s);
+    if (clonedState.judge) syncParticipant(clonedState.judge);
+  }
+
+  /**
    * Handles state machine transition event.
    * @private
    */
@@ -743,7 +816,8 @@ export class VisualizerLiveWatcher {
 
     const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
     const clonedState = clone(state);
-    const graph = this._computeGraph(state);
+    this._syncObserverFaultsForTransition(event, clonedState);
+    const graph = this._computeGraph(clonedState);
     const clonedGraph = graph ? clone(graph) : null;
 
     if (clonedGraph) {
@@ -972,23 +1046,12 @@ export class VisualizerLiveWatcher {
         : undefined;
 
     const applyTelemetryToTarget = (target) => {
-      if (!target) return;
+      if (!target || (target.status === 'excused' && status !== 'excused')) return;
       target.status = status;
-      const isFaultStatus = status === 'fault_quota' || status === 'fault_timeout' || status === 'fault';
-      if (isFaultStatus) {
-        if (metadata && metadata.reason) {
-          target.faultReason = metadata.reason;
-        }
-        if (metadata && metadata.errorClass) {
-          target.errorClass = metadata.errorClass;
-        }
-      } else if (
-        status === 'thinking' ||
-        status === 'idle' ||
-        status === 'proof_submitted' ||
-        status === 'accepted' ||
-        status === 'objected'
-      ) {
+      if (isFaultStatus(status)) {
+        if (metadata?.reason) target.faultReason = metadata.reason;
+        if (metadata?.errorClass) target.errorClass = metadata.errorClass;
+      } else if (CLEARING_TELEMETRY_STATUSES.has(status) && status !== 'excused') {
         delete target.faultReason;
         delete target.errorClass;
       }
@@ -1002,24 +1065,27 @@ export class VisualizerLiveWatcher {
       }
     };
 
-    if (this.liveRun.currentState) {
-      if (Array.isArray(this.liveRun.currentState.seats)) {
-        const seat = this.liveRun.currentState.seats.find((s) => s.id === seatId);
-        if (seat) {
-          applyTelemetryToTarget(seat);
-        }
+    const currentState = this.liveRun.currentState;
+    const seat = currentState && Array.isArray(currentState.seats) ? currentState.seats.find((s) => s.id === seatId) : null;
+    const judgeTarget = currentState?.judge?.id === seatId ? currentState.judge : null;
+    if (typeof seatId === 'string' && seatId && !((seat || judgeTarget)?.status === 'excused' && status !== 'excused')) {
+      if (isFaultStatus(status)) {
+        this._recordObserverFault(seatId, status, metadata?.reason, metadata?.errorClass);
+      } else if (CLEARING_TELEMETRY_STATUSES.has(status)) {
+        this._observerParticipantFaults.delete(seatId);
       }
-      if (this.liveRun.currentState.judge && this.liveRun.currentState.judge.id === seatId) {
-        applyTelemetryToTarget(this.liveRun.currentState.judge);
-      }
+    }
+
+    if (currentState) {
+      if (seat) applyTelemetryToTarget(seat);
+      if (judgeTarget) applyTelemetryToTarget(judgeTarget);
 
       // Re-derive graph topology with updated seat status
-      const graph = this._computeGraph(this.liveRun.currentState);
+      const graph = this._computeGraph(currentState);
       if (graph) {
-        const clone = (obj) => (typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)));
         const clonedGraph = clone(graph);
         this.liveRun.currentGraph = clonedGraph;
-        Object.defineProperty(this.liveRun.currentState, 'graph', {
+        Object.defineProperty(currentState, 'graph', {
           value: clonedGraph,
           enumerable: false,
           configurable: true,

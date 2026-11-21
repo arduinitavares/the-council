@@ -6,10 +6,94 @@
 
 import {
   ALLOWED_EFFORTS,
+  VALID_DRAIN_STATUSES,
+  normalizeExitCode,
+  normalizeSignalName,
   extractCanonicalBaseModel,
   downshiftEffort,
   downshiftModel
 } from '../harness/cli-runner.js';
+
+export const MAX_PRIMARY_FAULT_REASON_CHARS = 500;
+const MAX_DIAGNOSTIC_DETAIL_CHARS = 240;
+
+/** Collapses whitespace to one line and bounds length without splitting surrogate pairs. */
+export function boundSingleLineFaultMessage(value, maxChars = MAX_PRIMARY_FAULT_REASON_CHARS) {
+  if (value === null || value === undefined) return '';
+  const singleLine = String(value).replace(/\s+/g, ' ').trim();
+  const limit = Number.isFinite(maxChars) ? Math.floor(maxChars) : MAX_PRIMARY_FAULT_REASON_CHARS;
+  if (!singleLine || limit <= 0) return '';
+  if (singleLine.length <= limit) return singleLine;
+  if (limit <= 3) return singleLine.slice(0, limit);
+  let cut = singleLine.slice(0, limit - 3);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}...`;
+}
+
+/** Formats concise single-line diagnostic suffix without duplicating text in `baseText`. */
+export function formatErrorDiagnosticSuffix(error, baseText = '') {
+  if (!error || typeof error !== 'object') return '';
+  const baseRaw = typeof baseText === 'string' ? baseText : String(baseText || '');
+  const baseNorm = baseRaw.replace(/\s+/g, ' ').trim();
+  const hasBase = (s) => Boolean(s) && baseNorm.includes(s);
+  const stripEllipsis = (s) => (s.endsWith('...') ? s.slice(0, -3) : s);
+  const isDupInBase = (s) => Boolean(s) && hasBase(stripEllipsis(s) || s);
+  const firstText = (...vals) => vals.find((v) => typeof v === 'string' && v.trim()) || '';
+
+  const skipCause = 'drainStatus' in error || error.inheritCauseDiagnostics === false;
+  const pickOwn = (obj, k) =>
+    obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined
+      ? obj[k]
+      : undefined;
+  const pick = (k) => {
+    const v1 = pickOwn(error, k);
+    if (v1 !== undefined) return v1;
+    const v2 = pickOwn(error.trace, k);
+    if (v2 !== undefined) return v2;
+    if (skipCause) return undefined;
+    const v3 = pickOwn(error.cause, k);
+    if (v3 !== undefined) return v3;
+    return pickOwn(error.cause?.trace, k);
+  };
+  const pickText = (k) =>
+    firstText(error[k], error.trace?.[k]) ||
+    (skipCause ? '' : firstText(error.cause?.[k], error.cause?.trace?.[k]));
+
+  const rawDrain = pick('drainStatus');
+  const drainStatus = typeof rawDrain === 'string' && VALID_DRAIN_STATUSES.has(rawDrain) ? rawDrain : null;
+  const drainExpired = drainStatus === 'drain_expired';
+  const exitCode = drainExpired ? null : normalizeExitCode(pick('exitCode'));
+  const signal = drainExpired ? null : normalizeSignalName(pick('signal'));
+
+  const parts = [];
+  if (exitCode !== null) {
+    const escapedCode = String(exitCode).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`(?:^|\\D)exit code ${escapedCode}(?!\\d)`).test(baseNorm)) parts.push(`(exit code ${exitCode})`);
+  }
+  if (signal && !new RegExp(`\\b${signal}\\b`).test(baseNorm)) parts.push(`(signal ${signal})`);
+  if (drainStatus && !hasBase(`drain: ${drainStatus}`)) parts.push(`(drain: ${drainStatus})`);
+
+  if (!drainExpired) {
+    const stderrExcerpt = boundSingleLineFaultMessage(pickText('stderr'), MAX_DIAGNOSTIC_DETAIL_CHARS);
+    if (stderrExcerpt && !isDupInBase(stderrExcerpt)) parts.push(`— stderr: ${stderrExcerpt}`);
+
+    const envelopeExcerpt = boundSingleLineFaultMessage(pickText('envelopeError'), MAX_DIAGNOSTIC_DETAIL_CHARS);
+    const stderrNeedle = stripEllipsis(stderrExcerpt) || stderrExcerpt;
+    const envelopeNeedle = stripEllipsis(envelopeExcerpt) || envelopeExcerpt;
+    if (
+      envelopeExcerpt &&
+      !isDupInBase(envelopeExcerpt) &&
+      (!stderrExcerpt || (!stderrExcerpt.includes(envelopeNeedle) && !envelopeExcerpt.includes(stderrNeedle)))
+    ) {
+      parts.push(`— envelope: ${envelopeExcerpt}`);
+    }
+  }
+
+  if (parts.length === 0) return '';
+  const suffixText = parts.join(' ');
+  return !baseNorm || /\s$/.test(baseRaw) ? suffixText : ` ${suffixText}`;
+}
 
 export const VALID_SELF_CONTAINED_PHASES = Object.freeze([
   'DELIBERATION',
@@ -9460,17 +9544,17 @@ export function planParticipantRecovery(params = {}) {
     (error?.code === 'HEADLESS_TOOL_DENIED' || error?.name === 'HeadlessToolDeniedError'
       ? 'HeadlessToolDeniedError'
       : error?.name || 'Error');
-  const primaryFaultReason =
-    typeof error?.message === 'string' && error.message.trim()
-      ? error.message.trim()
-      : resolvedErrorClass;
+  const boundedMessage = boundSingleLineFaultMessage(error?.message);
+  const primaryFaultBase = boundedMessage || resolvedErrorClass;
+  const primaryFaultReason = `${primaryFaultBase}${formatErrorDiagnosticSuffix(error, primaryFaultBase)}`;
 
   // Step 1: non-retryable
   if (!isRetryable) {
+    const nonRetryableBase = boundedMessage || `Non-retryable ${resolvedErrorClass}`;
     return {
       canRetry: false,
       terminationKind: 'non_retryable',
-      reason: error?.message || `Non-retryable ${resolvedErrorClass}`,
+      reason: `${nonRetryableBase}${formatErrorDiagnosticSuffix(error, nonRetryableBase)}`,
       errorCode: null,
       setsToolFreeRecoveryUsed: false,
       retryDiagnostics: null

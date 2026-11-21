@@ -636,7 +636,7 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
       }
     });
 
-    it('classifies execCli ENOENT error into HarnessExecutionError with exitCode preserved', () => {
+    it('classifies execCli ENOENT error into HarnessExecutionError with exitCode null and code ENOENT preserved', () => {
       const adapter = new HarnessAdapter({ name: 'test' });
       const enoentErr = new Error('spawn binary ENOENT');
       enoentErr.code = 'ENOENT';
@@ -645,7 +645,9 @@ describe('Adversarial Stress: Milestone 2 CLI Runner & Adapter Robustness', () =
 
       const classified = adapter.classifyError(enoentErr, { seatId: 'seat-enoent' });
       assert.ok(classified instanceof HarnessExecutionError);
-      assert.equal(classified.exitCode, 'ENOENT');
+      assert.strictEqual(classified.exitCode, null);
+      assert.strictEqual(classified.code, 'ENOENT');
+      assert.strictEqual(classified.cause, enoentErr);
     });
 
     it('preserves existing HarnessError instances without double-wrapping', () => {

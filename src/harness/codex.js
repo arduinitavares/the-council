@@ -6,12 +6,13 @@
 
 import {
   HarnessAdapter,
-  HarnessError,
   QuotaExhaustionError,
   HarnessExecutionError,
   PROVIDER_HTTP_429_REGEX,
   resolveAttemptExecutionWorkspace,
-  captureAttemptInvocationMeta
+  captureAttemptInvocationMeta,
+  registerAttemptPrompt,
+  isReservedClassificationError
 } from './adapter.js';
 import { runCodexCli, extractCanonicalBaseModel } from './cli-runner.js';
 import {
@@ -67,23 +68,12 @@ export class CodexAdapter extends HarnessAdapter {
    * @param {Object} [context]
    */
   classifyError(error, context = {}) {
-    if (error instanceof HarnessError) {
-      return error;
-    }
-
-    if (
-      error?.name === 'AbortError' ||
-      error?.code === 'ABORT_ERR' ||
-      error?.code === 'FORBIDDEN_STATE_ACCESS' ||
-      error?.trace?.forbiddenStateAccess === true ||
-      /\[ForbiddenStateAccessError\]/i.test(error?.message || '') ||
-      error?.name === 'HeadlessToolDeniedError' ||
-      error?.code === 'HEADLESS_TOOL_DENIED'
-    ) {
+    if (isReservedClassificationError(error)) {
       return super.classifyError(error, context);
     }
 
-    const raw = [error?.message, error?.stderr, error?.envelopeError].filter(Boolean).join(' ');
+    const baseOptions = this._buildClassifiedErrorOptions(error, context);
+    const raw = [error?.message, baseOptions.stderr, baseOptions.envelopeError].filter(Boolean).join(' ');
 
     // OpenAI Quota / Rate limit patterns
     const isQuota =
@@ -93,15 +83,13 @@ export class CodexAdapter extends HarnessAdapter {
       );
 
     if (isQuota) {
-      return new QuotaExhaustionError(
-        error.message || `OpenAI rate limit or token quota exhausted on Codex harness`,
-        {
-          harness: this.name,
-          seatId: context.seatId,
-          model: context.model,
-          cause: error
-        }
-      );
+      const msg =
+        typeof error?.message === 'string' && error.message
+          ? (typeof baseOptions.cause?.message === 'string' && baseOptions.cause.message
+            ? baseOptions.cause.message
+            : error.message)
+          : 'OpenAI rate limit or token quota exhausted on Codex harness';
+      return new QuotaExhaustionError(msg, baseOptions);
     }
 
     return super.classifyError(error, context);
@@ -201,9 +189,11 @@ export class CodexAdapter extends HarnessAdapter {
             mode: isRebuttal ? 'rebuttal' : mode,
             context
           });
+          const effectivePrompt = this._withRetryFeedback(prompt, callerContext?.retryFeedback);
+          registerAttemptPrompt(context, effectivePrompt);
           const rawOutput = await this._dispatchCli({
             model: seat.model,
-            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
+            prompt: effectivePrompt,
             signal,
             context,
             tools: effectiveTools,
@@ -213,23 +203,12 @@ export class CodexAdapter extends HarnessAdapter {
           const schemaType = isClarification ? 'clarification' : (isVoting ? 'vote' : 'proof');
           return this.parseStructuredOutput(rawOutput, schemaType);
         } catch (err) {
-          if (err?.trace && !err._providerCallRecorded) {
-            this.recordProviderCall({
-              context,
-              onCallRecord,
-              record: {
-                participantId: context.seatId,
-                provider: 'codex',
-                model: context.model,
-                tools: effectiveTools,
-                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
-                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
-                trace: { ...err.trace, outcome: 'error' }
-              }
-            });
-            err._providerCallRecorded = true;
-          }
-          throw this.classifyError(err, context);
+          this._handleAttemptError(err, {
+            provider: 'codex',
+            context,
+            onCallRecord,
+            tools: effectiveTools
+          });
         }
       },
       timeoutMs,
@@ -313,9 +292,11 @@ export class CodexAdapter extends HarnessAdapter {
             cwd: effectiveCwd,
             context
           });
+          const effectivePrompt = this._withRetryFeedback(prompt, callerContext?.retryFeedback);
+          registerAttemptPrompt(context, effectivePrompt);
           const rawOutput = await this._dispatchCli({
             model: judge.model,
-            prompt: this._withRetryFeedback(prompt, callerContext?.retryFeedback),
+            prompt: effectivePrompt,
             signal,
             context,
             tools: effectiveTools,
@@ -324,23 +305,12 @@ export class CodexAdapter extends HarnessAdapter {
 
           return this.parseStructuredOutput(rawOutput, 'judge_synthesis');
         } catch (err) {
-          if (err?.trace && !err._providerCallRecorded) {
-            this.recordProviderCall({
-              context,
-              onCallRecord,
-              record: {
-                participantId: context.seatId,
-                provider: 'codex',
-                model: context.model,
-                tools: effectiveTools,
-                exitCode: typeof err.exitCode === 'number' ? err.exitCode : 1,
-                durationMs: typeof err.trace.durationMs === 'number' ? err.trace.durationMs : 0,
-                trace: { ...err.trace, outcome: 'error' }
-              }
-            });
-            err._providerCallRecorded = true;
-          }
-          throw this.classifyError(err, context);
+          this._handleAttemptError(err, {
+            provider: 'codex',
+            context,
+            onCallRecord,
+            tools: effectiveTools
+          });
         }
       },
       timeoutMs,

@@ -23,6 +23,7 @@ import { AntigravityAdapter } from './antigravity.js';
 import { CursorAdapter } from './cursor.js';
 import { MockAdapter } from './mock.js';
 import { T3McpClient } from './t3-mcp-client.js';
+import { loginT3OAuth, logoutT3OAuth, getT3AuthStatus } from './t3-oauth.js';
 import { T3HarnessAdapter } from './t3.js';
 
 export const VALID_HARNESS_BACKENDS = Object.freeze(['cli', 't3']);
@@ -45,7 +46,10 @@ export {
   CursorAdapter,
   MockAdapter,
   T3McpClient,
-  T3HarnessAdapter
+  T3HarnessAdapter,
+  loginT3OAuth,
+  logoutT3OAuth,
+  getT3AuthStatus
 };
 
 /**
@@ -123,6 +127,7 @@ export class HarnessRegistry {
       this._sharedT3Client = new T3McpClient({
         url: overrideOptions.url ?? this.defaultOptions.url,
         token: overrideOptions.token ?? this.defaultOptions.token,
+        tokenStorePath: overrideOptions.tokenStorePath ?? this.defaultOptions.tokenStorePath,
         headers: overrideOptions.headers ?? this.defaultOptions.headers,
         fetchImpl: overrideOptions.fetchImpl ?? this.defaultOptions.fetchImpl,
         callTool: overrideOptions.callTool ?? this.defaultOptions.callTool

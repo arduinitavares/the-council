@@ -14,8 +14,14 @@ import {
   PROVIDER_HTTP_AUTH_REGEX
 } from './adapter.js';
 import { sliceUtf8Bytes, MAX_CLI_ERROR_MESSAGE_BYTES } from './telemetry-utils.js';
+import {
+  DEFAULT_T3_MCP_URL,
+  isT3CredentialExpired,
+  loadStoredT3Credential,
+  refreshStoredT3Credential
+} from './t3-oauth.js';
 
-export const DEFAULT_T3_MCP_URL = 'http://127.0.0.1:3773/mcp';
+export { DEFAULT_T3_MCP_URL };
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 const MCP_ACCEPT_HEADER = 'application/json, text/event-stream';
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -250,8 +256,11 @@ function extractToolErrorText(result) {
 export class T3McpClient {
   constructor(options = {}) {
     this.url = String(options.url || process.env.T3_MCP_URL || DEFAULT_T3_MCP_URL).trim();
+    this._explicitTokenProvided = options.token !== undefined;
     this._token =
       options.token !== undefined ? String(options.token || '').trim() : String(process.env.T3_MCP_TOKEN || '').trim();
+    this._tokenStorePath = options.tokenStorePath;
+    this._useTokenStore = options.useTokenStore !== undefined ? Boolean(options.useTokenStore) : true;
     this._headersProvider = options.headers || null;
     this._clientInfo = options.clientInfo || { name: 'the-council', version: '0.1.0' };
     this.protocolVersion = options.protocolVersion || MCP_PROTOCOL_VERSION;
@@ -264,7 +273,40 @@ export class T3McpClient {
     this._initialized = false;
     this._initInfo = null;
     this._initPromise = null;
+    this._refreshPromise = null;
     this._nextId = 1;
+  }
+
+  async _resolveStoredToken({ forceRefresh = false } = {}) {
+    if (this._explicitTokenProvided || this._token || !this._useTokenStore) {
+      return '';
+    }
+    const entry = loadStoredT3Credential(this.url, { storePath: this._tokenStorePath });
+    if (!entry?.accessToken) {
+      return '';
+    }
+    const expired = isT3CredentialExpired(entry);
+    if ((forceRefresh || expired) && entry.refreshToken) {
+      if (!this._refreshPromise) {
+        this._refreshPromise = refreshStoredT3Credential(this.url, {
+          storePath: this._tokenStorePath,
+          fetchImpl: this._fetch
+        }).finally(() => {
+          this._refreshPromise = null;
+        });
+      }
+      const refreshed = await this._refreshPromise;
+      if (refreshed?.accessToken) {
+        return refreshed.accessToken;
+      }
+      if (forceRefresh || expired) {
+        return '';
+      }
+    }
+    if (expired) {
+      return '';
+    }
+    return entry.accessToken;
   }
 
   _collectSecrets(extraHeaders = {}) {
@@ -281,7 +323,7 @@ export class T3McpClient {
     return secrets;
   }
 
-  async _resolveAuthHeaders() {
+  async _resolveAuthHeaders({ forceRefresh = false } = {}) {
     const custom =
       typeof this._headersProvider === 'function'
         ? await this._headersProvider()
@@ -291,6 +333,7 @@ export class T3McpClient {
     const headers = {};
     let hasAuth = false;
     let hasAuthorizationHeader = false;
+    let usedStoredToken = false;
     for (const [k, v] of Object.entries(custom || {})) {
       if (k.trim().toLowerCase() === 'authorization') {
         hasAuthorizationHeader = true;
@@ -303,11 +346,20 @@ export class T3McpClient {
         hasAuth = true;
       }
     }
-    if (!hasAuthorizationHeader && this._token) {
-      headers.Authorization = `Bearer ${this._token}`;
-      hasAuth = true;
+    if (!hasAuthorizationHeader) {
+      if (this._token) {
+        headers.Authorization = `Bearer ${this._token}`;
+        hasAuth = true;
+      } else {
+        const storedToken = await this._resolveStoredToken({ forceRefresh });
+        if (storedToken) {
+          headers.Authorization = `Bearer ${storedToken}`;
+          hasAuth = true;
+          usedStoredToken = true;
+        }
+      }
     }
-    return { headers, hasAuth };
+    return { headers, hasAuth, usedStoredToken };
   }
 
   _assertSafeUrl(hasAuth, authHeaders = {}) {
@@ -415,8 +467,8 @@ export class T3McpClient {
     });
   }
 
-  async _postJsonRpc(payload, { signal, includeSession = true, isNotification = false } = {}) {
-    const { headers: authHeaders, hasAuth } = await this._resolveAuthHeaders();
+  async _postJsonRpc(payload, { signal, includeSession = true, isNotification = false, retriedAuth = false } = {}) {
+    const { headers: authHeaders, hasAuth, usedStoredToken } = await this._resolveAuthHeaders();
     this._assertSafeUrl(hasAuth, authHeaders);
     const secrets = this._collectSecrets(authHeaders);
 
@@ -451,6 +503,18 @@ export class T3McpClient {
 
     const returnedSessionId = res.headers?.get?.('mcp-session-id');
     if (res.status === 401 || res.status === 403) {
+      if (res.status === 401 && usedStoredToken && !retriedAuth) {
+        await res.body?.cancel?.().catch(() => {});
+        const refreshed = await this._resolveStoredToken({ forceRefresh: true });
+        if (refreshed) {
+          return await this._postJsonRpc(payload, {
+            signal,
+            includeSession,
+            isNotification,
+            retriedAuth: true
+          });
+        }
+      }
       const errText = await readBoundedText(res, Math.min(this._maxResponseBytes, 16_384)).catch(() => '');
       let parsedErr = null;
       try {
@@ -460,7 +524,10 @@ export class T3McpClient {
       }
       const code = parsedErr?.error === 'invalid_mcp_credential' ? 'INVALID_MCP_CREDENTIAL' : `HTTP_${res.status}`;
       const detail = parsedErr?.message || errText || `HTTP ${res.status} authentication failed`;
-      throw this._classifyProtocolError(`HTTP ${res.status} (${code}): ${detail}`, {
+      const hint = res.status === 401
+        ? ' Run "council login t3" (or set T3_MCP_TOKEN) to authenticate with T3 Code.'
+        : '';
+      throw this._classifyProtocolError(`HTTP ${res.status} (${code}): ${detail}${hint}`, {
         code,
         status: res.status,
         secrets

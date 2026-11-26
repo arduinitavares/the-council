@@ -28,7 +28,15 @@ import {
 } from '../telemetry/ledger.js';
 import { validateRetryFallbackCapability } from '../engine/recovery.js';
 import { listAntigravityModels } from '../harness/cli-runner.js';
-import { HarnessRegistry, T3HarnessAdapter, resolveHarnessBackend } from '../harness/index.js';
+import {
+  HarnessRegistry,
+  T3HarnessAdapter,
+  T3McpClient,
+  resolveHarnessBackend,
+  loginT3OAuth,
+  logoutT3OAuth,
+  getT3AuthStatus
+} from '../harness/index.js';
 import { VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
 
 function formatDiagnosticModelEffort(model, effort) {
@@ -98,6 +106,8 @@ The Council — Multi-Agent Consensus Deliberation Engine (v0.1.0)
 
 Usage:
   council run (--live | --mock) [options]
+  council login t3 [--url <mcp-url>] [--status] [--no-browser] [--json]
+  council logout t3 [--url <mcp-url>] [--json]
   council telemetry [--days <N>] [--by model|seat] [--json]
   council demo [wt-better-os | wt-10-seats-quota | wt-opus-guardrails]
   council inspect <snapshot-file.json>
@@ -127,6 +137,9 @@ Options:
       --by <model|seat>       Group telemetry leaderboard by canonical model or seat (default: model)
       --output-dir <path>     Custom runs/summary output directory
       --telemetry-dir <path>  Custom telemetry ledger directory
+      --url <mcp-url>         T3 MCP endpoint URL (login/logout, default: http://127.0.0.1:3773/mcp)
+      --status                Show current T3 authentication status without refreshing or logging in
+      --no-browser            Print T3 authorization URL without opening a browser tab
       --json                  Output result strictly as JSON (includes "mode": "live" | "mock")
   -v, --verbose               Print real-time observer telemetry events to stderr
   -h, --help                  Show this help message
@@ -226,6 +239,9 @@ export function parseCliArgs(rawArgs = []) {
       by: { type: 'string' },
       'output-dir': { type: 'string' },
       'telemetry-dir': { type: 'string' },
+      url: { type: 'string' },
+      status: { type: 'boolean', default: false },
+      'no-browser': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       verbose: { type: 'boolean', short: 'v', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -383,6 +399,102 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
   if (values.version) {
     log('the-council v0.1.0 (Node ' + process.version + ')');
     return await safeExit(0);
+  }
+
+  if (command === 'login') {
+    const target = (positionals[0] || 't3').trim().toLowerCase();
+    if (target !== 't3') {
+      logErr(`Unknown login provider "${positionals[0]}". Supported: t3`);
+      return await safeExit(1);
+    }
+    const mcpUrl = values.url || io.t3Url;
+    const storePath = io.tokenStorePath;
+    if (values.status) {
+      try {
+        const statusFn = io.getT3AuthStatus || getT3AuthStatus;
+        const st = statusFn({ url: mcpUrl, storePath });
+        if (values.json) {
+          log(JSON.stringify(st, null, 2));
+        } else {
+          log(`T3 MCP endpoint: ${st.url}`);
+          log(`Authenticated  : ${st.authenticated ? 'yes' : 'no'} (source: ${st.source})`);
+          if (st.scope) log(`Scopes         : ${st.scope}`);
+          if (st.expiresAt) log(`Expires At     : ${st.expiresAt}${st.expired ? ' (expired)' : ''}`);
+          log(`Token Store    : ${st.storePath}`);
+        }
+        return await safeExit(0);
+      } catch (err) {
+        logErr(`T3 auth status error: ${err.message}`);
+        return await safeExit(1);
+      }
+    }
+
+    try {
+      const loginFn = io.loginT3OAuth || loginT3OAuth;
+      const result = await loginFn({
+        url: mcpUrl,
+        storePath,
+        noBrowser: Boolean(values['no-browser']),
+        onAuthUrl: (authUrl) => {
+          if (!values.json) {
+            logErr(`Authorize The Council with T3 Code in your browser:\n  ${authUrl}`);
+          }
+        }
+      });
+
+      let health = null;
+      const skipHealth = Boolean(io.skipHealthCheck || (io.loginT3OAuth && !io.verifyT3Auth));
+      if (!skipHealth) {
+        if (typeof io.verifyT3Auth === 'function') {
+          health = await io.verifyT3Auth(result.url);
+        } else {
+          const client = new T3McpClient({ url: result.url, tokenStorePath: storePath });
+          try {
+            health = await client.healthCheck();
+          } finally {
+            await client.close();
+          }
+        }
+        if (health && health.ok === false) {
+          throw new Error(`T3 verification failed after login: ${health.error || 'unknown error'}`);
+        }
+      }
+
+      if (values.json) {
+        log(JSON.stringify({ ...result, verified: health ? Boolean(health.ok) : null }, null, 2));
+      } else {
+        log(`Authenticated with T3 MCP: ${result.url}`);
+        log(`Scopes      : ${result.scope}`);
+        log(`Token Store : ${result.storePath}`);
+        if (result.expiresAt) log(`Expires At  : ${result.expiresAt}`);
+        if (health?.ok) log(`Verified    : ok (${health.latencyMs}ms)`);
+      }
+      return await safeExit(0);
+    } catch (err) {
+      logErr(`T3 login error: ${err.message}`);
+      return await safeExit(1);
+    }
+  }
+
+  if (command === 'logout') {
+    const target = (positionals[0] || 't3').trim().toLowerCase();
+    if (target !== 't3') {
+      logErr(`Unknown logout provider "${positionals[0]}". Supported: t3`);
+      return await safeExit(1);
+    }
+    try {
+      const logoutFn = io.logoutT3OAuth || logoutT3OAuth;
+      const result = await logoutFn({ url: values.url || io.t3Url, storePath: io.tokenStorePath });
+      if (values.json) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        log(`Cleared stored T3 credential for ${result.url} (removed=${result.removed}, revoked=${result.revoked})`);
+      }
+      return await safeExit(0);
+    } catch (err) {
+      logErr(`T3 logout error: ${err.message}`);
+      return await safeExit(1);
+    }
   }
 
   if (command === 'telemetry') {
@@ -565,7 +677,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         ...(resolved.cwd ? { cwd: resolved.cwd } : {}),
         ...(io.t3McpClient ? { mcpClient: io.t3McpClient } : {}),
         ...(io.t3Url ? { url: io.t3Url } : {}),
-        ...(io.t3Token ? { token: io.t3Token } : {})
+        ...(io.t3Token ? { token: io.t3Token } : {}),
+        ...(io.tokenStorePath ? { tokenStorePath: io.tokenStorePath } : {})
       };
       const harnessRegistry = io.harnessRegistry || new HarnessRegistry(registryDefaults);
       try {

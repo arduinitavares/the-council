@@ -1,15 +1,22 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { T3McpClient } from '../../src/harness/t3-mcp-client.js';
+import { DEFAULT_T3_MCP_URL, T3McpClient } from '../../src/harness/t3-mcp-client.js';
+import { loadStoredT3Credential, isT3CredentialExpired } from '../../src/harness/t3-oauth.js';
 import { T3HarnessAdapter } from '../../src/harness/t3.js';
 
-const LIVE_ENABLED = process.env.LIVE_T3_SMOKE === '1' && Boolean(process.env.T3_MCP_TOKEN);
+const TARGET_URL = process.env.T3_MCP_URL || DEFAULT_T3_MCP_URL;
+const STORED_CREDENTIAL = loadStoredT3Credential(TARGET_URL);
+const HAS_STORED_CREDENTIAL = Boolean(
+  STORED_CREDENTIAL?.accessToken && (!isT3CredentialExpired(STORED_CREDENTIAL) || STORED_CREDENTIAL.refreshToken)
+);
+const LIVE_ENABLED =
+  process.env.LIVE_T3_SMOKE === '1' && (Boolean(process.env.T3_MCP_TOKEN) || HAS_STORED_CREDENTIAL);
 
 describe('Opt-in Live T3 MCP Qualification Smoke (LIVE_T3_SMOKE=1)', { skip: !LIVE_ENABLED }, () => {
   it('verifies live T3 MCP healthCheck and a single scratch tools:none vote turn', async () => {
     const client = new T3McpClient({
       url: process.env.T3_MCP_URL,
-      token: process.env.T3_MCP_TOKEN
+      ...(process.env.T3_MCP_TOKEN ? { token: process.env.T3_MCP_TOKEN } : {})
     });
     const provider = process.env.LIVE_T3_PROVIDER || 'codex';
     const model = process.env.LIVE_T3_MODEL || 'gpt-6.2-sol (xhigh)';

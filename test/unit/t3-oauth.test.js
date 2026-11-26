@@ -518,8 +518,14 @@ describe('T3 MCP OAuth 2.1 + PKCE & CLI integration', () => {
       }
       if (reqUrl.pathname === '/token' && req.method === 'POST') {
         const form = new URLSearchParams(await readRequestBody(req));
+        const encCode = encodeURIComponent(form.get('code') || '');
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'invalid_grant', error_description: `Bad code_verifier ${form.get('code_verifier')}` }));
+        res.end(
+          JSON.stringify({
+            error: 'invalid_grant',
+            error_description: `Bad code_verifier ${form.get('code_verifier')} and encoded code ${encCode}`
+          })
+        );
         return;
       }
       res.writeHead(404);
@@ -536,14 +542,19 @@ describe('T3 MCP OAuth 2.1 + PKCE & CLI integration', () => {
           openBrowser: async (authUrlStr) => {
             const authUrl = new URL(authUrlStr);
             const cb = new URL(authUrl.searchParams.get('redirect_uri'));
-            cb.searchParams.set('code', 'secret-code-123');
+            cb.searchParams.set('code', 'secret/code+=99');
             cb.searchParams.set('state', authUrl.searchParams.get('state'));
             await fetch(cb.toString());
           }
         }),
       (err) => {
         capturedVerifierLeak = err.message;
-        return err.message.includes('[REDACTED]') && !err.message.includes('Bad code_verifier s');
+        return (
+          err.message.includes('[REDACTED]') &&
+          !err.message.includes('Bad code_verifier s') &&
+          !err.message.includes('secret%2Fcode') &&
+          !err.message.includes('secret/code+=99')
+        );
       }
     );
     assert.ok(capturedVerifierLeak?.includes('[REDACTED]'));
@@ -649,7 +660,25 @@ describe('T3 MCP OAuth 2.1 + PKCE & CLI integration', () => {
     assert.deepEqual(resB, { ok: true });
     assert.equal(refreshCount, 2, 'Staggered 401 must reuse already-refreshed stored token without another refresh');
 
-    // 3. Non-refreshable stored token 401 preserves INVALID_MCP_CREDENTIAL error code/detail
+    // 3. Failed refresh AND non-refreshable stored token 401 preserve INVALID_MCP_CREDENTIAL error code/detail
+    saveStoredT3Credential(
+      raceMcpUrl,
+      {
+        accessToken: 'invalid-grant-tok',
+        refreshToken: 'rt-invalid-grant',
+        clientId: 'cid-inv',
+        tokenEndpoint: `${raceBase}/token-fail`,
+        expiresAt: new Date(Date.now() + 300_000).toISOString()
+      },
+      { storePath }
+    );
+    const invGrantClient = new T3McpClient({ url: raceMcpUrl, tokenStorePath: storePath, useEnvToken: false });
+    await invGrantClient.initialize();
+    await assert.rejects(
+      () => invGrantClient.callTool('orchestrator_capabilities', {}),
+      (err) => err instanceof AuthenticationError && err.code === 'INVALID_MCP_CREDENTIAL' && err.message.includes('Stale token')
+    );
+
     saveStoredT3Credential(
       raceMcpUrl,
       {

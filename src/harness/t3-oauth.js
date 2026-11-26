@@ -98,6 +98,51 @@ function writeTokenStoreFile(storePath, store) {
   }
 }
 
+function withTokenStoreLockSync(storePath, fn) {
+  const dir = path.dirname(storePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(dir, `.${path.basename(storePath)}.lock`);
+  const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 2000;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (err) {
+      if (err?.code !== 'EEXIST') {
+        return fn();
+      }
+      try {
+        const st = fs.statSync(lockPath);
+        if (Date.now() - st.mtimeMs > 10_000) {
+          fs.rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch {
+        // Lock removed concurrently
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out acquiring T3 OAuth store lock "${lockPath}"`);
+      }
+      Atomics.wait(sleepBuf, 0, 0, 5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // Ignore close failure
+    }
+    try {
+      fs.rmSync(lockPath, { force: true });
+    } catch {
+      // Ignore unlink failure
+    }
+  }
+}
+
 export function loadStoredT3Credential(mcpUrl, { storePath } = {}) {
   const resolvedPath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
   let key;
@@ -117,25 +162,29 @@ export function loadStoredT3Credential(mcpUrl, { storePath } = {}) {
 export function saveStoredT3Credential(mcpUrl, record, { storePath } = {}) {
   const resolvedPath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
   const key = normalizeT3EndpointUrl(mcpUrl);
-  const store = readTokenStoreFile(resolvedPath);
-  store.endpoints[key] = record;
-  writeTokenStoreFile(resolvedPath, store);
+  withTokenStoreLockSync(resolvedPath, () => {
+    const store = readTokenStoreFile(resolvedPath);
+    store.endpoints[key] = record;
+    writeTokenStoreFile(resolvedPath, store);
+  });
   return resolvedPath;
 }
 
 export function deleteStoredT3Credential(mcpUrl, { storePath } = {}) {
   const resolvedPath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
   const key = normalizeT3EndpointUrl(mcpUrl);
-  if (!fs.existsSync(resolvedPath)) {
-    return false;
-  }
-  const store = readTokenStoreFile(resolvedPath);
-  if (!Object.prototype.hasOwnProperty.call(store.endpoints, key)) {
-    return false;
-  }
-  delete store.endpoints[key];
-  writeTokenStoreFile(resolvedPath, store);
-  return true;
+  return withTokenStoreLockSync(resolvedPath, () => {
+    if (!fs.existsSync(resolvedPath)) {
+      return false;
+    }
+    const store = readTokenStoreFile(resolvedPath);
+    if (!Object.prototype.hasOwnProperty.call(store.endpoints, key)) {
+      return false;
+    }
+    delete store.endpoints[key];
+    writeTokenStoreFile(resolvedPath, store);
+    return true;
+  });
 }
 
 export function isT3CredentialExpired(entry, skewMs = 60_000) {
@@ -181,13 +230,26 @@ async function readBoundedText(response, maxBytes = MAX_OAUTH_RESPONSE_BYTES) {
 
 function redactOAuthErrorText(text, secrets = []) {
   let out = String(text || '');
-  const ordered = [...secrets]
-    .filter((s) => typeof s === 'string' && s.length > 0)
-    .sort((a, b) => b.length - a.length);
+  const variants = new Set();
+  for (const raw of secrets) {
+    if (typeof raw !== 'string' || raw.length === 0) continue;
+    variants.add(raw);
+    try {
+      variants.add(encodeURIComponent(raw));
+    } catch {
+      // Ignore encoding error
+    }
+    try {
+      variants.add(new URLSearchParams([['v', raw]]).toString().slice(2));
+    } catch {
+      // Ignore encoding error
+    }
+  }
+  const ordered = [...variants].sort((a, b) => b.length - a.length);
   for (const s of ordered) {
     out = out.split(s).join('[REDACTED]');
   }
-  out = out.replace(/((?:code_verifier|client_secret|refresh_token|access_token)\s*[=:]\s*)[^\s&"',;]+/gi, '$1[REDACTED]');
+  out = out.replace(/((?:code_verifier|code|state|client_secret|refresh_token|access_token)\s*[=:]\s*)[^\s&"',;]+/gi, '$1[REDACTED]');
   return out;
 }
 
@@ -462,27 +524,31 @@ export async function refreshStoredT3Credential(
     return null;
   }
 
-  // Guard against logout or concurrent fresh login completing while refresh was in flight
-  const current = loadStoredT3Credential(normalizedUrl, { storePath });
-  if (!current || !current.refreshToken) {
-    return null;
-  }
-  if (current.clientId !== entry.clientId || current.obtainedAt !== entry.obtainedAt) {
-    return current;
-  }
+  const resolvedStorePath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
+  return withTokenStoreLockSync(resolvedStorePath, () => {
+    const store = readTokenStoreFile(resolvedStorePath);
+    const current = store.endpoints[normalizedUrl];
+    if (!current || !current.refreshToken) {
+      return null;
+    }
+    if (current.clientId !== entry.clientId || current.obtainedAt !== entry.obtainedAt) {
+      return current;
+    }
 
-  const updated = {
-    ...entry,
-    accessToken,
-    refreshToken: typeof data.refresh_token === 'string' && data.refresh_token.trim()
-      ? data.refresh_token.trim()
-      : entry.refreshToken,
-    scope: typeof data.scope === 'string' && data.scope.trim() ? data.scope.trim() : entry.scope,
-    expiresAt: computeExpiresAt(data.expires_in) ?? entry.expiresAt ?? null,
-    obtainedAt: new Date().toISOString()
-  };
-  saveStoredT3Credential(normalizedUrl, updated, { storePath });
-  return updated;
+    const updated = {
+      ...entry,
+      accessToken,
+      refreshToken: typeof data.refresh_token === 'string' && data.refresh_token.trim()
+        ? data.refresh_token.trim()
+        : entry.refreshToken,
+      scope: typeof data.scope === 'string' && data.scope.trim() ? data.scope.trim() : entry.scope,
+      expiresAt: computeExpiresAt(data.expires_in) ?? entry.expiresAt ?? null,
+      obtainedAt: new Date().toISOString()
+    };
+    store.endpoints[normalizedUrl] = updated;
+    writeTokenStoreFile(resolvedStorePath, store);
+    return updated;
+  });
 }
 
 export async function loginT3OAuth(options = {}) {

@@ -518,6 +518,7 @@ export class T3McpClient {
 
     const returnedSessionId = res.headers?.get?.('mcp-session-id');
     if (res.status === 401 || res.status === 403) {
+      const errText = await readBoundedText(res, Math.min(this._maxResponseBytes, 16_384)).catch(() => '');
       if (res.status === 401 && usedStoredToken && !retriedAuth) {
         const currentCred = loadStoredT3Credential(this.url, { storePath: this._tokenStorePath });
         const canRetryAuth = Boolean(
@@ -528,7 +529,6 @@ export class T3McpClient {
                 !isT3CredentialExpired(currentCred, 0)))
         );
         if (canRetryAuth) {
-          await res.body?.cancel?.().catch(() => {});
           const refreshed = await this._resolveStoredToken({
             forceRefresh: true,
             expectedStaleToken: storedTokenUsed,
@@ -544,7 +544,6 @@ export class T3McpClient {
           }
         }
       }
-      const errText = await readBoundedText(res, Math.min(this._maxResponseBytes, 16_384)).catch(() => '');
       let parsedErr = null;
       try {
         parsedErr = errText ? JSON.parse(errText) : null;

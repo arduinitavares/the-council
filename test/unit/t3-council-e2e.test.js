@@ -57,25 +57,55 @@ function startT3E2eServer({ authToken = 'test-t3-token', projectRoot, onToolCall
 const E2E_CAPABILITIES = {
   providers: [
     {
-      provider: 'codex',
+      providerInstanceId: 'codex',
+      driverKind: 'codex',
       canRunChildTask: true,
       models: [
-        { model: 'gpt-6.2-sol', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gpt-6.2-astra', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh'] }
+        {
+          id: 'gpt-6.2-sol',
+          options: [
+            { id: 'reasoningEffort', values: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            { id: 'serviceTier', values: ['standard', 'fast'] }
+          ]
+        },
+        {
+          id: 'gpt-6.2-astra',
+          options: [
+            { id: 'reasoningEffort', values: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            { id: 'serviceTier', values: ['standard', 'fast'] }
+          ]
+        }
       ]
     },
     {
-      provider: 'antigravity',
+      providerInstanceId: 'antigravity',
+      driverKind: 'antigravity',
       canRunChildTask: true,
       models: [
-        { model: 'gemini-4-neon', optionKey: 'thought_level', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gemini-pro-orchestrator-neon', optionKey: null, efforts: null }
+        {
+          id: 'gemini-4-neon',
+          options: [{ id: 'thought_level', values: ['low', 'medium', 'high', 'xhigh'] }]
+        },
+        {
+          id: 'gemini-pro-orchestrator-neon',
+          options: []
+        }
       ]
     },
     {
-      provider: 'cursor',
+      providerInstanceId: 'cursor',
+      driverKind: 'cursor',
       canRunChildTask: true,
-      models: [{ model: 'grok-4.7', optionKey: 'reasoning_effort', efforts: ['low', 'medium', 'high', 'xhigh'] }]
+      models: [
+        {
+          id: 'grok-4.7',
+          options: [{ id: 'reasoning_effort', values: ['low', 'medium', 'high', 'xhigh'] }]
+        },
+        {
+          id: 'composer-2.5',
+          options: [{ id: 'fastMode', values: ['default', 'fast'] }]
+        }
+      ]
     }
   ]
 };

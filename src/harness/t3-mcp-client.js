@@ -20,6 +20,12 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 const MCP_ACCEPT_HEADER = 'application/json, text/event-stream';
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const CREDENTIAL_HEADER_NAME_REGEX =
+  /^(?:authorization|proxy-authorization|cookie|x-api-key|api-key|x-auth-token)$|token|secret|auth|key/i;
+
+function isCredentialHeaderName(name) {
+  return typeof name === 'string' && CREDENTIAL_HEADER_NAME_REGEX.test(name.trim());
+}
 
 /**
  * Returns true if hostname resolves strictly to local loopback.
@@ -251,9 +257,10 @@ export class T3McpClient {
     const secrets = [];
     if (this._token) secrets.push(this._token);
     for (const [k, v] of Object.entries(extraHeaders || {})) {
-      if (k.toLowerCase() === 'authorization' && typeof v === 'string' && v.trim()) {
-        secrets.push(v.trim());
-        const bearerMatch = /^Bearer\s+(.+)$/i.exec(v.trim());
+      if (isCredentialHeaderName(k) && typeof v === 'string' && v.trim()) {
+        const trimmed = v.trim();
+        secrets.push(trimmed);
+        const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmed);
         if (bearerMatch?.[1]) secrets.push(bearerMatch[1].trim());
       }
     }
@@ -269,24 +276,31 @@ export class T3McpClient {
           : {};
     const headers = {};
     let hasAuth = false;
+    let hasAuthorizationHeader = false;
     for (const [k, v] of Object.entries(custom || {})) {
       if (v === undefined || v === null) continue;
-      headers[k] = String(v);
-      if (k.toLowerCase() === 'authorization') hasAuth = true;
+      const strVal = String(v);
+      headers[k] = strVal;
+      if (k.toLowerCase() === 'authorization' && strVal.trim()) {
+        hasAuthorizationHeader = true;
+      }
+      if (isCredentialHeaderName(k) && strVal.trim()) {
+        hasAuth = true;
+      }
     }
-    if (!hasAuth && this._token) {
+    if (!hasAuthorizationHeader && this._token) {
       headers.Authorization = `Bearer ${this._token}`;
       hasAuth = true;
     }
     return { headers, hasAuth };
   }
 
-  _assertSafeUrl(hasAuth) {
+  _assertSafeUrl(hasAuth, authHeaders = {}) {
     let parsed;
     try {
       parsed = new URL(this.url);
     } catch {
-      throw new HarnessExecutionError(`Invalid T3 MCP URL "${redactSecrets(this.url, this._collectSecrets())}"`, {
+      throw new HarnessExecutionError(`Invalid T3 MCP URL "${redactSecrets(this.url, this._collectSecrets(authHeaders))}"`, {
         harness: 't3',
         code: 'INVALID_T3_MCP_URL',
         isRetryable: false,
@@ -388,7 +402,7 @@ export class T3McpClient {
 
   async _postJsonRpc(payload, { signal, includeSession = true, isNotification = false } = {}) {
     const { headers: authHeaders, hasAuth } = await this._resolveAuthHeaders();
-    this._assertSafeUrl(hasAuth);
+    this._assertSafeUrl(hasAuth, authHeaders);
     const secrets = this._collectSecrets(authHeaders);
 
     const reqHeaders = {
@@ -583,7 +597,14 @@ export class T3McpClient {
     if (this._injectedCallTool) {
       const raw = await this._injectedCallTool(name, args, { signal });
       if (raw && typeof raw === 'object' && raw.isError === true) {
+        let authHeaders = {};
+        try {
+          ({ headers: authHeaders } = await this._resolveAuthHeaders());
+        } catch {
+          authHeaders = {};
+        }
         throw this._classifyProtocolError(extractToolErrorText(raw), {
+          secrets: this._collectSecrets(authHeaders),
           isToolError: true
         });
       }
@@ -645,7 +666,13 @@ export class T3McpClient {
         capabilities
       };
     } catch (err) {
-      const secrets = this._token ? [this._token] : [];
+      let authHeaders = {};
+      try {
+        ({ headers: authHeaders } = await this._resolveAuthHeaders());
+      } catch {
+        authHeaders = {};
+      }
+      const secrets = this._collectSecrets(authHeaders);
       return {
         ok: false,
         latencyMs: Math.max(0, Date.now() - t0),

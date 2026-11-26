@@ -307,4 +307,52 @@ describe('Task 2: Zero-dependency Streamable HTTP T3McpClient', () => {
       (err) => err instanceof AbortError && err.isRetryable === false
     );
   });
+
+  it('protects credential-bearing custom headers (X-API-Key): rejects cleartext non-loopback HTTP, blocks redirects, and redacts secret from error/healthCheck output', async () => {
+    const customSecret = 'custom-secret-key';
+    const headersProvider = () => ({ 'X-API-Key': customSecret });
+
+    const remoteClient = new T3McpClient({
+      url: 'http://remote.example.com:3773/mcp',
+      headers: headersProvider
+    });
+    await assert.rejects(
+      () => remoteClient.initialize(),
+      (err) => err instanceof HarnessExecutionError && err.code === 'INSECURE_T3_MCP_URL' && err.isRetryable === false
+    );
+
+    const { server, url } = await startMockServer((req, res) => {
+      if (req.url === '/redirect') {
+        res.writeHead(302, { Location: 'http://127.0.0.1:9999/steal' });
+        res.end();
+        return;
+      }
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end(`Upstream rejected X-API-Key=${customSecret} for request`);
+    });
+    servers.push(server);
+
+    const redirClient = new T3McpClient({
+      url: url.replace('/mcp', '/redirect'),
+      headers: headersProvider
+    });
+    await assert.rejects(() => redirClient.initialize());
+
+    const errClient = new T3McpClient({ url, headers: headersProvider });
+    await assert.rejects(
+      () => errClient.callTool('orchestrator_capabilities', {}),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.message.includes(customSecret), false);
+        assert.equal((err.envelopeError || '').includes(customSecret), false);
+        assert.match(err.message, /\[REDACTED\]/);
+        return true;
+      }
+    );
+
+    const health = await errClient.healthCheck();
+    assert.equal(health.ok, false);
+    assert.equal((health.error || '').includes(customSecret), false);
+    assert.match(health.error || '', /\[REDACTED\]/);
+  });
 });

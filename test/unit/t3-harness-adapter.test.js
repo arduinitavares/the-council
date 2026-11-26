@@ -13,43 +13,102 @@ import { createTelemetryEmitter } from '../../src/telemetry/emitter.js';
 const MOCK_CAPABILITIES = {
   providers: [
     {
-      provider: 'codex',
+      providerInstanceId: 'codex',
+      driverKind: 'codex',
       canRunChildTask: true,
       models: [
-        { model: 'gpt-6.2-sol', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gpt-6.2-astra', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gpt-6-astra', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }
+        {
+          id: 'gpt-6.2-sol',
+          options: [
+            { id: 'reasoningEffort', values: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            { id: 'serviceTier', values: ['standard', 'fast'] }
+          ]
+        },
+        {
+          id: 'gpt-6.2-astra',
+          options: [
+            { id: 'reasoningEffort', values: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            { id: 'serviceTier', values: ['standard', 'fast'] }
+          ]
+        },
+        {
+          id: 'gpt-6-astra',
+          options: [{ id: 'reasoningEffort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }]
+        }
       ]
     },
     {
-      provider: 'antigravity',
+      providerInstanceId: 'antigravity',
+      driverKind: 'antigravity',
       canRunChildTask: true,
       models: [
-        { model: 'gemini-4-neon', optionKey: 'thought_level', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gemini-pro-orchestrator-neon', optionKey: null, efforts: null },
-        { model: 'claude-opus-5-5', optionKey: 'thought_level', efforts: ['low', 'medium', 'high'] }
+        {
+          id: 'gemini-4-neon',
+          options: [{ id: 'thought_level', values: ['low', 'medium', 'high', 'xhigh'] }]
+        },
+        {
+          id: 'gemini-pro-orchestrator-neon',
+          options: []
+        },
+        {
+          id: 'claude-opus-5-5',
+          options: [{ id: 'thought_level', values: ['low', 'medium', 'high'] }]
+        }
       ]
     },
     {
-      provider: 'cursor',
+      providerInstanceId: 'cursor',
+      driverKind: 'cursor',
       canRunChildTask: true,
       models: [
-        { model: 'grok-4.7', optionKey: 'reasoning_effort', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'grok-4.6', optionKey: 'effort', efforts: ['low', 'medium', 'high'] },
-        { model: 'composer-2.5', optionKey: null, efforts: null }
+        {
+          id: 'grok-4.7',
+          options: [{ id: 'reasoning_effort', values: ['low', 'medium', 'high', 'xhigh'] }]
+        },
+        {
+          id: 'grok-4.6',
+          options: [{ id: 'effort', values: ['low', 'medium', 'high'] }]
+        },
+        {
+          id: 'composer-2.5',
+          options: [{ id: 'fastMode', values: ['default', 'fast'] }]
+        }
       ]
     }
   ]
 };
 
+const LEGACY_CAPABILITIES = {
+  providers: [
+    {
+      provider: 'codex',
+      canRunChildTask: true,
+      models: [{ model: 'gpt-6.2-sol', optionKey: 'reasoningEffort', efforts: ['low', 'medium', 'high', 'xhigh'] }]
+    },
+    {
+      provider: 'cursor',
+      canRunChildTask: true,
+      models: [{ model: 'grok-4.7', options: { reasoning_effort: { values: ['low', 'medium', 'high', 'xhigh'] } } }]
+    }
+  ]
+};
+
 describe('Task 3: T3HarnessAdapter direct contract tests', () => {
-  it('translates modelSelection per provider capability option key and omits effort for composer-2.5 and gemini-pro-orchestrator-neon', () => {
+  it('translates modelSelection per live T3 and legacy provider capability wire shapes and omits effort for composer-2.5 and gemini-pro-orchestrator-neon', () => {
     const codex = new T3HarnessAdapter({ provider: 'codex', capabilities: MOCK_CAPABILITIES });
     assert.deepEqual(codex.translateModelSelection('gpt-6.2-sol (xhigh)'), {
       provider: 'codex',
       model: 'gpt-6.2-sol',
       options: { reasoningEffort: 'xhigh' }
     });
+    assert.deepEqual(codex.getVerifiedCapabilities().models['gpt-6.2-sol'].efforts, [
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra'
+    ]);
 
     const agy = new T3HarnessAdapter({ provider: 'antigravity', capabilities: MOCK_CAPABILITIES });
     assert.deepEqual(agy.translateModelSelection('gemini-4-neon-xhigh'), {
@@ -60,6 +119,35 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
     assert.deepEqual(agy.translateModelSelection('gemini-pro-orchestrator-neon'), {
       provider: 'antigravity',
       model: 'gemini-pro-orchestrator-neon'
+    });
+
+    // When live T3 advertises thought_level for gemini-pro-orchestrator-neon, omitting effort stays omitted while explicit effort translates cleanly
+    const agyLiveOrch = new T3HarnessAdapter({
+      provider: 'antigravity',
+      capabilities: {
+        providers: [
+          {
+            providerInstanceId: 'antigravity',
+            driverKind: 'antigravity',
+            canRunChildTask: true,
+            models: [
+              {
+                id: 'gemini-pro-orchestrator-neon',
+                options: [{ id: 'thought_level', values: ['low', 'medium', 'high'] }]
+              }
+            ]
+          }
+        ]
+      }
+    });
+    assert.deepEqual(agyLiveOrch.translateModelSelection('gemini-pro-orchestrator-neon'), {
+      provider: 'antigravity',
+      model: 'gemini-pro-orchestrator-neon'
+    });
+    assert.deepEqual(agyLiveOrch.translateModelSelection('gemini-pro-orchestrator-neon-high'), {
+      provider: 'antigravity',
+      model: 'gemini-pro-orchestrator-neon',
+      options: { thought_level: 'high' }
     });
 
     const cursor = new T3HarnessAdapter({ provider: 'cursor', capabilities: MOCK_CAPABILITIES });
@@ -73,11 +161,27 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
       model: 'grok-4.6',
       options: { effort: 'high' }
     });
+    // composer-2.5 only has fastMode (no known effort option) -> optionKey: null, efforts: null
     assert.deepEqual(cursor.translateModelSelection('composer-2.5'), {
       provider: 'cursor',
       model: 'composer-2.5'
     });
+    assert.equal(cursor.getVerifiedCapabilities().models['composer-2.5'].efforts, null);
     assert.throws(() => cursor.validateModel('composer-2.5 (high)'), /not permitted/i);
+
+    // Legacy flat + object options shapes continue to decode cleanly
+    const legacyCodex = new T3HarnessAdapter({ provider: 'codex', capabilities: LEGACY_CAPABILITIES });
+    assert.deepEqual(legacyCodex.translateModelSelection('gpt-6.2-sol (high)'), {
+      provider: 'codex',
+      model: 'gpt-6.2-sol',
+      options: { reasoningEffort: 'high' }
+    });
+    const legacyCursor = new T3HarnessAdapter({ provider: 'cursor', capabilities: LEGACY_CAPABILITIES });
+    assert.deepEqual(legacyCursor.translateModelSelection('grok-4.7-xhigh'), {
+      provider: 'cursor',
+      model: 'grok-4.7',
+      options: { reasoning_effort: 'xhigh' }
+    });
   });
 
   it('handles direct QUESTION: and CLEAR: clarification turns, Proof/Vote/Judge turns, in-place _invocationMeta mutation, and confirmed-terminal archiving', async () => {
@@ -449,5 +553,282 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
     assert.equal(records.length, 1, 'Exactly one onCallRecord receipt must be emitted');
     assert.equal(telemetry.getProviderCalls().length, 1, 'Exactly one provider_call telemetry event must be emitted');
     assert.equal(records[0].provider, 'codex');
+  });
+
+  it('probes t3_thread_read for thread.pendingRequestCount when t3_thread_wait omits it and interrupts once with HeadlessToolDeniedError', async () => {
+    const interruptCalls = [];
+    const organizeCalls = [];
+    const readCalls = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-pending-probe', runId: 'run-pending-probe' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: true, status: 'waiting' };
+        }
+        if (name === 't3_thread_read') {
+          readCalls.push(args);
+          return { thread: { pendingRequestCount: 1 }, items: [] };
+        }
+        if (name === 't3_thread_interrupt') {
+          interruptCalls.push(args);
+          return { ok: true };
+        }
+        if (name === 't3_thread_organize') {
+          organizeCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Live pendingRequestCount probe test' }
+        }),
+      (err) => err instanceof HeadlessToolDeniedError && err.code === 'HEADLESS_TOOL_DENIED'
+    );
+
+    assert.equal(readCalls.length, 1);
+    assert.equal(readCalls[0].threadId, 'th-pending-probe');
+    assert.equal(readCalls[0].view, 'messages');
+    assert.equal(readCalls[0].limit, 1);
+    assert.equal(interruptCalls.length, 1);
+    assert.equal(interruptCalls[0].threadId, 'th-pending-probe');
+    assert.equal(interruptCalls[0].runId, 'run-pending-probe');
+    assert.equal('stop' in interruptCalls[0], false);
+    assert.equal(organizeCalls.length, 0);
+  });
+
+  it('throws T3_LAUNCH_MISSING_RUN without calling t3_thread_interrupt or t3_thread_organize when runId stays absent after probe', async () => {
+    const interruptCalls = [];
+    const organizeCalls = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-no-run' };
+        if (name === 't3_thread_read') return { items: [] };
+        if (name === 't3_thread_interrupt') {
+          interruptCalls.push(args);
+          return { ok: true };
+        }
+        if (name === 't3_thread_organize') {
+          organizeCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Missing runId test' }
+        }),
+      (err) => err instanceof HarnessExecutionError && err.code === 'T3_LAUNCH_MISSING_RUN'
+    );
+
+    assert.equal(interruptCalls.length, 0, 'Must NEVER call un-scoped t3_thread_interrupt without runId');
+    assert.equal(organizeCalls.length, 0, 'Must NOT archive thread when launch lacked runId');
+  });
+
+  it('detects .council/ reads encoded in activity item.text while stripping raw file output from trace.toolCalls and onCallRecord receipts', async () => {
+    const sensitiveDummyContent = 'TOP_SECRET_COUNCIL_LEDGER_DUMP_987654321';
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-act', runId: 'run-act' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [{ id: 'm-act', role: 'assistant', runId: 'run-act', text: '{"vote":"accept"}', textTruncated: false }],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          return {
+            items: [
+              {
+                id: 'act-1',
+                kind: 'tool_call',
+                toolName: 'read_file',
+                text: `Tool: read_file(.council/runs/latest.js)\nOutput:\n${sensitiveDummyContent}`,
+                output: sensitiveDummyContent,
+                stdout: sensitiveDummyContent,
+                content: sensitiveDummyContent
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') return { ok: true };
+        return {};
+      }
+    });
+
+    const records = [];
+    const telemetry = createTelemetryEmitter();
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+
+    await assert.rejects(
+      () =>
+        adapter.executeSeatVote({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (low)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Forbidden activity scan', candidate: { summary: 'S', clauses: [] }, proofs: [] },
+          telemetry,
+          onCallRecord: (rec) => records.push(rec)
+        }),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+        assert.equal(err.trace?.forbiddenStateAccess, true);
+        assert.ok(err.trace.forbiddenAccessDetails.some((d) => d.includes('.council/runs/latest.js')));
+        assert.equal(JSON.stringify(err.trace).includes(sensitiveDummyContent), false);
+        return true;
+      }
+    );
+
+    assert.equal(records.length, 1);
+    assert.equal(telemetry.getProviderCalls().length, 1);
+    assert.equal(records[0].trace.forbiddenStateAccess, true);
+    assert.equal(records[0].trace.outcome, 'error');
+    assert.ok(records[0].trace.forbiddenAccessDetails.some((d) => d.includes('.council/runs/latest.js')));
+    assert.equal(JSON.stringify(records[0]).includes(sensitiveDummyContent), false, 'Receipt must NOT leak raw tool output');
+    assert.equal('text' in records[0].trace.toolCalls[0], false);
+    assert.equal('output' in records[0].trace.toolCalls[0], false);
+    assert.equal('stdout' in records[0].trace.toolCalls[0], false);
+    assert.equal('content' in records[0].trace.toolCalls[0], false);
+  });
+
+  it('emits exactly one failure telemetry receipt on post-launch MCP wait error with transport, threadId, runId, and outcome error', async () => {
+    const interruptCalls = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-err', runId: 'run-err' };
+        if (name === 't3_thread_wait') {
+          return { isError: true, content: [{ type: 'text', text: 'T3 MCP wait tool exploded' }] };
+        }
+        if (name === 't3_thread_interrupt') {
+          interruptCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const records = [];
+    const telemetry = createTelemetryEmitter();
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Post-launch wait MCP error' },
+          telemetry,
+          onCallRecord: (rec) => records.push(rec)
+        }),
+      (err) => err instanceof HarnessExecutionError && err.code === 'MCP_TOOL_ERROR'
+    );
+
+    assert.equal(interruptCalls.length, 1);
+    assert.equal(records.length, 1);
+    assert.equal(telemetry.getProviderCalls().length, 1);
+    assert.equal(records[0].transport, 't3-mcp');
+    assert.equal(records[0].threadId, 'th-err');
+    assert.equal(records[0].runId, 'run-err');
+    assert.equal(records[0].trace.outcome, 'error');
+  });
+
+  it('fails closed with T3_READ_TRUNCATED and skips archiving when truncated continuation returns empty items', async () => {
+    const organizeCalls = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-trunc-empty', runId: 'run-trunc-empty' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages' && args.itemId === 'msg-trunc') {
+          return { items: [] };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [
+              {
+                id: 'msg-trunc',
+                role: 'assistant',
+                runId: 'run-trunc-empty',
+                text: '{"vote":"acc',
+                textTruncated: true,
+                nextTextOffset: 20_000
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') {
+          organizeCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatVote({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (low)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Empty continuation test', candidate: { summary: 'S', clauses: [] }, proofs: [] }
+        }),
+      (err) => err instanceof HarnessExecutionError && err.code === 'T3_READ_TRUNCATED'
+    );
+
+    assert.equal(organizeCalls.length, 0, 'Must NOT archive thread when continuation read failed with T3_READ_TRUNCATED');
+  });
+
+  it('rejects completed t3_thread_wait when returned runId is null or mismatched with T3_RUN_MISMATCH', async () => {
+    const organizeCalls = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-null-run', runId: 'run-expected' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: null, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_organize') {
+          organizeCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatVote({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (low)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Null runId on completed wait', candidate: { summary: 'S', clauses: [] }, proofs: [] }
+        }),
+      (err) => err instanceof HarnessExecutionError && err.code === 'T3_RUN_MISMATCH'
+    );
+
+    assert.equal(organizeCalls.length, 0);
   });
 });

@@ -22,9 +22,10 @@ import {
 import { parseModelAndEffort, extractCanonicalBaseModel } from './model-utils.js';
 import {
   getActiveAttemptTelemetryGate,
-  detectBasicForbiddenCouncilAccess
+  detectBasicForbiddenCouncilAccess,
+  sliceUtf8Bytes
 } from './telemetry-utils.js';
-import { T3McpClient } from './t3-mcp-client.js';
+import { T3McpClient, redactSecrets } from './t3-mcp-client.js';
 import {
   formatClarificationPrompt,
   formatDeliberationPrompt,
@@ -103,6 +104,40 @@ function normalizePathSafe(rawPath) {
   }
 }
 
+const KNOWN_EFFORT_OPTION_KEYS = Object.freeze([
+  'reasoningEffort',
+  'thought_level',
+  'reasoning_effort',
+  'effort'
+]);
+
+const ACTIVITY_OUTPUT_SECTION_REGEX =
+  /\r?\n\s*(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
+const ACTIVITY_LEADING_OUTPUT_REGEX =
+  /^(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
+const MAX_ACTIVITY_INPUT_SUMMARY_BYTES = 512;
+const ALLOWED_ACTIVITY_METADATA_KEYS = Object.freeze([
+  'id',
+  'type',
+  'kind',
+  'toolName',
+  'tool',
+  'command',
+  'arguments',
+  'input'
+]);
+
+function normalizeOptionValues(rawValues) {
+  if (!Array.isArray(rawValues)) return undefined;
+  return rawValues
+    .map((v) =>
+      String(typeof v === 'object' && v !== null ? (v.value ?? v.id ?? '') : v)
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
+}
+
 function normalizeModelDescriptor(provider, entry) {
   if (typeof entry === 'string') {
     const id = entry.trim().toLowerCase();
@@ -129,18 +164,38 @@ function normalizeModelDescriptor(provider, entry) {
     ? entry.efforts.map((e) => String(e).trim().toLowerCase())
     : (entry.efforts === null ? null : undefined);
 
-  if (entry.options && typeof entry.options === 'object' && !Array.isArray(entry.options)) {
-    const knownKeys = ['reasoningEffort', 'thought_level', 'reasoning_effort', 'effort'];
-    for (const k of knownKeys) {
+  if (Array.isArray(entry.options)) {
+    let matchedKey = null;
+    let matchedEfforts = undefined;
+    for (const k of KNOWN_EFFORT_OPTION_KEYS) {
+      const opt = entry.options.find(
+        (item) => item && typeof item === 'object' && (item.id === k || item.key === k || item.name === k)
+      );
+      if (opt) {
+        matchedKey = k;
+        matchedEfforts = normalizeOptionValues(opt.values ?? opt.enum ?? opt.options);
+        break;
+      }
+    }
+    if (matchedKey !== null) {
+      optionKey = matchedKey;
+      if (matchedEfforts !== undefined) {
+        efforts = matchedEfforts;
+      }
+    } else {
+      if (optionKey === undefined) optionKey = null;
+      if (efforts === undefined) efforts = null;
+    }
+  } else if (entry.options && typeof entry.options === 'object') {
+    for (const k of KNOWN_EFFORT_OPTION_KEYS) {
       if (Object.prototype.hasOwnProperty.call(entry.options, k)) {
         optionKey = k;
         const optDef = entry.options[k];
-        if (Array.isArray(optDef)) {
-          efforts = optDef.map((e) => String(e).trim().toLowerCase());
-        } else if (Array.isArray(optDef?.values)) {
-          efforts = optDef.values.map((e) => String(e).trim().toLowerCase());
-        } else if (Array.isArray(optDef?.enum)) {
-          efforts = optDef.enum.map((e) => String(e).trim().toLowerCase());
+        const vals = normalizeOptionValues(
+          Array.isArray(optDef) ? optDef : (optDef?.values ?? optDef?.enum ?? optDef?.options)
+        );
+        if (vals !== undefined) {
+          efforts = vals;
         }
         break;
       }
@@ -167,7 +222,11 @@ function normalizeCapabilitiesPayload(raw) {
   if (list) {
     for (const item of list) {
       if (!item || typeof item !== 'object') continue;
-      const prov = String(item.provider || item.id || item.name || '').trim().toLowerCase();
+      const prov = String(
+        item.providerInstanceId || item.driverKind || item.provider || item.id || item.name || ''
+      )
+        .trim()
+        .toLowerCase();
       if (!prov) continue;
       const models = {};
       for (const m of Array.isArray(item.models) ? item.models : []) {
@@ -212,23 +271,70 @@ function hasInlineEffortSyntax(modelString) {
   return /\([^)]*\)\s*$/.test(trimmed) || /-(?:low|medium|high|xhigh|max)$/i.test(trimmed);
 }
 
-function extractActivityToolCalls(items) {
-  const toolCalls = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    if (!item || typeof item !== 'object') continue;
-    const kind = String(item.kind || item.type || '').toLowerCase();
-    if (
-      kind.includes('tool') ||
+function extractActivityTextInput(text) {
+  if (typeof text !== 'string') return '';
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const match = ACTIVITY_OUTPUT_SECTION_REGEX.exec(trimmed);
+  const inputPart = match ? trimmed.slice(0, match.index).trim() : trimmed;
+  if (!inputPart || ACTIVITY_LEADING_OUTPUT_REGEX.test(inputPart)) {
+    return '';
+  }
+  return inputPart;
+}
+
+function isActivityToolItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  const kind = String(item.kind || item.type || '').toLowerCase();
+  if (kind === 'user' || kind === 'user_message' || kind === 'assistant' || kind === 'assistant_message') {
+    return false;
+  }
+  return Boolean(
+    kind.includes('tool') ||
       kind.includes('command') ||
       kind.includes('exec') ||
+      kind.includes('file') ||
+      kind.includes('shell') ||
+      kind.includes('bash') ||
+      kind.includes('mcp') ||
       item.toolName ||
       item.tool ||
-      item.command
-    ) {
-      toolCalls.push(item);
+      item.command ||
+      item.arguments !== undefined ||
+      item.input !== undefined
+  );
+}
+
+function extractActivityToolCalls(items) {
+  const toolCalls = [];
+  const forbiddenScanEntries = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!isActivityToolItem(item)) continue;
+    const sanitized = {};
+    for (const key of ALLOWED_ACTIVITY_METADATA_KEYS) {
+      if (item[key] !== undefined) {
+        sanitized[key] = item[key];
+      }
+    }
+    const textInput = extractActivityTextInput(item.text);
+    if (textInput) {
+      sanitized.inputSummary = sliceUtf8Bytes(
+        redactSecrets(textInput),
+        MAX_ACTIVITY_INPUT_SUMMARY_BYTES
+      );
+    }
+    toolCalls.push(sanitized);
+
+    const scanEntry = {};
+    if (item.command !== undefined) scanEntry.command = item.command;
+    if (item.arguments !== undefined) scanEntry.arguments = item.arguments;
+    if (item.input !== undefined) scanEntry.input = item.input;
+    if (textInput) scanEntry.inputSummary = textInput;
+    if (Object.keys(scanEntry).length > 0) {
+      forbiddenScanEntries.push(scanEntry);
     }
   }
-  return toolCalls;
+  return { toolCalls, forbiddenScanEntries };
 }
 
 export class T3HarnessAdapter extends HarnessAdapter {
@@ -364,6 +470,9 @@ export class T3HarnessAdapter extends HarnessAdapter {
       return { provider: this.provider, model: baseModel };
     }
     const inlineEffort = hasInlineEffortSyntax(model);
+    if (baseModel === 'gemini-pro-orchestrator-neon' && !inlineEffort && !context?.reasoningEffort) {
+      return { provider: this.provider, model: baseModel };
+    }
     const desiredEffort = inlineEffort ? parsed.effort : (context?.reasoningEffort || parsed.effort || 'high');
     const normEffort = String(desiredEffort || '').trim().toLowerCase();
     if (Array.isArray(descriptor.efforts) && normEffort && !descriptor.efforts.includes(normEffort)) {
@@ -587,13 +696,13 @@ export class T3HarnessAdapter extends HarnessAdapter {
   }
 
   async _interruptRun(threadId, runId, reason) {
-    if (!threadId) return;
+    if (!threadId || !runId) return;
     try {
       await this.mcpClient.callTool(
         't3_thread_interrupt',
         {
           threadId,
-          ...(runId ? { runId } : {}),
+          runId,
           reason: String(reason || 'Council turn interrupted').slice(0, 2000),
           clientRequestId: randomUUID(),
           ...(this.environmentId ? { environmentId: this.environmentId } : {})
@@ -717,9 +826,37 @@ export class T3HarnessAdapter extends HarnessAdapter {
         },
         { signal }
       );
-      const contItems = Array.isArray(cont?.items) ? cont.items : (Array.isArray(cont?.messages) ? cont.messages : [cont]);
+      const contItems = Array.isArray(cont?.items)
+        ? cont.items
+        : Array.isArray(cont?.messages)
+          ? cont.messages
+          : cont && typeof cont === 'object' && (cont.id === itemId || cont.itemId === itemId)
+            ? [cont]
+            : [];
       const contItem = contItems.find((i) => i && (i.id === itemId || i.itemId === itemId)) || contItems[0];
-      const chunkText = typeof contItem?.text === 'string' ? contItem.text : '';
+      if (!contItem || typeof contItem.text !== 'string') {
+        throw new HarnessExecutionError(
+          `T3 assistant_message continuation for item "${itemId}" returned missing or empty item`,
+          {
+            harness: this.name,
+            code: 'T3_READ_TRUNCATED',
+            exitCode: null,
+            signal: null
+          }
+        );
+      }
+      if (contItem.text.length === 0 && contItem.textTruncated === true) {
+        throw new HarnessExecutionError(
+          `T3 assistant_message continuation for item "${itemId}" made no progress while truncated`,
+          {
+            harness: this.name,
+            code: 'T3_READ_TRUNCATED',
+            exitCode: null,
+            signal: null
+          }
+        );
+      }
+      const chunkText = contItem.text;
       totalBytes += Buffer.byteLength(chunkText, 'utf8');
       if (totalBytes > this.maxResponseBytes) {
         throw new HarnessExecutionError(`T3 assistant_message exceeded maxResponseBytes (${this.maxResponseBytes})`, {
@@ -730,8 +867,8 @@ export class T3HarnessAdapter extends HarnessAdapter {
         });
       }
       text += chunkText;
-      truncated = contItem?.textTruncated === true;
-      nextOffset = contItem?.nextTextOffset;
+      truncated = contItem.textTruncated === true;
+      nextOffset = contItem.nextTextOffset;
     }
 
     if (totalBytes > this.maxResponseBytes) {
@@ -759,8 +896,8 @@ export class T3HarnessAdapter extends HarnessAdapter {
         { signal }
       );
       const items = Array.isArray(act?.items) ? act.items : [];
-      const toolCalls = extractActivityToolCalls(items);
-      const forbidden = detectBasicForbiddenCouncilAccess(toolCalls);
+      const { toolCalls, forbiddenScanEntries } = extractActivityToolCalls(items);
+      const forbidden = detectBasicForbiddenCouncilAccess(forbiddenScanEntries);
       return {
         traceCoverage: act?.hasMore === true ? 'partial' : 'full',
         toolCalls,
@@ -818,7 +955,9 @@ export class T3HarnessAdapter extends HarnessAdapter {
     let threadId = null;
     let runId = null;
     let confirmedTerminal = false;
+    let readCompleted = false;
     let interrupted = false;
+    let callRecorded = false;
 
     try {
       const launchRes = await this.mcpClient.callTool(
@@ -864,8 +1003,6 @@ export class T3HarnessAdapter extends HarnessAdapter {
           probe?.runs?.[0]?.id ||
           null;
         if (!runId) {
-          interrupted = true;
-          await this._interruptRun(threadId, null, 'Launch omitted runId');
           throw new HarnessExecutionError(`T3 t3_thread_launch for thread "${threadId}" omitted runId`, {
             harness: this.name,
             seatId: context.seatId,
@@ -894,10 +1031,54 @@ export class T3HarnessAdapter extends HarnessAdapter {
           { signal }
         );
 
-        const pendingCount = waitRes?.thread?.pendingRequestCount ?? waitRes?.pendingRequestCount ?? 0;
-        const status = String(waitRes?.status || waitRes?.run?.status || '').toLowerCase();
+        let pendingCount = Number(waitRes?.thread?.pendingRequestCount ?? waitRes?.pendingRequestCount ?? 0) || 0;
+        let status = String(waitRes?.status || waitRes?.run?.status || '').toLowerCase();
+        const isUnfinishedOrPending =
+          waitRes?.timedOut === true ||
+          status === 'waiting' ||
+          status === 'waiting_for_input' ||
+          status === 'pending_approval' ||
+          status === 'running';
 
-        if (pendingCount > 0 || status === 'waiting_for_input' || status === 'pending_approval') {
+        let probeStatus = '';
+        let probeRunId = null;
+        let probeError = null;
+        if (isUnfinishedOrPending && pendingCount === 0 && !signal?.aborted) {
+          const probe = await this.mcpClient.callTool(
+            't3_thread_read',
+            {
+              threadId,
+              view: 'messages',
+              limit: 1,
+              ...(this.environmentId ? { environmentId: this.environmentId } : {})
+            },
+            { signal }
+          );
+          pendingCount = Number(probe?.thread?.pendingRequestCount ?? probe?.pendingRequestCount ?? 0) || 0;
+          probeStatus = String(
+            probe?.latestRun?.status || probe?.thread?.latestRun?.status || probe?.thread?.status || ''
+          ).toLowerCase();
+          probeRunId =
+            probe?.latestRun?.id ||
+            probe?.latestRunId ||
+            probe?.thread?.latestRun?.id ||
+            probe?.thread?.latestRunId ||
+            null;
+          probeError =
+            probe?.latestRun?.error ||
+            probe?.thread?.latestRun?.error ||
+            probe?.thread?.error ||
+            null;
+        }
+
+        const stalledOnPending =
+          pendingCount > 0 ||
+          status === 'waiting_for_input' ||
+          status === 'pending_approval' ||
+          probeStatus === 'waiting_for_input' ||
+          probeStatus === 'pending_approval';
+
+        if (stalledOnPending) {
           interrupted = true;
           await this._interruptRun(threadId, runId, 'Headless T3 thread stalled on pending request');
           const durationMs = Math.max(0, Date.now() - startedAt);
@@ -931,11 +1112,15 @@ export class T3HarnessAdapter extends HarnessAdapter {
           );
         }
 
-        if (waitRes?.timedOut === true) {
+        const probeTerminalFailure =
+          TERMINAL_FAILED_STATUSES.has(probeStatus) && (!probeRunId || probeRunId === runId);
+        if (probeTerminalFailure) {
+          status = probeStatus;
+        } else if (waitRes?.timedOut === true) {
           continue;
         }
 
-        const returnedRunId = waitRes?.runId || waitRes?.run?.id;
+        const returnedRunId = waitRes?.runId || waitRes?.run?.id || null;
         if (returnedRunId && returnedRunId !== runId) {
           throw new HarnessExecutionError(
             `T3 t3_thread_wait returned mismatched runId "${returnedRunId}" (expected "${runId}")`,
@@ -944,6 +1129,12 @@ export class T3HarnessAdapter extends HarnessAdapter {
         }
 
         if (waitRes?.timedOut === false && status === 'completed') {
+          if (returnedRunId !== runId) {
+            throw new HarnessExecutionError(
+              `T3 t3_thread_wait completed with missing or mismatched runId "${returnedRunId ?? 'null'}" (expected "${runId}")`,
+              { harness: this.name, seatId: context.seatId, model: participant.model, code: 'T3_RUN_MISMATCH', exitCode: null, signal: null }
+            );
+          }
           confirmedTerminal = true;
           break;
         }
@@ -955,6 +1146,7 @@ export class T3HarnessAdapter extends HarnessAdapter {
           waitRes?.error ||
             waitRes?.message ||
             waitRes?.run?.error ||
+            probeError ||
             `T3 run ended with status "${failStatus}"`
         );
         const failErr = new Error(failMsg);
@@ -995,12 +1187,13 @@ export class T3HarnessAdapter extends HarnessAdapter {
       }
 
       const rawText = await this._readRunAssistantText(threadId, runId, { signal });
+      readCompleted = true;
       const durationMs = Math.max(0, Date.now() - startedAt);
       const trace = await this._readActivityTrace(threadId, durationMs, { signal });
 
       const activeGate = getActiveAttemptTelemetryGate();
       if (!(activeGate?.cancelled || activeGate?.finalized || activeGate?.recorded)) {
-        this.recordProviderCall({
+        callRecorded = this.recordProviderCall({
           context,
           onCallRecord,
           attemptGate: activeGate,
@@ -1023,13 +1216,63 @@ export class T3HarnessAdapter extends HarnessAdapter {
 
       return this.parseStructuredOutput({ text: rawText, trace }, schemaType);
     } catch (err) {
-      if (threadId && !confirmedTerminal && !interrupted) {
+      if (threadId && runId && !confirmedTerminal && !interrupted) {
         interrupted = true;
         await this._interruptRun(threadId, runId, signal?.aborted ? 'Council timeout or abort' : (err?.message || 'Turn failed'));
       }
+      const activeGate = getActiveAttemptTelemetryGate();
+      if (
+        !callRecorded &&
+        !(activeGate?.cancelled || activeGate?.finalized || activeGate?.recorded) &&
+        !err?._providerCallRecorded
+      ) {
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        const failureTrace =
+          err?.trace && typeof err.trace === 'object'
+            ? { ...err.trace, outcome: 'error' }
+            : {
+                traceCoverage: 'unavailable',
+                toolCalls: [],
+                skillsRead: [],
+                forbiddenStateAccess: false,
+                forbiddenAccessDetails: [],
+                durationMs,
+                outcome: 'error',
+                envelopeError: String(err?.message || 'T3 turn failed')
+              };
+        const recorded = this.recordProviderCall({
+          context,
+          onCallRecord,
+          attemptGate: activeGate,
+          record: {
+            participantId: context.seatId || context.participantId || role,
+            provider: this.name,
+            transport: 't3-mcp',
+            ...(threadId ? { threadId } : {}),
+            ...(runId ? { runId } : {}),
+            model: participant.model,
+            prompt,
+            tools: effectiveTools,
+            exitCode: null,
+            signal: null,
+            durationMs,
+            trace: failureTrace
+          }
+        });
+        if (recorded) {
+          callRecorded = true;
+          if (err && typeof err === 'object' && Object.isExtensible(err)) {
+            try {
+              err._providerCallRecorded = true;
+            } catch {
+              // Non-writable property; activeGate.recorded still prevents duplicate receipts
+            }
+          }
+        }
+      }
       throw err;
     } finally {
-      if (this.archiveThreads && confirmedTerminal && threadId) {
+      if (this.archiveThreads && confirmedTerminal && readCompleted && threadId) {
         await this._archiveConfirmedThread(threadId);
       }
     }

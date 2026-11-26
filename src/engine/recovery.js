@@ -5860,10 +5860,15 @@ const IGNORED_SINGLE_SEGMENT_JS_NOUNS = new Set([
  */
 const STATIC_CAPABILITY_CATALOG = Object.freeze({
   codex: Object.freeze({
+    'gpt-6.2-sol': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']),
+    'gpt-6.2-astra': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']),
     'gpt-6-astra': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']),
     'gpt-6.1-sol': Object.freeze(['low', 'medium', 'high', 'xhigh', 'max'])
   }),
   antigravity: Object.freeze({
+    'gemini-4-neon': Object.freeze(['low', 'medium', 'high', 'xhigh']),
+    'gemini-4-hydrogen': Object.freeze(['low', 'medium', 'high', 'xhigh']),
+    'gemini-pro-orchestrator-neon': null,
     'gemini-4-argon': Object.freeze(['low', 'medium', 'high']),
     'gemini-4-carbon': Object.freeze(['low', 'medium', 'high']),
     'claude-sonnet-5-5': Object.freeze(['low', 'medium', 'high']),
@@ -9262,34 +9267,39 @@ export function resolveRetryModelAndEffort(params = {}) {
 
   const canonicalBase = extractCanonicalBaseModel(inline.strippedBase, normalizedDefault);
 
-  // Cursor / Composer special case: `composer-2.5` has NO effort levels (requested/effective = null).
-  if (canonicalBase === 'composer-2.5') {
-    if (normalizedHarness && normalizedHarness !== 'cursor' && normalizedHarness !== 'mock') {
+  // Zero-effort models: `composer-2.5` (cursor) and `gemini-pro-orchestrator-neon` (antigravity) have NO effort levels.
+  const ZERO_EFFORT_HARNESS_MAP = {
+    'composer-2.5': 'cursor',
+    'gemini-pro-orchestrator-neon': 'antigravity'
+  };
+  if (Object.prototype.hasOwnProperty.call(ZERO_EFFORT_HARNESS_MAP, canonicalBase)) {
+    const expectedHarness = ZERO_EFFORT_HARNESS_MAP[canonicalBase];
+    if (normalizedHarness && normalizedHarness !== expectedHarness && normalizedHarness !== 'mock') {
       return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
         retryEffortFallback,
-        error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" is not supported on harness "${normalizedHarness}".`
+        error: `UNSUPPORTED_MODEL_EFFORT: Model "${canonicalBase}" is not supported on harness "${normalizedHarness}".`
       });
     }
-    if (inline.hasInlineEffort || originalTrimmed.toLowerCase() !== 'composer-2.5') {
+    if (inline.hasInlineEffort || originalTrimmed.toLowerCase() !== canonicalBase) {
       return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
         retryEffortFallback,
-        error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" does not accept inline reasoning effort ("${originalTrimmed}").`
+        error: `UNSUPPORTED_MODEL_EFFORT: Model "${canonicalBase}" does not accept inline reasoning effort ("${originalTrimmed}").`
       });
     }
     if (retryEffortFallback === true && isExplicitSeatEffort && normalizedConfiguredEffort) {
       return buildUnsupportedResolution({
         requestedModel: originalTrimmed,
         retryEffortFallback,
-        error: `UNSUPPORTED_MODEL_EFFORT: Model "composer-2.5" does not support explicit reasoningEffort "${normalizedConfiguredEffort}".`
+        error: `UNSUPPORTED_MODEL_EFFORT: Model "${canonicalBase}" does not support explicit reasoningEffort "${normalizedConfiguredEffort}".`
       });
     }
     return {
       supported: true,
       requestedModel: originalTrimmed,
       requestedEffort: null,
-      effectiveModel: 'composer-2.5',
+      effectiveModel: canonicalBase,
       effectiveEffort: null,
       fallbackApplied: false,
       provenance: retryEffortFallback ? 'adapter_static_policy' : null,

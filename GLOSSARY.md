@@ -29,7 +29,7 @@ The pre-configured persona, temperament, reasoning posture, or domain lens assig
 _Avoid_: System prompt, role description, temperature, personality
 
 **Harness**:
-The execution environment through which Orca launches and communicates with a Seat or Judge (such as Codex, Antigravity, or Cursor).
+The execution environment through which the Council launches and communicates with a Seat or Judge (such as Codex, Antigravity, or Cursor) via T3 MCP or local CLI dispatch.
 _Avoid_: Provider, wrapper, host, CLI
 
 **Clarification Batch**:

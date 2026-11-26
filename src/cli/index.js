@@ -28,7 +28,7 @@ import {
 } from '../telemetry/ledger.js';
 import { validateRetryFallbackCapability } from '../engine/recovery.js';
 import { listAntigravityModels } from '../harness/cli-runner.js';
-import { HarnessRegistry } from '../harness/index.js';
+import { HarnessRegistry, T3HarnessAdapter, resolveHarnessBackend } from '../harness/index.js';
 import { VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
 
 function formatDiagnosticModelEffort(model, effort) {
@@ -111,6 +111,7 @@ Options:
   -q, --quorum <number>       Minimum quorum of active seats (default: 2)
   -l, --live                  Run with live CLI harnesses and visualizer stream (required unless --mock)
   -m, --mock                  Run in hermetic deterministic simulated mock mode (required unless --live)
+      --backend <cli|t3>      Live harness transport backend (default: COUNCIL_HARNESS_BACKEND or cli)
       --timeout <ms>          Turn timeout in milliseconds (positive integer)
       --seat-budget <ms>      Total seat phase budget in milliseconds (positive integer)
       --rebuttal-timeout <ms> Round 2+ rebuttal turn timeout in milliseconds (positive integer)
@@ -201,6 +202,7 @@ export function parseCliArgs(rawArgs = []) {
       quorum: { type: 'string', short: 'q' },
       live: { type: 'boolean', short: 'l', default: false },
       mock: { type: 'boolean', short: 'm', default: false },
+      backend: { type: 'string' },
       timeout: { type: 'string' },
       'seat-budget': { type: 'string' },
       seatBudget: { type: 'string' },
@@ -551,12 +553,27 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     let liveWatcher = null;
 
     if (values.live) {
-      const harnessRegistry = io.harnessRegistry || new HarnessRegistry(resolved.cwd ? { cwd: resolved.cwd } : {});
+      let backend;
+      try {
+        backend = resolveHarnessBackend(values.backend ?? io.backend);
+      } catch (err) {
+        logErr(`Configuration error: ${err.message}`);
+        return await safeExit(1);
+      }
+      const registryDefaults = {
+        backend,
+        ...(resolved.cwd ? { cwd: resolved.cwd } : {}),
+        ...(io.t3McpClient ? { mcpClient: io.t3McpClient } : {}),
+        ...(io.t3Url ? { url: io.t3Url } : {}),
+        ...(io.t3Token ? { token: io.t3Token } : {})
+      };
+      const harnessRegistry = io.harnessRegistry || new HarnessRegistry(registryDefaults);
       try {
         const participants = [
           ...(resolved.judge ? [{ role: 'judge', participant: resolved.judge }] : []),
           ...(Array.isArray(resolved.seats) ? resolved.seats.map((s) => ({ role: 'seat', participant: s })) : [])
         ];
+        const resolvedAdapters = [];
         for (const { role, participant } of participants) {
           if (String(participant.harness || '').toLowerCase() === 'mock') {
             throw new Error(
@@ -564,6 +581,44 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
             );
           }
           const adapter = harnessRegistry.get(participant.harness);
+          resolvedAdapters.push({ role, participant, adapter });
+        }
+
+        // Deduplicated T3 MCP preflight healthCheck + per-provider availability + project verification before validateModel & Round 1
+        const t3Adapters = [...new Set(resolvedAdapters.map((r) => r.adapter).filter((a) => a instanceof T3HarnessAdapter))];
+        let t3PreflightHealth = null;
+        if (t3Adapters.length > 0) {
+          t3PreflightHealth = await t3Adapters[0].healthCheck();
+          if (!t3PreflightHealth?.ok) {
+            throw new Error(`T3 MCP preflight failed: ${t3PreflightHealth?.error || 'unknown error'}`);
+          }
+          for (const t3Adapter of t3Adapters.slice(1)) {
+            if (t3Adapter.mcpClient === t3Adapters[0].mcpClient) {
+              if (t3PreflightHealth.capabilities) t3Adapter.setCapabilities(t3PreflightHealth.capabilities);
+              if (t3PreflightHealth.projects) t3Adapter.setProjects(t3PreflightHealth.projects);
+              if (!t3Adapter.isProviderAvailable()) {
+                throw new Error(
+                  `T3 MCP preflight failed: T3 provider "${t3Adapter.provider}" is unavailable or cannot run child tasks`
+                );
+              }
+            } else {
+              const adapterHealth = await t3Adapter.healthCheck();
+              if (!adapterHealth?.ok) {
+                throw new Error(`T3 MCP preflight failed: ${adapterHealth?.error || 'unknown error'}`);
+              }
+            }
+          }
+          for (const { participant, adapter } of resolvedAdapters) {
+            if (!(adapter instanceof T3HarnessAdapter)) continue;
+            const effectiveTools = participant.tools ?? resolved.tools ?? 'read-only';
+            const effectiveCwd = effectiveTools === 'none' ? undefined : (participant.cwd || resolved.cwd);
+            if (effectiveCwd) {
+              await adapter.resolveProjectId(effectiveCwd);
+            }
+          }
+        }
+
+        for (const { role, participant, adapter } of resolvedAdapters) {
           if (adapter && typeof adapter.validateModel === 'function') {
             try {
               adapter.validateModel(participant.model);
@@ -625,28 +680,45 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         }
         if (resolved.retryEffortFallback) {
           const catalogByHarness = { ...(io.catalogByHarness || {}) };
-          const hasAntigravity = participants.some(
-            ({ participant }) => String(participant?.harness || '').toLowerCase() === 'antigravity'
-          );
+          const verifiedCapabilitiesByHarness = { ...(io.verifiedCapabilitiesByHarness || {}) };
           let antigravityProbeError = null;
-          if (hasAntigravity && !catalogByHarness.antigravity) {
-            const probeFn = io.listAntigravityModels || listAntigravityModels;
-            const catRes = await probeFn();
-            if (catRes?.ok && Array.isArray(catRes.selectors)) {
-              catalogByHarness.antigravity = catRes.selectors;
-            } else {
-              antigravityProbeError = catRes?.error || 'agy models probe failed';
+          if (t3Adapters.length > 0) {
+            for (const t3Adapter of t3Adapters) {
+              const caps = t3Adapter.getVerifiedCapabilities();
+              if (caps) {
+                verifiedCapabilitiesByHarness[t3Adapter.name] = caps;
+                if (!catalogByHarness[t3Adapter.name] && Array.isArray(caps.selectors) && caps.selectors.length > 0) {
+                  catalogByHarness[t3Adapter.name] = caps.selectors;
+                }
+              }
+            }
+          } else {
+            const hasAntigravity = participants.some(
+              ({ participant }) => String(participant?.harness || '').toLowerCase() === 'antigravity'
+            );
+            if (hasAntigravity && !catalogByHarness.antigravity) {
+              const probeFn = io.listAntigravityModels || listAntigravityModels;
+              const catRes = await probeFn();
+              if (catRes?.ok && Array.isArray(catRes.selectors)) {
+                catalogByHarness.antigravity = catRes.selectors;
+              } else {
+                antigravityProbeError = catRes?.error || 'agy models probe failed';
+              }
             }
           }
           const capCheck = validateRetryFallbackCapability({
             config: resolved,
-            catalogByHarness
+            catalogByHarness,
+            verifiedCapabilitiesByHarness
           });
           if (!capCheck.valid) {
             const extraDetail = antigravityProbeError ? ` (${antigravityProbeError})` : '';
             throw new Error(`${capCheck.errors.join('; ')}${extraDetail}`);
           }
           engineOptions.catalogByHarness = catalogByHarness;
+          if (Object.keys(verifiedCapabilitiesByHarness).length > 0) {
+            engineOptions.verifiedCapabilitiesByHarness = verifiedCapabilitiesByHarness;
+          }
         }
       } catch (err) {
         logErr(`Configuration error: ${err.message}`);

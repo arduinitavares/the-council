@@ -115,13 +115,18 @@ const ACTIVITY_OUTPUT_SECTION_REGEX =
   /\r?\n\s*(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
 const ACTIVITY_LEADING_OUTPUT_REGEX =
   /^(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
+const ACTIVITY_EXPLICIT_INPUT_REGEX = /^(?:input|arguments|command)\s*:/i;
+const TRUNCATED_JSON_OUTPUT_KEY_REGEX = /"(?:output|result|response|stdout|stderr)"\s*:/;
 const MAX_ACTIVITY_INPUT_SUMMARY_BYTES = 512;
+const MAX_TRUNCATED_INPUT_SCAN_BYTES = 16 * 1024;
 const ALLOWED_ACTIVITY_METADATA_KEYS = Object.freeze([
   'id',
   'type',
   'kind',
   'toolName',
   'tool',
+  'path',
+  'filePath',
   'command',
   'arguments',
   'input'
@@ -271,10 +276,208 @@ function hasInlineEffortSyntax(modelString) {
   return /\([^)]*\)\s*$/.test(trimmed) || /-(?:low|medium|high|xhigh|max)$/i.test(trimmed);
 }
 
-function extractActivityTextInput(text) {
+function extractActivityCommandLine(text) {
+  if (typeof text !== 'string') return '';
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) return '';
+  const firstLine = trimmedStart.split(/\r?\n/, 1)[0].trim();
+  if (!firstLine || ACTIVITY_LEADING_OUTPUT_REGEX.test(firstLine)) {
+    return '';
+  }
+  const cmdLine = firstLine.replace(/^\$\s+/, '').trim();
+  if (!cmdLine || ACTIVITY_LEADING_OUTPUT_REGEX.test(cmdLine)) {
+    return '';
+  }
+  return cmdLine;
+}
+
+function skipJsonWhitespace(str, index) {
+  let i = index;
+  while (i < str.length) {
+    const ch = str.charCodeAt(i);
+    if (ch === 32 || ch === 9 || ch === 10 || ch === 13) {
+      i += 1;
+    } else {
+      break;
+    }
+  }
+  return i;
+}
+
+function readJsonStringToken(str, start) {
+  let i = start + 1;
+  let escaped = false;
+  while (i < str.length) {
+    const ch = str[i];
+    if (escaped) {
+      escaped = false;
+    } else if (ch === '\\') {
+      escaped = true;
+    } else if (ch === '"') {
+      return { raw: str.slice(start, i + 1), end: i + 1, closed: true };
+    }
+    i += 1;
+  }
+  return { raw: str.slice(start), end: str.length, closed: false };
+}
+
+function sliceBalancedJsonValue(str, start) {
+  const i = skipJsonWhitespace(str, start);
+  if (i >= str.length) {
+    return { raw: '', end: i, closed: false };
+  }
+  const first = str[i];
+  if (first === '"') {
+    return readJsonStringToken(str, i);
+  }
+  if (first === '{' || first === '[') {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < str.length; j += 1) {
+      const ch = str[j];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+      } else if (ch === '"') {
+        inString = true;
+      } else if (ch === '{' || ch === '[') {
+        depth += 1;
+      } else if (ch === '}' || ch === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          return { raw: str.slice(i, j + 1), end: j + 1, closed: true };
+        }
+      }
+    }
+    return { raw: str.slice(i), end: str.length, closed: false };
+  }
+  let j = i;
+  while (j < str.length) {
+    const ch = str[j];
+    if (ch === ',' || ch === '}' || ch === ']' || ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+      break;
+    }
+    j += 1;
+  }
+  return { raw: str.slice(i, j), end: j, closed: j < str.length };
+}
+
+function extractDynamicToolJsonInput(text) {
+  const trimmed = text.trimStart();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const toolName =
+        typeof parsed.toolName === 'string' && parsed.toolName
+          ? parsed.toolName
+          : (typeof parsed.tool === 'string' && parsed.tool ? parsed.tool : null);
+      const input = parsed.input !== undefined ? parsed.input : parsed.arguments;
+      return { toolName, input };
+    }
+    return { toolName: null, input: undefined };
+  } catch {
+    // Truncated JSON: walk top-level object keys only so output/result fields are never read.
+  }
+
+  let toolName = null;
+  let fallbackTool = null;
+  let input = undefined;
+  let fallbackArgs = undefined;
+  let pos = 1; // Skip opening '{'
+
+  while (pos < trimmed.length) {
+    pos = skipJsonWhitespace(trimmed, pos);
+    if (pos >= trimmed.length || trimmed[pos] === '}') break;
+    if (trimmed[pos] === ',') {
+      pos += 1;
+      continue;
+    }
+    if (trimmed[pos] !== '"') break;
+    const keyTok = readJsonStringToken(trimmed, pos);
+    if (!keyTok.closed) break;
+    let key;
+    try {
+      key = JSON.parse(keyTok.raw);
+    } catch {
+      break;
+    }
+    pos = skipJsonWhitespace(trimmed, keyTok.end);
+    if (pos >= trimmed.length || trimmed[pos] !== ':') break;
+    pos += 1;
+
+    const val = sliceBalancedJsonValue(trimmed, pos);
+    if (val.end <= pos) break;
+
+    if (key === 'toolName' || key === 'tool') {
+      if (val.closed) {
+        try {
+          const parsedTool = JSON.parse(val.raw);
+          if (typeof parsedTool === 'string' && parsedTool) {
+            if (key === 'toolName') toolName = parsedTool;
+            else if (!fallbackTool) fallbackTool = parsedTool;
+          }
+        } catch {
+          // Ignore malformed toolName token
+        }
+      }
+    } else if (key === 'input' || key === 'arguments') {
+      let extracted;
+      if (val.closed) {
+        try {
+          extracted = JSON.parse(val.raw);
+        } catch {
+          const cut = TRUNCATED_JSON_OUTPUT_KEY_REGEX.exec(val.raw);
+          const safeRaw = (cut ? val.raw.slice(0, cut.index) : val.raw).trim();
+          extracted = safeRaw ? sliceUtf8Bytes(safeRaw, MAX_TRUNCATED_INPUT_SCAN_BYTES) : undefined;
+        }
+      } else {
+        const cut = TRUNCATED_JSON_OUTPUT_KEY_REGEX.exec(val.raw);
+        const safeRaw = (cut ? val.raw.slice(0, cut.index) : val.raw).trim();
+        extracted = safeRaw ? sliceUtf8Bytes(safeRaw, MAX_TRUNCATED_INPUT_SCAN_BYTES) : undefined;
+      }
+      if (extracted !== undefined) {
+        if (key === 'input' && input === undefined) input = extracted;
+        else if (key === 'arguments' && fallbackArgs === undefined) fallbackArgs = extracted;
+      }
+    }
+
+    if (!val.closed) break;
+    pos = val.end;
+  }
+
+  return {
+    toolName: toolName || fallbackTool,
+    input: input !== undefined ? input : fallbackArgs
+  };
+}
+
+function summarizeActivityInput(value) {
+  if (value === undefined || value === null) return '';
+  let raw;
+  if (typeof value === 'string') {
+    raw = value;
+  } else {
+    try {
+      raw = JSON.stringify(value);
+    } catch {
+      raw = String(value);
+    }
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  return sliceUtf8Bytes(redactSecrets(trimmed), MAX_ACTIVITY_INPUT_SUMMARY_BYTES);
+}
+
+function extractActivityLabeledTextInput(text) {
   if (typeof text !== 'string') return '';
   const trimmed = text.trim();
-  if (!trimmed) return '';
+  if (!trimmed || !ACTIVITY_EXPLICIT_INPUT_REGEX.test(trimmed)) return '';
   const match = ACTIVITY_OUTPUT_SECTION_REGEX.exec(trimmed);
   const inputPart = match ? trimmed.slice(0, match.index).trim() : trimmed;
   if (!inputPart || ACTIVITY_LEADING_OUTPUT_REGEX.test(inputPart)) {
@@ -310,26 +513,74 @@ function extractActivityToolCalls(items) {
   const forbiddenScanEntries = [];
   for (const item of Array.isArray(items) ? items : []) {
     if (!isActivityToolItem(item)) continue;
+    const kind = String(item.kind || item.type || '').toLowerCase();
     const sanitized = {};
     for (const key of ALLOWED_ACTIVITY_METADATA_KEYS) {
       if (item[key] !== undefined) {
         sanitized[key] = item[key];
       }
     }
-    const textInput = extractActivityTextInput(item.text);
-    if (textInput) {
-      sanitized.inputSummary = sliceUtf8Bytes(
-        redactSecrets(textInput),
-        MAX_ACTIVITY_INPUT_SUMMARY_BYTES
-      );
-    }
-    toolCalls.push(sanitized);
 
     const scanEntry = {};
+    if (item.path !== undefined) scanEntry.path = item.path;
+    if (item.filePath !== undefined) scanEntry.filePath = item.filePath;
     if (item.command !== undefined) scanEntry.command = item.command;
     if (item.arguments !== undefined) scanEntry.arguments = item.arguments;
     if (item.input !== undefined) scanEntry.input = item.input;
-    if (textInput) scanEntry.inputSummary = textInput;
+
+    if (kind.includes('file')) {
+      // Case A: file_change / file items — never parse, store, or scan item.text.
+    } else if (
+      kind.includes('command') ||
+      kind.includes('exec') ||
+      kind.includes('shell') ||
+      kind.includes('bash')
+    ) {
+      // Case B: command_execution / shell / bash / exec — extract line 1 only.
+      const cmdLine = extractActivityCommandLine(item.text);
+      if (cmdLine) {
+        if (!sanitized.command) {
+          sanitized.command = sliceUtf8Bytes(
+            redactSecrets(cmdLine),
+            MAX_ACTIVITY_INPUT_SUMMARY_BYTES
+          );
+        }
+        if (scanEntry.command === undefined) {
+          scanEntry.command = cmdLine;
+        } else if (scanEntry.command !== cmdLine) {
+          scanEntry.inputSummary = cmdLine;
+        }
+      }
+    } else if (typeof item.text === 'string' && item.text.trimStart().startsWith('{')) {
+      // Case C (JSON): dynamic_tool / tool / mcp — extract toolName & input only.
+      const { toolName: parsedToolName, input: parsedInput } = extractDynamicToolJsonInput(item.text);
+      if (parsedToolName && !sanitized.toolName) {
+        sanitized.toolName = parsedToolName;
+      }
+      if (parsedInput !== undefined) {
+        const inputSummary = summarizeActivityInput(parsedInput);
+        if (inputSummary) {
+          sanitized.inputSummary = inputSummary;
+        }
+        if (scanEntry.input === undefined) {
+          scanEntry.input = parsedInput;
+        } else {
+          scanEntry.inputSummary = parsedInput;
+        }
+      }
+    } else {
+      // Case C (plain text): only explicit Input:/Arguments:/Command: section before output section.
+      const labeledInput = extractActivityLabeledTextInput(item.text);
+      if (labeledInput) {
+        sanitized.inputSummary = sliceUtf8Bytes(
+          redactSecrets(labeledInput),
+          MAX_ACTIVITY_INPUT_SUMMARY_BYTES
+        );
+        scanEntry.inputSummary = labeledInput;
+      }
+    }
+
+    toolCalls.push(sanitized);
     if (Object.keys(scanEntry).length > 0) {
       forbiddenScanEntries.push(scanEntry);
     }
@@ -833,21 +1084,10 @@ export class T3HarnessAdapter extends HarnessAdapter {
           : cont && typeof cont === 'object' && (cont.id === itemId || cont.itemId === itemId)
             ? [cont]
             : [];
-      const contItem = contItems.find((i) => i && (i.id === itemId || i.itemId === itemId)) || contItems[0];
-      if (!contItem || typeof contItem.text !== 'string') {
+      const contItem = contItems.find((i) => i && (i.id === itemId || i.itemId === itemId));
+      if (!contItem || typeof contItem.text !== 'string' || contItem.text.length === 0) {
         throw new HarnessExecutionError(
           `T3 assistant_message continuation for item "${itemId}" returned missing or empty item`,
-          {
-            harness: this.name,
-            code: 'T3_READ_TRUNCATED',
-            exitCode: null,
-            signal: null
-          }
-        );
-      }
-      if (contItem.text.length === 0 && contItem.textTruncated === true) {
-        throw new HarnessExecutionError(
-          `T3 assistant_message continuation for item "${itemId}" made no progress while truncated`,
           {
             harness: this.name,
             code: 'T3_READ_TRUNCATED',

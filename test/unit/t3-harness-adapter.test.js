@@ -660,7 +660,7 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
                 id: 'act-1',
                 kind: 'tool_call',
                 toolName: 'read_file',
-                text: `Tool: read_file(.council/runs/latest.js)\nOutput:\n${sensitiveDummyContent}`,
+                text: `Input: read_file(.council/runs/latest.js)\nOutput:\n${sensitiveDummyContent}`,
                 output: sensitiveDummyContent,
                 stdout: sensitiveDummyContent,
                 content: sensitiveDummyContent
@@ -830,5 +830,283 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
     );
 
     assert.equal(organizeCalls.length, 0);
+  });
+
+  it('parses command_execution line 1 only, ignoring .council/ paths in stdout and excluding stdout from trace.toolCalls', async () => {
+    const proofPayload = JSON.stringify({
+      scope: 'README check',
+      kind: 'check',
+      source: 'README.md:1',
+      statement: 'README exists.'
+    });
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-cmd', runId: 'run-cmd' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [{ id: 'm-cmd', role: 'assistant', runId: 'run-cmd', text: proofPayload, textTruncated: false }],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          return {
+            items: [
+              {
+                id: 'act-cmd-1',
+                type: 'command_execution',
+                text: '$ cat README.md\n.council/runs/latest.js'
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') return { ok: true };
+        return {};
+      }
+    });
+
+    const records = [];
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    const proof = await adapter.executeSeatProof({
+      seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+      soul: 'Architect',
+      round: 1,
+      state: { topic: 'Command execution activity stdout isolation' },
+      onCallRecord: (rec) => records.push(rec)
+    });
+
+    assert.equal(proof.kind, 'check');
+    assert.equal(records.length, 1);
+    assert.equal(records[0].trace.forbiddenStateAccess, false);
+    assert.equal(records[0].trace.toolCalls.length, 1);
+    assert.equal(records[0].trace.toolCalls[0].command, 'cat README.md');
+    assert.equal(JSON.stringify(records[0].trace.toolCalls[0]).includes('cat README.md'), true);
+    assert.equal(JSON.stringify(records[0].trace.toolCalls[0]).includes('.council/runs/latest.js'), false);
+    assert.equal('text' in records[0].trace.toolCalls[0], false);
+  });
+
+  it('detects forbidden access in dynamic_tool complete and truncated JSON inputs while dropping output secrets, and ignores output-only .council/ mentions', async () => {
+    const proofPayload = JSON.stringify({
+      scope: 'Dynamic tool check',
+      kind: 'check',
+      source: 'src/app.js:1',
+      statement: 'Checked app.'
+    });
+
+    const runWithActivity = async (activityItem) => {
+      const records = [];
+      const mcpClient = new T3McpClient({
+        callTool: async (name, args) => {
+          if (name === 't3_thread_launch') return { threadId: 'th-dyn', runId: 'run-dyn' };
+          if (name === 't3_thread_wait') {
+            return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+          }
+          if (name === 't3_thread_read' && args.view === 'messages') {
+            return {
+              items: [{ id: 'm-dyn', role: 'assistant', runId: 'run-dyn', text: proofPayload, textTruncated: false }],
+              hasMore: false
+            };
+          }
+          if (name === 't3_thread_read' && args.view === 'activity') {
+            return { items: [activityItem], hasMore: false };
+          }
+          if (name === 't3_thread_organize') return { ok: true };
+          return {};
+        }
+      });
+      const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+      return {
+        adapter,
+        records,
+        exec: () =>
+          adapter.executeSeatProof({
+            seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+            soul: 'Architect',
+            round: 1,
+            state: { topic: 'Dynamic tool activity wire parsing' },
+            onCallRecord: (rec) => records.push(rec)
+          })
+      };
+    };
+
+    // 1. Complete JSON with forbidden input + sensitive output
+    const completeRun = await runWithActivity({
+      id: 'dyn-1',
+      type: 'dynamic_tool',
+      text: JSON.stringify({
+        toolName: 'read_file',
+        input: { path: '.council/runs/latest.js' },
+        output: 'TOP_SECRET_FILE_BODY'
+      })
+    });
+    await assert.rejects(
+      () => completeRun.exec(),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+        assert.equal(err.trace.forbiddenStateAccess, true);
+        assert.equal(JSON.stringify(err.trace.toolCalls).includes('TOP_SECRET_FILE_BODY'), false);
+        assert.equal(err.trace.toolCalls[0].toolName, 'read_file');
+        return true;
+      }
+    );
+    assert.equal(completeRun.records.length, 1);
+    assert.equal(JSON.stringify(completeRun.records[0].trace.toolCalls).includes('TOP_SECRET_FILE_BODY'), false);
+
+    // 2. Truncated JSON cut off mid-"output" with forbidden path in "input"
+    const truncatedRun = await runWithActivity({
+      id: 'dyn-2',
+      type: 'dynamic_tool',
+      textTruncated: true,
+      text: '{"toolName":"read_file","input":{"path":".council/runs/state.json"},"output":"TRUNCATED_SECRET_BODY_unclosed'
+    });
+    await assert.rejects(
+      () => truncatedRun.exec(),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.code, 'FORBIDDEN_STATE_ACCESS');
+        assert.equal(err.trace.forbiddenStateAccess, true);
+        assert.equal(JSON.stringify(err.trace.toolCalls).includes('TRUNCATED_SECRET_BODY'), false);
+        assert.equal(err.trace.toolCalls[0].toolName, 'read_file');
+        return true;
+      }
+    );
+    assert.equal(truncatedRun.records.length, 1);
+    assert.equal(JSON.stringify(truncatedRun.records[0].trace.toolCalls).includes('TRUNCATED_SECRET_BODY'), false);
+
+    // 3. dynamic_tool where .council/runs/state.json appears ONLY inside "output"
+    const outputOnlyRun = await runWithActivity({
+      id: 'dyn-3',
+      type: 'dynamic_tool',
+      text: JSON.stringify({
+        toolName: 'grep',
+        input: { query: 'healthCheck' },
+        output: 'Matched .council/runs/state.json in stdout'
+      })
+    });
+    const proof = await outputOnlyRun.exec();
+    assert.equal(proof.kind, 'check');
+    assert.equal(outputOnlyRun.records.length, 1);
+    assert.equal(outputOnlyRun.records[0].trace.forbiddenStateAccess, false);
+    assert.equal(
+      JSON.stringify(outputOnlyRun.records[0].trace.toolCalls).includes('.council/runs/state.json'),
+      false
+    );
+    assert.equal('text' in outputOnlyRun.records[0].trace.toolCalls[0], false);
+  });
+
+  it('ignores file_change item.text diffs/contents for forbidden scanning and excludes them from trace.toolCalls', async () => {
+    const proofPayload = JSON.stringify({
+      scope: 'App diff',
+      kind: 'check',
+      source: 'src/app.js:1',
+      statement: 'File change reviewed.'
+    });
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-file', runId: 'run-file' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [{ id: 'm-file', role: 'assistant', runId: 'run-file', text: proofPayload, textTruncated: false }],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          return {
+            items: [
+              {
+                id: 'act-file-1',
+                type: 'file_change',
+                path: 'src/app.js',
+                text: 'diff --git\n+PRIVATE_FILE_CONTENT\n+.council/runs/x'
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') return { ok: true };
+        return {};
+      }
+    });
+
+    const records = [];
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    const proof = await adapter.executeSeatProof({
+      seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+      soul: 'Architect',
+      round: 1,
+      state: { topic: 'file_change activity privacy' },
+      onCallRecord: (rec) => records.push(rec)
+    });
+
+    assert.equal(proof.kind, 'check');
+    assert.equal(records.length, 1);
+    assert.equal(records[0].trace.forbiddenStateAccess, false);
+    assert.equal(records[0].trace.toolCalls[0].path, 'src/app.js');
+    assert.equal(JSON.stringify(records[0].trace.toolCalls).includes('PRIVATE_FILE_CONTENT'), false);
+    assert.equal(JSON.stringify(records[0].trace.toolCalls).includes('.council/runs/x'), false);
+    assert.equal('text' in records[0].trace.toolCalls[0], false);
+  });
+
+  it('fails closed with T3_READ_TRUNCATED and skips archiving when continuation returns mismatched itemId or empty text with textTruncated: false', async () => {
+    const runContinuationCase = async (continuationItems) => {
+      const organizeCalls = [];
+      const mcpClient = new T3McpClient({
+        callTool: async (name, args) => {
+          if (name === 't3_thread_launch') return { threadId: 'th-cont', runId: 'run-cont' };
+          if (name === 't3_thread_wait') {
+            return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+          }
+          if (name === 't3_thread_read' && args.view === 'messages' && args.itemId === 'msg-target') {
+            return { items: continuationItems, hasMore: false };
+          }
+          if (name === 't3_thread_read' && args.view === 'messages') {
+            return {
+              items: [
+                {
+                  id: 'msg-target',
+                  role: 'assistant',
+                  runId: 'run-cont',
+                  text: '{"vote":"acc',
+                  textTruncated: true,
+                  nextTextOffset: 20_000
+                }
+              ],
+              hasMore: false
+            };
+          }
+          if (name === 't3_thread_organize') {
+            organizeCalls.push(args);
+            return { ok: true };
+          }
+          return {};
+        }
+      });
+
+      const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+      await assert.rejects(
+        () =>
+          adapter.executeSeatVote({
+            seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (low)', tools: 'none' },
+            soul: 'Architect',
+            round: 1,
+            state: { topic: 'Continuation fail-closed test', candidate: { summary: 'S', clauses: [] }, proofs: [] }
+          }),
+        (err) => err instanceof HarnessExecutionError && err.code === 'T3_READ_TRUNCATED'
+      );
+      assert.equal(organizeCalls.length, 0);
+    };
+
+    // 1. Mismatched itemId only
+    await runContinuationCase([{ id: 'msg-other', role: 'assistant', text: 'unrelated', textTruncated: false }]);
+
+    // 2. Matching itemId with empty text even when textTruncated: false
+    await runContinuationCase([{ id: 'msg-target', role: 'assistant', text: '', textTruncated: false }]);
   });
 });

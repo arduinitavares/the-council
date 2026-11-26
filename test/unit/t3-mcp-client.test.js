@@ -355,4 +355,152 @@ describe('Task 2: Zero-dependency Streamable HTTP T3McpClient', () => {
     assert.equal((health.error || '').includes(customSecret), false);
     assert.match(health.error || '', /\[REDACTED\]/);
   });
+
+  it('treats non-standard custom header X-Session-ID as credential: blocks cleartext HTTP, sets redirect: error on HTTPS, and redacts from errors', async () => {
+    const sessionSecret = 'sess-secret-999';
+    const headersProvider = () => ({ 'X-Session-ID': sessionSecret });
+
+    const insecureClient = new T3McpClient({
+      url: 'http://example.com/mcp',
+      token: '',
+      headers: headersProvider
+    });
+    await assert.rejects(
+      () => insecureClient.initialize(),
+      (err) => err instanceof HarnessExecutionError && err.code === 'INSECURE_T3_MCP_URL' && err.isRetryable === false
+    );
+
+    let capturedInit = null;
+    const httpsClient = new T3McpClient({
+      url: 'https://example.com/mcp',
+      token: '',
+      headers: headersProvider,
+      fetchImpl: async (_url, init) => {
+        capturedInit = init;
+        return new Response(`Rejected session ${sessionSecret}`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain' }
+        });
+      }
+    });
+
+    await assert.rejects(
+      () => httpsClient.initialize(),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.message.includes(sessionSecret), false);
+        assert.equal((err.envelopeError || '').includes(sessionSecret), false);
+        assert.match(err.message, /\[REDACTED\]/);
+        return true;
+      }
+    );
+    assert.equal(capturedInit?.redirect, 'error');
+    assert.equal(capturedInit?.headers?.['X-Session-ID'], sessionSecret);
+  });
+
+  it('suppresses Bearer token fallback and omits Authorization header when custom headers explicitly set empty Authorization', async () => {
+    const seenHeaders = [];
+    const { server, url } = await startMockServer((req, res, body) => {
+      seenHeaders.push({ ...req.headers });
+      if (body?.method === 'initialize') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'sess-no-auth' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: MCP_PROTOCOL_VERSION } }));
+        return;
+      }
+      if (body?.method === 'notifications/initialized') {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: { structuredContent: { ok: true } }
+        })
+      );
+    });
+    servers.push(server);
+
+    const client = new T3McpClient({
+      url,
+      token: 'env-default-tok',
+      headers: () => ({ Authorization: '', 'X-API-Key': 'proxy-key-777' })
+    });
+
+    const result = await client.callTool('echo_tool', {});
+    assert.deepEqual(result, { ok: true });
+    assert.ok(seenHeaders.length >= 3);
+    for (const hdrs of seenHeaders) {
+      assert.equal(hdrs['x-api-key'], 'proxy-key-777');
+      assert.equal('authorization' in hdrs, false, 'Blank Authorization must not be sent');
+      assert.equal(JSON.stringify(hdrs).includes('env-default-tok'), false);
+    }
+  });
+
+  it('redacts exact rotating header secret from tools/call result.isError without re-invoking headers provider', async () => {
+    let providerCalls = 0;
+    let rotatingPhase = false;
+    const rotatingTokens = ['tok-call-1', 'tok-call-2'];
+    let rotatingIdx = 0;
+
+    const { server, url } = await startMockServer((req, res, body) => {
+      if (body?.method === 'initialize') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'sess-rot' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: MCP_PROTOCOL_VERSION } }));
+        return;
+      }
+      if (body?.method === 'notifications/initialized') {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      const receivedTok = req.headers['x-session-id'];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            isError: true,
+            content: [{ type: 'text', text: `Upstream denied session ${receivedTok}` }]
+          }
+        })
+      );
+    });
+    servers.push(server);
+
+    const client = new T3McpClient({
+      url,
+      token: '',
+      headers: () => {
+        providerCalls += 1;
+        if (!rotatingPhase) {
+          return { 'X-Session-ID': 'tok-init' };
+        }
+        const tok = rotatingTokens[rotatingIdx] ?? 'tok-unexpected';
+        rotatingIdx += 1;
+        return { 'X-Session-ID': tok };
+      }
+    });
+
+    await client.initialize();
+    rotatingPhase = true;
+    const callsBeforeToolCall = providerCalls;
+
+    await assert.rejects(
+      () => client.callTool('failing_tool', {}),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.message.includes('tok-call-1'), false);
+        assert.equal((err.envelopeError || '').includes('tok-call-1'), false);
+        assert.match(err.message, /\[REDACTED\]/);
+        return true;
+      }
+    );
+
+    assert.equal(providerCalls - callsBeforeToolCall, 1, 'headers provider must be invoked only once for tools/call');
+    assert.equal(rotatingIdx, 1);
+  });
 });

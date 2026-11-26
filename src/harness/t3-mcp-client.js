@@ -20,11 +20,21 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 const MCP_ACCEPT_HEADER = 'application/json, text/event-stream';
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
-const CREDENTIAL_HEADER_NAME_REGEX =
-  /^(?:authorization|proxy-authorization|cookie|x-api-key|api-key|x-auth-token)$|token|secret|auth|key/i;
+const NON_AUTH_STANDARD_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'content-type',
+  'mcp-protocol-version',
+  'mcp-session-id',
+  'pragma',
+  'user-agent'
+]);
 
-function isCredentialHeaderName(name) {
-  return typeof name === 'string' && CREDENTIAL_HEADER_NAME_REGEX.test(name.trim());
+function isPotentiallyCredentialHeader(name) {
+  const norm = typeof name === 'string' ? name.trim().toLowerCase() : '';
+  return Boolean(norm) && !NON_AUTH_STANDARD_HEADERS.has(norm);
 }
 
 /**
@@ -257,7 +267,7 @@ export class T3McpClient {
     const secrets = [];
     if (this._token) secrets.push(this._token);
     for (const [k, v] of Object.entries(extraHeaders || {})) {
-      if (isCredentialHeaderName(k) && typeof v === 'string' && v.trim()) {
+      if (isPotentiallyCredentialHeader(k) && typeof v === 'string' && v.trim()) {
         const trimmed = v.trim();
         secrets.push(trimmed);
         const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmed);
@@ -278,13 +288,14 @@ export class T3McpClient {
     let hasAuth = false;
     let hasAuthorizationHeader = false;
     for (const [k, v] of Object.entries(custom || {})) {
-      if (v === undefined || v === null) continue;
-      const strVal = String(v);
-      headers[k] = strVal;
-      if (k.toLowerCase() === 'authorization' && strVal.trim()) {
+      if (k.trim().toLowerCase() === 'authorization') {
         hasAuthorizationHeader = true;
       }
-      if (isCredentialHeaderName(k) && strVal.trim()) {
+      if (v === undefined || v === null) continue;
+      const strVal = String(v);
+      if (strVal.trim() === '') continue;
+      headers[k] = strVal;
+      if (isPotentiallyCredentialHeader(k)) {
         hasAuth = true;
       }
     }
@@ -464,7 +475,7 @@ export class T3McpClient {
 
     if (isNotification && (res.status === 202 || res.status === 204 || res.status === 200)) {
       await res.body?.cancel?.().catch(() => {});
-      return { sessionId: returnedSessionId, message: null };
+      return { sessionId: returnedSessionId, message: null, secrets };
     }
 
     if (!res.ok) {
@@ -509,7 +520,7 @@ export class T3McpClient {
       });
     }
 
-    return { sessionId: returnedSessionId, message };
+    return { sessionId: returnedSessionId, message, secrets };
   }
 
   async initialize({ signal } = {}) {
@@ -618,7 +629,7 @@ export class T3McpClient {
 
     const invokeOnce = async () => {
       const id = this._nextId++;
-      const { message } = await this._postJsonRpc(
+      const { message, secrets } = await this._postJsonRpc(
         {
           jsonrpc: '2.0',
           id,
@@ -629,9 +640,8 @@ export class T3McpClient {
       );
       const result = message?.result;
       if (result?.isError === true) {
-        const { headers: authHeaders } = await this._resolveAuthHeaders();
         throw this._classifyProtocolError(extractToolErrorText(result), {
-          secrets: this._collectSecrets(authHeaders),
+          secrets,
           isToolError: true
         });
       }

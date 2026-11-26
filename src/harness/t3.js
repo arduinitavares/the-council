@@ -833,7 +833,7 @@ export class T3HarnessAdapter extends HarnessAdapter {
     const raw = [error?.message, baseOptions.stderr, baseOptions.envelopeError].filter(Boolean).join(' ');
     if (
       PROVIDER_HTTP_429_REGEX.test(raw) ||
-      /insufficient_quota|rate_limit|resource_exhausted|overloaded_error|weekly\s+included\s+pool\s+exhausted|quota\s+exceeded/i.test(raw)
+      /insufficient_quota|rate_limit|resource_exhausted|overloaded_error|weekly\s+included\s+pool\s+exhausted|quota\s+(?:exceeded|reached)|third-party\s+quota|usage\s+limit\s+reached/i.test(raw)
     ) {
       return new QuotaExhaustionError(error?.message || `Quota exhausted on T3 ${this.provider} harness`, baseOptions);
     }
@@ -1155,6 +1155,92 @@ export class T3HarnessAdapter extends HarnessAdapter {
     }
   }
 
+  async _readTerminalFailureDetail(threadId, runId, { signal, timeoutMs = 2000 } = {}) {
+    if (!threadId || signal?.aborted || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return null;
+    }
+    const detailController = new AbortController();
+    const onParentAbort = () => detailController.abort(signal?.reason);
+    if (signal && typeof signal.addEventListener === 'function') {
+      signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+    let timerId = null;
+    const timeoutPromise = new Promise((resolve) => {
+      timerId = setTimeout(() => {
+        detailController.abort(new Error('Terminal failure detail lookup timed out'));
+        resolve(null);
+      }, timeoutMs);
+      if (typeof timerId?.unref === 'function') {
+        timerId.unref();
+      }
+    });
+    try {
+      const readPromise = Promise.resolve()
+        .then(() =>
+          this.mcpClient.callTool(
+            't3_thread_read',
+            {
+              threadId,
+              view: 'activity',
+              limit: 20,
+              ...(this.environmentId ? { environmentId: this.environmentId } : {})
+            },
+            { signal: detailController.signal }
+          )
+        )
+        .catch(() => null);
+      const act = await Promise.race([readPromise, timeoutPromise]);
+      if (!act) return null;
+      const items = Array.isArray(act?.items) ? act.items : [];
+      if (items.length === 0) return null;
+      const runItems =
+        runId && items.some((item) => item && item.runId === runId)
+          ? items.filter((item) => item && item.runId === runId)
+          : items;
+
+      const formatItemDetail = (item) => {
+        const title = typeof item?.title === 'string' ? item.title.trim() : '';
+        const text = typeof item?.text === 'string' ? item.text.trim() : '';
+        if (title && text && !text.includes(title)) {
+          return `${title}: ${text}`;
+        }
+        return text || title || '';
+      };
+
+      for (let i = runItems.length - 1; i >= 0; i -= 1) {
+        const item = runItems[i];
+        if (!item) continue;
+        const isExplicitError =
+          item.type === 'error' ||
+          (item.status === 'failed' && typeof item.text === 'string' && item.text.trim().length > 0);
+        if (!isExplicitError) continue;
+        const detail = formatItemDetail(item);
+        if (detail) {
+          return sliceUtf8Bytes(redactSecrets(detail), 512);
+        }
+      }
+
+      for (let i = runItems.length - 1; i >= 0; i -= 1) {
+        const item = runItems[i];
+        if (item?.type !== 'assistant_message' || typeof item.text !== 'string') continue;
+        const trimmed = item.text.trim();
+        if (trimmed && /⚠|quota|usage limit|rate limit|error|failed|denied|unauthorized/i.test(trimmed)) {
+          return sliceUtf8Bytes(redactSecrets(trimmed), 512);
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+      if (signal && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', onParentAbort);
+      }
+    }
+  }
+
   async _executeTurn({ role, participant, prompt, schemaType, signal, timeoutMs, context, onCallRecord, effectiveTools, effectiveCwd }) {
     if (prompt.length > MAX_T3_PROMPT_CHARS) {
       throw new HarnessExecutionError(
@@ -1377,11 +1463,24 @@ export class T3HarnessAdapter extends HarnessAdapter {
         confirmedTerminal = TERMINAL_FAILED_STATUSES.has(status);
         const durationMs = Math.max(0, Date.now() - startedAt);
         const failStatus = status || 'unknown';
-        const failMsg = String(
+        const explicitFailMsg =
           waitRes?.error ||
             waitRes?.message ||
             waitRes?.run?.error ||
             probeError ||
+            null;
+        const remainingBeforeDeadlineMs = effectiveDeadlineMs - durationMs;
+        const detailBudgetMs =
+          remainingBeforeDeadlineMs >= 75
+            ? Math.min(2000, Math.floor(remainingBeforeDeadlineMs - 50))
+            : 0;
+        const activityFailMsg =
+          !explicitFailMsg && confirmedTerminal && threadId && !signal?.aborted && detailBudgetMs > 0
+            ? await this._readTerminalFailureDetail(threadId, runId, { signal, timeoutMs: detailBudgetMs })
+            : null;
+        const failMsg = String(
+          explicitFailMsg ||
+            activityFailMsg ||
             `T3 run ended with status "${failStatus}"`
         );
         const failErr = new Error(failMsg);

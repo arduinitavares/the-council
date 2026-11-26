@@ -46,9 +46,9 @@
       }
     },
     {
-      "id": "opus-voter",
+      "id": "carbon-voter",
       "harness": "antigravity",
-      "model": "claude-opus-5-5-medium",
+      "model": "gemini-4-carbon (high)",
       "soul": {
         "name": "Principal Domain & Edge-Case Critic",
         "temperament": "adversarial",
@@ -62,7 +62,8 @@
     {
       "id": "grok-voter",
       "harness": "cursor",
-      "model": "grok-4.7-xhigh",
+      "model": "grok-4.7-high",
+      "timeoutMs": 180000,
       "soul": {
         "name": "First-Principles Skeptic & Empirical Challenger",
         "temperament": "skeptical",

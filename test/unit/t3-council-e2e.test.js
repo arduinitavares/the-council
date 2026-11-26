@@ -502,8 +502,11 @@ describe('Task 4: T3 MCP coexistence wiring, CLI preflight, recovery catalog & C
     const resolved = resolveConfig({ preset: 't3-best-of-families', topic: 'T3 preset validation' });
     assert.deepEqual(
       resolved.seats.map((s) => s.id),
-      ['sol-voter', 'neon-voter', 'opus-voter', 'grok-voter']
+      ['sol-voter', 'neon-voter', 'carbon-voter', 'grok-voter']
     );
+    const grokSeat = resolved.seats.find((s) => s.id === 'grok-voter');
+    assert.equal(grokSeat?.model, 'grok-4.7-high');
+    assert.equal(grokSeat?.timeoutMs, 180000);
     const cfgCheck = validateConfig(resolved);
     assert.equal(cfgCheck.valid, true, cfgCheck.errors.join('; '));
 

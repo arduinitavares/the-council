@@ -5,9 +5,11 @@ import { T3McpClient } from '../../src/harness/t3-mcp-client.js';
 import {
   TimeoutError,
   AbortError,
+  QuotaExhaustionError,
   HeadlessToolDeniedError,
   HarnessExecutionError
 } from '../../src/harness/adapter.js';
+import { formatDeliberationPrompt } from '../../src/seats/soul.js';
 import { createTelemetryEmitter } from '../../src/telemetry/emitter.js';
 
 const MOCK_CAPABILITIES = {
@@ -1211,5 +1213,158 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
         }),
       (err) => err instanceof HarnessExecutionError && err.code === 'FORBIDDEN_STATE_ACCESS'
     );
+  });
+
+  it('extracts terminal error activity item on silent T3 failed status, classifies third-party quota exhaustion, and does not archive failed threads', async () => {
+    const organizeCalls = [];
+    const activityReads = [];
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') {
+          return { threadId: 'th-quota-fail', runId: 'run-quota-fail' };
+        }
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'failed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          activityReads.push(args);
+          return {
+            items: [
+              {
+                id: 'err-quota-1',
+                runId: 'run-quota-fail',
+                type: 'error',
+                status: 'failed',
+                title: 'Usage limit reached',
+                text: 'Third-party quota reached. Please switch to Gemini models or upgrade your subscription to increase your limits.'
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') {
+          organizeCalls.push(args);
+          return { ok: true };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'antigravity', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 'opus-voter', harness: 'antigravity', model: 'claude-opus-5-5-medium', tools: 'none' },
+          soul: 'Domain Critic',
+          round: 1,
+          state: { topic: 'Quota diagnostic propagation test' }
+        }),
+      (err) =>
+        err instanceof QuotaExhaustionError &&
+        err.message.includes('Usage limit reached') &&
+        err.message.includes('Third-party quota reached')
+    );
+
+    assert.equal(activityReads.length, 1);
+    assert.equal(organizeCalls.length, 0);
+  });
+
+  it('instructs read-only deliberation prompts not to read global policy/skill files and keeps sandboxed prompts free of shell web lookups', () => {
+    const promptWithCwd = formatDeliberationPrompt({
+      soul: 'First-Principles Skeptic',
+      seat: { id: 'grok-voter', tools: 'read-only' },
+      topic: 'Check repository behavior',
+      round: 1,
+      maxRounds: 2,
+      tools: 'read-only',
+      cwd: '/tmp/example-workspace'
+    });
+    assert.match(promptWithCwd, /Do NOT read global user policy or skill files outside the attached workspace/);
+    assert.match(promptWithCwd, /instruction-core\.md/);
+    assert.match(promptWithCwd, /model-policy\.md/);
+    assert.match(promptWithCwd, /SKILL\.md/);
+
+    const promptWithoutCwd = formatDeliberationPrompt({
+      soul: 'First-Principles Skeptic',
+      seat: { id: 'grok-voter', tools: 'read-only' },
+      topic: 'Historical consensus test',
+      round: 1,
+      maxRounds: 2,
+      tools: 'read-only'
+    });
+    assert.match(promptWithoutCwd, /do NOT read global user policy or skill files/);
+    assert.match(promptWithoutCwd, /do NOT run shell scripts \(python, curl, wget\) for web lookups in sandboxed mode/);
+    assert.match(promptWithoutCwd, /cap any external web verification to at most 1–2 targeted queries/);
+  });
+
+  it('skips optional failure-detail lookup when remaining deadline budget is too tight, preserving confirmed failed error instead of TimeoutError', async () => {
+    let activityReads = 0;
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') {
+          return { threadId: 'th-tight-deadline', runId: 'run-tight-deadline' };
+        }
+        if (name === 't3_thread_wait') {
+          await new Promise((r) => setTimeout(r, 150));
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'failed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          activityReads += 1;
+          await new Promise((r) => setTimeout(r, 100));
+          return { items: [] };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'antigravity', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 'opus-voter', harness: 'antigravity', model: 'claude-opus-5-5-medium', tools: 'none' },
+          soul: 'Domain Critic',
+          round: 1,
+          timeoutMs: 200,
+          state: { topic: 'Tight deadline preservation' }
+        }),
+      (err) => err instanceof HarnessExecutionError && !(err instanceof TimeoutError) && err.message.includes('status "failed"')
+    );
+    assert.equal(activityReads, 0);
+  });
+
+  it('cuts off slow failure-detail activity lookup inside remaining deadline without turning confirmed failure into TimeoutError', async () => {
+    let activityReads = 0;
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') {
+          return { threadId: 'th-slow-detail', runId: 'run-slow-detail' };
+        }
+        if (name === 't3_thread_wait') {
+          await new Promise((r) => setTimeout(r, 100));
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'failed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          activityReads += 1;
+          // Intentionally ignore abort signal and exceed the remaining deadline.
+          await new Promise((r) => setTimeout(r, 250));
+          return { items: [{ type: 'error', text: 'Late detail' }] };
+        }
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'antigravity', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 'opus-voter', harness: 'antigravity', model: 'claude-opus-5-5-medium', tools: 'none' },
+          soul: 'Domain Critic',
+          round: 1,
+          timeoutMs: 250,
+          state: { topic: 'Slow detail cutoff preservation' }
+        }),
+      (err) => err instanceof HarnessExecutionError && !(err instanceof TimeoutError) && err.message.includes('status "failed"')
+    );
+    assert.equal(activityReads, 1);
   });
 });

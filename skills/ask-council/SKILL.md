@@ -36,7 +36,7 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/t3-best-of-families.json`](../../configs/t3-best-of-families.json): **Recommended T3 MCP Multi-Family Roster (`--backend t3`)** — Judge: `judge-astra` (`codex` / `gpt-6.2-astra (xhigh)`); Voters: `sol-voter` (`codex` / `gpt-6.2-sol (xhigh)`), `neon-voter` (`antigravity` / `gemini-4-neon (xhigh)`), `opus-voter` (`antigravity` / `claude-opus-5-5-medium`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p t3-best-of-families`:
+- [`configs/t3-best-of-families.json`](../../configs/t3-best-of-families.json): **Recommended T3 MCP Multi-Family Roster (`--backend t3`)** — Judge: `judge-astra` (`codex` / `gpt-6.2-astra (xhigh)`); Voters: `sol-voter` (`codex` / `gpt-6.2-sol (xhigh)`), `neon-voter` (`antigravity` / `gemini-4-neon (xhigh)`), `carbon-voter` (`antigravity` / `gemini-4-carbon (high)`), `grok-voter` (`cursor` / `grok-4.7-high`, 180s timeout). Works from any working directory via `-p t3-best-of-families`:
   ```bash
   /Users/aaat/projects/the-council/bin/council run --live --backend t3 -p t3-best-of-families -t "<question>" -v
   ```

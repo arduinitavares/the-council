@@ -503,4 +503,80 @@ describe('Task 2: Zero-dependency Streamable HTTP T3McpClient', () => {
     assert.equal(providerCalls - callsBeforeToolCall, 1, 'headers provider must be invoked only once for tools/call');
     assert.equal(rotatingIdx, 1);
   });
+
+  it('redacts overlapping header secrets longest-first without leaking suffix fragments', async () => {
+    const { server, url } = await startMockServer((_req, res, body) => {
+      if (body?.method === 'initialize') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'sess-overlap' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: MCP_PROTOCOL_VERSION } }));
+        return;
+      }
+      if (body?.method === 'notifications/initialized') {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            isError: true,
+            content: [{ type: 'text', text: 'Rejected key fixture-user:fixture-signature' }]
+          }
+        })
+      );
+    });
+    servers.push(server);
+
+    const client = new T3McpClient({
+      url,
+      token: '',
+      headers: {
+        'X-User': 'fixture-user',
+        'X-API-Key': 'fixture-user:fixture-signature'
+      }
+    });
+
+    await assert.rejects(
+      () => client.callTool('check_key', {}),
+      (err) => {
+        assert.ok(err instanceof HarnessExecutionError);
+        assert.equal(err.message.includes('fixture-user'), false);
+        assert.equal(err.message.includes('fixture-signature'), false);
+        assert.equal((err.envelopeError || '').includes('fixture-signature'), false);
+        assert.match(err.message, /\[REDACTED\]/);
+        return true;
+      }
+    );
+  });
+
+  it('allows unauthenticated non-loopback HTTP initialization when only standard Origin header is set', async () => {
+    const seenUrls = [];
+    const client = new T3McpClient({
+      url: 'http://192.0.2.10:3773/mcp',
+      token: '',
+      headers: { Origin: 'http://localhost:3000' },
+      fetchImpl: async (reqUrl, init) => {
+        seenUrls.push({ url: reqUrl, headers: init.headers });
+        const payload = JSON.parse(init.body);
+        if (payload.method === 'notifications/initialized') {
+          return new Response(null, { status: 202 });
+        }
+        return new Response(
+          JSON.stringify({ jsonrpc: '2.0', id: payload.id, result: { protocolVersion: MCP_PROTOCOL_VERSION } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'sess-lan' }
+          }
+        );
+      }
+    });
+
+    const info = await client.initialize();
+    assert.equal(info.sessionId, 'sess-lan');
+    assert.equal(seenUrls.length, 2);
+    assert.equal(seenUrls[0].headers.Origin, 'http://localhost:3000');
+  });
 });

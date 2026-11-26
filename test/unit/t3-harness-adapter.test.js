@@ -660,7 +660,7 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
                 id: 'act-1',
                 kind: 'tool_call',
                 toolName: 'read_file',
-                text: `Input: read_file(.council/runs/latest.js)\nOutput:\n${sensitiveDummyContent}`,
+                text: `Tool: read_file(.council/runs/latest.js)\nOutput:\n${sensitiveDummyContent}`,
                 output: sensitiveDummyContent,
                 stdout: sensitiveDummyContent,
                 content: sensitiveDummyContent
@@ -1108,5 +1108,108 @@ describe('Task 3: T3HarnessAdapter direct contract tests', () => {
 
     // 2. Matching itemId with empty text even when textTruncated: false
     await runContinuationCase([{ id: 'msg-target', role: 'assistant', text: '', textTruncated: false }]);
+  });
+
+  it('does not promote stdout line 2 when command_execution text starts with a blank line', async () => {
+    const proofPayload = JSON.stringify({
+      scope: 'Blank line command',
+      kind: 'check',
+      source: 'README.md:1',
+      statement: 'Checked safely.'
+    });
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-blank-cmd', runId: 'run-blank-cmd' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [{ id: 'm-blank', role: 'assistant', runId: 'run-blank-cmd', text: proofPayload, textTruncated: false }],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          return {
+            items: [
+              {
+                id: 'act-blank-cmd',
+                type: 'command_execution',
+                text: '\n.council/runs/latest.js\nTOP_SECRET_STDOUT'
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') return { ok: true };
+        return {};
+      }
+    });
+
+    const records = [];
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    const proof = await adapter.executeSeatProof({
+      seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+      soul: 'Architect',
+      round: 1,
+      state: { topic: 'Blank leading line command_execution' },
+      onCallRecord: (rec) => records.push(rec)
+    });
+
+    assert.equal(proof.kind, 'check');
+    assert.equal(records.length, 1);
+    assert.equal(records[0].trace.forbiddenStateAccess, false);
+    assert.equal(JSON.stringify(records[0].trace.toolCalls).includes('.council/runs/latest.js'), false);
+    assert.equal(JSON.stringify(records[0].trace.toolCalls).includes('TOP_SECRET_STDOUT'), false);
+  });
+
+  it('preserves forbidden path detection inside truncated dynamic_tool input that contains an input "output" key', async () => {
+    const proofPayload = JSON.stringify({
+      scope: 'Truncated nested output key',
+      kind: 'check',
+      source: 'src/app.js:1',
+      statement: 'Checked.'
+    });
+    const mcpClient = new T3McpClient({
+      callTool: async (name, args) => {
+        if (name === 't3_thread_launch') return { threadId: 'th-nested-out', runId: 'run-nested-out' };
+        if (name === 't3_thread_wait') {
+          return { threadId: args.threadId, runId: args.runId, timedOut: false, status: 'completed' };
+        }
+        if (name === 't3_thread_read' && args.view === 'messages') {
+          return {
+            items: [{ id: 'm-nested', role: 'assistant', runId: 'run-nested-out', text: proofPayload, textTruncated: false }],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_read' && args.view === 'activity') {
+          return {
+            items: [
+              {
+                id: 'act-nested-out',
+                type: 'dynamic_tool',
+                textTruncated: true,
+                text: '{"toolName":"write_file","input":{"output":"diff","path":".council/runs/latest.js","content":"unclosed'
+              }
+            ],
+            hasMore: false
+          };
+        }
+        if (name === 't3_thread_organize') return { ok: true };
+        return {};
+      }
+    });
+
+    const adapter = new T3HarnessAdapter({ provider: 'codex', mcpClient, capabilities: MOCK_CAPABILITIES });
+    await assert.rejects(
+      () =>
+        adapter.executeSeatProof({
+          seat: { id: 's1', harness: 'codex', model: 'gpt-6.2-sol (xhigh)', tools: 'none' },
+          soul: 'Architect',
+          round: 1,
+          state: { topic: 'Truncated dynamic_tool input with output field' }
+        }),
+      (err) => err instanceof HarnessExecutionError && err.code === 'FORBIDDEN_STATE_ACCESS'
+    );
   });
 });

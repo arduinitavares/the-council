@@ -26,9 +26,12 @@ const NON_AUTH_STANDARD_HEADERS = new Set([
   'accept-language',
   'cache-control',
   'content-type',
+  'host',
   'mcp-protocol-version',
   'mcp-session-id',
+  'origin',
   'pragma',
+  'referer',
   'user-agent'
 ]);
 
@@ -57,10 +60,11 @@ export function redactSecrets(text, secrets = []) {
   if (typeof text !== 'string' || !text) return '';
   let out = text.replace(/\b(Bearer\s+)[^\s"',;]+/gi, '$1[REDACTED]');
   out = out.replace(/(authorization\s*[:=]\s*)[^\r\n"',;]+/gi, '$1[REDACTED]');
-  for (const secret of secrets) {
-    if (typeof secret === 'string' && secret.length > 0) {
-      out = out.split(secret).join('[REDACTED]');
-    }
+  const orderedSecrets = [...secrets]
+    .filter((s) => typeof s === 'string' && s.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const secret of orderedSecrets) {
+    out = out.split(secret).join('[REDACTED]');
   }
   return sliceUtf8Bytes(out, MAX_CLI_ERROR_MESSAGE_BYTES);
 }

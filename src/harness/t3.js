@@ -115,8 +115,7 @@ const ACTIVITY_OUTPUT_SECTION_REGEX =
   /\r?\n\s*(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
 const ACTIVITY_LEADING_OUTPUT_REGEX =
   /^(?:output|stdout|stderr|result|response|aggregated_output)\s*:/i;
-const ACTIVITY_EXPLICIT_INPUT_REGEX = /^(?:input|arguments|command)\s*:/i;
-const TRUNCATED_JSON_OUTPUT_KEY_REGEX = /"(?:output|result|response|stdout|stderr)"\s*:/;
+const ACTIVITY_EXPLICIT_INPUT_REGEX = /^(?:input|arguments|command|tool)\s*:/i;
 const MAX_ACTIVITY_INPUT_SUMMARY_BYTES = 512;
 const MAX_TRUNCATED_INPUT_SCAN_BYTES = 16 * 1024;
 const ALLOWED_ACTIVITY_METADATA_KEYS = Object.freeze([
@@ -278,9 +277,7 @@ function hasInlineEffortSyntax(modelString) {
 
 function extractActivityCommandLine(text) {
   if (typeof text !== 'string') return '';
-  const trimmedStart = text.trimStart();
-  if (!trimmedStart) return '';
-  const firstLine = trimmedStart.split(/\r?\n/, 1)[0].trim();
+  const firstLine = text.split(/\r?\n/, 1)[0].trim();
   if (!firstLine || ACTIVITY_LEADING_OUTPUT_REGEX.test(firstLine)) {
     return '';
   }
@@ -432,13 +429,11 @@ function extractDynamicToolJsonInput(text) {
         try {
           extracted = JSON.parse(val.raw);
         } catch {
-          const cut = TRUNCATED_JSON_OUTPUT_KEY_REGEX.exec(val.raw);
-          const safeRaw = (cut ? val.raw.slice(0, cut.index) : val.raw).trim();
+          const safeRaw = val.raw.trim();
           extracted = safeRaw ? sliceUtf8Bytes(safeRaw, MAX_TRUNCATED_INPUT_SCAN_BYTES) : undefined;
         }
       } else {
-        const cut = TRUNCATED_JSON_OUTPUT_KEY_REGEX.exec(val.raw);
-        const safeRaw = (cut ? val.raw.slice(0, cut.index) : val.raw).trim();
+        const safeRaw = val.raw.trim();
         extracted = safeRaw ? sliceUtf8Bytes(safeRaw, MAX_TRUNCATED_INPUT_SCAN_BYTES) : undefined;
       }
       if (extracted !== undefined) {

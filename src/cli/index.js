@@ -114,7 +114,7 @@ Usage:
 
 Options:
   -c, --config <path>         Path to JSON configuration file
-  -p, --preset <name>         Built-in preset (architecture, product-comparison, security-audit, argon-only, best-of-families)
+  -p, --preset <name>         Built-in preset (architecture, product-comparison, security-audit, argon-only, t3-best-of-families, best-of-families)
   -t, --topic <string>        Debate topic problem statement
   -e, --evidence <path>       Path to JSON or Markdown/text evidence file (repeatable)
   -r, --rounds <number>       Maximum deliberation rounds (default: 3)

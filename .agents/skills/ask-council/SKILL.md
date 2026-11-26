@@ -36,7 +36,11 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Best-of-Each-Family Roster** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `carbon-voter` (`antigravity` / `gemini-4-carbon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p best-of-families` or `-c configs/best-of-families.json`:
+- [`configs/t3-best-of-families.json`](../../configs/t3-best-of-families.json): **Recommended T3 MCP Multi-Family Roster (`--backend t3`)** — Judge: `judge-astra` (`codex` / `gpt-6.2-astra (xhigh)`); Voters: `sol-voter` (`codex` / `gpt-6.2-sol (xhigh)`), `neon-voter` (`antigravity` / `gemini-4-neon (xhigh)`), `opus-voter` (`antigravity` / `claude-opus-5-5-medium`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works from any working directory via `-p t3-best-of-families`:
+  ```bash
+  /Users/aaat/projects/the-council/bin/council run --live --backend t3 -p t3-best-of-families -t "<question>" -v
+  ```
+- [`configs/best-of-families.json`](../../configs/best-of-families.json): **Legacy CLI Best-of-Each-Family Roster (`--backend cli`)** — Judge: `judge-astra` (`codex` / `gpt-6-astra (max)`); Voters: `sol-voter` (`codex` / `gpt-6.1-sol (max)`), `argon-voter` (`antigravity` / `gemini-4-argon-high`), `carbon-voter` (`antigravity` / `gemini-4-carbon-high`), `opus-voter` (`antigravity` / `claude-opus-5-5-high`), `grok-voter` (`cursor` / `grok-4.7-xhigh`). Works via `-p best-of-families` or `-c configs/best-of-families.json`:
   ```bash
   /Users/aaat/projects/the-council/bin/council run --live -p best-of-families -t "<question>" -v
   ```
@@ -108,6 +112,15 @@ The Council includes a real-time, browser-based Observer Visualizer at `/Users/a
 
 ## 4. Execution Workflow
 
+### T3 MCP Backend & One-Time Sign-In (Recommended for Live Runs)
+- **Prefer `--backend t3`** (or `export COUNCIL_HARNESS_BACKEND=t3`) so Seats and the Judge dispatch as isolated fresh T3 threads over `http://127.0.0.1:3773/mcp` instead of spawning raw local `codex`, `agy`, or `cursor-agent` child processes.
+- **One-time standalone sign-in:** Authenticate once with OAuth 2.1 + PKCE:
+  ```bash
+  /Users/aaat/projects/the-council/bin/council login t3
+  /Users/aaat/projects/the-council/bin/council login t3 --status
+  ```
+  *(In T3 Code → Settings → Sharing & access → `+ Create link`, copy a one-time pairing Sign-in code and approve in the opened browser tab; credentials save with `0600` permissions at `~/.config/the-council/t3-oauth.json`. Use `council logout t3` to revoke/remove, or `T3_MCP_TOKEN` for headless CI overrides.)*
+
 ### Step 0: Evidence Gathering & Grounding (`--evidence` / `evidence` config key)
 Before launching a Council deliberation on time-sensitive, retail, pricing, benchmark, or empirical questions, gather verified facts first (using web search, official documentation, or repository inspection) and pass them into The Council so every Seat and the Judge deliberate over a shared, attributed, and challengeable baseline evidence packet rather than relying on stale training weights or redundant per-seat web searches. Prefer primary-source excerpts and exact `file:line` citations over unverified secondary prose.
 
@@ -122,7 +135,7 @@ For a self-review such as “What single change would most improve this Council 
 1. **Via `--evidence <file>` (`-e`, repeatable)**:
    - Pass a JSON file containing an array of `{ "label", "source", "text" }` objects (or `{ "evidence": [...] }`), or pass a plain Markdown/text file (`--evidence notes.md`), which is automatically wrapped as a labeled evidence item:
      ```bash
-     /Users/aaat/projects/the-council/bin/council run --live -p best-of-families \
+     /Users/aaat/projects/the-council/bin/council run --live --backend t3 -p t3-best-of-families \
        -t "Which smartphone under R$ 1000 is the best buy in Brazil right now?" \
        --evidence /tmp/brazil-phones-2026.json -v
      ```
@@ -132,7 +145,7 @@ For a self-review such as “What single change would most improve this Council 
    ```json
    {
      "topic": "Which smartphone under R$ 1000 provides the best longevity and camera performance in Brazil?",
-     "preset": "best-of-families",
+     "preset": "t3-best-of-families",
      "evidence": [
        {
          "label": "Anatel & Retail Street Pricing (May 2026)",
@@ -167,11 +180,12 @@ Using a custom configuration file:
 ```
 
 ### CLI Flag Reference
-- `-p, --preset <name>`: Select built-in preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`, or `best-of-families`).
+- `-p, --preset <name>`: Select preset (`architecture`, `product-comparison`, `security-audit`, `argon-only`, `t3-best-of-families`, or `best-of-families`).
+- `--backend <cli|t3>`: Select live harness transport (`cli` default or `COUNCIL_HARNESS_BACKEND`; use `--backend t3` to dispatch Seats & Judge through T3 MCP).
 - `-e, --evidence <path>`: Path to a JSON or Markdown/text evidence file (repeatable). Merges with any `evidence` array in `-c <config.json>` and injects `[E1] <label> (Source: <source>): <text>` into all Seat and Judge prompts.
 - `--timeout <ms>`: Explicit per-turn timeout override in milliseconds (positive integer). Overrides effort-scaled defaults for initial seat and judge turns and ordinary validation/quota retries, within the phase budget. Timeout/headless-denial recovery retains a separate ceiling of 90,000 ms. Voting and rebuttal phase caps still apply. Retry diagnostics report the effective deadline and limiting reason.
 - `--seat-budget <ms>`: Total phase time budget per seat in milliseconds (positive integer, defaults to 2 × timeoutMs or 480,000 ms). Bounds cumulative execution time across initial turn and any retries.
-- `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live CLI harness dispatchers (`codex`, `agy`, `cursor-agent`), automatically enforcing `--ephemeral` session isolation on Codex, and stream telemetry to `/Users/aaat/projects/the-council/.council/runs/`. Sets `"mode": "live"` in `--json` output.
+- `-l, --live`: **Required for real deliberations** (unless `--mock` is explicitly passed). Run with live harness dispatchers (`--backend t3` via T3 MCP, or `--backend cli` via `codex`, `agy`, `cursor-agent` with `--ephemeral` Codex isolation), and stream telemetry to `/Users/aaat/projects/the-council/.council/runs/`. Sets `"mode": "live"` in `--json` output.
 - `-m, --mock`: Run in hermetic deterministic simulated mock mode for offline testing only (required unless `--live` is passed). Prints a prominent `SIMULATED (mock harness): not a real deliberation` banner at the top and bottom of human output and sets `"mode": "mock"` in `--json` output. `council run` requires an explicit `--live` or `--mock` flag and fails fast if neither is specified.
 - `-t, --topic <string>`: Problem statement or topic handoff.
 - `-c, --config <path>`: Path to custom JSON configuration file (resolved against current working directory first, then `<packageRoot>/` and `<packageRoot>/configs/`).

@@ -4,7 +4,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CouncilEngine } from '../../src/engine/council-engine.js';
+import { CouncilEngine, resolveVotingSeatConfig } from '../../src/engine/council-engine.js';
+import { resolveConfig, validateConfig } from '../../src/engine/config.js';
 import { validateRetryFallbackCapability } from '../../src/engine/recovery.js';
 import {
   HarnessRegistry,
@@ -495,5 +496,25 @@ describe('Task 4: T3 MCP coexistence wiring, CLI preflight, recovery catalog & C
     const noProj = await runWithIo(['run', '--live', '--backend', 't3', '-c', cfgPath]);
     assert.equal(noProj.code, 1);
     assert.match(noProj.err, /No registered T3 project matches cwd/i);
+  });
+
+  it('resolves configs/t3-best-of-families.json preset and validates initial and downshifted voting models across all 3 T3 harnesses', () => {
+    const resolved = resolveConfig({ preset: 't3-best-of-families', topic: 'T3 preset validation' });
+    assert.deepEqual(
+      resolved.seats.map((s) => s.id),
+      ['sol-voter', 'neon-voter', 'opus-voter', 'grok-voter']
+    );
+    const cfgCheck = validateConfig(resolved);
+    assert.equal(cfgCheck.valid, true, cfgCheck.errors.join('; '));
+
+    const participants = [{ role: 'judge', item: resolved.judge }, ...resolved.seats.map((s) => ({ role: 'seat', item: s }))];
+    for (const { role, item } of participants) {
+      const adapter = new T3HarnessAdapter({ provider: item.harness });
+      adapter.validateModel(item.model);
+      if (role === 'seat') {
+        const votingCfg = resolveVotingSeatConfig(item, resolved, { harness: adapter });
+        adapter.validateModel(votingCfg.model);
+      }
+    }
   });
 });

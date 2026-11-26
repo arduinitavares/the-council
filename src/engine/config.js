@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
-import { ALLOWED_EFFORTS } from '../harness/cli-runner.js';
+import { ALLOWED_EFFORTS } from '../harness/model-utils.js';
 import { VALID_SELF_CONTAINED_PHASES } from './recovery.js';
 
 function validateReasoningEffortField(value, fieldLabel, errors) {

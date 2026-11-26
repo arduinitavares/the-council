@@ -6,13 +6,15 @@
 
 import {
   ALLOWED_EFFORTS,
-  VALID_DRAIN_STATUSES,
-  normalizeExitCode,
-  normalizeSignalName,
   extractCanonicalBaseModel,
   downshiftEffort,
   downshiftModel
-} from '../harness/cli-runner.js';
+} from '../harness/model-utils.js';
+import {
+  VALID_DRAIN_STATUSES,
+  normalizeExitCode,
+  normalizeSignalName
+} from '../harness/telemetry-utils.js';
 
 export const MAX_PRIMARY_FAULT_REASON_CHARS = 500;
 const MAX_DIAGNOSTIC_DETAIL_CHARS = 240;

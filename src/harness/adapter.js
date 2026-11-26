@@ -7,7 +7,6 @@ import {
   VALID_DRAIN_STATUSES,
   MAX_CLI_ERROR_MESSAGE_BYTES,
   MAX_CLI_STDERR_BYTES,
-  parseModelAndEffort,
   recordProviderCall,
   normalizeProviderTrace,
   normalizeExitCode,
@@ -22,7 +21,7 @@ import {
   markAttemptGateFinalized,
   PROVIDER_HTTP_429_REGEX,
   PROVIDER_HTTP_AUTH_REGEX
-} from './cli-runner.js';
+} from './telemetry-utils.js';
 
 export {
   PROVIDER_HTTP_429_REGEX,

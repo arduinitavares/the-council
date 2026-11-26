@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseModelAndEffort, extractCanonicalBaseModel } from '../harness/cli-runner.js';
+import { parseModelAndEffort, extractCanonicalBaseModel } from '../harness/model-utils.js';
 
 export const TELEMETRY_SCHEMA_VERSION = 1;
 export const DEFAULT_RUNS_DIR = path.resolve(import.meta.dirname, '../../.council/runs');

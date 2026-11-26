@@ -4,334 +4,79 @@
  * Node >= 22 ESM.
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { isUtf8 } from 'node:buffer';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  CODEX_EFFORT_MAP,
+  ALLOWED_EFFORTS,
+  parseModelAndEffort,
+  extractCanonicalBaseModel,
+  downshiftEffort,
+  downshiftModel
+} from './model-utils.js';
+import {
+  VALID_DRAIN_STATUSES,
+  LIFECYCLE_ISO_KEYS,
+  LIFECYCLE_INT_KEYS,
+  MAX_CLI_ERROR_MESSAGE_BYTES,
+  MAX_CLI_STDERR_BYTES,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX,
+  sliceUtf8Bytes,
+  redactArgv,
+  inferPromptFromArgs,
+  redactPromptInText,
+  normalizeExitCode,
+  normalizeSignalName,
+  sanitizeLifecycleMetadata,
+  createAttemptTelemetryGate,
+  runWithAttemptTelemetryGate,
+  getActiveAttemptTelemetryGate,
+  markAttemptGateFinalized,
+  markAttemptGateCancelled,
+  registerForbiddenAccessDetector,
+  normalizeProviderTrace,
+  recordProviderCall
+} from './telemetry-utils.js';
+
+export {
+  CODEX_EFFORT_MAP,
+  ALLOWED_EFFORTS,
+  parseModelAndEffort,
+  extractCanonicalBaseModel,
+  downshiftEffort,
+  downshiftModel,
+  VALID_DRAIN_STATUSES,
+  LIFECYCLE_ISO_KEYS,
+  LIFECYCLE_INT_KEYS,
+  MAX_CLI_ERROR_MESSAGE_BYTES,
+  MAX_CLI_STDERR_BYTES,
+  PROVIDER_HTTP_429_REGEX,
+  PROVIDER_HTTP_AUTH_REGEX,
+  sliceUtf8Bytes,
+  redactArgv,
+  inferPromptFromArgs,
+  redactPromptInText,
+  normalizeExitCode,
+  normalizeSignalName,
+  sanitizeLifecycleMetadata,
+  createAttemptTelemetryGate,
+  runWithAttemptTelemetryGate,
+  getActiveAttemptTelemetryGate,
+  markAttemptGateFinalized,
+  markAttemptGateCancelled,
+  normalizeProviderTrace,
+  recordProviderCall
+};
+
+registerForbiddenAccessDetector(detectForbiddenCouncilAccess);
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 
-const _validDrainStatusesSet = new Set(['fulfilled', 'settled', 'drain_expired']);
-const _throwDrainStatusesReadOnly = () => {
-  throw new TypeError('VALID_DRAIN_STATUSES is read-only');
-};
-export const VALID_DRAIN_STATUSES = Object.freeze({
-  get size() {
-    return _validDrainStatusesSet.size;
-  },
-  has(value) {
-    return _validDrainStatusesSet.has(value);
-  },
-  values() {
-    return _validDrainStatusesSet.values();
-  },
-  [Symbol.iterator]() {
-    return _validDrainStatusesSet[Symbol.iterator]();
-  },
-  add: _throwDrainStatusesReadOnly,
-  delete: _throwDrainStatusesReadOnly,
-  clear: _throwDrainStatusesReadOnly
-});
-
-export const LIFECYCLE_ISO_KEYS = Object.freeze([
-  'spawnedAt',
-  'firstStdoutAt',
-  'lastStdoutAt',
-  'firstStderrAt',
-  'lastStderrAt',
-  'sigtermSentAt',
-  'sigkillSentAt',
-  'settledAt'
-]);
-
-export const LIFECYCLE_INT_KEYS = Object.freeze([
-  'stdoutBytes',
-  'stdoutChunks',
-  'stderrBytes',
-  'stderrChunks'
-]);
-
-export const MAX_CLI_ERROR_MESSAGE_BYTES = 2048;
-export const MAX_CLI_STDERR_BYTES = 4096;
-
-export const CODEX_EFFORT_MAP = Object.freeze({
-  max: 'max',
-  xhigh: 'xhigh',
-  high: 'high',
-  medium: 'medium',
-  low: 'low'
-});
-
-export const ALLOWED_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-
-const RECOGNIZED_EFFORT_SUFFIXES = ['-max', '-xhigh', '-high', '-medium', '-low'];
-
-/**
- * Redacts prompt string in CLI argv for telemetry logging, replacing it with length and sha256 hash.
- * Handles exact prompt arguments and --print=<prompt> flags.
- *
- * @param {string[]} args
- * @param {string} [prompt='']
- * @returns {string[]}
- */
-export function redactArgv(args, prompt = '') {
-  if (!Array.isArray(args)) {
-    return [];
-  }
-  const promptStr = typeof prompt === 'string' ? prompt : String(prompt || '');
-  const hash = createHash('sha256').update(promptStr).digest('hex').slice(0, 12);
-  const length = promptStr.length;
-  const summary = `[REDACTED prompt: length=${length}, sha256=${hash}]`;
-
-  return args.map((arg) => {
-    if (arg === prompt) {
-      return summary;
-    }
-    if (typeof arg === 'string' && prompt && arg === `--print=${prompt}`) {
-      return `--print=${summary}`;
-    }
-    return arg;
-  });
-}
-
-/**
- * Parses model name and reasoning effort level.
- * Handles parenthesis format "gpt-6-astra (max)" and hyphenated suffixes "gemini-4-argon-high".
- * Preserves 'max' for Codex reasoning effort.
- * Throws a configuration error on unsupported efforts naming allowed values.
- *
- * @param {string} modelString
- * @param {'high'|'medium'|'low'|'max'|'xhigh'|string} [defaultEffort='high']
- * @returns {{ model: string, effort: string, codexEffort: string }}
- */
-export function parseModelAndEffort(modelString, defaultEffort, fallbackReasoningEffort = 'high') {
-  if (typeof modelString !== 'string' || !modelString.trim()) {
-    throw new Error('modelString must be a non-empty string');
-  }
-
-  const resolvedDefault = defaultEffort ?? fallbackReasoningEffort ?? 'high';
-  const trimmed = modelString.trim();
-
-  // 1. Parenthesized effort format: e.g. "gpt-6-astra (max)"
-  const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
-  if (parenMatch) {
-    const model = parenMatch[1].trim();
-    const rawEffort = parenMatch[2].trim();
-    if (!rawEffort) {
-      const defaultEff = (resolvedDefault || 'high').toLowerCase();
-      const codexEffort = CODEX_EFFORT_MAP[defaultEff] || 'high';
-      return { model, effort: '', codexEffort };
-    }
-    const effort = rawEffort.toLowerCase();
-    if (!CODEX_EFFORT_MAP[effort]) {
-      throw new Error(
-        `Configuration error: Unsupported reasoning effort "${rawEffort}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
-      );
-    }
-    return { model, effort, codexEffort: CODEX_EFFORT_MAP[effort] };
-  }
-
-  // 2. Suffix effort format: e.g. "gemini-4-argon-high", "grok-4.7-xhigh", "model-max"
-  for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
-    if (trimmed.toLowerCase().endsWith(suffix)) {
-      const effort = suffix.slice(1);
-      const codexEffort = CODEX_EFFORT_MAP[effort] || 'high';
-      return { model: trimmed, effort, codexEffort };
-    }
-  }
-
-  // 3. Fallback to default effort
-  const defaultEff = (resolvedDefault || 'high').toLowerCase();
-  if (!CODEX_EFFORT_MAP[defaultEff]) {
-    throw new Error(
-      `Configuration error: Unsupported reasoning effort "${resolvedDefault}". Allowed: ${ALLOWED_EFFORTS.join(', ')}.`
-    );
-  }
-  const codexEffort = CODEX_EFFORT_MAP[defaultEff];
-  return { model: trimmed, effort: defaultEff, codexEffort };
-}
-
-/**
- * Extracts the canonical lowercase base model name after validating effort via parseModelAndEffort.
- * Enforces the no-double-effort (!hasParens) and single-suffix (break) rules.
- *
- * @param {string} modelString
- * @param {'high'|'medium'|'low'|'max'|'xhigh'|string} [defaultEffort='high']
- * @returns {string}
- */
-export function extractCanonicalBaseModel(modelString, defaultEffort = 'high') {
-  const parsed = parseModelAndEffort(modelString, defaultEffort);
-  const hasParens = /\([^)]*\)\s*$/.test(String(modelString || '').trim());
-  let baseModel = parsed.model.trim().toLowerCase();
-  if (!hasParens) {
-    for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
-      if (baseModel.endsWith(suffix)) {
-        baseModel = baseModel.slice(0, -suffix.length);
-        break;
-      }
-    }
-  }
-  return baseModel;
-}
-
-const EFFORT_RANK = Object.freeze({
-  low: 1,
-  medium: 2,
-  high: 3,
-  xhigh: 4,
-  max: 5
-});
-
-/**
- * Downshifts an effort level to a target level if current effort exceeds target.
- * Never upshifts an effort that is already at or below target.
- *
- * @param {string} effort
- * @param {string} [target='low']
- * @returns {string}
- */
-export function downshiftEffort(effort, target = 'low') {
-  const cur = String(effort || '').toLowerCase().trim();
-  const tgt = String(target || 'low').toLowerCase().trim();
-  if (EFFORT_RANK[tgt] === undefined) {
-    return cur || 'low';
-  }
-  if (EFFORT_RANK[cur] === undefined) {
-    return tgt;
-  }
-  return EFFORT_RANK[cur] > EFFORT_RANK[tgt] ? tgt : cur;
-}
-
-/**
- * Downshifts model reasoning effort for voting or lightweight tasks.
- * Handles parenthesized models (e.g. "gpt-6-astra (max)" -> "gpt-6-astra (low)")
- * and hyphenated suffix models (e.g. "grok-4.7-xhigh" -> "grok-4.7-low").
- * Preserves models without recognized effort tiers (e.g. "composer-2.5").
- *
- * @param {string} model
- * @param {string} [target='low']
- * @returns {string}
- */
-export function downshiftModel(model, target = 'low') {
-  if (typeof model !== 'string' || !model.trim()) {
-    return model;
-  }
-  const trimmed = model.trim();
-  const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
-  if (parenMatch) {
-    const baseModel = parenMatch[1].trim();
-    const rawEffort = parenMatch[2].trim();
-    const newEffort = downshiftEffort(rawEffort, target);
-    return `${baseModel} (${newEffort})`;
-  }
-
-  for (const suffix of RECOGNIZED_EFFORT_SUFFIXES) {
-    if (trimmed.toLowerCase().endsWith(suffix)) {
-      const rawEffort = suffix.slice(1);
-      const newEffort = downshiftEffort(rawEffort, target);
-      return `${trimmed.slice(0, -suffix.length)}-${newEffort}`;
-    }
-  }
-
-  return trimmed;
-}
-
-const NON_PROMPT_VALUE_FLAGS = new Set([
-  '-e',
-  '--eval',
-  '-m',
-  '--model',
-  '-c',
-  '--mode',
-  '--sandbox',
-  '--output-format',
-  '--effort',
-  '--disable'
-]);
-
-/**
- * Infers the prompt string from CLI arguments when not explicitly provided.
- *
- * @param {string} executable
- * @param {string[]} [args=[]]
- * @param {string} [explicitPrompt='']
- * @returns {string}
- */
-const SHORT_CLI_FLAG_REGEX = /^-+[a-zA-Z0-9][-a-zA-Z0-9_]*$/;
-
-export function inferPromptFromArgs(executable, args = [], explicitPrompt = '') {
-  if (typeof explicitPrompt === 'string' && explicitPrompt.length > 0) {
-    return explicitPrompt;
-  }
-  if (!Array.isArray(args) || args.length === 0) {
-    return '';
-  }
-  for (const arg of args) {
-    if (typeof arg === 'string' && arg.startsWith('--print=') && arg.length > '--print='.length) {
-      return arg.slice('--print='.length);
-    }
-  }
-  if (args.length >= 2) {
-    const lastArg = args[args.length - 1];
-    const prevArg = String(args[args.length - 2] || '');
-    if (
-      typeof lastArg === 'string' &&
-      lastArg.length > 0 &&
-      !SHORT_CLI_FLAG_REGEX.test(lastArg) &&
-      !NON_PROMPT_VALUE_FLAGS.has(prevArg)
-    ) {
-      return lastArg;
-    }
-  } else if (args.length === 1) {
-    const onlyArg = args[0];
-    if (typeof onlyArg === 'string' && onlyArg.length >= 8 && !SHORT_CLI_FLAG_REGEX.test(onlyArg)) {
-      return onlyArg;
-    }
-  }
-  return '';
-}
-
 const REDACTED_PROMPT_MARKER_REGEX = /^\[REDACTED prompt: length=\d+, sha256=[0-9a-f]{12}\]$/;
-
-function isAsciiAlnumCode(code) {
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122)
-  );
-}
-
-function matchesTokenBoundary(text, idx, needle) {
-  if (!needle) return false;
-  if (isAsciiAlnumCode(needle.charCodeAt(0)) && idx > 0 && isAsciiAlnumCode(text.charCodeAt(idx - 1))) {
-    return false;
-  }
-  const end = idx + needle.length;
-  if (
-    isAsciiAlnumCode(needle.charCodeAt(needle.length - 1)) &&
-    end < text.length &&
-    isAsciiAlnumCode(text.charCodeAt(end))
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function findNextPairMatch(text, pair, fromPos) {
-  let pos = fromPos;
-  while (pos < text.length) {
-    const idx = text.indexOf(pair.needle, pos);
-    if (idx === -1) return -1;
-    if (!pair.boundaryOnly || matchesTokenBoundary(text, idx, pair.needle)) {
-      return idx;
-    }
-    pos = idx + 1;
-  }
-  return -1;
-}
 
 function resolveCliErrorArgsAndPrompt(error, executable, args = [], explicitPrompt = '') {
   const providedArgs = Array.isArray(args) ? args : [];
@@ -356,48 +101,6 @@ function resolveCliErrorArgsAndPrompt(error, executable, args = [], explicitProm
   };
 }
 
-function buildPromptRedactionPairs(text, prompt, options = {}) {
-  const args = Array.isArray(options?.args) ? options.args : [];
-  const executable = typeof options?.executable === 'string' ? options.executable : '';
-  const explicitPrompt = typeof prompt === 'string' ? prompt : '';
-  const detectedPrompt = explicitPrompt || inferPromptFromArgs(executable, args, '');
-  if (!detectedPrompt) {
-    return [];
-  }
-  const minPromptLength =
-    typeof options?.minPromptLength === 'number' && Number.isFinite(options.minPromptLength)
-      ? options.minPromptLength
-      : 1;
-  const redactBareUnbounded = detectedPrompt.length >= minPromptLength || text === detectedPrompt;
-  const redactBareBounded = !redactBareUnbounded && Boolean(explicitPrompt);
-  const redactedSummary = redactArgv([detectedPrompt], detectedPrompt)[0] || '[PROMPT REDACTED]';
-  const pairs = [];
-  const addPair = (needle, replacement, boundaryOnly = false) => {
-    if (needle && replacement !== undefined && needle !== replacement) {
-      pairs.push({ needle, replacement, boundaryOnly });
-    }
-  };
-  if (!redactBareUnbounded && args.length > 0) {
-    const redactedArgs = redactArgv(args, detectedPrompt);
-    const rawCmd = [executable, ...args].filter(Boolean).join(' ');
-    const redactedCmd = [executable, ...redactedArgs].filter(Boolean).join(' ');
-    if (rawCmd) {
-      addPair(rawCmd, redactedCmd, false);
-    }
-    if (args.length >= 2) {
-      addPair(args.join(' '), redactedArgs.join(' '), false);
-    }
-  }
-  addPair(`--print=${detectedPrompt}`, `--print=${redactedSummary}`, false);
-  if (redactBareUnbounded) {
-    addPair(detectedPrompt, redactedSummary, false);
-  } else if (redactBareBounded) {
-    addPair(detectedPrompt, redactedSummary, true);
-  }
-  pairs.sort((a, b) => b.needle.length - a.needle.length);
-  return pairs;
-}
-
 function sanitizeSpawnargsInPlace(error, detectedPrompt, explicitPrompt, opts) {
   if (!error || typeof error !== 'object' || !Array.isArray(error.spawnargs) || !detectedPrompt) {
     return;
@@ -407,89 +110,6 @@ function sanitizeSpawnargsInPlace(error, detectedPrompt, explicitPrompt, opts) {
     const val = redacted[i];
     error.spawnargs[i] = typeof val === 'string' ? redactPromptInText(val, explicitPrompt, opts) : val;
   }
-}
-
-function appendBoundedTrailingSlice(rebuilt, rebuiltBytes, text, pos, maxBytesCap) {
-  const remainingBytes = Math.max(0, maxBytesCap - rebuiltBytes);
-  if (remainingBytes <= 0) {
-    return rebuilt;
-  }
-  const tail = pos === 0 ? text.slice(0, remainingBytes + 4) : text.slice(pos, pos + remainingBytes + 4);
-  return rebuilt + tail;
-}
-
-/**
- * Redacts literal prompt and prompt-arg occurrences in text in a single pass,
- * optionally capping the resulting UTF-8 byte length via sliceUtf8Bytes.
- *
- * @param {string} text
- * @param {string} [prompt='']
- * @param {Object} [options]
- * @returns {string}
- */
-export function redactPromptInText(text, prompt = '', options = {}) {
-  if (typeof text !== 'string' || !text) {
-    return '';
-  }
-  const hasMaxBytes =
-    typeof options?.maxBytes === 'number' && Number.isFinite(options.maxBytes) && options.maxBytes >= 0;
-  if (typeof options?.maxBytes === 'number' && (!Number.isFinite(options.maxBytes) || options.maxBytes <= 0)) {
-    return '';
-  }
-  const maxBytesCap = hasMaxBytes ? Math.floor(options.maxBytes) : Infinity;
-  const pairs = buildPromptRedactionPairs(text, prompt, options);
-  if (pairs.length === 0) {
-    return hasMaxBytes ? sliceUtf8Bytes(text, options.maxBytes) : text;
-  }
-  const nextIndices = pairs.map((pair) => findNextPairMatch(text, pair, 0));
-  let pos = 0;
-  let rebuilt = '';
-  let rebuiltBytes = 0;
-  while (pos < text.length) {
-    let bestIdx = -1;
-    let bestPair = null;
-    for (let i = 0; i < pairs.length; i += 1) {
-      let idx = nextIndices[i];
-      if (idx === -1) continue;
-      if (idx < pos) {
-        idx = findNextPairMatch(text, pairs[i], pos);
-        nextIndices[i] = idx;
-        if (idx === -1) continue;
-      }
-      if (
-        bestIdx === -1 ||
-        idx < bestIdx ||
-        (idx === bestIdx && pairs[i].needle.length > bestPair.needle.length)
-      ) {
-        bestIdx = idx;
-        bestPair = pairs[i];
-      }
-    }
-    if (bestIdx === -1) {
-      rebuilt = hasMaxBytes
-        ? appendBoundedTrailingSlice(rebuilt, rebuiltBytes, text, pos, maxBytesCap)
-        : (pos === 0 ? text : rebuilt + text.slice(pos));
-      break;
-    }
-    const prefix = text.slice(pos, bestIdx);
-    if (hasMaxBytes) {
-      const remainingBytes = Math.max(0, maxBytesCap - rebuiltBytes);
-      if (prefix.length > remainingBytes + 4) {
-        rebuilt += prefix.slice(0, remainingBytes + 4);
-        break;
-      }
-    }
-    const piece = prefix + bestPair.replacement;
-    rebuilt += piece;
-    pos = bestIdx + bestPair.needle.length;
-    if (hasMaxBytes) {
-      rebuiltBytes += Buffer.byteLength(piece, 'utf8');
-      if (rebuiltBytes >= maxBytesCap) {
-        break;
-      }
-    }
-  }
-  return hasMaxBytes ? sliceUtf8Bytes(rebuilt, options.maxBytes) : rebuilt;
 }
 
 /**
@@ -1707,29 +1327,6 @@ function stripBenignCouncilExclusions(str) {
 }
 
 const MAX_TRACE_SCAN_BYTES = 262_144;
-
-export function sliceUtf8Bytes(str, maxBytes = MAX_TRACE_SCAN_BYTES) {
-  if (typeof str !== 'string' || !str) return '';
-  if (typeof maxBytes !== 'number' || !Number.isFinite(maxBytes) || maxBytes <= 0) return '';
-  const cap = Math.floor(maxBytes);
-  if (cap <= 0) return '';
-  let pre = str.length > cap ? str.slice(0, cap) : str;
-  if (str.length > cap && pre.length > 0) {
-    const lastCode = pre.charCodeAt(pre.length - 1);
-    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
-      pre = pre.slice(0, -1);
-    }
-  }
-  const buf = Buffer.from(pre, 'utf8');
-  if (buf.length <= cap) {
-    return pre;
-  }
-  let end = cap;
-  while (end > 0 && (buf[end] & 0xc0) === 0x80) {
-    end -= 1;
-  }
-  return buf.subarray(0, end).toString('utf8');
-}
 
 function stripOuterMatchingQuotes(s) {
   if (s.length >= 2) {
@@ -3579,19 +3176,6 @@ export function parseCursorEventStream(stdout, options = null) {
   };
 }
 
-/**
- * Normalizes trace metadata on a provider call record.
- *
- * @param {Object} [trace]
- * @param {Object} [defaults]
- * @returns {{ traceCoverage: 'full'|'partial'|'unavailable', toolCalls: Array<Object>, skillsRead: Array<Object>, forbiddenStateAccess: boolean, forbiddenAccessDetails: string[], durationMs: number, outcome: 'success'|'error' }}
- */
-export const PROVIDER_HTTP_429_REGEX =
-  /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*429\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*429\b|"status"\s*:\s*429\b|"code"\s*:\s*429\b|\b429\s+(?:too\s+many\s+requests|resource[\s_-]*exhausted|rate[\s_-]*limit))/i;
-
-export const PROVIDER_HTTP_AUTH_REGEX =
-  /(?:\bhttp(?:\/\d(?:\.\d)?)?\s*(?:401|403)\b|\b(?:status(?:\s*code)?|error(?:\s*code)?|response(?:\s*code)?)\s*[:=]?\s*(?:401|403)\b|"status"\s*:\s*(?:401|403)\b|"code"\s*:\s*(?:401|403)\b|\b(?:401|403)\s+(?:unauthorized|forbidden|unauthenticated|permission[\s_-]*denied))/i;
-
 const BENIGN_AGY_MODE_PLAN_WARNING_LINE =
   /^[ \t]*warning:\s+--mode\s+plan\s+has\s+no\s+effect\s+while\s+slash\s+command\s+expansion\s+is\s+disabled\.?[ \t]*$/i;
 
@@ -3620,118 +3204,6 @@ export function hasExplicitProviderErrorSignature(text) {
     hasQuotaOrAuthProviderSignature(text) ||
     /\b(?:model_not_found|unknown\s+model|unsupported\s+model|invalid_argument)\b/i.test(text)
   );
-}
-
-const ISO_8601_TIMESTAMP_REGEX =
-  /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
-
-/**
- * Normalizes a CLI exit code to a finite number or null (never string error codes like 'ENOENT').
- *
- * @param {*} value
- * @returns {number|null}
- */
-export function normalizeExitCode(value) {
-  return typeof value === 'number' && Number.isFinite(value) ? (value === 0 ? 0 : value) : null;
-}
-
-/**
- * Normalizes a POSIX signal name to trimmed uppercase /^SIG[A-Z0-9]+$/ or null.
- *
- * @param {*} value
- * @returns {string|null}
- */
-export function normalizeSignalName(value) {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toUpperCase();
-  return /^SIG[A-Z0-9]+$/.test(normalized) ? normalized : null;
-}
-
-/**
- * Validates and clones CLI lifecycle metadata into a frozen object, or returns null when empty/invalid.
- *
- * @param {*} raw
- * @returns {Readonly<Object>|null}
- */
-export function sanitizeLifecycleMetadata(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return null;
-  }
-  const out = {};
-  for (const key of LIFECYCLE_ISO_KEYS) {
-    const val = raw[key];
-    if (typeof val === 'string') {
-      const trimmed = val.trim();
-      if (ISO_8601_TIMESTAMP_REGEX.test(trimmed) && Number.isFinite(Date.parse(trimmed))) {
-        out[key] = trimmed;
-      }
-    }
-  }
-  for (const key of LIFECYCLE_INT_KEYS) {
-    const val = raw[key];
-    if (typeof val === 'number' && Number.isInteger(val) && val >= 0) {
-      out[key] = val === 0 ? 0 : val;
-    }
-  }
-  if (typeof raw.groupDrainExhausted === 'boolean') {
-    out.groupDrainExhausted = raw.groupDrainExhausted;
-  }
-  if (Array.isArray(raw.attemptedSignals)) {
-    const seen = new Set();
-    const signals = [];
-    for (const item of raw.attemptedSignals) {
-      const sig = normalizeSignalName(item);
-      if (sig && !seen.has(sig)) {
-        seen.add(sig);
-        signals.push(sig);
-        if (signals.length >= 8) break;
-      }
-    }
-    if (signals.length > 0) {
-      out.attemptedSignals = Object.freeze(signals);
-    }
-  }
-  return Object.keys(out).length > 0 ? Object.freeze(out) : null;
-}
-
-const attemptTelemetryGateStorage = new AsyncLocalStorage();
-
-export function createAttemptTelemetryGate(meta = {}) {
-  const safeMeta = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
-  return {
-    ...safeMeta,
-    recorded: Boolean(safeMeta.recorded),
-    finalized: Boolean(safeMeta.finalized),
-    cancelled: Boolean(safeMeta.cancelled),
-    managedByExecuteWithTimeout: Boolean(safeMeta.managedByExecuteWithTimeout)
-  };
-}
-
-export function runWithAttemptTelemetryGate(gate, fn) {
-  if (typeof fn !== 'function') {
-    throw new TypeError('runWithAttemptTelemetryGate requires a function');
-  }
-  return attemptTelemetryGateStorage.run(gate && typeof gate === 'object' ? gate : null, fn);
-}
-
-export function getActiveAttemptTelemetryGate() {
-  return attemptTelemetryGateStorage.getStore() || null;
-}
-
-export function markAttemptGateFinalized(gate) {
-  if (gate && typeof gate === 'object') {
-    gate.finalized = true;
-    return gate;
-  }
-  return null;
-}
-
-export function markAttemptGateCancelled(gate) {
-  if (gate && typeof gate === 'object') {
-    gate.cancelled = true;
-    return gate;
-  }
-  return null;
 }
 
 export function createHeadlessToolDeniedError(message, options = {}) {
@@ -3777,79 +3249,11 @@ export function createHeadlessToolDeniedError(message, options = {}) {
   return err;
 }
 
-export function normalizeProviderTrace(trace, defaults = {}) {
-  const validCoverages = new Set(['full', 'partial', 'unavailable']);
-  const defaultCoverage = defaults.provider === 'antigravity' ? 'unavailable' : 'partial';
-  const traceCoverage = validCoverages.has(trace?.traceCoverage)
-    ? trace.traceCoverage
-    : defaultCoverage;
-  const toolCalls = Array.isArray(trace?.toolCalls) ? trace.toolCalls : [];
-  const skillsRead = Array.isArray(trace?.skillsRead) ? trace.skillsRead : [];
-  const detectedForbidden =
-    toolCalls.length > 0
-      ? detectForbiddenCouncilAccess(toolCalls)
-      : { forbiddenStateAccess: false, forbiddenAccessDetails: [] };
-  const mergedDetails = [
-    ...new Set([
-      ...(Array.isArray(trace?.forbiddenAccessDetails) ? trace.forbiddenAccessDetails : []),
-      ...detectedForbidden.forbiddenAccessDetails
-    ])
-  ];
-  const forbiddenStateAccess =
-    Boolean(trace?.forbiddenStateAccess) ||
-    detectedForbidden.forbiddenStateAccess ||
-    mergedDetails.length > 0;
-  const durationMs =
-    typeof trace?.durationMs === 'number'
-      ? trace.durationMs
-      : (typeof defaults.durationMs === 'number' ? defaults.durationMs : 0);
-  const outcome =
-    forbiddenStateAccess
-      ? 'error'
-      : trace?.outcome === 'error' || trace?.outcome === 'success'
-        ? trace.outcome
-        : (defaults.exitCode === 0 || defaults.exitCode === undefined ? 'success' : 'error');
-
-  const promptHint = typeof defaults.prompt === 'string' ? defaults.prompt : '';
-  const redactOpts = {
-    executable: defaults.executable,
-    args: defaults.args,
-    minPromptLength: 8
-  };
-  const boundedStderr =
-    typeof trace?.stderr === 'string' && trace.stderr.length > 0
-      ? redactPromptInText(trace.stderr, promptHint, { ...redactOpts, maxBytes: MAX_CLI_STDERR_BYTES })
-      : '';
-  const boundedEnvelopeError =
-    typeof trace?.envelopeError === 'string' && trace.envelopeError.length > 0
-      ? redactPromptInText(trace.envelopeError, promptHint, { ...redactOpts, maxBytes: 1024 })
-      : '';
-  const lifecycle = sanitizeLifecycleMetadata(trace?.lifecycle ?? defaults.lifecycle);
-
-  return {
-    traceCoverage,
-    toolCalls,
-    skillsRead,
-    forbiddenStateAccess,
-    forbiddenAccessDetails: mergedDetails,
-    durationMs,
-    outcome,
-    ...(boundedStderr ? { stderr: boundedStderr } : {}),
-    ...(Array.isArray(trace?.deniedActions)
-      ? { deniedActions: trace.deniedActions }
-      : {}),
-    ...(boundedEnvelopeError ? { envelopeError: boundedEnvelopeError } : {}),
-    ...(typeof trace?.finishedReason === 'string' && trace.finishedReason.length > 0
-      ? { finishedReason: trace.finishedReason }
-      : {}),
-    ...(lifecycle ? { lifecycle } : {})
-  };
-}
-
 /**
- * Builds a sanitized child process environment when executing in `cwd`,
- * setting `PWD` to `cwd` and scrubbing inherited `OLDPWD` and `INIT_CWD`
- * so isolated seats do not inherit host repository paths from the parent shell/npm.
+ * Builds a sanitized child process environment when executing in `cwd` or when
+ * `T3_MCP_TOKEN` is present, setting `PWD` to `cwd`, stripping `T3_MCP_TOKEN`,
+ * and scrubbing inherited `OLDPWD` and `INIT_CWD` so isolated seats do not
+ * inherit host repository paths or T3 MCP credentials.
  *
  * @param {string|null|undefined} cwd
  * @param {NodeJS.ProcessEnv} [env]
@@ -3857,16 +3261,21 @@ export function normalizeProviderTrace(trace, defaults = {}) {
  */
 export function buildSanitizedCliEnv(cwd, env) {
   const normalizedCwd = typeof cwd === 'string' ? cwd.trim() : '';
-  if (!normalizedCwd) {
+  const baseEnv = env || process.env;
+  const hasT3Token = Boolean(baseEnv && Object.prototype.hasOwnProperty.call(baseEnv, 'T3_MCP_TOKEN'));
+  if (!normalizedCwd && !hasT3Token) {
     return env;
   }
-  const baseEnv = env || process.env;
-  const nextEnv = { ...baseEnv, PWD: normalizedCwd };
-  if (!env || env.OLDPWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'OLDPWD')) {
-    delete nextEnv.OLDPWD;
-  }
-  if (!env || env.INIT_CWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'INIT_CWD')) {
-    delete nextEnv.INIT_CWD;
+  const nextEnv = { ...baseEnv };
+  delete nextEnv.T3_MCP_TOKEN;
+  if (normalizedCwd) {
+    nextEnv.PWD = normalizedCwd;
+    if (!env || env.OLDPWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'OLDPWD')) {
+      delete nextEnv.OLDPWD;
+    }
+    if (!env || env.INIT_CWD === undefined || !Object.prototype.hasOwnProperty.call(env, 'INIT_CWD')) {
+      delete nextEnv.INIT_CWD;
+    }
   }
   return nextEnv;
 }
@@ -4430,189 +3839,6 @@ export async function execCli(executable, args = [], options = {}) {
   return new Promise((resolve, reject) =>
     runExecCliSession({ executable, args, options, spawnOptions, isPosix, maxBuffer, killGraceMs, resolve, reject })
   );
-}
-
-function inferEffortForTelemetry(modelString, defaultEffort) {
-  if (typeof modelString !== 'string' || !modelString.trim()) {
-    return undefined;
-  }
-  const trimmed = modelString.trim();
-  const fallback =
-    typeof defaultEffort === 'string' && defaultEffort.trim() ? defaultEffort.trim().toLowerCase() : 'high';
-  try {
-    const baseModel = extractCanonicalBaseModel(trimmed, fallback);
-    if (baseModel === 'composer-2.5' || trimmed.toLowerCase() === 'composer-2.5') {
-      return null;
-    }
-    return parseModelAndEffort(trimmed, fallback).effort;
-  } catch {
-    return typeof defaultEffort === 'string' && defaultEffort.trim()
-      ? defaultEffort.trim().toLowerCase()
-      : undefined;
-  }
-}
-
-function buildProviderCallRecord({ context, record }) {
-  const pickDefined = (...values) => {
-    for (const value of values) {
-      if (value !== undefined) return value;
-    }
-    return undefined;
-  };
-  const retryDiagnostics =
-    record.retryDiagnostics !== undefined ? record.retryDiagnostics : context?.retryDiagnostics;
-  const phase = record.phase ?? context?.phase;
-  const round = record.round ?? context?.round;
-  const hasRetryDiag = Boolean(retryDiagnostics && typeof retryDiagnostics === 'object');
-  const rawEffectiveModel = record.model || context?.model;
-  const attempt =
-    typeof record.attempt === 'number'
-      ? record.attempt
-      : typeof retryDiagnostics?.attempt === 'number'
-        ? retryDiagnostics.attempt
-        : typeof context?.attempt === 'number'
-          ? context.attempt
-          : !hasRetryDiag
-            ? 0
-            : undefined;
-  const requestedModel = pickDefined(
-    record.requestedModel,
-    retryDiagnostics?.requestedModel,
-    context?.requestedModel,
-    context?.seat?.model,
-    rawEffectiveModel
-  );
-  const requestedEffort = pickDefined(
-    record.requestedEffort,
-    retryDiagnostics?.requestedEffort,
-    context?.requestedEffort,
-    inferEffortForTelemetry(requestedModel || rawEffectiveModel, context?.reasoningEffort)
-  );
-  const effectiveEffort = pickDefined(
-    record.effectiveEffort,
-    retryDiagnostics?.effectiveEffort,
-    inferEffortForTelemetry(rawEffectiveModel, record.reasoningEffort ?? context?.reasoningEffort)
-  );
-  const capabilityProvenance = pickDefined(
-    record.capabilityProvenance,
-    retryDiagnostics?.capabilityProvenance,
-    context?.capabilityProvenance,
-    null
-  );
-  const fallbackApplied =
-    typeof record.fallbackApplied === 'boolean'
-      ? record.fallbackApplied
-      : typeof retryDiagnostics?.fallbackApplied === 'boolean'
-        ? retryDiagnostics.fallbackApplied
-        : false;
-  const fallbackReason = pickDefined(record.fallbackReason, retryDiagnostics?.fallbackReason, null);
-  const drainStatus = VALID_DRAIN_STATUSES.has(record.drainStatus) ? record.drainStatus : undefined;
-  const drainDurationMs =
-    typeof record.drainDurationMs === 'number' &&
-    Number.isFinite(record.drainDurationMs) &&
-    record.drainDurationMs >= 0
-      ? record.drainDurationMs
-      : undefined;
-  const exitCode = drainStatus === 'drain_expired' ? null : normalizeExitCode(record.exitCode);
-  const signal = drainStatus === 'drain_expired' ? null : normalizeSignalName(record.signal);
-  const promptHint =
-    typeof record.prompt === 'string' && record.prompt
-      ? record.prompt
-      : (typeof context?.prompt === 'string' ? context.prompt : '');
-  const normalizedTrace = normalizeProviderTrace(record.trace, {
-    durationMs: record.durationMs,
-    exitCode,
-    provider: record.provider,
-    prompt: promptHint,
-    lifecycle: record.trace?.lifecycle ?? record.lifecycle
-  });
-
-  const {
-    drainStatus: _ds,
-    drainDurationMs: _dd,
-    exitCode: _ec,
-    signal: _sig,
-    lifecycle: _lc,
-    prompt: _pr,
-    ...restRecord
-  } = record;
-
-  return {
-    ...restRecord,
-    ...(record.model || context?.model ? { model: record.model || context?.model } : {}),
-    ...(typeof phase === 'string' && phase ? { phase } : {}),
-    ...(typeof round === 'number' ? { round } : {}),
-    ...(typeof attempt === 'number' ? { attempt } : {}),
-    ...(requestedModel !== undefined ? { requestedModel } : {}),
-    ...(requestedEffort !== undefined ? { requestedEffort } : {}),
-    ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
-    ...(capabilityProvenance !== undefined ? { capabilityProvenance } : {}),
-    ...(typeof fallbackApplied === 'boolean' ? { fallbackApplied } : {}),
-    ...(fallbackReason !== undefined ? { fallbackReason } : {}),
-    exitCode,
-    signal,
-    ...(drainStatus ? { drainStatus } : {}),
-    ...(drainDurationMs !== undefined ? { drainDurationMs } : {}),
-    tools:
-      record.tools === 'none' || context?.tools === 'none'
-        ? 'none'
-        : (record.tools || context?.tools || 'read-only'),
-    trace: normalizedTrace
-  };
-}
-
-/**
- * Helper to safely record provider call telemetry once per active attempt gate.
- * Observer errors in onCallRecord, context.onCallRecord, or telemetry.emitProviderCall
- * are isolated so they never alter provider execution outcomes or trigger duplicate recording.
- *
- * @returns {boolean} true if emitted, false if skipped/invalid/gated
- */
-export function recordProviderCall({
-  context,
-  onCallRecord,
-  record,
-  attemptGate,
-  allowCancelledFallback = false
-} = {}) {
-  const gate = attemptGate || getActiveAttemptTelemetryGate();
-  if (gate && (gate.recorded || gate.finalized || (gate.cancelled && !allowCancelledFallback))) {
-    return false;
-  }
-  if (!record || typeof record !== 'object') {
-    return false;
-  }
-  let enrichedRecord;
-  try {
-    enrichedRecord = buildProviderCallRecord({ context, record });
-  } catch {
-    return false;
-  }
-  if (gate) {
-    gate.recorded = true;
-  }
-  try {
-    if (typeof onCallRecord === 'function') {
-      onCallRecord(enrichedRecord);
-    }
-  } catch {
-    // Isolate direct observer callback failure
-  }
-  try {
-    if (typeof context?.onCallRecord === 'function' && context.onCallRecord !== onCallRecord) {
-      context.onCallRecord(enrichedRecord);
-    }
-  } catch {
-    // Isolate context observer callback failure
-  }
-  try {
-    if (context?.telemetry && typeof context.telemetry.emitProviderCall === 'function') {
-      context.telemetry.emitProviderCall(enrichedRecord);
-    }
-  } catch {
-    // Isolate telemetry emitter failure
-  }
-  return true;
 }
 
 function createForbiddenStateAccessError(details, trace, exitCode = 0) {
@@ -5674,11 +4900,12 @@ export async function listAntigravityModels(options = {}) {
   const exec = options.exec || options.runner || execCli;
   const runner = typeof options.runner === 'function' ? options.runner : null;
   const timeoutMs = options.timeoutMs ?? 15000;
+  const sanitizedEnv = buildSanitizedCliEnv(undefined, options.env);
   let res;
   try {
     res = runner
-      ? await runner({ command: 'agy', args: ['models'], timeoutMs })
-      : await exec('agy', ['models'], { timeoutMs, signal: options.signal });
+      ? await runner({ command: 'agy', args: ['models'], timeoutMs, ...(sanitizedEnv ? { env: sanitizedEnv } : {}) })
+      : await exec('agy', ['models'], { timeoutMs, signal: options.signal, ...(sanitizedEnv ? { env: sanitizedEnv } : {}) });
   } catch (err) {
     return {
       ok: false,

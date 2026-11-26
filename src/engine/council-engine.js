@@ -40,7 +40,7 @@ import {
   downshiftModel,
   extractCanonicalBaseModel,
   parseModelAndEffort
-} from '../harness/cli-runner.js';
+} from '../harness/model-utils.js';
 import {
   planParticipantRecovery,
   boundSingleLineFaultMessage,

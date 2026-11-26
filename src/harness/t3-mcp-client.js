@@ -257,8 +257,11 @@ export class T3McpClient {
   constructor(options = {}) {
     this.url = String(options.url || process.env.T3_MCP_URL || DEFAULT_T3_MCP_URL).trim();
     this._explicitTokenProvided = options.token !== undefined;
+    this._useEnvToken = options.useEnvToken !== undefined ? Boolean(options.useEnvToken) : true;
     this._token =
-      options.token !== undefined ? String(options.token || '').trim() : String(process.env.T3_MCP_TOKEN || '').trim();
+      options.token !== undefined
+        ? String(options.token || '').trim()
+        : (this._useEnvToken ? String(process.env.T3_MCP_TOKEN || '').trim() : '');
     this._tokenStorePath = options.tokenStorePath;
     this._useTokenStore = options.useTokenStore !== undefined ? Boolean(options.useTokenStore) : true;
     this._headersProvider = options.headers || null;
@@ -277,7 +280,7 @@ export class T3McpClient {
     this._nextId = 1;
   }
 
-  async _resolveStoredToken({ forceRefresh = false } = {}) {
+  async _resolveStoredToken({ forceRefresh = false, expectedStaleToken = null, skewMs = 60_000 } = {}) {
     if (this._explicitTokenProvided || this._token || !this._useTokenStore) {
       return '';
     }
@@ -285,7 +288,15 @@ export class T3McpClient {
     if (!entry?.accessToken) {
       return '';
     }
-    const expired = isT3CredentialExpired(entry);
+    if (
+      forceRefresh &&
+      expectedStaleToken &&
+      entry.accessToken !== expectedStaleToken &&
+      !isT3CredentialExpired(entry, 0)
+    ) {
+      return entry.accessToken;
+    }
+    const expired = isT3CredentialExpired(entry, skewMs);
     if ((forceRefresh || expired) && entry.refreshToken) {
       if (!this._refreshPromise) {
         this._refreshPromise = refreshStoredT3Credential(this.url, {
@@ -323,7 +334,7 @@ export class T3McpClient {
     return secrets;
   }
 
-  async _resolveAuthHeaders({ forceRefresh = false } = {}) {
+  async _resolveAuthHeaders({ forceRefresh = false, skewMs = 60_000 } = {}) {
     const custom =
       typeof this._headersProvider === 'function'
         ? await this._headersProvider()
@@ -334,6 +345,7 @@ export class T3McpClient {
     let hasAuth = false;
     let hasAuthorizationHeader = false;
     let usedStoredToken = false;
+    let storedTokenUsed = '';
     for (const [k, v] of Object.entries(custom || {})) {
       if (k.trim().toLowerCase() === 'authorization') {
         hasAuthorizationHeader = true;
@@ -351,15 +363,16 @@ export class T3McpClient {
         headers.Authorization = `Bearer ${this._token}`;
         hasAuth = true;
       } else {
-        const storedToken = await this._resolveStoredToken({ forceRefresh });
+        const storedToken = await this._resolveStoredToken({ forceRefresh, skewMs });
         if (storedToken) {
           headers.Authorization = `Bearer ${storedToken}`;
           hasAuth = true;
           usedStoredToken = true;
+          storedTokenUsed = storedToken;
         }
       }
     }
-    return { headers, hasAuth, usedStoredToken };
+    return { headers, hasAuth, usedStoredToken, storedTokenUsed };
   }
 
   _assertSafeUrl(hasAuth, authHeaders = {}) {
@@ -468,7 +481,9 @@ export class T3McpClient {
   }
 
   async _postJsonRpc(payload, { signal, includeSession = true, isNotification = false, retriedAuth = false } = {}) {
-    const { headers: authHeaders, hasAuth, usedStoredToken } = await this._resolveAuthHeaders();
+    const { headers: authHeaders, hasAuth, usedStoredToken, storedTokenUsed } = await this._resolveAuthHeaders({
+      skewMs: retriedAuth ? 0 : 60_000
+    });
     this._assertSafeUrl(hasAuth, authHeaders);
     const secrets = this._collectSecrets(authHeaders);
 
@@ -504,15 +519,29 @@ export class T3McpClient {
     const returnedSessionId = res.headers?.get?.('mcp-session-id');
     if (res.status === 401 || res.status === 403) {
       if (res.status === 401 && usedStoredToken && !retriedAuth) {
-        await res.body?.cancel?.().catch(() => {});
-        const refreshed = await this._resolveStoredToken({ forceRefresh: true });
-        if (refreshed) {
-          return await this._postJsonRpc(payload, {
-            signal,
-            includeSession,
-            isNotification,
-            retriedAuth: true
+        const currentCred = loadStoredT3Credential(this.url, { storePath: this._tokenStorePath });
+        const canRetryAuth = Boolean(
+          currentCred &&
+            (currentCred.refreshToken ||
+              (currentCred.accessToken &&
+                currentCred.accessToken !== storedTokenUsed &&
+                !isT3CredentialExpired(currentCred, 0)))
+        );
+        if (canRetryAuth) {
+          await res.body?.cancel?.().catch(() => {});
+          const refreshed = await this._resolveStoredToken({
+            forceRefresh: true,
+            expectedStaleToken: storedTokenUsed,
+            skewMs: 0
           });
+          if (refreshed) {
+            return await this._postJsonRpc(payload, {
+              signal,
+              includeSession,
+              isNotification,
+              retriedAuth: true
+            });
+          }
         }
       }
       const errText = await readBoundedText(res, Math.min(this._maxResponseBytes, 16_384)).catch(() => '');

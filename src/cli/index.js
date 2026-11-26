@@ -407,7 +407,7 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       logErr(`Unknown login provider "${positionals[0]}". Supported: t3`);
       return await safeExit(1);
     }
-    const mcpUrl = values.url || io.t3Url;
+    const mcpUrl = values.url || io.t3Url || process.env.T3_MCP_URL;
     const storePath = io.tokenStorePath;
     if (values.status) {
       try {
@@ -436,11 +436,15 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         storePath,
         noBrowser: Boolean(values['no-browser']),
         onAuthUrl: (authUrl) => {
-          if (!values.json) {
+          if (!values.json || values['no-browser']) {
             logErr(`Authorize The Council with T3 Code in your browser:\n  ${authUrl}`);
           }
         }
       });
+
+      if (typeof process.env.T3_MCP_TOKEN === 'string' && process.env.T3_MCP_TOKEN.trim()) {
+        logErr('Note: T3_MCP_TOKEN is set in your environment and overrides the saved OAuth credential until unset.');
+      }
 
       let health = null;
       const skipHealth = Boolean(io.skipHealthCheck || (io.loginT3OAuth && !io.verifyT3Auth));
@@ -448,7 +452,11 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         if (typeof io.verifyT3Auth === 'function') {
           health = await io.verifyT3Auth(result.url);
         } else {
-          const client = new T3McpClient({ url: result.url, tokenStorePath: storePath });
+          const client = new T3McpClient({
+            url: result.url,
+            tokenStorePath: storePath,
+            useEnvToken: false
+          });
           try {
             health = await client.healthCheck();
           } finally {
@@ -484,7 +492,10 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
     }
     try {
       const logoutFn = io.logoutT3OAuth || logoutT3OAuth;
-      const result = await logoutFn({ url: values.url || io.t3Url, storePath: io.tokenStorePath });
+      const result = await logoutFn({
+        url: values.url || io.t3Url || process.env.T3_MCP_URL,
+        storePath: io.tokenStorePath
+      });
       if (values.json) {
         log(JSON.stringify(result, null, 2));
       } else {

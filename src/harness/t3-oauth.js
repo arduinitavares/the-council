@@ -21,8 +21,8 @@ function isLoopbackHostname(hostname) {
   return norm === '127.0.0.1' || norm === 'localhost' || norm === '::1' || norm === '[::1]';
 }
 
-export function normalizeT3EndpointUrl(rawUrl) {
-  const input = String(rawUrl || DEFAULT_T3_MCP_URL).trim();
+export function normalizeT3EndpointUrl(rawUrl, env = process.env) {
+  const input = String(rawUrl || env?.T3_MCP_URL || DEFAULT_T3_MCP_URL).trim();
   let parsed;
   try {
     parsed = new URL(input);
@@ -98,7 +98,7 @@ function writeTokenStoreFile(storePath, store) {
   }
 }
 
-export function loadStoredT3Credential(mcpUrl = DEFAULT_T3_MCP_URL, { storePath } = {}) {
+export function loadStoredT3Credential(mcpUrl, { storePath } = {}) {
   const resolvedPath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
   let key;
   try {
@@ -123,7 +123,7 @@ export function saveStoredT3Credential(mcpUrl, record, { storePath } = {}) {
   return resolvedPath;
 }
 
-export function deleteStoredT3Credential(mcpUrl = DEFAULT_T3_MCP_URL, { storePath } = {}) {
+export function deleteStoredT3Credential(mcpUrl, { storePath } = {}) {
   const resolvedPath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath();
   const key = normalizeT3EndpointUrl(mcpUrl);
   if (!fs.existsSync(resolvedPath)) {
@@ -179,7 +179,23 @@ async function readBoundedText(response, maxBytes = MAX_OAUTH_RESPONSE_BYTES) {
   }
 }
 
-async function fetchJsonSafe(url, init, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS, allow404 = false } = {}) {
+function redactOAuthErrorText(text, secrets = []) {
+  let out = String(text || '');
+  const ordered = [...secrets]
+    .filter((s) => typeof s === 'string' && s.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const s of ordered) {
+    out = out.split(s).join('[REDACTED]');
+  }
+  out = out.replace(/((?:code_verifier|client_secret|refresh_token|access_token)\s*[=:]\s*)[^\s&"',;]+/gi, '$1[REDACTED]');
+  return out;
+}
+
+async function fetchJsonSafe(
+  url,
+  init,
+  { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS, allow404 = false, secrets = [] } = {}
+) {
   assertSafeOAuthUrl(url, 'OAuth HTTP request');
   const res = await fetchImpl(url, {
     ...init,
@@ -200,7 +216,10 @@ async function fetchJsonSafe(url, init, { fetchImpl = globalThis.fetch, timeoutM
     }
   }
   if (!res.ok) {
-    const detail = parsed?.error_description || parsed?.message || parsed?.error || res.statusText || `HTTP ${res.status}`;
+    const detail = redactOAuthErrorText(
+      parsed?.error_description || parsed?.message || parsed?.error || res.statusText || `HTTP ${res.status}`,
+      secrets
+    );
     throw new Error(`OAuth request to "${url}" failed (${res.status}): ${detail}`);
   }
   if (!parsed || typeof parsed !== 'object') {
@@ -209,7 +228,7 @@ async function fetchJsonSafe(url, init, { fetchImpl = globalThis.fetch, timeoutM
   return parsed;
 }
 
-export async function discoverT3OAuthMetadata(mcpUrl = DEFAULT_T3_MCP_URL, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS } = {}) {
+export async function discoverT3OAuthMetadata(mcpUrl, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS } = {}) {
   const normalizedUrl = normalizeT3EndpointUrl(mcpUrl);
   const parsedMcp = assertSafeOAuthUrl(normalizedUrl, 'T3 MCP');
   const pathSuffix = parsedMcp.pathname === '/' ? '' : parsedMcp.pathname;
@@ -395,10 +414,11 @@ function computeExpiresAt(expiresInSeconds) {
 }
 
 export async function refreshStoredT3Credential(
-  mcpUrl = DEFAULT_T3_MCP_URL,
+  mcpUrl,
   { storePath, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS } = {}
 ) {
-  const entry = loadStoredT3Credential(mcpUrl, { storePath });
+  const normalizedUrl = normalizeT3EndpointUrl(mcpUrl);
+  const entry = loadStoredT3Credential(normalizedUrl, { storePath });
   if (!entry || !entry.refreshToken || !entry.tokenEndpoint || !entry.clientId) {
     return null;
   }
@@ -442,6 +462,15 @@ export async function refreshStoredT3Credential(
     return null;
   }
 
+  // Guard against logout or concurrent fresh login completing while refresh was in flight
+  const current = loadStoredT3Credential(normalizedUrl, { storePath });
+  if (!current || !current.refreshToken) {
+    return null;
+  }
+  if (current.clientId !== entry.clientId || current.obtainedAt !== entry.obtainedAt) {
+    return current;
+  }
+
   const updated = {
     ...entry,
     accessToken,
@@ -452,7 +481,7 @@ export async function refreshStoredT3Credential(
     expiresAt: computeExpiresAt(data.expires_in) ?? entry.expiresAt ?? null,
     obtainedAt: new Date().toISOString()
   };
-  saveStoredT3Credential(mcpUrl, updated, { storePath });
+  saveStoredT3Credential(normalizedUrl, updated, { storePath });
   return updated;
 }
 
@@ -462,7 +491,7 @@ export async function loginT3OAuth(options = {}) {
     ? options.timeoutMs
     : DEFAULT_LOGIN_TIMEOUT_MS;
   const httpTimeoutMs = Math.min(timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
-  const metadata = await discoverT3OAuthMetadata(options.url || DEFAULT_T3_MCP_URL, {
+  const metadata = await discoverT3OAuthMetadata(options.url, {
     fetchImpl,
     timeoutMs: httpTimeoutMs
   });
@@ -518,15 +547,18 @@ export async function loginT3OAuth(options = {}) {
         return;
       }
 
-      if (metadata.authorizationResponseIssParameterSupported && issParam !== null && issParam !== metadata.issuer) {
+      if (metadata.authorizationResponseIssParameterSupported && issParam !== metadata.issuer) {
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<html><body><h1>Authorization failed</h1><p>Issuer mismatch.</p></body></html>');
-        finishReject(new Error(`T3 OAuth callback issuer mismatch (expected "${metadata.issuer}")`));
+        res.end('<html><body><h1>Authorization failed</h1><p>Missing or mismatched issuer.</p></body></html>');
+        finishReject(new Error(`T3 OAuth callback issuer validation failed (expected "${metadata.issuer}")`));
         return;
       }
 
       if (errorCode) {
-        const detail = errorDesc ? `${errorCode}: ${errorDesc}` : errorCode;
+        const detail = redactOAuthErrorText(
+          errorDesc ? `${errorCode}: ${errorDesc}` : errorCode,
+          [state, code]
+        );
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`<html><body><h1>Authorization denied</h1><p>${escapeHtml(detail)}</p></body></html>`);
         finishReject(new Error(`T3 OAuth authorization error (${detail})`));
@@ -609,7 +641,11 @@ export async function loginT3OAuth(options = {}) {
         },
         body: form.toString()
       },
-      { fetchImpl, timeoutMs: httpTimeoutMs }
+      {
+        fetchImpl,
+        timeoutMs: httpTimeoutMs,
+        secrets: [codeVerifier, code, state, registered.clientSecret]
+      }
     );
 
     const accessToken = typeof tokenRes.access_token === 'string' ? tokenRes.access_token.trim() : '';
@@ -659,7 +695,7 @@ export async function loginT3OAuth(options = {}) {
 export async function logoutT3OAuth(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 10_000;
-  const normalizedUrl = normalizeT3EndpointUrl(options.url || DEFAULT_T3_MCP_URL);
+  const normalizedUrl = normalizeT3EndpointUrl(options.url);
   const storePath = options.storePath ? path.resolve(options.storePath) : getDefaultT3TokenStorePath();
   const entry = loadStoredT3Credential(normalizedUrl, { storePath });
   let revoked = false;
@@ -692,8 +728,8 @@ export async function logoutT3OAuth(options = {}) {
   };
 }
 
-export function getT3AuthStatus({ url = DEFAULT_T3_MCP_URL, storePath, env = process.env } = {}) {
-  const normalizedUrl = normalizeT3EndpointUrl(url);
+export function getT3AuthStatus({ url, storePath, env = process.env } = {}) {
+  const normalizedUrl = normalizeT3EndpointUrl(url, env);
   const resolvedStorePath = storePath ? path.resolve(storePath) : getDefaultT3TokenStorePath(env);
   const envToken = typeof env?.T3_MCP_TOKEN === 'string' ? env.T3_MCP_TOKEN.trim() : '';
   if (envToken) {

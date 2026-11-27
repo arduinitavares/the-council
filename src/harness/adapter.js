@@ -68,11 +68,11 @@ export function isReservedClassificationError(error) {
 }
 
 export const EFFORT_TIMEOUT_MAP = Object.freeze({
-  max: 240000,
-  xhigh: 240000,
-  high: 120000,
-  medium: 60000,
-  low: 60000
+  max: 300000,
+  xhigh: 300000,
+  high: 240000,
+  medium: 120000,
+  low: 120000
 });
 
 export const DEFAULT_TIMEOUT_MS = 60000;

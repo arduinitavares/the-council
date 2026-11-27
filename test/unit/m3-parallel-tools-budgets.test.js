@@ -584,27 +584,27 @@ describe('Milestone 3: Parallel Seat Turns & Read-Only Tool Budgets (#24, #25)',
   // =========================================================================
   describe('Pillar 4: Dynamic Effort-Scaled Timeouts & Resilient Parsing', () => {
     it('EFFORT_TIMEOUT_MAP defines correct timeout tiers', () => {
-      assert.equal(EFFORT_TIMEOUT_MAP.max, 240000);
-      assert.equal(EFFORT_TIMEOUT_MAP.xhigh, 240000);
-      assert.equal(EFFORT_TIMEOUT_MAP.high, 120000);
-      assert.equal(EFFORT_TIMEOUT_MAP.medium, 60000);
-      assert.equal(EFFORT_TIMEOUT_MAP.low, 60000);
+      assert.equal(EFFORT_TIMEOUT_MAP.max, 300000);
+      assert.equal(EFFORT_TIMEOUT_MAP.xhigh, 300000);
+      assert.equal(EFFORT_TIMEOUT_MAP.high, 240000);
+      assert.equal(EFFORT_TIMEOUT_MAP.medium, 120000);
+      assert.equal(EFFORT_TIMEOUT_MAP.low, 120000);
     });
 
     it('HarnessAdapter dynamically resolves timeouts by effort tier', () => {
       const adapter = new HarnessAdapter();
 
-      // Max / xhigh tiers (240s)
-      assert.equal(adapter.resolveTimeoutMs('gpt-6-astra (max)'), 240000);
-      assert.equal(adapter.resolveTimeoutMs('gpt-6.1-sol (xhigh)'), 240000);
+      // Max / xhigh tiers (300s)
+      assert.equal(adapter.resolveTimeoutMs('gpt-6-astra (max)'), 300000);
+      assert.equal(adapter.resolveTimeoutMs('gpt-6.1-sol (xhigh)'), 300000);
 
-      // High tier (120s)
-      assert.equal(adapter.resolveTimeoutMs('gemini-4-argon-high'), 120000);
-      assert.equal(adapter.resolveTimeoutMs('claude-opus-5-5-high'), 120000);
+      // High tier (240s)
+      assert.equal(adapter.resolveTimeoutMs('gemini-4-argon-high'), 240000);
+      assert.equal(adapter.resolveTimeoutMs('claude-opus-5-5-high'), 240000);
 
-      // Medium / low tiers (60s)
-      assert.equal(adapter.resolveTimeoutMs('claude-sonnet-4-5-medium'), 60000);
-      assert.equal(adapter.resolveTimeoutMs('model-low'), 60000);
+      // Medium / low tiers (120s)
+      assert.equal(adapter.resolveTimeoutMs('claude-sonnet-4-5-medium'), 120000);
+      assert.equal(adapter.resolveTimeoutMs('model-low'), 120000);
 
       // Default fallback (60s)
       assert.equal(adapter.resolveTimeoutMs('custom-model-no-tier'), DEFAULT_TIMEOUT_MS);

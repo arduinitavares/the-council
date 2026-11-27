@@ -59,3 +59,7 @@ _Avoid_: Veto, dissent comment, negative vote, blocker
 **Verdict**:
 The final outcome of a Council: either Unanimous Consensus (every active Seat accepts the Candidate, at least the minimum quorum of active Seats remains, and no Excused Seat holds an unwithdrawn Objection) or a Dissent Report (the final Candidate alongside every remaining active or Excused-Seat Objection and its Proof).
 _Avoid_: Result, output, decision, conclusion
+
+**Continuation**:
+An explicit, operator-triggered follow-up Council linked to an immutable Dissent Report run that gives each Excused Seat holding a preserved Objection a single ratification vote on the frozen Candidate.
+_Avoid_: Resume, retry, rerun, override

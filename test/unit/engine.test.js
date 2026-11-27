@@ -1344,24 +1344,24 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
           topic: 'No timeout inflation check',
           maxRounds: 1,
           minQuorum: 2,
-          totalSeatBudgetMs: 180000, // Explicit < 480000 without explicit timeoutMs
+          totalSeatBudgetMs: 260000, // Explicit < 480000 without explicit timeoutMs
           judge: {
             id: 'judge-high',
             harness: 'mock',
-            model: 'gemini-4-argon-high', // model effort timeout is 120000ms (< 180000ms budget)
+            model: 'gemini-4-argon-high', // model effort timeout is 240000ms (< 260000ms budget)
             soul: 'Judge'
           },
           seats: [
             {
               id: 's-high-effort',
               harness: 'mock',
-              model: 'gemini-4-argon-high', // model effort timeout is 120000ms (< 180000ms budget)
+              model: 'gemini-4-argon-high', // model effort timeout is 240000ms (< 260000ms budget)
               soul: 'S1'
             },
             {
               id: 's-capped-by-budget',
               harness: 'mock',
-              model: 'gpt-6-astra (max)', // model effort timeout is 240000ms (> 180000ms budget)
+              model: 'gpt-6-astra (max)', // model effort timeout is 300000ms (> 260000ms budget)
               soul: 'S2'
             }
           ]
@@ -1373,15 +1373,15 @@ describe('Unit: Council Engine Coordinator & Config (src/engine/)', () => {
       const result = await engine.run();
       assert.equal(result.ok, true);
 
-      // s-high-effort has model timeout 120000ms (< 180000ms budget), so turnTimeoutMs must stay undefined (not inflated to 180000ms)
+      // s-high-effort has model timeout 240000ms (< 260000ms budget), so turnTimeoutMs must stay undefined (not inflated to 260000ms)
       const s1Delib = deliberationTimeouts.find((d) => d.seatId === 's-high-effort');
       assert.equal(s1Delib.timeoutMs, undefined);
 
-      // s-capped-by-budget has model timeout 240000ms (> 180000ms budget), so turnTimeoutMs is clamped to 180000ms
+      // s-capped-by-budget has model timeout 300000ms (> 260000ms budget), so turnTimeoutMs is clamped to 260000ms
       const s2Delib = deliberationTimeouts.find((d) => d.seatId === 's-capped-by-budget');
-      assert.equal(s2Delib.timeoutMs, 180000);
+      assert.equal(s2Delib.timeoutMs, 260000);
 
-      // judge-high has model timeout 120000ms (< 180000ms budget), so initialJudgeTimeoutMs must stay undefined
+      // judge-high has model timeout 240000ms (< 260000ms budget), so initialJudgeTimeoutMs must stay undefined
       assert.equal(judgeTimeouts[0], undefined);
     });
   });

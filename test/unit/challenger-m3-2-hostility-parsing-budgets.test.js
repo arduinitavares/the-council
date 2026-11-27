@@ -603,41 +603,41 @@ Candidate completely satisfies my domain constraints.
     const defaultAdapter = new TestableHarnessAdapter();
 
     it('verifies EFFORT_TIMEOUT_MAP mapping contracts', () => {
-      assert.equal(EFFORT_TIMEOUT_MAP.max, 240000);
-      assert.equal(EFFORT_TIMEOUT_MAP.xhigh, 240000);
-      assert.equal(EFFORT_TIMEOUT_MAP.high, 120000);
-      assert.equal(EFFORT_TIMEOUT_MAP.medium, 60000);
-      assert.equal(EFFORT_TIMEOUT_MAP.low, 60000);
+      assert.equal(EFFORT_TIMEOUT_MAP.max, 300000);
+      assert.equal(EFFORT_TIMEOUT_MAP.xhigh, 300000);
+      assert.equal(EFFORT_TIMEOUT_MAP.high, 240000);
+      assert.equal(EFFORT_TIMEOUT_MAP.medium, 120000);
+      assert.equal(EFFORT_TIMEOUT_MAP.low, 120000);
       assert.equal(DEFAULT_TIMEOUT_MS, 60000);
       assert.ok(Object.isFrozen(EFFORT_TIMEOUT_MAP));
     });
 
     it('dynamically scales timeouts based on parenthesized model effort', () => {
-      // max / xhigh -> 240,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)'), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (xhigh)'), 240000);
-      // high -> 120,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (high)'), 120000);
-      // medium / low -> 60,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (medium)'), 60000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (low)'), 60000);
+      // max / xhigh -> 300,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)'), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (xhigh)'), 300000);
+      // high -> 240,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (high)'), 240000);
+      // medium / low -> 120,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (medium)'), 120000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol (low)'), 120000);
     });
 
     it('dynamically scales timeouts based on hyphenated model effort suffix', () => {
-      // max / xhigh -> 240,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('gemini-4-argon-max'), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gemini-4-argon-xhigh'), 240000);
-      // high -> 120,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('claude-opus-5-5-high'), 120000);
-      // medium / low -> 60,000ms
-      assert.equal(defaultAdapter.resolveTimeoutMs('claude-sonnet-4-medium'), 60000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('claude-haiku-3-low'), 60000);
+      // max / xhigh -> 300,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('gemini-4-argon-max'), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gemini-4-argon-xhigh'), 300000);
+      // high -> 240,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('claude-opus-5-5-high'), 240000);
+      // medium / low -> 120,000ms
+      assert.equal(defaultAdapter.resolveTimeoutMs('claude-sonnet-4-medium'), 120000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('claude-haiku-3-low'), 120000);
     });
 
     it('handles uppercase and irregular whitespace in model strings', () => {
-      assert.equal(defaultAdapter.resolveTimeoutMs('  GPT-6-ASTRA (MAX)  '), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('CLAUDE-OPUS-5-5-HIGH'), 120000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol   ( XHIGH ) '), 240000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('  GPT-6-ASTRA (MAX)  '), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('CLAUDE-OPUS-5-5-HIGH'), 240000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-5-sol   ( XHIGH ) '), 300000);
     });
 
     it('falls back to default 60000ms when effort is unrecognized or absent', () => {
@@ -652,9 +652,9 @@ Candidate completely satisfies my domain constraints.
       const customAdapter = new TestableHarnessAdapter({ timeoutMs: 180000 });
       assert.equal(customAdapter.defaultTimeoutMs, 180000);
 
-      // Model effort would normally be 240000, but constructor custom default is 180000
+      // Model effort would normally be 300000, but constructor custom default is 180000
       assert.equal(customAdapter.resolveTimeoutMs('gpt-6-astra (max)'), 180000);
-      // Model effort would normally be 60000, but constructor custom default is 180000
+      // Model effort would normally be 120000, but constructor custom default is 180000
       assert.equal(customAdapter.resolveTimeoutMs('gpt-5-sol (low)'), 180000);
       // Plain model
       assert.equal(customAdapter.resolveTimeoutMs('plain-model'), 180000);
@@ -674,12 +674,12 @@ Candidate completely satisfies my domain constraints.
 
     it('ignores invalid explicitTimeoutMs and falls through to next priority', () => {
       // Non-positive, NaN, Infinity, non-numeric should NOT be used as explicit override
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', 0), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', -500), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', Number.NaN), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', Number.POSITIVE_INFINITY), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', '120000'), 240000);
-      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', null), 240000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', 0), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', -500), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', Number.NaN), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', Number.POSITIVE_INFINITY), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', '120000'), 300000);
+      assert.equal(defaultAdapter.resolveTimeoutMs('gpt-6-astra (max)', null), 300000);
 
       const customAdapter = new TestableHarnessAdapter({ timeoutMs: 180000 });
       assert.equal(customAdapter.resolveTimeoutMs('gpt-6-astra (max)', 0), 180000);

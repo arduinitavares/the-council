@@ -178,7 +178,7 @@ describe('Issue #85: Round 2+ Targeted Rebuttal Downshift for Prior-Round Accept
         tools: 'read-only',
         preserveRebuttalEffort: true
       });
-      assert.equal(preservedHighModel.rebuttalTimeoutMs, 120000);
+      assert.equal(preservedHighModel.rebuttalTimeoutMs, 240000);
 
       // Bare model without effort suffix uses HarnessAdapter default timeout (60000ms)
       const preservedBareModel = resolveRebuttalSeatConfig({

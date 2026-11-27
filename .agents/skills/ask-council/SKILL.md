@@ -36,7 +36,7 @@ The Council provides 4 built-in presets tailored to common deliberation domains:
 | `argon-only` | 3 seats: `argon-systems`, `argon-pragmatic`, `argon-skeptic` (all `antigravity` / `gemini-4-argon-high` with distinct Souls) | `judge-argon` (`antigravity` / `gemini-4-argon-high`) | Fast, token-efficient consensus mode when conserving quota or running routine checks. |
 
 ### Pre-Saved Custom Configurations (`configs/`)
-- [`configs/t3-best-of-families.json`](../../configs/t3-best-of-families.json): **Recommended T3 MCP Multi-Family Roster (`--backend t3`)** — Judge: `judge-astra` (`codex` / `gpt-6.2-astra (xhigh)`); Voters: `sol-voter` (`codex` / `gpt-6.2-sol (xhigh)`), `neon-voter` (`antigravity` / `gemini-4-neon (xhigh)`), `carbon-voter` (`antigravity` / `gemini-4-carbon (high)`), `grok-voter` (`cursor` / `grok-4.7-high`, 180s timeout). Works from any working directory via `-p t3-best-of-families`:
+- [`configs/t3-best-of-families.json`](../../configs/t3-best-of-families.json): **Recommended T3 MCP Multi-Family Roster (`--backend t3`)** — Judge: `judge-astra` (`codex` / `gpt-6.2-astra (xhigh)`); Voters: `sol-voter` (`codex` / `gpt-6.2-sol (xhigh)`), `neon-voter` (`antigravity` / `gemini-4-neon (xhigh)`), `carbon-voter` (`antigravity` / `gemini-4-carbon (high)`), `grok-voter` (`cursor` / `grok-4.7-high`). Works from any working directory via `-p t3-best-of-families`:
   ```bash
   /Users/aaat/projects/the-council/bin/council run --live --backend t3 -p t3-best-of-families -t "<question>" -v
   ```
@@ -313,21 +313,21 @@ Per-turn time budgets can be configured at the top level or overridden on indivi
 
 | Effort Tier | Models / Suffixes | Default Timeout |
 |---|---|---|
-| `max` / `xhigh` | `gpt-6-astra (max)`, `gpt-6.1-sol (xhigh)` | 240,000 ms (4.0 min) |
-| `high` | `gemini-4-argon-high`, `gemini-4-carbon-high`, `claude-opus-5-5-high`, `*-high` | 120,000 ms (2.0 min) |
-| `medium` / `low` | `claude-sonnet-4-5-medium`, `*-medium`, `*-low` | 60,000 ms (1.0 min) |
+| `max` / `xhigh` | `gpt-6-astra (max)`, `gpt-6.1-sol (xhigh)` | 300,000 ms (5.0 min) |
+| `high` | `gemini-4-argon-high`, `gemini-4-carbon-high`, `claude-opus-5-5-high`, `*-high` | 240,000 ms (4.0 min) |
+| `medium` / `low` | `claude-sonnet-4-5-medium`, `*-medium`, `*-low` | 120,000 ms (2.0 min) |
 | Fallback | Models without explicit effort tier | 60,000 ms (1.0 min) |
 
 *Resilient Output Parsing*: Model outputs preceded by tool execution logs or multiple markdown code blocks are parsed using reverse evaluation and balanced-brace JSON tracking, ensuring robust extraction even during extensive investigation chatter.
 
 ### Long-Run Timeout & Orchestrator Ceiling Guidance
-When orchestrators run `bin/council run --live` inside an agentic harness with a hard wall-clock timeout (e.g. 600s / 10 min):
+Omit `--timeout` on complex multi-family runs so effort-scaled defaults (`240s` for `high`, `300s` for `xhigh`) apply cleanly—Gemini models typically take ~3–4.5× longer than Codex Sol. Only pass an explicit ceiling when running inside an agentic harness with a hard wall-clock budget:
 1. **Shared Total Seat Budget (`--seat-budget <ms>`)**: Tracks cumulative runtime per seat per phase. If a seat consumes its initial turn timeout, any retry is bounded by `remainingBudget = totalSeatBudgetMs - elapsedMs`.
 2. **Bounded Retry Timeout**: Retries receive `Math.min(turnTimeoutMs, 90000, remainingBudget)` and exploratory tools are disabled (`tools: 'none'`).
-3. **Tuning for 600s Ceilings**:
+3. **Explicit Ceiling Example (avoid clamping `--timeout` below effort defaults on complex runs)**:
    ```bash
-   /Users/aaat/projects/the-council/bin/council run --live -p best-of-families \
-     --timeout 120000 --seat-budget 180000 -t "<question>" -v
+   /Users/aaat/projects/the-council/bin/council run --live --backend t3 -p t3-best-of-families \
+     --timeout 300000 --seat-budget 420000 -t "<question>" -v
    ```
 
 ### Recommended Configuration for Deep Research Questions
@@ -336,14 +336,14 @@ For empirical or codebase-heavy questions, configure `tools: 'read-only'` with g
 {
   "topic": "Audit src/engine/council-engine.js for race conditions under concurrent seat execution",
   "maxConcurrentSeats": 4,
-  "timeoutMs": 120000,
+  "timeoutMs": 240000,
   "judge": {
     "id": "judge-opus",
     "harness": "antigravity",
     "model": "claude-opus-5-5-high",
     "soul": "Impartial Concurrency Auditor",
     "tools": "read-only",
-    "timeoutMs": 180000
+    "timeoutMs": 300000
   },
   "seats": [
     {

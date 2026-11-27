@@ -455,10 +455,10 @@ describe('Unit: Multi-Harness Adapters & Error Taxonomy (src/harness/)', () => {
           (err) => err instanceof HarnessExecutionError && /not permitted under Cursor route/.test(err.message)
         );
 
-        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-high'), 120000);
-        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon (high)'), 120000);
-        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-medium'), 60000);
-        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-low'), 60000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-high'), 240000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon (high)'), 240000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-medium'), 120000);
+        assert.equal(agy.resolveTimeoutMs('gemini-4-carbon-low'), 120000);
         assert.equal(agy.resolveTimeoutMs('gemini-4-carbon'), 60000);
 
         const { downshiftModel } = await import('../../src/harness/cli-runner.js');

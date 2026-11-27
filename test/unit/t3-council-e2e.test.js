@@ -506,7 +506,7 @@ describe('Task 4: T3 MCP coexistence wiring, CLI preflight, recovery catalog & C
     );
     const grokSeat = resolved.seats.find((s) => s.id === 'grok-voter');
     assert.equal(grokSeat?.model, 'grok-4.7-high');
-    assert.equal(grokSeat?.timeoutMs, 180000);
+    assert.equal(grokSeat?.timeoutMs, undefined);
     const cfgCheck = validateConfig(resolved);
     assert.equal(cfgCheck.valid, true, cfgCheck.errors.join('; '));
 
@@ -514,6 +514,8 @@ describe('Task 4: T3 MCP coexistence wiring, CLI preflight, recovery catalog & C
     for (const { role, item } of participants) {
       const adapter = new T3HarnessAdapter({ provider: item.harness });
       adapter.validateModel(item.model);
+      const expectedTimeout = item.id === 'carbon-voter' || item.id === 'grok-voter' ? 240000 : 300000;
+      assert.equal(adapter.resolveTimeoutMs(item.model), expectedTimeout);
       if (role === 'seat') {
         const votingCfg = resolveVotingSeatConfig(item, resolved, { harness: adapter });
         adapter.validateModel(votingCfg.model);

@@ -63,7 +63,6 @@
       "id": "grok-voter",
       "harness": "cursor",
       "model": "grok-4.7-high",
-      "timeoutMs": 180000,
       "soul": {
         "name": "First-Principles Skeptic & Empirical Challenger",
         "temperament": "skeptical",

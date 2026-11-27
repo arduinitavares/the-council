@@ -5,6 +5,13 @@
  */
 
 import { VALID_PROOF_KINDS } from '../types.js';
+export {
+  EXPECTED_DIGEST_HEX_REGEX,
+  BINDING_FIELDS,
+  isValidSha256Hex,
+  validateExpectedDigestsConfig,
+  validateJudgeDigestBinding
+} from './digest-binding.js';
 
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

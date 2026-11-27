@@ -861,6 +861,11 @@ export function formatJudgePrompt({
   judgeDirectives.push(answerFirstDirective);
   const synthesisConsistencyDirective = `${judgeDirectives.length + 1}. Summary, Clause & Caveat Consistency: Keep "summary" (Candidate Summary) and "clauses" (Candidate Clauses) mutually consistent with Topic and preserve all decisive conditions, scope bounds, quantities, and caveats from cited "admitted" and "partially_admitted" proofs (including "admittedStatement" and "judgeNote"). Where upstream verification is unavailable, explicitly label unavailable verification as a limitation or abstention rather than presenting it as a verified fact.`;
   judgeDirectives.push(synthesisConsistencyDirective);
+  if (state?.expectedDigests?.policy && state?.expectedDigests?.evidence) {
+    judgeDirectives.push(
+      `${judgeDirectives.length + 1}. Required Digest Binding: In "summary", include exactly one "policy_sha256: ${state.expectedDigests.policy}" and one "frozen_packet_sha256: ${state.expectedDigests.evidence}" (exact 64-character hex values). Do NOT repeat policy_sha256 or frozen_packet_sha256 in any substantive "clauses" entry; clauses must cite proof IDs only (unrelated evidence hashes are allowed).`
+    );
+  }
   judgeDirectives.push(`${judgeDirectives.length + 1}. ${ANTI_CHEATING_RULE}`);
 
   return `### THE COUNCIL — JUDGE AUDIT AND SYNTHESIS ROUND ${round}/${resolvedMaxRounds}

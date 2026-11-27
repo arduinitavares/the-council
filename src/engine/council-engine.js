@@ -23,6 +23,7 @@ import {
   normalizeTrustedInvocationCitations,
   validateCitationFields
 } from '../proofs/validator.js';
+import { validateJudgeDigestBinding } from '../proofs/digest-binding.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
 import {
@@ -921,10 +922,51 @@ export class CouncilEngine {
   // echo raw output, paths, stderr, or arbitrary error messages as instructions.
   _validationRetryFeedback(error) {
     if (this._classifyErrorClass(error) !== 'InvalidResponseError') return undefined;
+    const hasExpectedDigests = Boolean(this.config?.expectedDigests || this.state?.expectedDigests);
     const constraints = new Set();
     for (const value of (Array.isArray(error?.validationErrors) ? error.validationErrors : []).slice(0, 8)) {
       if (typeof value !== 'string') continue;
       const raw = value.slice(0, 2048);
+
+      if (hasExpectedDigests) {
+        const clauseRepMatch =
+          /^(judge\.clauses\[\d{1,6}\])(?:\.([A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,5}))?\S*\s+must not repeat binding field (policy_sha256|frozen_packet_sha256)\b/.exec(
+            raw
+          );
+        if (clauseRepMatch) {
+          const targetLabel = clauseRepMatch[2]
+            ? `${clauseRepMatch[1]}.${clauseRepMatch[2]}`
+            : clauseRepMatch[1];
+          const bindingField = clauseRepMatch[3];
+          constraints.add(
+            `${targetLabel}: remove ${bindingField} from substantive clauses; place policy_sha256 and frozen_packet_sha256 only once in judge.summary and cite proof IDs in clauses.`
+          );
+          continue;
+        }
+        const summaryBindingMatch =
+          /^judge\.summary (is missing required|contains duplicate|has swapped|has mismatched|has malformed) (policy_sha256|frozen_packet_sha256)\b/.exec(
+            raw
+          );
+        if (summaryBindingMatch) {
+          const verb = summaryBindingMatch[1];
+          const bindingField = summaryBindingMatch[2];
+          if (verb === 'is missing required') {
+            constraints.add(`judge.summary: include exactly one ${bindingField} with the expected 64-character hex digest.`);
+          } else if (verb === 'contains duplicate') {
+            constraints.add(`judge.summary: include ${bindingField} only once and remove duplicate ${bindingField} entries.`);
+          } else if (verb === 'has swapped') {
+            constraints.add(
+              `judge.summary: ${bindingField} was swapped with the other digest; set ${bindingField} to its expected 64-character hex digest.`
+            );
+          } else if (verb === 'has mismatched') {
+            constraints.add(`judge.summary: update ${bindingField} to match the expected 64-character hex digest.`);
+          } else if (verb === 'has malformed') {
+            constraints.add(`judge.summary: fix ${bindingField} to be a valid 64-character hex digest matching the expected value.`);
+          }
+          continue;
+        }
+      }
+
       const field = /^(proof\.(?:scope|source|statement)|vote\.(?:reason|objectionReason|note)|judge\.(?:summary|clauses\[\d{1,6}\]\.(?:id|context|conclusion)|proofDecisions\[P\d{1,6}\]\.(?:note|statement|admittedStatement|reason|caveat)))\s/.exec(raw)?.[1];
       if (field && raw.includes('must not cite internal .council or telemetry artifacts')) {
         constraints.add(field + ': cite an allowed external or repository source, not internal run artifacts.');
@@ -936,6 +978,30 @@ export class CouncilEngine {
     }
     return 'The previous response failed validation. Return the required JSON contract. ' +
       (constraints.size ? [...constraints].join(' ') : 'Check required fields, allowed values, and cited proof IDs.');
+  }
+
+  _serializeRejectedJudgeResponse(value, maxChars = 16384) {
+    if (value === undefined || value === null) return undefined;
+    let serialized;
+    if (typeof value === 'string') {
+      serialized = value;
+    } else {
+      try {
+        serialized = JSON.stringify(value);
+      } catch {
+        serialized = String(value);
+      }
+    }
+    if (!serialized) return undefined;
+    if (serialized.length <= maxChars) return serialized;
+    const suffix = '...[truncated]';
+    const budget = Math.max(0, maxChars - suffix.length);
+    let cut = serialized.slice(0, budget);
+    const lastCode = cut.charCodeAt(cut.length - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      cut = cut.slice(0, -1);
+    }
+    return `${cut}${suffix}`;
   }
 
   _resolveConfigParticipant(role, participantId) {
@@ -1137,9 +1203,14 @@ export class CouncilEngine {
       }
     });
     const citationRes = validateCitationFields(fields, { forbiddenWorkspaceRoots });
+    const expectedDigests = this.config?.expectedDigests || this.state?.expectedDigests;
+    const bindingRes = expectedDigests
+      ? validateJudgeDigestBinding(normalized, expectedDigests)
+      : { valid: true, errors: [] };
+    const errors = [...bindingRes.errors, ...citationRes.errors];
     return {
-      valid: citationRes.valid,
-      errors: citationRes.errors,
+      valid: errors.length === 0,
+      errors,
       judgeResult: normalized
     };
   }
@@ -2291,6 +2362,7 @@ export class CouncilEngine {
           judgeContext,
           judgeLiveMeta
         );
+        const hasExpectedDigests = Boolean(this.config?.expectedDigests || this.state?.expectedDigests);
         const judgeValidation = this._normalizeAndValidateJudge(
           synthesisResult,
           judgeInvocationMeta,
@@ -2301,6 +2373,7 @@ export class CouncilEngine {
             harness: judge.harness,
             seatId: judge.id,
             model: currentJudgeConfig.model || judge.model,
+            ...(hasExpectedDigests ? { rawResponse: this._serializeRejectedJudgeResponse(synthesisResult) } : {}),
             validationErrors: judgeValidation.errors
           });
         }
@@ -2317,7 +2390,8 @@ export class CouncilEngine {
           throw new InvalidResponseError(this.state.lastTransition.message, {
             harness: judge.harness,
             seatId: judge.id,
-            model: currentJudgeConfig.model || judge.model
+            model: currentJudgeConfig.model || judge.model,
+            ...(hasExpectedDigests ? { rawResponse: this._serializeRejectedJudgeResponse(synthesisResult) } : {})
           });
         }
 
@@ -2363,11 +2437,31 @@ export class CouncilEngine {
           currentReasoningEffort: currentJudgeConfig.reasoningEffort
         });
 
+        const hasExpectedDigests = Boolean(this.config?.expectedDigests || this.state?.expectedDigests);
         const errorClass = plan.errorClass;
         const errorMsg = plan.primaryReason;
         const faultStatus = plan.faultStatus;
-        this.telemetry.emitSeatTelemetry(judge.id, faultStatus, { reason: errorMsg, errorClass });
-        this._step({ type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass }, true);
+        const rejectedResponse =
+          hasExpectedDigests && typeof err?.rawResponse === 'string' && err.rawResponse.length > 0
+            ? this._serializeRejectedJudgeResponse(err.rawResponse)
+            : undefined;
+        const validationErrors =
+          hasExpectedDigests && Array.isArray(err?.validationErrors) && err.validationErrors.length > 0
+            ? err.validationErrors.filter((e) => typeof e === 'string' && e.trim()).slice(0, 16)
+            : undefined;
+        const faultExtras = {
+          ...(rejectedResponse ? { rejectedResponse } : {}),
+          ...(validationErrors && validationErrors.length > 0 ? { validationErrors } : {})
+        };
+        this.telemetry.emitSeatTelemetry(judge.id, faultStatus, {
+          reason: errorMsg,
+          errorClass,
+          ...faultExtras
+        });
+        this._step(
+          { type: 'JUDGE_FAULT', error: errorMsg, reason: errorMsg, status: faultStatus, errorClass, ...faultExtras },
+          true
+        );
 
         if (plan.canRetry) {
           judgeRoundRetries += 1;
@@ -2383,7 +2477,9 @@ export class CouncilEngine {
             activeRetryDiagnostics: this.state.judge.activeRetryDiagnostics,
             retryDiagnosticsHistory: this.state.judge.retryDiagnosticsHistory
           };
-          this._applyRetryConfig(currentJudgeConfig, plan);
+          if (!hasExpectedDigests || errorClass !== 'InvalidResponseError') {
+            this._applyRetryConfig(currentJudgeConfig, plan);
+          }
           currentJudgeTimeoutMs = plan.turnTimeoutMs;
           judgeRetryFeedback = plan.retryFeedback;
           this.telemetry.emitSeatTelemetry(judge.id, 'thinking', {
@@ -2404,6 +2500,7 @@ export class CouncilEngine {
               reason: terminalReason,
               status: faultStatus,
               errorClass,
+              ...faultExtras,
               terminal: true
             },
             true

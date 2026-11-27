@@ -217,6 +217,8 @@ export const ERROR_CLASSES = Object.freeze([
  * @property {number} [timeoutMs] - Explicit execution timeout in ms.
  * @property {JudgeStatus} status - Live judge status.
  * @property {number} retries - Number of times judge has been retried after faulting.
+ * @property {string} [lastRejectedResponse] - Bounded rejected Judge response preserved from the latest validation failure.
+ * @property {string[]} [lastValidationErrors] - Structured validation errors from the latest Judge failure.
  */
 
 /**
@@ -327,6 +329,12 @@ export const ERROR_CLASSES = Object.freeze([
  */
 
 /**
+ * @typedef {Object} ExpectedDigests
+ * @property {string} policy - Expected 64-character hexadecimal SHA-256 policy digest.
+ * @property {string} evidence - Expected 64-character hexadecimal SHA-256 frozen packet digest.
+ */
+
+/**
  * @typedef {Object} CouncilConfig
  * @property {string} [topic] - Topic handoff problem statement.
  * @property {number} [maxRounds] - Max deliberation rounds (default: 3).
@@ -337,6 +345,7 @@ export const ERROR_CLASSES = Object.freeze([
  * @property {number} [maxConcurrentSeats] - Max concurrent seats during deliberation/voting.
  * @property {'none' | 'read-only'} [tools] - Global participant tool policy.
  * @property {boolean} [retryEffortFallback] - Enable opt-in retry effort fallback (caps effort at 'medium' within same model family; never raises 'low').
+ * @property {ExpectedDigests | null} [expectedDigests] - Optional expected policy/evidence SHA-256 digests enforced on Judge output prior to voting.
  * @property {SelfContainedInputContract | null} [selfContainedInput] - Structured self-contained evidence contract for tool-removing recovery.
  * @property {EvidenceItem[]} [evidence] - Pre-collected grounded evidence items passed to seats and judge.
  * @property {Clarification[]} [clarifications] - Pre-supplied clarification answers broadcast to seats and judge.

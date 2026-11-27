@@ -319,7 +319,7 @@ export class MockAdapter extends HarnessAdapter {
     const effectiveJudge = judge
       ? { ...judge, tools: effectiveTools, ...(effectiveTools === 'none' ? { cwd: undefined } : {}) }
       : judge;
-    const judgePrompt = formatJudgePrompt({
+    const baseJudgePrompt = formatJudgePrompt({
       judge: effectiveJudge,
       topic: state?.topic,
       round,
@@ -329,6 +329,7 @@ export class MockAdapter extends HarnessAdapter {
       tools: effectiveTools,
       cwd: effectiveCwd
     });
+    const judgePrompt = this._withRetryFeedback(baseJudgePrompt, callerContext?.retryFeedback);
     this.recordedPrompts.push({
       seatId: judge?.id || 'judge',
       role: 'judge',
@@ -378,8 +379,13 @@ export class MockAdapter extends HarnessAdapter {
       proofDecisions[p.id] = { status: 'admitted', note: `Admitted by mock judge.` };
     });
 
+    const digestSuffix =
+      state?.expectedDigests?.policy && state?.expectedDigests?.evidence
+        ? ` (policy_sha256: ${state.expectedDigests.policy}, frozen_packet_sha256: ${state.expectedDigests.evidence})`
+        : '';
+
     return {
-      summary: `Deterministic consensus candidate synthesized by ${judge?.id || 'judge'} for round ${round}.`,
+      summary: `Deterministic consensus candidate synthesized by ${judge?.id || 'judge'} for round ${round}.${digestSuffix}`,
       proofDecisions,
       clauses: [
         {

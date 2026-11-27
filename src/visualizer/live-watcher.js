@@ -534,6 +534,12 @@ export class VisualizerLiveWatcher {
         else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.faultReason;
         if (hasOwn(d.judgeState, 'errorClass')) judgeAcc.errorClass = d.judgeState.errorClass;
         else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.errorClass;
+        if (hasOwn(d.judgeState, 'lastRejectedResponse')) {
+          judgeAcc.lastRejectedResponse = d.judgeState.lastRejectedResponse;
+        }
+        if (hasOwn(d.judgeState, 'lastValidationErrors')) {
+          judgeAcc.lastValidationErrors = cloneValue(d.judgeState.lastValidationErrors);
+        }
         if (hasRetrySchema) {
           if (hasOwn(d.judgeState, 'activeRetryDiagnostics')) {
             judgeAcc.activeRetryDiagnostics = d.judgeState.activeRetryDiagnostics
@@ -974,6 +980,12 @@ export class VisualizerLiveWatcher {
             retries: clonedState.judge.retries ?? 0,
             ...(clonedState.judge.faultReason !== undefined ? { faultReason: clonedState.judge.faultReason } : {}),
             ...(clonedState.judge.errorClass !== undefined ? { errorClass: clonedState.judge.errorClass } : {}),
+            ...(clonedState.judge.lastRejectedResponse !== undefined
+              ? { lastRejectedResponse: clonedState.judge.lastRejectedResponse }
+              : {}),
+            ...(Array.isArray(clonedState.judge.lastValidationErrors)
+              ? { lastValidationErrors: clone(clonedState.judge.lastValidationErrors) }
+              : {}),
             ...(Object.prototype.hasOwnProperty.call(clonedState.judge, 'activeRetryDiagnostics')
               ? {
                   activeRetryDiagnostics: clonedState.judge.activeRetryDiagnostics
@@ -1288,6 +1300,12 @@ export class VisualizerLiveWatcher {
           else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.faultReason;
           if (hasOwn(d.judgeState, 'errorClass')) judgeAcc.errorClass = d.judgeState.errorClass;
           else if (hasOwn(d.judgeState, 'status')) delete judgeAcc.errorClass;
+          if (hasOwn(d.judgeState, 'lastRejectedResponse')) {
+            judgeAcc.lastRejectedResponse = d.judgeState.lastRejectedResponse;
+          }
+          if (hasOwn(d.judgeState, 'lastValidationErrors')) {
+            judgeAcc.lastValidationErrors = cloneValue(d.judgeState.lastValidationErrors);
+          }
           if (hasRetrySchema) {
             if (hasOwn(d.judgeState, 'activeRetryDiagnostics')) {
               judgeAcc.activeRetryDiagnostics = d.judgeState.activeRetryDiagnostics

@@ -131,6 +131,8 @@ Options:
       --rebuttal-model <id>   Override model selector for Round 2+ rebuttal
       --reasoning-effort <level> Set global default reasoning effort (does not trigger explicit conflict)
       --retry-effort-fallback Cap bounded retries on eligible failures at medium effort without raising low
+      --policy-digest <hex>   Expected 64-char hex SHA-256 policy digest (requires --evidence-digest)
+      --evidence-digest <hex> Expected 64-char hex SHA-256 frozen packet digest (requires --policy-digest)
       --cwd <dir>             Explicit working directory for seat/judge CLI inspection (alias: --workspace)
       --workspace <dir>       Alias for --cwd <dir>
       --days <number>         Filter telemetry leaderboard to the last N days (e.g. 7, 30)
@@ -233,6 +235,10 @@ export function parseCliArgs(rawArgs = []) {
       reasoningEffort: { type: 'string' },
       'retry-effort-fallback': { type: 'boolean', default: false },
       retryEffortFallback: { type: 'boolean' },
+      'policy-digest': { type: 'string' },
+      policyDigest: { type: 'string' },
+      'evidence-digest': { type: 'string' },
+      evidenceDigest: { type: 'string' },
       cwd: { type: 'string' },
       workspace: { type: 'string' },
       days: { type: 'string' },
@@ -349,6 +355,17 @@ export function buildCliFlagsForConfig(values = {}) {
 
   if (values['retry-effort-fallback'] === true || values.retryEffortFallback === true) {
     overrides.retryEffortFallback = true;
+  }
+
+  const rawPolicyDigest =
+    values['policy-digest'] !== undefined ? values['policy-digest'] : values.policyDigest;
+  const rawEvidenceDigest =
+    values['evidence-digest'] !== undefined ? values['evidence-digest'] : values.evidenceDigest;
+  if (rawPolicyDigest !== undefined || rawEvidenceDigest !== undefined) {
+    overrides.expectedDigests = {
+      ...(rawPolicyDigest !== undefined ? { policy: rawPolicyDigest } : {}),
+      ...(rawEvidenceDigest !== undefined ? { evidence: rawEvidenceDigest } : {})
+    };
   }
 
   return overrides;

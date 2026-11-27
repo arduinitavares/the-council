@@ -8,6 +8,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, VALID_TOOL_POLICIES } from '../types.js';
 import { ALLOWED_EFFORTS } from '../harness/model-utils.js';
 import { VALID_SELF_CONTAINED_PHASES } from './recovery.js';
+import { validateExpectedDigestsConfig } from '../proofs/digest-binding.js';
 
 function validateReasoningEffortField(value, fieldLabel, errors) {
   if (value === undefined) return;
@@ -275,6 +276,13 @@ export function validateConfig(config) {
   validateReasoningEffortField(config.reasoningEffort, 'reasoningEffort', errors);
   validateReasoningEffortField(config['reasoning-effort'], 'reasoning-effort', errors);
   validateSelfContainedInput(config.selfContainedInput, errors);
+
+  if (config.expectedDigests !== undefined && config.expectedDigests !== null) {
+    const digestRes = validateExpectedDigestsConfig(config.expectedDigests);
+    if (!digestRes.valid) {
+      errors.push(...digestRes.errors);
+    }
+  }
 
   if (config.evidence !== undefined) {
     if (!Array.isArray(config.evidence)) {
@@ -1242,6 +1250,7 @@ export function resolveConfig(userConfig = {}) {
     throw new Error(`Invalid Council configuration: ${validation.errors.join('; ')}`);
   }
 
+  const normalizedExpectedDigests = validateExpectedDigestsConfig(merged.expectedDigests).normalized;
   const normalizedEvidence = normalizeEvidenceList(merged.evidence);
   const normalizedClarifications = normalizeClarificationsList(merged.clarifications);
   const resolvedMaxClarificationBatches = Array.isArray(normalizedClarifications)
@@ -1367,6 +1376,11 @@ export function resolveConfig(userConfig = {}) {
     evidence: normalizedEvidence,
     ...(normalizedClarifications !== undefined ? { clarifications: normalizedClarifications } : {})
   };
+  if (normalizedExpectedDigests) {
+    finalConfig.expectedDigests = normalizedExpectedDigests;
+  } else {
+    delete finalConfig.expectedDigests;
+  }
   Object.defineProperties(finalConfig, {
     _explicitGlobalSeatBudget: {
       value: hasExplicitGlobalSeatBudget,
@@ -1432,6 +1446,16 @@ export function loadConfigFile(filePath, overrides = {}) {
   const mergedInput = { ...parsed, ...overrides };
   if (Array.isArray(parsed?.evidence) && Array.isArray(overrides?.evidence)) {
     mergedInput.evidence = [...parsed.evidence, ...overrides.evidence];
+  }
+  if (
+    parsed?.expectedDigests &&
+    typeof parsed.expectedDigests === 'object' &&
+    !Array.isArray(parsed.expectedDigests) &&
+    overrides?.expectedDigests &&
+    typeof overrides.expectedDigests === 'object' &&
+    !Array.isArray(overrides.expectedDigests)
+  ) {
+    mergedInput.expectedDigests = { ...parsed.expectedDigests, ...overrides.expectedDigests };
   }
   return resolveConfig(mergedInput);
 }

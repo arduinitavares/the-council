@@ -107,9 +107,21 @@ export function createInitialCouncilState(config = {}) {
 
   const baseMaxClarificationBatches = cfg.maxClarificationBatches ?? DEFAULT_COUNCIL_CONFIG.maxClarificationBatches;
 
+  const expectedDigests =
+    cfg.expectedDigests &&
+    typeof cfg.expectedDigests === 'object' &&
+    typeof cfg.expectedDigests.policy === 'string' &&
+    typeof cfg.expectedDigests.evidence === 'string'
+      ? Object.freeze({
+          policy: cfg.expectedDigests.policy,
+          evidence: cfg.expectedDigests.evidence
+        })
+      : undefined;
+
   return {
     topic: cfg.topic || DEFAULT_COUNCIL_CONFIG.topic,
     ...(typeof cfg.cwd === 'string' && cfg.cwd.trim() ? { cwd: cfg.cwd.trim() } : {}),
+    ...(expectedDigests ? { expectedDigests } : {}),
     phase: initialPhase,
     canonicalPhase: toCanonicalPhase(initialPhase),
     phaseAlias: toPrototypePhase(initialPhase),
@@ -149,6 +161,9 @@ export function cloneState(state) {
       : JSON.parse(JSON.stringify(state));
   if (cloned && Array.isArray(cloned.evidence)) {
     cloned.evidence = Object.freeze(cloned.evidence.map((item) => Object.freeze(item)));
+  }
+  if (cloned && cloned.expectedDigests && typeof cloned.expectedDigests === 'object') {
+    cloned.expectedDigests = Object.freeze(cloned.expectedDigests);
   }
   return cloned;
 }

@@ -757,6 +757,12 @@ export function transitionCouncil(state, event) {
       if (event.errorClass) {
         next.judge.errorClass = event.errorClass;
       }
+      if (typeof event.rejectedResponse === 'string' && event.rejectedResponse.length > 0) {
+        next.judge.lastRejectedResponse = event.rejectedResponse;
+      }
+      if (Array.isArray(event.validationErrors) && event.validationErrors.length > 0) {
+        next.judge.lastValidationErrors = [...event.validationErrors];
+      }
       if (event.terminal === true) {
         const remaining = activeSeats(next).length;
         next.phase = 'completed';

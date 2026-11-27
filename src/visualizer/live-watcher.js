@@ -82,6 +82,14 @@ export function getTransitionSummary(event, state) {
       return `Published clarification answer for Batch ${event.batch ?? state?.clarificationBatch ?? 1}`;
     case 'BEGIN_ROUND':
       return `Began Round ${state?.round ?? 1}/${state?.maxRounds ?? 3} proof collection`;
+    case 'BEGIN_CONTINUATION': {
+      const targetIds = Array.isArray(event.targetSeatIds)
+        ? event.targetSeatIds
+        : (Array.isArray(state?.continuationTargetSeatIds) ? state.continuationTargetSeatIds : []);
+      const parentLabel = event.parentRunId || state?.parentRunId || 'parent';
+      const seatsLabel = targetIds.length > 0 ? targetIds.join(', ') : 'target seat(s)';
+      return `Started Continuation from "${parentLabel}" for preserved objection seat(s): ${seatsLabel}`;
+    }
     case 'SUBMIT_PROOF': {
       const latestProof =
         Array.isArray(state?.proofs) && state.proofs.length > 0
@@ -183,6 +191,133 @@ const CLEARING_TELEMETRY_STATUSES = new Set([
   'thinking', 'auditing', 'idle', 'proof_submitted', 'accepted', 'objected', 'excused'
 ]);
 
+export function extractBalancedJsonObject(text, startIdx) {
+  if (typeof text !== 'string' || startIdx < 0 || text[startIdx] !== '{') {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIdx, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+export function parseRunBundleJs(rawJs, expectedRunId) {
+  if (typeof rawJs !== 'string' || !rawJs) {
+    return null;
+  }
+
+  const len = rawJs.length;
+  let i = 0;
+  while (i < len) {
+    const ch = rawJs[i];
+    const next = i + 1 < len ? rawJs[i + 1] : '';
+
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < len && rawJs[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const endComment = rawJs.indexOf('*/', i + 2);
+      if (endComment === -1) return null;
+      i = endComment + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < len) {
+        if (rawJs[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (rawJs[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+
+    const slice = rawJs.slice(i);
+    const bundleMatch = /^const\s+data\s*=\s*\{/.exec(slice);
+    if (bundleMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+      const braceIdx = i + bundleMatch[0].length - 1;
+      const jsonSlice = extractBalancedJsonObject(rawJs, braceIdx);
+      if (!jsonSlice) return null;
+      let parsedRun;
+      try {
+        parsedRun = JSON.parse(jsonSlice);
+      } catch {
+        return null;
+      }
+      if (
+        parsedRun &&
+        typeof parsedRun === 'object' &&
+        !Array.isArray(parsedRun) &&
+        typeof parsedRun.runId === 'string' &&
+        parsedRun.runId.length > 0 &&
+        (!expectedRunId || parsedRun.runId === expectedRunId)
+      ) {
+        return { parsedRun, isLegacy: false };
+      }
+      return null;
+    }
+
+    const legacyMatch = /^(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(slice);
+    if (legacyMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
+      const braceIdx = i + legacyMatch[0].length - 1;
+      const jsonSlice = extractBalancedJsonObject(rawJs, braceIdx);
+      if (!jsonSlice) return null;
+      let parsedRun;
+      try {
+        parsedRun = JSON.parse(jsonSlice);
+      } catch {
+        return null;
+      }
+      if (
+        parsedRun &&
+        typeof parsedRun === 'object' &&
+        !Array.isArray(parsedRun) &&
+        typeof parsedRun.runId === 'string' &&
+        parsedRun.runId.length > 0 &&
+        (!expectedRunId || parsedRun.runId === expectedRunId)
+      ) {
+        return { parsedRun, isLegacy: true };
+      }
+      return null;
+    }
+
+    i += 1;
+  }
+
+  return null;
+}
+
 export class VisualizerLiveWatcher {
   /**
    * @param {Object} [options]
@@ -229,9 +364,18 @@ export class VisualizerLiveWatcher {
     this._prevFaultSeatId = null;
 
     const nowIso = new Date().toISOString();
+    const initialParentRunId =
+      typeof options.parentRunId === 'string' && options.parentRunId.trim() ? options.parentRunId.trim() : null;
+    const initialRootRunId =
+      typeof options.rootRunId === 'string' && options.rootRunId.trim() ? options.rootRunId.trim() : null;
+    const initialRunKind =
+      typeof options.runKind === 'string' && options.runKind.trim() ? options.runKind.trim() : null;
     this.liveRun = {
       id: 'wt-live-latest',
       runId: this.runId,
+      ...(initialRunKind ? { runKind: initialRunKind } : {}),
+      ...(initialParentRunId ? { parentRunId: initialParentRunId } : {}),
+      ...(initialRootRunId ? { rootRunId: initialRootRunId } : {}),
       pid: this.pid,
       title: `Live Run: ${this.initialConfig.topic || 'Deliberation'}`,
       description: `Real-time observer stream for live deliberation: ${this.initialConfig.topic || 'Deliberation'}`,
@@ -720,6 +864,15 @@ export class VisualizerLiveWatcher {
           ...(d.lastEventName !== undefined ? { lastEventName: d.lastEventName } : {}),
           ...(d.returnPhase !== undefined ? { returnPhase: d.returnPhase } : {}),
           ...(d.faultSeatId !== undefined ? { faultSeatId: d.faultSeatId } : {}),
+          ...(d.runKind !== undefined ? { runKind: d.runKind } : {}),
+          ...(d.parentRunId !== undefined ? { parentRunId: d.parentRunId } : {}),
+          ...(d.rootRunId !== undefined ? { rootRunId: d.rootRunId } : {}),
+          ...(Array.isArray(d.continuationTargetSeatIds)
+            ? { continuationTargetSeatIds: d.continuationTargetSeatIds.slice() }
+            : {}),
+          ...(Array.isArray(d.priorAcceptedSeatIds)
+            ? { priorAcceptedSeatIds: d.priorAcceptedSeatIds.slice() }
+            : {}),
           round: d.round,
           maxRounds: d.maxRounds,
           minQuorum: d.minQuorum,
@@ -958,6 +1111,15 @@ export class VisualizerLiveWatcher {
       ...(clonedState.lastEventName !== undefined ? { lastEventName: clonedState.lastEventName } : {}),
       ...(clonedState.returnPhase !== undefined ? { returnPhase: clonedState.returnPhase } : {}),
       ...(clonedState.faultSeatId !== undefined ? { faultSeatId: clonedState.faultSeatId } : {}),
+      ...(clonedState.runKind !== undefined ? { runKind: clonedState.runKind } : {}),
+      ...(clonedState.parentRunId !== undefined ? { parentRunId: clonedState.parentRunId } : {}),
+      ...(clonedState.rootRunId !== undefined ? { rootRunId: clonedState.rootRunId } : {}),
+      ...(Array.isArray(clonedState.continuationTargetSeatIds)
+        ? { continuationTargetSeatIds: [...clonedState.continuationTargetSeatIds] }
+        : {}),
+      ...(Array.isArray(clonedState.priorAcceptedSeatIds)
+        ? { priorAcceptedSeatIds: [...clonedState.priorAcceptedSeatIds] }
+        : {}),
       round: clonedState.round,
       maxRounds: clonedState.maxRounds,
       minQuorum: clonedState.minQuorum,
@@ -1472,6 +1634,15 @@ export class VisualizerLiveWatcher {
             ...(d.lastEventName !== undefined ? { lastEventName: d.lastEventName } : {}),
             ...(d.returnPhase !== undefined ? { returnPhase: d.returnPhase } : {}),
             ...(d.faultSeatId !== undefined ? { faultSeatId: d.faultSeatId } : {}),
+            ...(d.runKind !== undefined ? { runKind: d.runKind } : {}),
+            ...(d.parentRunId !== undefined ? { parentRunId: d.parentRunId } : {}),
+            ...(d.rootRunId !== undefined ? { rootRunId: d.rootRunId } : {}),
+            ...(Array.isArray(d.continuationTargetSeatIds)
+              ? { continuationTargetSeatIds: d.continuationTargetSeatIds.slice() }
+              : {}),
+            ...(Array.isArray(d.priorAcceptedSeatIds)
+              ? { priorAcceptedSeatIds: d.priorAcceptedSeatIds.slice() }
+              : {}),
             round: d.round,
             maxRounds: d.maxRounds,
             minQuorum: d.minQuorum,
@@ -1596,36 +1767,7 @@ export class VisualizerLiveWatcher {
    * @private
    */
   _extractBalancedJsonObject(text, startIdx) {
-    if (typeof text !== 'string' || startIdx < 0 || text[startIdx] !== '{') {
-      return null;
-    }
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = startIdx; i < text.length; i++) {
-      const ch = text[i];
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (ch === '\\') {
-          escaped = true;
-        } else if (ch === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-      } else if (ch === '{') {
-        depth += 1;
-      } else if (ch === '}') {
-        depth -= 1;
-        if (depth === 0) {
-          return text.slice(startIdx, i + 1);
-        }
-      }
-    }
-    return null;
+    return extractBalancedJsonObject(text, startIdx);
   }
 
   /**
@@ -1637,100 +1779,7 @@ export class VisualizerLiveWatcher {
    * @private
    */
   _parseRunBundleJs(rawJs, expectedRunId) {
-    if (typeof rawJs !== 'string' || !rawJs) {
-      return null;
-    }
-
-    const len = rawJs.length;
-    let i = 0;
-    while (i < len) {
-      const ch = rawJs[i];
-      const next = i + 1 < len ? rawJs[i + 1] : '';
-
-      // Skip line comments
-      if (ch === '/' && next === '/') {
-        i += 2;
-        while (i < len && rawJs[i] !== '\n') i += 1;
-        continue;
-      }
-      // Skip block comments
-      if (ch === '/' && next === '*') {
-        const endComment = rawJs.indexOf('*/', i + 2);
-        if (endComment === -1) return null;
-        i = endComment + 2;
-        continue;
-      }
-      // Skip JS string / template literals outside the target assignment
-      if (ch === "'" || ch === '"' || ch === '`') {
-        const quote = ch;
-        i += 1;
-        while (i < len) {
-          if (rawJs[i] === '\\') {
-            i += 2;
-            continue;
-          }
-          if (rawJs[i] === quote) {
-            i += 1;
-            break;
-          }
-          i += 1;
-        }
-        continue;
-      }
-
-      const slice = rawJs.slice(i);
-      const bundleMatch = /^const\s+data\s*=\s*\{/.exec(slice);
-      if (bundleMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
-        const braceIdx = i + bundleMatch[0].length - 1;
-        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
-        if (!jsonSlice) return null;
-        let parsedRun;
-        try {
-          parsedRun = JSON.parse(jsonSlice);
-        } catch {
-          return null;
-        }
-        if (
-          parsedRun &&
-          typeof parsedRun === 'object' &&
-          !Array.isArray(parsedRun) &&
-          typeof parsedRun.runId === 'string' &&
-          parsedRun.runId.length > 0 &&
-          (!expectedRunId || parsedRun.runId === expectedRunId)
-        ) {
-          return { parsedRun, isLegacy: false };
-        }
-        return null;
-      }
-
-      const legacyMatch = /^(?:window|globalThis)\.COUNCIL_LIVE_RUN\s*=\s*\{/.exec(slice);
-      if (legacyMatch && (i === 0 || !/[a-zA-Z0-9_$.]/.test(rawJs[i - 1]))) {
-        const braceIdx = i + legacyMatch[0].length - 1;
-        const jsonSlice = this._extractBalancedJsonObject(rawJs, braceIdx);
-        if (!jsonSlice) return null;
-        let parsedRun;
-        try {
-          parsedRun = JSON.parse(jsonSlice);
-        } catch {
-          return null;
-        }
-        if (
-          parsedRun &&
-          typeof parsedRun === 'object' &&
-          !Array.isArray(parsedRun) &&
-          typeof parsedRun.runId === 'string' &&
-          parsedRun.runId.length > 0 &&
-          (!expectedRunId || parsedRun.runId === expectedRunId)
-        ) {
-          return { parsedRun, isLegacy: true };
-        }
-        return null;
-      }
-
-      i += 1;
-    }
-
-    return null;
+    return parseRunBundleJs(rawJs, expectedRunId);
   }
 
   /**
@@ -1832,6 +1881,21 @@ export class VisualizerLiveWatcher {
     if (this._stopped) return;
 
     try {
+      const resolvedParentRunId =
+        this.liveRun.parentRunId || this.liveRun.currentState?.parentRunId || null;
+      const resolvedRootRunId =
+        this.liveRun.rootRunId || this.liveRun.currentState?.rootRunId || null;
+      const resolvedRunKind =
+        this.liveRun.runKind || this.liveRun.currentState?.runKind || null;
+      if (resolvedRunKind && !this.liveRun.runKind) {
+        this.liveRun.runKind = resolvedRunKind;
+      }
+      if (resolvedParentRunId && !this.liveRun.parentRunId) {
+        this.liveRun.parentRunId = resolvedParentRunId;
+      }
+      if (resolvedRootRunId && !this.liveRun.rootRunId) {
+        this.liveRun.rootRunId = resolvedRootRunId;
+      }
       const payload = JSON.stringify(this.liveRun, null, 2);
       const latestContent = this._buildBundleScript(payload, true);
 
@@ -1844,6 +1908,9 @@ export class VisualizerLiveWatcher {
       const currentEntry = {
         id: this.runId,
         runId: this.runId,
+        ...(resolvedRunKind ? { runKind: resolvedRunKind } : {}),
+        ...(resolvedParentRunId ? { parentRunId: resolvedParentRunId } : {}),
+        ...(resolvedRootRunId ? { rootRunId: resolvedRootRunId } : {}),
         pid: this.pid,
         file: `${this.runId}.js`,
         title: this.liveRun.title,
@@ -1929,6 +1996,8 @@ export class VisualizerLiveWatcher {
       if (this.liveRun.currentState?.phase === 'completed') {
         persistRunTelemetry({
           runId: this.runId,
+          ...(resolvedParentRunId ? { parentRunId: resolvedParentRunId } : {}),
+          ...(resolvedRootRunId ? { rootRunId: resolvedRootRunId } : {}),
           mode: 'live',
           state: this.liveRun.currentState,
           steps: this.liveRun.steps,

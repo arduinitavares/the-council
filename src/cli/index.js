@@ -19,6 +19,10 @@ import {
   resolveVotingSeatConfig,
   resolveRebuttalSeatConfig
 } from '../engine/council-engine.js';
+import {
+  validateContinuationEligibility,
+  loadContinuationParent
+} from '../engine/continuation.js';
 import { loadConfigFile, resolveConfig } from '../engine/config.js';
 import { deserializeSnapshot } from '../telemetry/snapshot.js';
 import {
@@ -37,7 +41,7 @@ import {
   logoutT3OAuth,
   getT3AuthStatus
 } from '../harness/index.js';
-import { VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
+import { DEFAULT_OUTPUT_DIR, VisualizerLiveWatcher } from '../visualizer/live-watcher.js';
 
 function formatDiagnosticModelEffort(model, effort) {
   const modelText = typeof model === 'string' ? model.trim() : '';
@@ -106,6 +110,7 @@ The Council — Multi-Agent Consensus Deliberation Engine (v0.1.0)
 
 Usage:
   council run (--live | --mock) [options]
+  council continue <runId|snapshot-path> (--live | --mock) [options]
   council login t3 [--url <mcp-url>] [--status] [--no-browser] [--json]
   council logout t3 [--url <mcp-url>] [--json]
   council telemetry [--days <N>] [--by model|seat] [--json]
@@ -139,6 +144,7 @@ Options:
       --by <model|seat>       Group telemetry leaderboard by canonical model or seat (default: model)
       --output-dir <path>     Custom runs/summary output directory
       --telemetry-dir <path>  Custom telemetry ledger directory
+      --snapshot <path>       Write output JSON snapshot to a new path
       --url <mcp-url>         T3 MCP endpoint URL (login/logout, default: http://127.0.0.1:3773/mcp)
       --status                Show current T3 authentication status without refreshing or logging in
       --no-browser            Print T3 authorization URL without opening a browser tab
@@ -163,6 +169,34 @@ function resolveInputPath(rawPath) {
     }
   }
   return cwdPath;
+}
+
+function canonicalPathForCompare(filePath) {
+  const resolved = path.resolve(filePath);
+  const realNative = typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native : fs.realpathSync;
+  try {
+    return realNative(resolved);
+  } catch {
+    try {
+      return path.join(realNative(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+function isSameFilesystemTarget(pathA, pathB) {
+  if (!pathA || !pathB) return false;
+  if (canonicalPathForCompare(pathA) === canonicalPathForCompare(pathB)) {
+    return true;
+  }
+  try {
+    const statA = fs.statSync(path.resolve(pathA));
+    const statB = fs.statSync(path.resolve(pathB));
+    return statA.dev === statB.dev && statA.ino === statB.ino;
+  } catch {
+    return false;
+  }
 }
 
 function parseEvidenceFile(rawPath) {
@@ -245,6 +279,7 @@ export function parseCliArgs(rawArgs = []) {
       by: { type: 'string' },
       'output-dir': { type: 'string' },
       'telemetry-dir': { type: 'string' },
+      snapshot: { type: 'string' },
       url: { type: 'string' },
       status: { type: 'boolean', default: false },
       'no-browser': { type: 'boolean', default: false },
@@ -1033,6 +1068,13 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     const resolvedOutputDir = explicitOutputDir || liveWatcher?.outputDir;
     const resolvedTelemetryDir = explicitTelemetryDir || liveWatcher?.telemetryDir;
+    const snapshotOutPath = values.snapshot ? path.resolve(process.cwd(), values.snapshot) : null;
+    const persistedRunId =
+      liveWatcher?.runId ||
+      io.runId ||
+      io.liveWatcherOptions?.runId ||
+      `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const exposeRunId = Boolean(snapshotOutPath || liveWatcher?.runId || io.runId || io.liveWatcherOptions?.runId);
     const allowModePersistence = mode !== 'mock' || Boolean(io.persistMockTelemetry);
     const shouldPersistTelemetry =
       allowModePersistence &&
@@ -1041,13 +1083,8 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
 
     if (shouldPersistTelemetry && result?.state?.phase === 'completed') {
       try {
-        const runId =
-          liveWatcher?.runId ||
-          io.runId ||
-          io.liveWatcherOptions?.runId ||
-          `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         persistRunTelemetry({
-          runId,
+          runId: persistedRunId,
           mode,
           state: result.state,
           snapshots: engine.getTelemetry().getSnapshots(),
@@ -1082,17 +1119,44 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
       : engine.getTelemetry?.()?.getProviderCalls?.();
     const outputPayload = {
       mode,
+      ...(exposeRunId ? { runId: persistedRunId } : {}),
       ...result,
       retryEffortFallback: Boolean(resolved.retryEffortFallback),
       ...(Array.isArray(attributedProviderCalls) ? { providerCalls: attributedProviderCalls } : {}),
       state: {
         ...result.state,
+        ...(exposeRunId ? { runId: persistedRunId } : {}),
         ...(normalizedJudge ? { judge: normalizedJudge } : {}),
         ...(normalizedSeats ? { seats: normalizedSeats } : {}),
         ...(resolved.timeoutMs !== undefined ? { timeoutMs: resolved.timeoutMs } : {}),
         ...(resolved.totalSeatBudgetMs !== undefined ? { totalSeatBudgetMs: resolved.totalSeatBudgetMs } : {})
       }
     };
+
+    if (snapshotOutPath) {
+      const sanitizedInitialConfig = {
+        topic: resolved.topic,
+        maxRounds: resolved.maxRounds,
+        minQuorum: resolved.minQuorum,
+        ...(resolved.cwd ? { cwd: resolved.cwd } : {}),
+        ...(resolved.tools ? { tools: resolved.tools } : {}),
+        judge: normalizedJudge || resolved.judge || null,
+        seats: Array.isArray(resolved.seats) ? resolved.seats.map((s) => ({ ...s })) : []
+      };
+      const snapshotPayload = {
+        ...outputPayload,
+        runId: persistedRunId,
+        initialConfig: sanitizedInitialConfig,
+        state: {
+          ...outputPayload.state,
+          runId: persistedRunId
+        }
+      };
+      fs.mkdirSync(path.dirname(snapshotOutPath), { recursive: true });
+      const tmpSnap = `${snapshotOutPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmpSnap, JSON.stringify(snapshotPayload, null, 2), 'utf8');
+      fs.renameSync(tmpSnap, snapshotOutPath);
+    }
 
     if (values.json) {
       log(JSON.stringify(outputPayload, null, 2));
@@ -1274,6 +1338,329 @@ export async function runCli(rawArgs = process.argv.slice(2), io = {}) {
         log('  SIMULATED (mock harness): not a real deliberation');
         log('============================================================\n');
       }
+    }
+
+    return await safeExit(result.ok ? 0 : 2);
+  }
+
+  if (command === 'continue') {
+    const target = positionals[0];
+    if (!target) {
+      logErr('Continuation error: "council continue" requires a <runId|snapshot-path>.');
+      return await safeExit(1);
+    }
+
+    if (values.live && values.mock) {
+      logErr('Execution mode error: Cannot specify both --live (-l) and --mock (-m). Choose one execution mode.');
+      return await safeExit(1);
+    }
+    if (!values.live && !values.mock) {
+      logErr('Execution mode error: Explicit mode selection required. Pass --live (-l) for real CLI harness deliberation or --mock (-m) for simulated mock mode.');
+      return await safeExit(1);
+    }
+
+    const mode = values.live ? 'live' : 'mock';
+    const explicitOutputDir = values['output-dir'] || io.outputDir || io.liveWatcherOptions?.outputDir;
+    const explicitTelemetryDir = values['telemetry-dir'] || io.telemetryDir || io.liveWatcherOptions?.telemetryDir;
+
+    let overrideFlags;
+    try {
+      overrideFlags = buildCliFlagsForConfig({
+        ...(values.timeout !== undefined ? { timeout: values.timeout } : {}),
+        ...(values['seat-budget'] !== undefined ? { 'seat-budget': values['seat-budget'] } : {}),
+        ...(values.seatBudget !== undefined ? { seatBudget: values.seatBudget } : {}),
+        ...(values.cwd !== undefined ? { cwd: values.cwd } : {}),
+        ...(values.workspace !== undefined ? { workspace: values.workspace } : {})
+      });
+    } catch (err) {
+      logErr(`Configuration error: ${err.message}`);
+      return await safeExit(1);
+    }
+
+    let backend = null;
+    if (values.backend !== undefined || values.live) {
+      try {
+        backend = resolveHarnessBackend(values.backend ?? (values.live ? io.backend : undefined));
+      } catch (err) {
+        logErr(`Configuration error: ${err.message}`);
+        return await safeExit(1);
+      }
+    }
+
+    let loaded;
+    let eligibility;
+    try {
+      loaded = loadContinuationParent(target, { outputDir: explicitOutputDir });
+      eligibility = validateContinuationEligibility(loaded.state);
+      if (!eligibility.valid) {
+        throw new Error(eligibility.errors.join(' '));
+      }
+    } catch (err) {
+      logErr(`Continuation error: ${err.message}`);
+      return await safeExit(1);
+    }
+
+    const snapshotOutPath = values.snapshot ? path.resolve(process.cwd(), values.snapshot) : null;
+    if (
+      snapshotOutPath &&
+      loaded.sourcePath &&
+      isSameFilesystemTarget(snapshotOutPath, loaded.sourcePath)
+    ) {
+      logErr(`Continuation error: Refusing to overwrite parent snapshot "${loaded.sourcePath}". Choose a new --snapshot path.`);
+      return await safeExit(1);
+    }
+
+    let runId =
+      io.runId ||
+      io.liveWatcherOptions?.runId ||
+      `run-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    if (runId === loaded.parentRunId) {
+      runId = `${runId}-cont-${Math.random().toString(16).slice(2, 6)}`;
+    }
+
+    const effectiveDefaultCwd = overrideFlags.cwd || loaded.state.cwd;
+    const targetSeatsForRun = eligibility.targetSeats.map((s) => ({
+      ...s,
+      ...(s.tools === undefined ? { tools: loaded.state.tools ?? 'read-only' } : {}),
+      ...(overrideFlags.cwd && s.tools !== 'none' ? { cwd: overrideFlags.cwd } : {})
+    }));
+
+    const engineOptions = {
+      runId,
+      parentRunId: loaded.parentRunId,
+      rootRunId: loaded.rootRunId,
+      ...(overrideFlags.timeoutMs !== undefined ? { timeoutMs: overrideFlags.timeoutMs } : {}),
+      ...(overrideFlags.totalSeatBudgetMs !== undefined ? { totalSeatBudgetMs: overrideFlags.totalSeatBudgetMs } : {}),
+      ...(typeof io.harnessResolver === 'function' ? { harnessResolver: io.harnessResolver } : {}),
+      ...(io.signal ? { signal: io.signal } : {})
+    };
+
+    if (values.live) {
+      const harnessRegistry =
+        io.harnessRegistry ||
+        new HarnessRegistry({
+          backend,
+          ...(effectiveDefaultCwd ? { cwd: effectiveDefaultCwd } : {}),
+          ...(io.t3McpClient ? { mcpClient: io.t3McpClient } : {}),
+          ...(io.t3Url ? { url: io.t3Url } : {}),
+          ...(io.t3Token ? { token: io.t3Token } : {}),
+          ...(io.tokenStorePath ? { tokenStorePath: io.tokenStorePath } : {})
+        });
+      try {
+        const resolvedAdapters = [];
+        for (const seat of targetSeatsForRun) {
+          if (String(seat.harness || '').toLowerCase() === 'mock') {
+            throw new Error(
+              `Cannot use "mock" harness for seat "${seat.id}" in --live mode. Use --mock for simulated runs or configure a live harness (codex, antigravity, cursor).`
+            );
+          }
+          resolvedAdapters.push({ seat, adapter: harnessRegistry.get(seat.harness) });
+        }
+
+        const t3Adapters = [...new Set(resolvedAdapters.map((r) => r.adapter).filter((a) => a instanceof T3HarnessAdapter))];
+        if (t3Adapters.length > 0) {
+          const t3Health = await t3Adapters[0].healthCheck();
+          if (!t3Health?.ok) {
+            throw new Error(`T3 MCP preflight failed: ${t3Health?.error || 'unknown error'}`);
+          }
+          for (const t3Adapter of t3Adapters.slice(1)) {
+            if (t3Adapter.mcpClient === t3Adapters[0].mcpClient) {
+              if (t3Health.capabilities) t3Adapter.setCapabilities(t3Health.capabilities);
+              if (t3Health.projects) t3Adapter.setProjects(t3Health.projects);
+              if (!t3Adapter.isProviderAvailable()) {
+                throw new Error(
+                  `T3 MCP preflight failed: T3 provider "${t3Adapter.provider}" is unavailable or cannot run child tasks`
+                );
+              }
+            } else {
+              const adapterHealth = await t3Adapter.healthCheck();
+              if (!adapterHealth?.ok) {
+                throw new Error(`T3 MCP preflight failed: ${adapterHealth?.error || 'unknown error'}`);
+              }
+            }
+          }
+          for (const { seat, adapter } of resolvedAdapters) {
+            if (!(adapter instanceof T3HarnessAdapter)) continue;
+            const seatCwd = seat.tools === 'none' ? undefined : (seat.cwd || effectiveDefaultCwd);
+            if (seatCwd) {
+              await adapter.resolveProjectId(seatCwd);
+            }
+          }
+        }
+
+        for (const { seat, adapter } of resolvedAdapters) {
+          if (adapter && typeof adapter.validateModel === 'function') {
+            try {
+              adapter.validateModel(seat.model);
+            } catch (modelErr) {
+              throw new Error(
+                `Invalid model for seat "${seat.id}" (harness "${seat.harness}", model "${seat.model}"): ${modelErr.message}`
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logErr(`Configuration error: ${err.message}`);
+        return await safeExit(1);
+      }
+      engineOptions.harnessRegistry = harnessRegistry;
+    }
+
+    const allowModePersistence =
+      mode !== 'mock' || Boolean(io.persistMockTelemetry || values['output-dir'] || values['telemetry-dir']);
+    const shouldPersistWatcher = Boolean(
+      io.liveWatcher ||
+      values.live ||
+      (allowModePersistence && (explicitOutputDir || io.persistTelemetry || io.persistMockTelemetry))
+    );
+    const effectiveWatcherOutputDir = explicitOutputDir || io.liveWatcherOptions?.outputDir || DEFAULT_OUTPUT_DIR;
+    const candidateWatcherOutputPath = path.resolve(
+      io.liveWatcherOptions?.outputPath || path.join(effectiveWatcherOutputDir, 'latest.js')
+    );
+    const preservesSourceLatest =
+      Boolean(loaded.sourcePath) &&
+      isSameFilesystemTarget(loaded.sourcePath, candidateWatcherOutputPath);
+    const resolvedContinuationInitialConfig = loaded.initialConfig
+      ? {
+          ...loaded.initialConfig,
+          ...(effectiveDefaultCwd ? { cwd: effectiveDefaultCwd } : {})
+        }
+      : {
+          topic: loaded.state.topic,
+          maxRounds: loaded.state.maxRounds,
+          minQuorum: loaded.state.minQuorum,
+          ...(effectiveDefaultCwd ? { cwd: effectiveDefaultCwd } : {}),
+          judge: loaded.state.judge || null,
+          seats: loaded.state.seats || []
+        };
+    const liveWatcher =
+      io.liveWatcher ||
+      (shouldPersistWatcher
+        ? new VisualizerLiveWatcher({
+            runId,
+            runKind: 'continuation',
+            parentRunId: loaded.parentRunId,
+            rootRunId: loaded.rootRunId,
+            initialConfig: resolvedContinuationInitialConfig,
+            ...(explicitOutputDir ? { outputDir: explicitOutputDir } : {}),
+            ...(explicitTelemetryDir ? { telemetryDir: explicitTelemetryDir } : {}),
+            ...(io.liveWatcherOptions || {}),
+            ...(preservesSourceLatest ? { outputPath: path.resolve(effectiveWatcherOutputDir, `${runId}.js`) } : {})
+          })
+        : null);
+
+    const runStartedAt = new Date().toISOString();
+    let activeEngine = null;
+    engineOptions.onEngine = (engine) => {
+      activeEngine = engine;
+      if (liveWatcher) {
+        liveWatcher.attach(engine.getTelemetry());
+      }
+      if (values.verbose) {
+        attachVerboseTelemetryListeners(engine.getTelemetry(), logErr);
+      }
+      if (typeof io.onEngine === 'function') {
+        io.onEngine(engine);
+      }
+    };
+
+    const parentStateForRun = overrideFlags.cwd
+      ? {
+          ...loaded.state,
+          cwd: overrideFlags.cwd,
+          seats: (loaded.state.seats || []).map((s) =>
+            eligibility.targetSeats.some((ts) => ts.id === s.id) && s.tools !== 'none'
+              ? { ...s, cwd: overrideFlags.cwd }
+              : s
+          )
+        }
+      : loaded.state;
+
+    let result;
+    try {
+      result = await CouncilEngine.runContinuation(parentStateForRun, engineOptions);
+    } catch (runErr) {
+      if (liveWatcher) {
+        liveWatcher.stop({ reason: 'Aborted' });
+      }
+      throw runErr;
+    } finally {
+      if (liveWatcher) {
+        liveWatcher.stop(result?.aborted ? { reason: 'Aborted' } : undefined);
+      }
+    }
+
+    const resolvedOutputDir = explicitOutputDir || liveWatcher?.outputDir;
+    const resolvedTelemetryDir = explicitTelemetryDir || liveWatcher?.telemetryDir;
+    const shouldPersistTelemetry =
+      allowModePersistence &&
+      (Boolean(resolvedOutputDir || resolvedTelemetryDir || io.persistTelemetry || io.persistMockTelemetry) ||
+        !process.env.NODE_TEST_CONTEXT);
+
+    if (shouldPersistTelemetry && result?.state?.phase === 'completed') {
+      try {
+        persistRunTelemetry({
+          runId,
+          parentRunId: loaded.parentRunId,
+          rootRunId: loaded.rootRunId,
+          mode,
+          state: result.state,
+          snapshots: activeEngine ? activeEngine.getTelemetry().getSnapshots() : result.snapshots,
+          providerCalls: result.providerCalls,
+          startedAt: liveWatcher?.liveRun?.startedAt || runStartedAt,
+          completedAt: new Date().toISOString(),
+          outputDir: resolvedOutputDir,
+          telemetryDir: resolvedTelemetryDir,
+          includeMock: Boolean(io.persistMockTelemetry || values['output-dir'] || values['telemetry-dir'])
+        });
+      } catch {
+        // Isolate observer telemetry persistence errors
+      }
+    }
+
+    const outputPayload = {
+      mode,
+      runId,
+      parentRunId: loaded.parentRunId,
+      rootRunId: loaded.rootRunId,
+      ...result,
+      state: {
+        ...result.state,
+        runId
+      }
+    };
+
+    if (snapshotOutPath) {
+      const snapshotPayload = {
+        ...outputPayload,
+        initialConfig: resolvedContinuationInitialConfig
+      };
+      fs.mkdirSync(path.dirname(snapshotOutPath), { recursive: true });
+      const tmpSnap = `${snapshotOutPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmpSnap, JSON.stringify(snapshotPayload, null, 2), 'utf8');
+      fs.renameSync(tmpSnap, snapshotOutPath);
+    }
+
+    if (values.json) {
+      log(JSON.stringify(outputPayload, null, 2));
+    } else {
+      log('\n========================================');
+      log('      THE COUNCIL — CONTINUATION        ');
+      log('========================================');
+      log(`Mode      : ${mode === 'mock' ? 'SIMULATED (mock harness)' : 'LIVE'}`);
+      log(`Run ID    : ${runId}`);
+      log(`Parent Run: ${loaded.parentRunId}`);
+      log(`Root Run  : ${loaded.rootRunId}`);
+      log(`Topic     : ${result.state.topic}`);
+      log(`Verdict   : ${result.verdict?.kind || 'No verdict emitted'}`);
+      log(`Note      : ${result.verdict?.note || 'None'}`);
+      if (result.verdict?.unresolvedObjections?.length > 0) {
+        log('\nUnresolved Objections:');
+        result.verdict.unresolvedObjections.forEach((o) => {
+          log(`  - [${o.id}] (${o.status}) Seat "${o.seatId}": ${o.reason} (Proof: ${o.proofId})`);
+        });
+      }
+      log('========================================\n');
     }
 
     return await safeExit(result.ok ? 0 : 2);

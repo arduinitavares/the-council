@@ -593,10 +593,16 @@ export function formatVotingPrompt({
   const resolvedClarifications = (clarifications && clarifications.length > 0)
     ? clarifications
     : (state?.clarifications || []);
+  const isContinuation = state?.runKind === 'continuation';
   const resolvedMyOpenObjections = (Array.isArray(myOpenObjections) && myOpenObjections.length > 0)
     ? myOpenObjections
     : (seat?.id
-        ? (state?.objections || []).filter((o) => o && o.seatId === seat.id && o.status === 'open')
+        ? (state?.objections || []).filter(
+            (o) =>
+              o &&
+              o.seatId === seat.id &&
+              (o.status === 'open' || (isContinuation && o.status === 'preserved_excused'))
+          )
         : []);
 
   const proofList = (proofs && proofs.length > 0)
@@ -627,8 +633,11 @@ export function formatVotingPrompt({
     : 'No admitted proofs for this round.';
 
   const myOpenObjectionsSection = resolvedMyOpenObjections.length > 0
-    ? `\nYour Open Objections from Prior Rounds:\n` +
-      `Note: Voting "accept" withdraws your open objections listed below.\n` +
+    ? (isContinuation
+        ? `\nYour Preserved Objection(s) from the Parent Run:\n` +
+          `Note: Voting "accept" withdraws your preserved objection(s) listed below and ratifies the frozen Candidate.\n`
+        : `\nYour Open Objections from Prior Rounds:\n` +
+          `Note: Voting "accept" withdraws your open objections listed below.\n`) +
       resolvedMyOpenObjections
         .map((o) => `- [${o.id}] (Round ${o.round || 1}, backed by Proof ${o.proofId}): ${o.reason}`)
         .join('\n') +
@@ -665,7 +674,11 @@ ${ANTI_CHEATING_RULE}\n`
     : `\n${toolFreeVotingDirective}
 ${ANTI_CHEATING_RULE}\n`;
 
-  return `### Voting on Round ${cand?.round || 1} Candidate
+  const votingHeader = isContinuation
+    ? `### Continuation Ratification Vote on Frozen Round ${cand?.round || 1} Candidate`
+    : `### Voting on Round ${cand?.round || 1} Candidate`;
+
+  return `${votingHeader}
 ${topicLine}Candidate Summary: "${cand?.summary || ''}"
 ${groundingSection}
 Candidate Clauses:

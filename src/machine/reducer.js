@@ -548,6 +548,26 @@ export function transitionCouncil(state, event) {
       );
     }
 
+    case 'BEGIN_CONTINUATION': {
+      if (state.runKind !== 'continuation') {
+        return reject(state, event.type, 'Can only begin Continuation on a Continuation CouncilState.');
+      }
+      if (currentPhase !== 'confirming') {
+        return reject(state, event.type, 'Continuation must begin in confirming phase.');
+      }
+      const targetIds = Array.isArray(next.continuationTargetSeatIds) ? next.continuationTargetSeatIds : [];
+      return succeed(
+        state,
+        next,
+        event.type,
+        'Started Continuation ratification from "' +
+          (next.parentRunId || 'parent') +
+          '" for seat(s): ' +
+          (targetIds.length > 0 ? targetIds.join(', ') : 'none') +
+          '.'
+      );
+    }
+
     case 'CAST_VOTE': {
       if (currentPhase !== 'confirming') {
         return reject(state, event.type, 'Seats can only vote during the confirming phase.');
@@ -556,9 +576,25 @@ export function transitionCouncil(state, event) {
       if (!seat || seat.status === 'excused') {
         return reject(state, event.type, 'Seat "' + event.seatId + '" is not an active voting Seat.');
       }
+      const isContinuation = state.runKind === 'continuation';
+      if (isContinuation) {
+        const allowedTargets = Array.isArray(state.continuationTargetSeatIds)
+          ? state.continuationTargetSeatIds
+          : [];
+        if (!allowedTargets.includes(seat.id)) {
+          return reject(
+            state,
+            event.type,
+            'Seat "' + seat.id + '" is not a Continuation ratification target.'
+          );
+        }
+      }
       if (event.vote === 'accept') {
         next.objections.forEach((o) => {
-          if (o.seatId === seat.id && o.status === 'open') {
+          if (
+            o.seatId === seat.id &&
+            (o.status === 'open' || (isContinuation && o.status === 'preserved_excused'))
+          ) {
             o.status = 'withdrawn';
           }
         });
@@ -570,7 +606,13 @@ export function transitionCouncil(state, event) {
           state,
           next,
           event.type,
-          'Seat "' + seat.id + '" voted ACCEPT on Round ' + state.round + ' Candidate.'
+          'Seat "' +
+            seat.id +
+            '" voted ACCEPT on ' +
+            (isContinuation ? 'frozen ' : '') +
+            'Round ' +
+            state.round +
+            ' Candidate.'
         );
       }
       if (event.vote === 'object') {
@@ -867,6 +909,13 @@ export function transitionCouncil(state, event) {
 
       const openObjs = next.objections.filter((o) => o.status === 'open');
       const preservedObjs = next.objections.filter((o) => o.status === 'preserved_excused');
+      const isContinuation = next.runKind === 'continuation';
+      const lineage = isContinuation
+        ? {
+            ...(next.parentRunId ? { parentRunId: next.parentRunId } : {}),
+            ...(next.rootRunId ? { rootRunId: next.rootRunId } : {})
+          }
+        : {};
 
       if (openObjs.length === 0 && preservedObjs.length === 0) {
         next.phase = 'completed';
@@ -876,12 +925,27 @@ export function transitionCouncil(state, event) {
           unresolvedObjections: [],
           activeSeatCount: active.length,
           excusedSeatCount: next.seats.length - active.length,
-          note:
-            'All ' +
-            active.length +
-            ' active Seats accepted the Proof-bound Candidate in Round ' +
-            state.round +
-            ' with zero unresolved Objections.'
+          ...lineage,
+          ...(isContinuation
+            ? {
+                continuation: {
+                  ...lineage,
+                  priorAcceptedSeatIds: [...(next.priorAcceptedSeatIds || [])],
+                  ratifiedSeatIds: [...(next.continuationTargetSeatIds || [])]
+                }
+              }
+            : {}),
+          note: isContinuation
+            ? 'Continuation ratified frozen Round ' +
+              state.round +
+              ' Candidate: all ' +
+              active.length +
+              ' participating Seat(s) accepted with zero unresolved Objections.'
+            : 'All ' +
+              active.length +
+              ' active Seats accepted the Proof-bound Candidate in Round ' +
+              state.round +
+              ' with zero unresolved Objections.'
         };
         return succeed(state, next, event.type, 'Unanimous Consensus achieved in Round ' + state.round + '!');
       }
@@ -894,6 +958,7 @@ export function transitionCouncil(state, event) {
           unresolvedObjections: preservedObjs,
           activeSeatCount: active.length,
           excusedSeatCount: next.seats.length - active.length,
+          ...lineage,
           note:
             'All ' +
             active.length +
@@ -906,6 +971,28 @@ export function transitionCouncil(state, event) {
           next,
           event.type,
           'Completed with Dissent Report: Excused Seat Objection preserved.'
+        );
+      }
+
+      if (isContinuation) {
+        next.phase = 'completed';
+        next.verdict = {
+          kind: 'Dissent Report (Continuation Objection Reaffirmed)',
+          candidate: next.candidate,
+          unresolvedObjections: openObjs.concat(preservedObjs),
+          activeSeatCount: active.length,
+          excusedSeatCount: next.seats.length - active.length,
+          ...lineage,
+          note:
+            'Continuation vote did not withdraw dissent: ' +
+            openObjs.length +
+            ' reaffirmed Objection(s) remain unresolved on the frozen Candidate.'
+        };
+        return succeed(
+          state,
+          next,
+          event.type,
+          'Continuation ended with Dissent Report: reaffirmed Objection remains unresolved.'
         );
       }
 

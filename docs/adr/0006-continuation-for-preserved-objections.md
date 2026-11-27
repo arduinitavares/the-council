@@ -1,8 +1,8 @@
 # Continuation Runs for Preserved Excused-Seat Objections
 
-Status: accepted (design; implementation tracked in Issue #108)
+Status: accepted
 
-Under ADR-0003, when a Seat faults or times out while holding an open Objection, it becomes an Excused Seat, its Objection locks as `preserved_excused`, and the Council terminates in a `Dissent Report (Preserved Excused-Seat Objection)` even when all remaining active Seats accept the revised Candidate. To resolve that near-consensus outcome without compromising ADR-0003's anti-manufactured-consensus guarantee, we specify an explicit, operator-triggered **Continuation** (proposed CLI command `council continue <runId|snapshot-path>`, pending implementation in Issue #108) that keeps the original run and Verdict permanently immutable, persists a new run linked via `parentRunId` and `rootRunId`, and runs a strictly vote-only ratification pass re-invoking only the original objecting Excused Seat(s) (preserving exact Seat ID, Harness, Model, Soul, and read-only tool/skill/workspace access) against the frozen Candidate.
+Under ADR-0003, when a Seat faults or times out while holding an open Objection, it becomes an Excused Seat, its Objection locks as `preserved_excused`, and the Council terminates in a `Dissent Report (Preserved Excused-Seat Objection)` even when all remaining active Seats accept the revised Candidate. To resolve that near-consensus outcome without compromising ADR-0003's anti-manufactured-consensus guarantee, we implement an explicit, operator-triggered **Continuation** (`council continue <runId|snapshot-path>`) that keeps the original run and Verdict permanently immutable, persists a new run linked via `parentRunId` and `rootRunId`, and runs a strictly vote-only ratification pass re-invoking only the original objecting Excused Seat(s) (preserving exact Seat ID, Harness, Model, Soul, and read-only tool/skill/workspace access) against the frozen Candidate.
 
 ## Considered Options
 

@@ -27,6 +27,10 @@ import { validateJudgeDigestBinding } from '../proofs/digest-binding.js';
 import { createTelemetryEmitter } from '../telemetry/emitter.js';
 import { resolveConfig } from './config.js';
 import {
+  createContinuationCouncilState,
+  validateContinuationEligibility
+} from './continuation.js';
+import {
   HarnessAdapter,
   HarnessError,
   InvalidResponseError,
@@ -1330,6 +1334,94 @@ export class CouncilEngine {
         ? Boolean(toolFreeRecoveryUsed)
         : Boolean(this._seatToolFreeUsed?.get(toolFreeKey));
 
+    // Continuation runs (ADR-0006): never strip workspace/read-only tools or downshift model/effort.
+    if (this.state?.runKind === 'continuation' && role === 'seat') {
+      const origTools = originalAttemptTools ?? effectiveMeta?.effectiveTools ?? participant?.tools ?? 'read-only';
+      const origCwd =
+        origTools === 'none'
+          ? undefined
+          : (effectiveMeta?.configuredWorkspaceCwd ?? effectiveMeta?.effectiveCwd ?? participant?.cwd ?? this.config?.cwd);
+
+      let continuationPlan;
+      if (!isRetryable) {
+        continuationPlan = {
+          canRetry: false,
+          terminationKind: 'non_retryable',
+          reason: primaryReason,
+          errorCode: null,
+          setsToolFreeRecoveryUsed: false,
+          retryDiagnostics: null
+        };
+      } else if (effectiveRetries >= maxRetries) {
+        continuationPlan = {
+          canRetry: false,
+          terminationKind: 'retries_exhausted',
+          reason: `Retry limit exhausted (${effectiveRetries}/${maxRetries})`,
+          errorCode: null,
+          setsToolFreeRecoveryUsed: false,
+          retryDiagnostics: null
+        };
+      } else if (remainingBudget <= 0 || remainingBudget < minViable) {
+        continuationPlan = {
+          canRetry: false,
+          terminationKind: 'budget_exhausted',
+          reason: `Insufficient remaining budget (${remainingBudget}ms < ${minViable}ms minimum viable)`,
+          errorCode: null,
+          setsToolFreeRecoveryUsed: false,
+          retryDiagnostics: null
+        };
+      } else {
+        const effectiveRemaining = typeof remainingBudget === 'number' ? remainingBudget : Infinity;
+        const turnTimeoutMs =
+          Number.isFinite(baseTimeoutMs) && baseTimeoutMs > 0
+            ? Math.min(baseTimeoutMs, effectiveRemaining)
+            : effectiveRemaining;
+        const timeoutReason =
+          Number.isFinite(baseTimeoutMs) && baseTimeoutMs > 0 && turnTimeoutMs < baseTimeoutMs
+            ? 'remaining_phase_budget'
+            : 'turn_timeout';
+        continuationPlan = {
+          canRetry: true,
+          terminationKind: null,
+          reason: null,
+          errorCode: null,
+          nextTools: origTools,
+          nextCwd: origCwd,
+          nextModel: rawModel,
+          nextReasoningEffort: resolvedEffort ?? null,
+          setsToolFreeRecoveryUsed: false,
+          ...(Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? { turnTimeoutMs } : {}),
+          retryDiagnostics: {
+            participantId: participant?.id || 'seat',
+            role,
+            phase: effectivePhase,
+            round: currentRound,
+            attempt: effectiveRetries + 1,
+            requestedModel: rawModel ?? null,
+            requestedEffort: resolvedEffort ?? null,
+            effectiveModel: rawModel ?? null,
+            effectiveEffort: resolvedEffort ?? null,
+            capabilityProvenance: null,
+            fallbackEnabled: false,
+            fallbackApplied: false,
+            fallbackReason: null,
+            tools: origTools,
+            ...(Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? { turnTimeoutMs, timeoutReason } : {})
+          }
+        };
+      }
+      continuationPlan.retryFeedback = this._validationRetryFeedback(error);
+      return {
+        ...continuationPlan,
+        errorClass,
+        faultStatus,
+        isRetryable,
+        primaryReason,
+        retries: effectiveRetries,
+        toolFreeKey
+      };
+    }
+
     const harnessKey = String(harness || '').trim().toLowerCase();
     const capabilityCatalog = this._lookupByHarness(this.catalogByHarness, harness);
     const verifiedCapabilities = this._resolveVerifiedCapabilitiesForHarness(
@@ -2585,6 +2677,36 @@ export class CouncilEngine {
       };
     });
 
+    await this._executeVoteSlots(voteSlots, {
+      voteConcurrencyLimit,
+      currentRound,
+      previousCandidate
+    });
+
+    if (this.isCompleted() || this.aborted) {
+      this._flushCanceledTimeoutTelemetry(voteSlots);
+      return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
+    }
+
+    // 5. EVALUATE_ROUND
+    this._step({ type: 'EVALUATE_ROUND' }, true);
+    if (this.state.verdict) {
+      this.telemetry.emitVerdict(this.state.verdict);
+    }
+
+    return {
+      round: currentRound,
+      phase: this.state.phase,
+      verdict: this.state.verdict
+    };
+  }
+
+  /**
+   * Shared concurrent voting, validation, bounded retry wave, and deterministic
+   * roster-order commit loop used by both standard rounds and Continuation runs.
+   * @private
+   */
+  async _executeVoteSlots(voteSlots, { voteConcurrencyLimit, currentRound, previousCandidate = null } = {}) {
     const validateVoteWave = () => {
       for (let i = 0; i < voteSlots.length; i++) {
         if (this.aborted || this.isCompleted()) break;
@@ -3034,23 +3156,217 @@ export class CouncilEngine {
       const commitFaulted = this._commitVoteSlots(voteSlots);
       if (!commitFaulted) break;
     }
+  }
+
+  /**
+   * Executes a vote-only Continuation pass against an initialized Continuation state.
+   * Re-invokes only the excused objecting target seats while preserving exact identity
+   * (id, harness, model, soul) and read-only tools/skills/workspace access.
+   * @param {Object} [options={}]
+   * @returns {Promise<Object>}
+   */
+  async runContinuationPass(options = {}) {
+    if (this.state?.runKind !== 'continuation') {
+      throw new Error('runContinuationPass requires a Continuation CouncilState.');
+    }
+    const targetIds = Array.isArray(this.state.continuationTargetSeatIds)
+      ? this.state.continuationTargetSeatIds
+      : [];
+    const currentRound = this.state.round || 1;
+    this._step(
+      {
+        type: 'BEGIN_CONTINUATION',
+        parentRunId: this.state.parentRunId,
+        rootRunId: this.state.rootRunId,
+        targetSeatIds: [...targetIds]
+      },
+      true
+    );
+
+    const targetSeats = (this.state.seats || []).filter((s) => s && targetIds.includes(s.id));
+    const voteConcurrencyLimit = this.config.maxConcurrentSeats || Math.max(1, targetSeats.length);
+    const explicitTimeoutMs =
+      typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs
+        : (typeof this.config.timeoutMs === 'number' && this.config.timeoutMs > 0
+            ? this.config.timeoutMs
+            : undefined);
+    const explicitBudgetMs =
+      typeof options.totalSeatBudgetMs === 'number' && options.totalSeatBudgetMs > 0
+        ? options.totalSeatBudgetMs
+        : (typeof options.seatBudget === 'number' && options.seatBudget > 0
+            ? options.seatBudget
+            : undefined);
+
+    const voteSlots = targetSeats.map((seat, index) => {
+      const seatHarness = this.harnessResolver(seat.harness);
+      const effectiveTools =
+        seat.tools !== undefined
+          ? seat.tools
+          : (this.config.tools !== undefined ? this.config.tools : 'read-only');
+      const effectiveCwd =
+        effectiveTools === 'none'
+          ? undefined
+          : (typeof seat.cwd === 'string' && seat.cwd.trim()
+              ? seat.cwd.trim()
+              : (typeof this.state.cwd === 'string' && this.state.cwd.trim()
+                  ? this.state.cwd.trim()
+                  : this.config.cwd));
+      const harnessTimeoutMs =
+        typeof seatHarness.resolveTimeoutMs === 'function'
+          ? seatHarness.resolveTimeoutMs(seat.model)
+          : 240000;
+      const baseTimeoutMs = explicitTimeoutMs ?? seat.timeoutMs ?? harnessTimeoutMs;
+      const totalSeatBudgetMs =
+        explicitBudgetMs ??
+        seat.totalSeatBudgetMs ??
+        seat.seatBudget ??
+        Math.max(baseTimeoutMs * 2, this.config.totalSeatBudgetMs || 0);
+      const turnTimeoutMs = Math.min(baseTimeoutMs, totalSeatBudgetMs);
+
+      const effectiveSeatConfig = {
+        ...seat,
+        tools: effectiveTools,
+        votingTools: effectiveTools,
+        votingTimeoutMs: turnTimeoutMs,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {})
+      };
+      if (effectiveTools === 'none') {
+        delete effectiveSeatConfig.cwd;
+      }
+
+      return {
+        index,
+        seat,
+        seatHarness,
+        votingSeat: effectiveSeatConfig,
+        currentSeatConfig: effectiveSeatConfig,
+        baseVoteTimeoutMs: baseTimeoutMs,
+        totalSeatBudgetMs,
+        turnTimeoutMs,
+        seatElapsedMs: 0,
+        voteResult: null,
+        error: null,
+        skipped: false,
+        excused: false,
+        committed: false,
+        needsValidation: false,
+        originalInvocationMeta: null,
+        invocationMeta: null,
+        originalAttemptTools: effectiveTools,
+        toolFreeRecoveryUsed: false,
+        retryDiagnostics: null
+      };
+    });
+
+    await this._executeVoteSlots(voteSlots, {
+      voteConcurrencyLimit,
+      currentRound,
+      previousCandidate: this.state.candidate
+    });
 
     if (this.isCompleted() || this.aborted) {
       this._flushCanceledTimeoutTelemetry(voteSlots);
-      return { round: currentRound, phase: this.state.phase, verdict: this.state.verdict };
+      return {
+        ok: Boolean(!this.aborted && this.state.verdict?.kind === 'Unanimous Consensus'),
+        ...(this.aborted ? { aborted: true } : {}),
+        runId: this.state.runId,
+        parentRunId: this.state.parentRunId,
+        rootRunId: this.state.rootRunId,
+        verdict: this.state.verdict,
+        state: this.state,
+        snapshots: this.telemetry.getSnapshots(),
+        providerCalls: typeof this.telemetry.getProviderCalls === 'function' ? this.telemetry.getProviderCalls() : []
+      };
     }
 
-    // 5. EVALUATE_ROUND
     this._step({ type: 'EVALUATE_ROUND' }, true);
     if (this.state.verdict) {
       this.telemetry.emitVerdict(this.state.verdict);
     }
 
     return {
-      round: currentRound,
-      phase: this.state.phase,
-      verdict: this.state.verdict
+      ok: Boolean(!this.aborted && this.state.verdict?.kind === 'Unanimous Consensus'),
+      ...(this.aborted ? { aborted: true } : {}),
+      runId: this.state.runId,
+      parentRunId: this.state.parentRunId,
+      rootRunId: this.state.rootRunId,
+      verdict: this.state.verdict,
+      state: this.state,
+      snapshots: this.telemetry.getSnapshots(),
+      providerCalls: typeof this.telemetry.getProviderCalls === 'function' ? this.telemetry.getProviderCalls() : []
     };
+  }
+
+  /**
+   * Builds and executes an immutable vote-only Continuation from an eligible parent `CouncilState`
+   * without mutating `parentState` (ADR-0006 / Issue #108).
+   *
+   * @param {Object} parentState
+   * @param {Object} [options={}]
+   * @returns {Promise<Object>}
+   */
+  static async runContinuation(parentState, options = {}) {
+    const eligibility = validateContinuationEligibility(parentState);
+    if (!eligibility.valid) {
+      throw new Error(`Ineligible parent run for Continuation: ${eligibility.errors.join(' ')}`);
+    }
+    const continuationState = createContinuationCouncilState(parentState, {
+      runId: options.runId,
+      parentRunId: options.parentRunId,
+      rootRunId: options.rootRunId,
+      timeoutMs: options.timeoutMs,
+      totalSeatBudgetMs: options.totalSeatBudgetMs || options.seatBudget,
+      maxRetriesPerSeat: options.maxRetriesPerSeat
+    });
+
+    const resolvedJudge =
+      continuationState.judge &&
+      typeof continuationState.judge.harness === 'string' &&
+      continuationState.judge.harness.trim() &&
+      typeof continuationState.judge.model === 'string' &&
+      continuationState.judge.model.trim()
+        ? {
+            id: continuationState.judge.id || 'judge-1',
+            harness: continuationState.judge.harness,
+            model: continuationState.judge.model,
+            tools: continuationState.judge.tools || 'read-only'
+          }
+        : { id: 'judge-1', harness: 'mock', model: 'gpt-6-astra', tools: 'read-only' };
+
+    const engineConfig = {
+      topic: continuationState.topic,
+      minQuorum: continuationState.minQuorum ?? 2,
+      maxRounds: continuationState.maxRounds ?? 3,
+      maxRetriesPerSeat: continuationState.maxRetriesPerSeat ?? 1,
+      ...(continuationState.cwd ? { cwd: continuationState.cwd } : {}),
+      ...(continuationState.expectedDigests ? { expectedDigests: continuationState.expectedDigests } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.totalSeatBudgetMs || options.seatBudget
+        ? { totalSeatBudgetMs: options.totalSeatBudgetMs || options.seatBudget }
+        : {}),
+      retryEffortFallback: false,
+      judge: resolvedJudge,
+      seats: continuationState.seats.map((s) => ({
+        id: s.id,
+        harness: s.harness,
+        model: s.model,
+        soul: s.soul || 'Pragmatist',
+        ...(s.tools !== undefined ? { tools: s.tools } : {}),
+        ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
+        ...(s.reasoningEffort !== undefined ? { reasoningEffort: s.reasoningEffort } : {}),
+        ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs } : {}),
+        ...(typeof s.disableHooks === 'boolean' ? { disableHooks: s.disableHooks } : {}),
+        ...(typeof s.ignoreUserConfig === 'boolean' ? { ignoreUserConfig: s.ignoreUserConfig } : {})
+      }))
+    };
+
+    const engine = new CouncilEngine(engineConfig, options);
+    engine.state = continuationState;
+    if (typeof options.onEngine === 'function') {
+      options.onEngine(engine);
+    }
+    return await engine.runContinuationPass(options);
   }
 
   /**
@@ -3093,4 +3409,8 @@ export class CouncilEngine {
 
 export function createCouncilEngine(config = {}, options = {}) {
   return new CouncilEngine(config, options);
+}
+
+export async function runContinuation(parentState, options = {}) {
+  return await CouncilEngine.runContinuation(parentState, options);
 }

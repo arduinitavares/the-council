@@ -188,6 +188,8 @@ function atomicWriteFileSync(targetPath, content) {
  */
 export function buildRunTelemetryRecord({
   runId,
+  parentRunId: explicitParentRunId,
+  rootRunId: explicitRootRunId,
   mode = 'live',
   state,
   snapshots = [],
@@ -505,9 +507,20 @@ export function buildRunTelemetryRecord({
       })
     : null;
 
+  const parentRunId =
+    typeof explicitParentRunId === 'string' && explicitParentRunId.trim()
+      ? explicitParentRunId.trim()
+      : (typeof state.parentRunId === 'string' && state.parentRunId.trim() ? state.parentRunId.trim() : null);
+  const rootRunId =
+    typeof explicitRootRunId === 'string' && explicitRootRunId.trim()
+      ? explicitRootRunId.trim()
+      : (typeof state.rootRunId === 'string' && state.rootRunId.trim() ? state.rootRunId.trim() : null);
+
   return Object.freeze({
     schemaVersion: TELEMETRY_SCHEMA_VERSION,
     runId: effectiveRunId,
+    ...(parentRunId ? { parentRunId } : {}),
+    ...(rootRunId ? { rootRunId } : {}),
     mode: String(mode || 'live'),
     topic: state.topic || '',
     startedAt: startedIso,

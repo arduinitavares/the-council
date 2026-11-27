@@ -125,6 +125,7 @@ export const PHASE_MAP = Object.freeze({
 export const VERDICT_KINDS = Object.freeze({
   UNANIMOUS_CONSENSUS: 'Unanimous Consensus',
   DISSENT_PRESERVED_OBJECTION: 'Dissent Report (Preserved Excused-Seat Objection)',
+  DISSENT_CONTINUATION_REAFFIRMED: 'Dissent Report (Continuation Objection Reaffirmed)',
   DISSENT_ROUND_LIMIT: 'Dissent Report (Round Limit Reached)',
   DISSENT_BELOW_QUORUM: 'Dissent Report (Below Quorum)',
   DISSENT_JUDGE_FAULT: 'Dissent Report (Judge Fault)'
@@ -280,6 +281,9 @@ export const ERROR_CLASSES = Object.freeze([
  * @property {number} activeSeatCount - Count of non-excused seats at conclusion.
  * @property {number} excusedSeatCount - Count of excused seats at conclusion.
  * @property {string} note - Detailed verdict explanation.
+ * @property {string} [parentRunId] - Immediate parent run identifier when emitted by a Continuation.
+ * @property {string} [rootRunId] - Original root Council run identifier when emitted by a Continuation.
+ * @property {Object} [continuation] - Audit lineage summary for ratified Continuations.
  */
 
 /**
@@ -378,6 +382,11 @@ export const ERROR_CLASSES = Object.freeze([
  * @property {Verdict | null} verdict
  * @property {TransitionResult} lastTransition
  * @property {string[]} history
+ * @property {'continuation'} [runKind] - Set to 'continuation' for explicit Continuation runs.
+ * @property {string} [parentRunId] - Immediate parent run identifier for Continuations.
+ * @property {string} [rootRunId] - Original root Council run identifier for Continuations.
+ * @property {readonly string[]} [continuationTargetSeatIds] - Excused Seat IDs re-invoked in a Continuation.
+ * @property {readonly string[]} [priorAcceptedSeatIds] - Seat IDs whose prior ACCEPT votes were carried forward.
  */
 
 /**

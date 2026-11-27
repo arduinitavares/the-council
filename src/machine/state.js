@@ -165,6 +165,12 @@ export function cloneState(state) {
   if (cloned && cloned.expectedDigests && typeof cloned.expectedDigests === 'object') {
     cloned.expectedDigests = Object.freeze(cloned.expectedDigests);
   }
+  if (cloned && Array.isArray(cloned.continuationTargetSeatIds)) {
+    cloned.continuationTargetSeatIds = Object.freeze([...cloned.continuationTargetSeatIds]);
+  }
+  if (cloned && Array.isArray(cloned.priorAcceptedSeatIds)) {
+    cloned.priorAcceptedSeatIds = Object.freeze([...cloned.priorAcceptedSeatIds]);
+  }
   return cloned;
 }
 
